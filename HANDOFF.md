@@ -16,7 +16,7 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Commit terbaru di `main`:
   - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
   - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
-  - `8bcf1d4` — `fix(xray): remove xhttp transport from setup, manage, and bot links`
+  - `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
 - Perubahan penting terbaru:
   - Bot Telegram sekarang punya full parity WARP di menu `4) Network Controls` (status/restart/global/per-user/per-inbound/per-domain/tier/reconnect).
   - Hardening Telegram aktif:
@@ -25,7 +25,7 @@ Agent AI baru wajib memulai dari konteks di atas.
     - cooldown action/cleanup
     - masking output sensitif.
   - UX bot Telegram dipoles (flow panel, picker user delete, cleanup, Add User speed limit).
-  - Transport `xhttp` dihapus dari template `setup.sh`, generator `manage.sh`, dan backend bot Discord/Telegram.
+  - Transport legacy non-default dibersihkan dari template `setup.sh`, generator `manage.sh`, dan backend bot Discord/Telegram.
   - Menu CLI sekarang menampilkan `10) Traffic Analytics` dan `11) Install BOT Telegram` (input `12` tetap kompatibel ke Traffic Analytics).
 - Validasi runtime terakhir:
   - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
@@ -40,7 +40,7 @@ Agent AI baru wajib memulai dari konteks di atas.
 3. Penyederhanaan Domain Control (`Manual` vs `Auto`) dengan root domain select.
 4. Penambahan Observability + Domain Guard + Traffic Analytics.
 5. Penambahan installer Telegram (`install-telegram-bot.sh`) sebagai pelengkap menu CLI.
-6. Penghapusan `xhttp` untuk menstabilkan skenario domain fronting.
+6. Penghapusan jalur transport legacy untuk menstabilkan skenario domain fronting.
 7. Full parity WARP + hardening baseline bot Telegram.
 
 ## Catatan Working Tree Saat Handoff

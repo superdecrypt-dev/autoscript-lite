@@ -11,7 +11,7 @@ trap 'rc=$?; echo "[ERROR] line ${LINENO}: command failed (exit ${rc})" >&2; exi
 # =========================
 # Setup-only autoscript:
 # Xray + Nginx (nginx.org repo) + acme.sh
-# VLESS/VMess/Trojan over WS/HTTPUpgrade/gRPC
+# VLESS/VMess/Trojan/Shadowsocks/Shadowsocks 2022 over WS/HTTPUpgrade/gRPC
 # Public paths fixed, internal ports & paths randomized
 # Cert saved to /opt/cert/fullchain.pem & /opt/cert/privkey.pem
 # Supports: Ubuntu >= 20.04, Debian >= 11, KVM only
@@ -34,7 +34,7 @@ CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
-SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
+SPEED_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
 OBS_CONFIG_DIR="/etc/xray-observe"
 OBS_CONFIG_FILE="${OBS_CONFIG_DIR}/config.env"
 OBS_STATE_DIR="/var/lib/xray-observe"
@@ -919,24 +919,41 @@ install_xray() {
 }
 
 write_xray_config() {
-  local UUID TROJAN_PASS
+  local UUID TROJAN_PASS SS_PASS SS2022_SERVER_PSK SS2022_USER_PSK
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   TROJAN_PASS="$(rand_str 24)"
+  SS_PASS="$(rand_str 24)"
+  SS2022_SERVER_PSK="$(python3 - <<'PY'
+import base64, os
+print(base64.b64encode(os.urandom(16)).decode())
+PY
+)"
+  SS2022_USER_PSK="$(python3 - <<'PY'
+import base64, os
+print(base64.b64encode(os.urandom(16)).decode())
+PY
+)"
 
-  local P_VLESS_WS P_VMESS_WS P_TROJAN_WS
-  local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
-  local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
+  local P_VLESS_WS P_VMESS_WS P_TROJAN_WS P_SS_WS P_SS2022_WS
+  local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP P_SS_HUP P_SS2022_HUP
+  local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC P_SS_GRPC P_SS2022_GRPC
   local P_API
 
   P_VLESS_WS="$(pick_port)"
   P_VMESS_WS="$(pick_port)"
   P_TROJAN_WS="$(pick_port)"
+  P_SS_WS="$(pick_port)"
+  P_SS2022_WS="$(pick_port)"
   P_VLESS_HUP="$(pick_port)"
   P_VMESS_HUP="$(pick_port)"
   P_TROJAN_HUP="$(pick_port)"
+  P_SS_HUP="$(pick_port)"
+  P_SS2022_HUP="$(pick_port)"
   P_VLESS_GRPC="$(pick_port)"
   P_VMESS_GRPC="$(pick_port)"
   P_TROJAN_GRPC="$(pick_port)"
+  P_SS_GRPC="$(pick_port)"
+  P_SS2022_GRPC="$(pick_port)"
   P_API="10080"
 
   if ! is_port_free "$P_API"; then
@@ -948,19 +965,25 @@ write_xray_config() {
   fi
   is_port_free "$P_API" || die "Port API Xray ($P_API) sedang dipakai. Bebaskan port ini atau ubah konfigurasi."
 
-  local I_VLESS_WS I_VMESS_WS I_TROJAN_WS
-  local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP
-  local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC
+  local I_VLESS_WS I_VMESS_WS I_TROJAN_WS I_SS_WS I_SS2022_WS
+  local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP I_SS_HUP I_SS2022_HUP
+  local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC I_SS_GRPC I_SS2022_GRPC
 
   I_VLESS_WS="/$(rand_str 14)"
   I_VMESS_WS="/$(rand_str 14)"
   I_TROJAN_WS="/$(rand_str 14)"
+  I_SS_WS="/$(rand_str 14)"
+  I_SS2022_WS="/$(rand_str 14)"
   I_VLESS_HUP="/$(rand_str 14)"
   I_VMESS_HUP="/$(rand_str 14)"
   I_TROJAN_HUP="/$(rand_str 14)"
+  I_SS_HUP="/$(rand_str 14)"
+  I_SS2022_HUP="/$(rand_str 14)"
   I_VLESS_GRPC="$(rand_str 12)"
   I_VMESS_GRPC="$(rand_str 12)"
   I_TROJAN_GRPC="$(rand_str 12)"
+  I_SS_GRPC="$(rand_str 12)"
+  I_SS2022_GRPC="$(rand_str 12)"
 
   mkdir -p "$(dirname "$XRAY_CONFIG")"
 
@@ -1192,6 +1215,71 @@ write_xray_config() {
     },
     {
       "listen": "127.0.0.1",
+      "port": ${P_SS_WS},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks-ws",
+      "settings": {
+        "method": "aes-128-gcm",
+        "password": "${SS_PASS}",
+        "clients": [
+          {
+            "method": "aes-128-gcm",
+            "password": "${SS_PASS}",
+            "email": "default@shadowsocks-ws"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "${I_SS_WS}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_SS2022_WS},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks2022-ws",
+      "settings": {
+        "method": "2022-blake3-aes-128-gcm",
+        "password": "${SS2022_SERVER_PSK}",
+        "clients": [
+          {
+            "password": "${SS2022_USER_PSK}",
+            "email": "default@shadowsocks2022-ws"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "${I_SS2022_WS}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
       "port": ${P_VLESS_HUP},
       "protocol": "vless",
       "tag": "default@vless-hup",
@@ -1268,6 +1356,71 @@ write_xray_config() {
         "security": "none",
         "httpupgradeSettings": {
           "path": "${I_TROJAN_HUP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_SS_HUP},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks-hup",
+      "settings": {
+        "method": "aes-128-gcm",
+        "password": "${SS_PASS}",
+        "clients": [
+          {
+            "method": "aes-128-gcm",
+            "password": "${SS_PASS}",
+            "email": "default@shadowsocks-hup"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "${I_SS_HUP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_SS2022_HUP},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks2022-hup",
+      "settings": {
+        "method": "2022-blake3-aes-128-gcm",
+        "password": "${SS2022_SERVER_PSK}",
+        "clients": [
+          {
+            "password": "${SS2022_USER_PSK}",
+            "email": "default@shadowsocks2022-hup"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "${I_SS2022_HUP}"
         }
       },
       "sniffing": {
@@ -1367,6 +1520,71 @@ write_xray_config() {
           "quic"
         ]
       }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_SS_GRPC},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks-grpc",
+      "settings": {
+        "method": "aes-128-gcm",
+        "password": "${SS_PASS}",
+        "clients": [
+          {
+            "method": "aes-128-gcm",
+            "password": "${SS_PASS}",
+            "email": "default@shadowsocks-grpc"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "${I_SS_GRPC}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_SS2022_GRPC},
+      "protocol": "shadowsocks",
+      "tag": "default@shadowsocks2022-grpc",
+      "settings": {
+        "method": "2022-blake3-aes-128-gcm",
+        "password": "${SS2022_SERVER_PSK}",
+        "clients": [
+          {
+            "password": "${SS2022_USER_PSK}",
+            "email": "default@shadowsocks2022-grpc"
+          }
+        ],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "${I_SS2022_GRPC}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
     }
   ],
   "outbounds": [
@@ -1428,27 +1646,42 @@ EOF
   ok "Config Xray (monolitik) dibuat & divalidasi. Service akan dimulai setelah dipecah ke conf.d."
   declare -gx XR_UUID="$UUID"
   declare -gx XR_TROJAN_PASS="$TROJAN_PASS"
+  declare -gx XR_SS_PASS="$SS_PASS"
+  declare -gx XR_SS2022_SERVER_PSK="$SS2022_SERVER_PSK"
+  declare -gx XR_SS2022_USER_PSK="$SS2022_USER_PSK"
   declare -gx XR_API_PORT="$P_API"
 
   declare -gx P_VLESS_WS="$P_VLESS_WS"
   declare -gx P_VMESS_WS="$P_VMESS_WS"
   declare -gx P_TROJAN_WS="$P_TROJAN_WS"
+  declare -gx P_SS_WS="$P_SS_WS"
+  declare -gx P_SS2022_WS="$P_SS2022_WS"
   declare -gx P_VLESS_HUP="$P_VLESS_HUP"
   declare -gx P_VMESS_HUP="$P_VMESS_HUP"
   declare -gx P_TROJAN_HUP="$P_TROJAN_HUP"
+  declare -gx P_SS_HUP="$P_SS_HUP"
+  declare -gx P_SS2022_HUP="$P_SS2022_HUP"
   declare -gx P_VLESS_GRPC="$P_VLESS_GRPC"
   declare -gx P_VMESS_GRPC="$P_VMESS_GRPC"
   declare -gx P_TROJAN_GRPC="$P_TROJAN_GRPC"
+  declare -gx P_SS_GRPC="$P_SS_GRPC"
+  declare -gx P_SS2022_GRPC="$P_SS2022_GRPC"
 
   declare -gx I_VLESS_WS="$I_VLESS_WS"
   declare -gx I_VMESS_WS="$I_VMESS_WS"
   declare -gx I_TROJAN_WS="$I_TROJAN_WS"
+  declare -gx I_SS_WS="$I_SS_WS"
+  declare -gx I_SS2022_WS="$I_SS2022_WS"
   declare -gx I_VLESS_HUP="$I_VLESS_HUP"
   declare -gx I_VMESS_HUP="$I_VMESS_HUP"
   declare -gx I_TROJAN_HUP="$I_TROJAN_HUP"
+  declare -gx I_SS_HUP="$I_SS_HUP"
+  declare -gx I_SS2022_HUP="$I_SS2022_HUP"
   declare -gx I_VLESS_GRPC="$I_VLESS_GRPC"
   declare -gx I_VMESS_GRPC="$I_VMESS_GRPC"
   declare -gx I_TROJAN_GRPC="$I_TROJAN_GRPC"
+  declare -gx I_SS_GRPC="$I_SS_GRPC"
+  declare -gx I_SS2022_GRPC="$I_SS2022_GRPC"
 }
 write_xray_modular_configs() {
   ok "Membuat konfigurasi modular Xray-core (conf.d)..."
@@ -1469,13 +1702,6 @@ routing = cfg.get("routing") or {}
 inbounds_fresh = cfg.get("inbounds") or []
 if not isinstance(inbounds_fresh, list):
   inbounds_fresh = []
-
-# WireGuard inbound dinonaktifkan permanen dari autoscript:
-# buang semua inbound protocol=wireguard dari config modular.
-inbounds_fresh = [
-  ib for ib in inbounds_fresh
-  if not (isinstance(ib, dict) and str(ib.get("protocol") or "").strip().lower() == "wireguard")
-]
 
 parts = [
   ("00-log.json", {"log": cfg.get("log") or {}}),
@@ -1500,24 +1726,6 @@ for name, obj in parts:
     json.dump(obj, wf, ensure_ascii=False, indent=2)
     wf.write("\n")
   os.replace(tmp, path)
-
-# Hardening migrate:
-# Netralisasi file legacy WireGuard inbound agar tidak pernah ikut ter-load.
-legacy_wg = os.path.join(outdir, "11-wireguard-inbound.json")
-if os.path.isfile(legacy_wg):
-  legacy_bak = f"{legacy_wg}.legacy.bak"
-  if not os.path.exists(legacy_bak):
-    try:
-      with open(legacy_wg, "rb") as rf, open(legacy_bak, "wb") as wf:
-        wf.write(rf.read())
-    except Exception:
-      pass
-
-  tmp = f"{legacy_wg}.tmp"
-  with open(tmp, "w", encoding="utf-8") as wf:
-    json.dump({"inbounds": []}, wf, ensure_ascii=False, indent=2)
-    wf.write("\n")
-  os.replace(tmp, legacy_wg)
 PY
 
   chmod 640 "${XRAY_CONFDIR}"/*.json 2>/dev/null || true
@@ -1531,85 +1739,6 @@ PY
   ok "  - ${XRAY_CONFDIR}/40-policy.json"
   ok "  - ${XRAY_CONFDIR}/50-stats.json"
   ok "  - ${XRAY_CONFDIR}/60-observatory.json"
-}
-
-decommission_wg_inbound_runtime() {
-  ok "Hardening: hapus bersih runtime WireGuard inbound..."
-
-  local ts backup_root backup_tgz removed_count xray_inbounds_conf
-  ts="$(date +%Y%m%d-%H%M%S)"
-  backup_root="/var/backups/xray-manage"
-  xray_inbounds_conf="${XRAY_CONFDIR}/10-inbounds.json"
-  mkdir -p "${backup_root}" 2>/dev/null || true
-
-  if [[ -d "/opt/wg-inbound" ]]; then
-    backup_tgz="${backup_root}/wg-inbound-${ts}.tar.gz"
-    if tar -C /opt -czf "${backup_tgz}" wg-inbound >/dev/null 2>&1; then
-      rm -rf /opt/wg-inbound
-      ok "Runtime WG inbound dibackup lalu dihapus: ${backup_tgz}"
-    else
-      warn "Backup /opt/wg-inbound gagal. Runtime WG inbound tidak dihapus otomatis."
-    fi
-  fi
-
-  rm -f /var/lock/wg-inbound.lock >/dev/null 2>&1 || true
-
-  need_python3
-  removed_count="$(python3 - <<'PY' "${xray_inbounds_conf}" "${XRAY_CONFDIR}/11-wireguard-inbound.json"
-import json
-import os
-import sys
-
-inbounds_path, legacy_path = sys.argv[1:3]
-removed = 0
-
-def load_json(path, default):
-  try:
-    with open(path, "r", encoding="utf-8") as f:
-      return json.load(f)
-  except Exception:
-    return default
-
-cfg = load_json(inbounds_path, {})
-if not isinstance(cfg, dict):
-  cfg = {}
-
-inbounds = cfg.get("inbounds")
-if not isinstance(inbounds, list):
-  inbounds = []
-
-new_inbounds = []
-for ib in inbounds:
-  if isinstance(ib, dict) and str(ib.get("protocol") or "").strip().lower() == "wireguard":
-    removed += 1
-    continue
-  new_inbounds.append(ib)
-cfg["inbounds"] = new_inbounds
-
-tmp = f"{inbounds_path}.tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-  json.dump(cfg, f, ensure_ascii=False, indent=2)
-  f.write("\n")
-os.replace(tmp, inbounds_path)
-
-legacy_tmp = f"{legacy_path}.tmp"
-with open(legacy_tmp, "w", encoding="utf-8") as f:
-  json.dump({"inbounds": []}, f, ensure_ascii=False, indent=2)
-  f.write("\n")
-os.replace(legacy_tmp, legacy_path)
-
-print(removed)
-PY
-)"
-
-  chmod 640 "${xray_inbounds_conf}" "${XRAY_CONFDIR}/11-wireguard-inbound.json" 2>/dev/null || true
-  chown root:xray "${xray_inbounds_conf}" "${XRAY_CONFDIR}/11-wireguard-inbound.json" 2>/dev/null || true
-
-  if [[ "${removed_count:-0}" =~ ^[0-9]+$ ]] && (( removed_count > 0 )); then
-    warn "Ditemukan dan dihapus ${removed_count} inbound WireGuard dari ${xray_inbounds_conf}."
-  else
-    ok "Tidak ada inbound WireGuard aktif pada ${xray_inbounds_conf}."
-  fi
 }
 
 ensure_xray_service_user() {
@@ -1778,15 +1907,21 @@ map \$uri \$internal_port {
   ~^/vless-ws(?:/|\$)    ${P_VLESS_WS};
   ~^/vmess-ws(?:/|\$)    ${P_VMESS_WS};
   ~^/trojan-ws(?:/|\$)   ${P_TROJAN_WS};
+  ~^/shadowsocks-ws(?:/|\$) ${P_SS_WS};
+  ~^/shadowsocks2022-ws(?:/|\$) ${P_SS2022_WS};
 
   ~^/vless-hup(?:/|\$)   ${P_VLESS_HUP};
   ~^/vmess-hup(?:/|\$)   ${P_VMESS_HUP};
   ~^/trojan-hup(?:/|\$)  ${P_TROJAN_HUP};
+  ~^/shadowsocks-hup(?:/|\$) ${P_SS_HUP};
+  ~^/shadowsocks2022-hup(?:/|\$) ${P_SS2022_HUP};
 
   # gRPC requests usually come as /<serviceName>/Tun, so match prefix
   ~^/vless-grpc(?:/|\$)  ${P_VLESS_GRPC};
   ~^/vmess-grpc(?:/|\$)  ${P_VMESS_GRPC};
   ~^/trojan-grpc(?:/|\$) ${P_TROJAN_GRPC};
+  ~^/shadowsocks-grpc(?:/|\$) ${P_SS_GRPC};
+  ~^/shadowsocks2022-grpc(?:/|\$) ${P_SS2022_GRPC};
 
 }
 
@@ -1797,10 +1932,14 @@ map \$uri \$internal_path {
   ~^/vless-ws(?:/|\$)    ${I_VLESS_WS};
   ~^/vmess-ws(?:/|\$)    ${I_VMESS_WS};
   ~^/trojan-ws(?:/|\$)   ${I_TROJAN_WS};
+  ~^/shadowsocks-ws(?:/|\$) ${I_SS_WS};
+  ~^/shadowsocks2022-ws(?:/|\$) ${I_SS2022_WS};
 
   ~^/vless-hup(?:/|\$)   ${I_VLESS_HUP};
   ~^/vmess-hup(?:/|\$)   ${I_VMESS_HUP};
   ~^/trojan-hup(?:/|\$)  ${I_TROJAN_HUP};
+  ~^/shadowsocks-hup(?:/|\$) ${I_SS_HUP};
+  ~^/shadowsocks2022-hup(?:/|\$) ${I_SS2022_HUP};
 }
 
 # 3) Map Public Path -> gRPC Service Name
@@ -1810,6 +1949,8 @@ map \$uri \$grpc_service_name {
   ~^/vless-grpc(?:/|\$)  ${I_VLESS_GRPC};
   ~^/vmess-grpc(?:/|\$)  ${I_VMESS_GRPC};
   ~^/trojan-grpc(?:/|\$) ${I_TROJAN_GRPC};
+  ~^/shadowsocks-grpc(?:/|\$) ${I_SS_GRPC};
+  ~^/shadowsocks2022-grpc(?:/|\$) ${I_SS2022_GRPC};
 }
 
 server {
@@ -1828,7 +1969,7 @@ server {
   ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
 
   # --- WebSocket ---
-  location ~ ^/(vless|vmess|trojan)-ws(?:/|\$) {
+  location ~ ^/(vless|vmess|trojan|shadowsocks|shadowsocks2022)-ws(?:/|\$) {
     # capture map results BEFORE rewrite changes \$uri
     set \$up_port \$internal_port;
     set \$up_path \$internal_path;
@@ -1856,7 +1997,7 @@ server {
   }
 
   # --- HTTPUpgrade ---
-  location ~ ^/(vless|vmess|trojan)-hup(?:/|\$) {
+  location ~ ^/(vless|vmess|trojan|shadowsocks|shadowsocks2022)-hup(?:/|\$) {
     set \$up_port \$internal_port;
     set \$up_path \$internal_path;
 
@@ -1879,7 +2020,7 @@ server {
   }
 
   # --- gRPC ---
-  location ~ ^/(vless|vmess|trojan)-grpc(?:/|\$) {
+  location ~ ^/(vless|vmess|trojan|shadowsocks|shadowsocks2022)-grpc(?:/|\$) {
     set \$up_port \$internal_port;
     set \$svc \$grpc_service_name;
 
@@ -2484,10 +2625,10 @@ EOF
 install_management_scripts() {
   ok "Menyiapkan script manajemen (placeholder) ..."
 
-  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan
-  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan
-  chmod 700 /opt/account /opt/account/vless /opt/account/vmess /opt/account/trojan
-  chmod 700 /opt/quota  /opt/quota/vless  /opt/quota/vmess  /opt/quota/trojan
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
+  chmod 700 /opt/account /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
+  chmod 700 /opt/quota  /opt/quota/vless  /opt/quota/vmess  /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
@@ -2504,7 +2645,7 @@ XRAY_ROUTING_DEFAULT  = "/usr/local/etc/xray/conf.d/30-routing.json"
 ACCOUNT_ROOT = "/opt/account"
 QUOTA_ROOT = "/opt/quota"
 SPEED_ROOT = "/opt/speed"
-PROTO_DIRS = ("vless", "vmess", "trojan")
+PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 
 def now_utc():
   return datetime.now(timezone.utc)
@@ -2833,7 +2974,7 @@ from datetime import datetime, timezone
 
 XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan")
+PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 XRAY_ACCESS_LOG = "/var/log/xray/access.log"
 
 EMAIL_RE = re.compile(r"(?:email|user)\s*[:=]\s*([A-Za-z0-9._%+-]{1,128}@[A-Za-z0-9._-]{1,128})")
@@ -3258,7 +3399,7 @@ from datetime import datetime, timezone
 
 XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan")
+PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 
 def now_iso():
   return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -3491,7 +3632,7 @@ XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 API_SERVER_DEFAULT = "127.0.0.1:10080,127.0.0.1:10085"
 API_SERVER_FALLBACKS = ("127.0.0.1:10080", "127.0.0.1:10085")
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan")
+PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 
 GB_DECIMAL = 1000 ** 3
 GB_BINARY = 1024 ** 3
@@ -4574,7 +4715,7 @@ EOF
   systemctl daemon-reload
   if service_enable_restart_checked xray-speed; then
     ok "Speed limiter foundation aktif:"
-    ok "  - policy root: ${SPEED_POLICY_ROOT}/{vless,vmess,trojan}"
+    ok "  - policy root: ${SPEED_POLICY_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
     ok "  - config: ${SPEED_CONFIG_DIR}/config.json"
     ok "  - binary: /usr/local/bin/xray-speed"
     ok "  - service: xray-speed"
@@ -5759,7 +5900,6 @@ main() {
   install_custom_geosite_adblock
   write_xray_config
   write_xray_modular_configs
-  decommission_wg_inbound_runtime
   configure_xray_service_confdir
   write_nginx_config
   install_management_scripts

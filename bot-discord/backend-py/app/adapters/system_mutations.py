@@ -39,7 +39,9 @@ CERT_PRIVKEY = CERT_DIR / "privkey.pem"
 WORK_DIR = Path("/var/lib/xray-discord-bot/tmp")
 ROUTING_LOCK_FILE = "/var/lock/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
-PROTOCOLS = ("vless", "vmess", "trojan")
+PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+SS_METHOD = "aes-128-gcm"
+SS2022_METHOD = "2022-blake3-aes-128-gcm"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 SPEED_OUTBOUND_TAG_PREFIX = "speed-mark-"
@@ -245,12 +247,18 @@ def _ensure_runtime_dirs() -> None:
         ACCOUNT_ROOT / "vless",
         ACCOUNT_ROOT / "vmess",
         ACCOUNT_ROOT / "trojan",
+        ACCOUNT_ROOT / "shadowsocks",
+        ACCOUNT_ROOT / "shadowsocks2022",
         QUOTA_ROOT / "vless",
         QUOTA_ROOT / "vmess",
         QUOTA_ROOT / "trojan",
+        QUOTA_ROOT / "shadowsocks",
+        QUOTA_ROOT / "shadowsocks2022",
         SPEED_POLICY_ROOT / "vless",
         SPEED_POLICY_ROOT / "vmess",
         SPEED_POLICY_ROOT / "trojan",
+        SPEED_POLICY_ROOT / "shadowsocks",
+        SPEED_POLICY_ROOT / "shadowsocks2022",
         WORK_DIR,
     ]:
         p.mkdir(parents=True, exist_ok=True)
@@ -442,14 +450,31 @@ def _username_exists_anywhere(username: str) -> tuple[bool, str]:
                     if not isinstance(c, dict):
                         continue
                     email = str(c.get("email") or "").lower().strip()
-                    if email == f"{needle}@{proto}":
-                        return True, f"xray:{proto}:{email}"
+                    user_part, _, proto_part = email.partition("@")
+                    if user_part == needle and proto_part in PROTOCOLS:
+                        return True, f"xray:{proto_part}:{email}"
     return False, ""
 
 
+def _inbound_matches_proto(ib: Any, proto: str) -> bool:
+    if not isinstance(ib, dict):
+        return False
+    ib_proto = str(ib.get("protocol") or "").strip().lower()
+    tag = str(ib.get("tag") or "").strip().lower()
+    if proto in {"vless", "vmess", "trojan"}:
+        return ib_proto == proto
+    if proto == "shadowsocks":
+        return ib_proto == "shadowsocks" and "@shadowsocks-" in tag
+    if proto == "shadowsocks2022":
+        return ib_proto == "shadowsocks" and "@shadowsocks2022-" in tag
+    return False
+
+
 def _generate_credential(proto: str) -> str:
-    if proto == "trojan":
+    if proto in {"trojan", "shadowsocks"}:
         return secrets.token_hex(16)
+    if proto == "shadowsocks2022":
+        return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
     return str(uuid.uuid4())
 
 
@@ -473,7 +498,7 @@ def _xray_add_client(proto: str, username: str, cred: str) -> tuple[bool, str]:
         for ib in inbounds:
             if not isinstance(ib, dict):
                 continue
-            if ib.get("protocol") != proto:
+            if not _inbound_matches_proto(ib, proto):
                 continue
             settings = ib.get("settings") or {}
             clients = settings.get("clients")
@@ -488,6 +513,10 @@ def _xray_add_client(proto: str, username: str, cred: str) -> tuple[bool, str]:
             client = {"id": cred, "alterId": 0, "email": email}
         elif proto == "trojan":
             client = {"password": cred, "email": email}
+        elif proto == "shadowsocks":
+            client = {"method": SS_METHOD, "password": cred, "email": email}
+        elif proto == "shadowsocks2022":
+            client = {"password": cred, "email": email}
         else:
             return False, f"Protocol tidak didukung: {proto}"
 
@@ -495,7 +524,7 @@ def _xray_add_client(proto: str, username: str, cred: str) -> tuple[bool, str]:
         for ib in inbounds:
             if not isinstance(ib, dict):
                 continue
-            if ib.get("protocol") != proto:
+            if not _inbound_matches_proto(ib, proto):
                 continue
             settings = ib.setdefault("settings", {})
             clients = settings.get("clients")
@@ -555,7 +584,7 @@ def _xray_delete_client(proto: str, username: str) -> tuple[bool, str]:
         for ib in inbounds:
             if not isinstance(ib, dict):
                 continue
-            if ib.get("protocol") != proto:
+            if not _inbound_matches_proto(ib, proto):
                 continue
             settings = ib.get("settings") or {}
             clients = settings.get("clients")
@@ -1123,11 +1152,17 @@ def _dns_toggle_cache(cfg: dict[str, Any]) -> tuple[bool, str]:
     return True, f"DNS cache sekarang: {state}."
 
 
-def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str, str]:
+def _build_links(proto: str, username: str, cred: str, domain: str, ss2022_server_key: str = "") -> dict[str, str]:
     public_paths = {
         "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
+        "shadowsocks": {"ws": "/shadowsocks-ws", "httpupgrade": "/shadowsocks-hup", "grpc": "shadowsocks-grpc"},
+        "shadowsocks2022": {
+            "ws": "/shadowsocks2022-ws",
+            "httpupgrade": "/shadowsocks2022-hup",
+            "grpc": "shadowsocks2022-grpc",
+        },
     }
 
     def vless_link(net: str, val: str) -> str:
@@ -1168,8 +1203,20 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
         raw = json.dumps(obj, separators=(",", ":"))
         return "vmess://" + base64.b64encode(raw.encode()).decode()
 
+    def ss_link(method: str, password: str, net: str, val: str) -> str:
+        userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip("=")
+        if net == "ws":
+            plugin = f"xray-plugin;mode=websocket;tls;host={domain};path={val or '/'}"
+        elif net == "httpupgrade":
+            plugin = f"xray-plugin;mode=httpupgrade;tls;host={domain};path={val or '/'}"
+        else:
+            plugin = f"xray-plugin;mode=grpc;tls;serviceName={val or ''}"
+        q = urllib.parse.urlencode({"plugin": plugin})
+        return f"ss://{userinfo}@{domain}:443?{q}#{urllib.parse.quote(username + '@' + proto)}"
+
     links: dict[str, str] = {}
     p = public_paths.get(proto, {})
+    resolved_ss2022_key = str(ss2022_server_key or "").strip()
     for net in ("ws", "httpupgrade", "grpc"):
         v = p.get(net, "")
         if proto == "vless":
@@ -1178,6 +1225,13 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
             links[net] = vmess_link(net, v)
         elif proto == "trojan":
             links[net] = trojan_link(net, v)
+        elif proto == "shadowsocks":
+            links[net] = ss_link(SS_METHOD, cred, net, v)
+        elif proto == "shadowsocks2022":
+            if resolved_ss2022_key:
+                links[net] = ss_link(SS2022_METHOD, f"{resolved_ss2022_key}:{cred}", net, v)
+            else:
+                links[net] = "-"
     return links
 
 
@@ -1196,8 +1250,12 @@ def _build_account_text(
     speed_enabled: bool,
     speed_down: float,
     speed_up: float,
+    ss2022_server_key: str = "",
 ) -> str:
-    links = _build_links(proto, username, credential, domain)
+    resolved_ss2022_key = str(ss2022_server_key or "").strip()
+    if proto == "shadowsocks2022" and not resolved_ss2022_key:
+        resolved_ss2022_key = _find_ss2022_server_key_in_inbounds()
+    links = _build_links(proto, username, credential, domain, resolved_ss2022_key)
     lines = [
         "=== XRAY ACCOUNT INFO ===",
         f"Domain      : {domain}",
@@ -1209,6 +1267,11 @@ def _build_account_text(
         lines.append(f"UUID        : {credential}")
     else:
         lines.append(f"Password    : {credential}")
+    if proto == "shadowsocks":
+        lines.append(f"Method      : {SS_METHOD}")
+    if proto == "shadowsocks2022":
+        lines.append(f"Method      : {SS2022_METHOD}")
+        lines.append(f"Server Key  : {resolved_ss2022_key or '-'}")
 
     lines.extend(
         [
@@ -1262,7 +1325,7 @@ def _find_credential_in_inbounds(proto: str, username: str) -> str:
     if not isinstance(inbounds, list):
         return ""
     for ib in inbounds:
-        if not isinstance(ib, dict) or ib.get("protocol") != proto:
+        if not _inbound_matches_proto(ib, proto):
             continue
         clients = (ib.get("settings") or {}).get("clients")
         if not isinstance(clients, list):
@@ -1272,9 +1335,28 @@ def _find_credential_in_inbounds(proto: str, username: str) -> str:
                 continue
             if str(c.get("email") or "") != email:
                 continue
-            if proto == "trojan":
+            if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
                 return str(c.get("password") or "").strip()
             return str(c.get("id") or "").strip()
+    return ""
+
+
+def _find_ss2022_server_key_in_inbounds() -> str:
+    ok, payload = _read_json(XRAY_INBOUNDS_CONF)
+    if not ok or not isinstance(payload, dict):
+        return ""
+    inbounds = payload.get("inbounds", [])
+    if not isinstance(inbounds, list):
+        return ""
+    for ib in inbounds:
+        if not _inbound_matches_proto(ib, "shadowsocks2022"):
+            continue
+        settings = ib.get("settings") if isinstance(ib, dict) else {}
+        if not isinstance(settings, dict):
+            continue
+        key = str(settings.get("password") or "").strip()
+        if key:
+            return key
     return ""
 
 
@@ -1404,12 +1486,15 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
 
     credential = _find_credential_in_inbounds(proto, username)
     if not credential:
-        if proto == "trojan":
+        if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
             credential = account_fields.get("Password", "").strip()
         else:
             credential = account_fields.get("UUID", "").strip()
     if not credential:
         return False, f"Credential tidak ditemukan untuk {username}@{proto}"
+    ss2022_server_key = ""
+    if proto == "shadowsocks2022":
+        ss2022_server_key = _find_ss2022_server_key_in_inbounds() or account_fields.get("Server Key", "").strip()
 
     domain_eff = str(domain or "").strip() or _detect_domain()
     ip_eff = str(ip or "").strip() or account_fields.get("IP", "").strip() or _detect_public_ipv4()
@@ -1429,6 +1514,7 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
         speed_enabled=speed_enabled,
         speed_down=speed_down,
         speed_up=speed_up,
+        ss2022_server_key=ss2022_server_key,
     )
 
     _write_text_atomic(account_target, content)
@@ -2094,7 +2180,7 @@ def _find_credential_from_account(proto: str, username: str) -> str:
     if acc is None:
         return ""
     fields = _read_account_fields(acc)
-    if proto == "trojan":
+    if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
         return fields.get("Password", "").strip()
     return fields.get("UUID", "").strip()
 
@@ -2108,7 +2194,7 @@ def _user_exists_in_inbounds(proto: str, username: str) -> bool:
     if not isinstance(inbounds, list):
         return False
     for ib in inbounds:
-        if not isinstance(ib, dict) or ib.get("protocol") != proto:
+        if not _inbound_matches_proto(ib, proto):
             continue
         clients = (ib.get("settings") or {}).get("clients")
         if not isinstance(clients, list):

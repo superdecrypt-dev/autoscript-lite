@@ -14,7 +14,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Quota Detail",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
         ],
       },
@@ -27,7 +27,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Set Quota Limit",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "quota_gb", label: "Quota GB", style: "short", required: true, placeholder: "100" },
         ],
@@ -42,7 +42,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Reset Quota Used",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
         ],
       },
@@ -55,7 +55,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Manual Block",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],
@@ -69,7 +69,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "IP Limit Enable/Disable",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],
@@ -83,7 +83,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Set IP Limit",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "ip_limit", label: "IP Limit", style: "short", required: true, placeholder: "2" },
         ],
@@ -97,7 +97,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Unlock IP Lock",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
         ],
       },
@@ -110,7 +110,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Set Speed Download",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "speed_down_mbit", label: "Speed Down Mbps", style: "short", required: true, placeholder: "20" },
         ],
@@ -124,7 +124,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Set Speed Upload",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "speed_up_mbit", label: "Speed Up Mbps", style: "short", required: true, placeholder: "10" },
         ],
@@ -138,7 +138,7 @@ export const menu3: MenuDefinition = {
       modal: {
         title: "Speed Limit Enable/Disable",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],

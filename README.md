@@ -29,7 +29,7 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Installer bot terpisah (`install-discord-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
-- Transport `xhttp` sudah dinonaktifkan dari stack default karena kompatibilitas domain fronting.
+- Transport legacy non-default sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
 
 ## Quick Install (Root)
 ```bash
@@ -185,7 +185,7 @@ Stack default saat ini menyediakan endpoint berikut:
 - `grpc`
 
 Catatan:
-- Transport `xhttp` sudah dihapus dari template `setup.sh`, `manage.sh`, dan generator link bot.
+- Jalur transport non-default sudah dibersihkan dari template `setup.sh`, `manage.sh`, dan generator link bot.
 - Tujuan perubahan: mencegah masalah koneksi pada skenario domain fronting.
 
 ## Ringkasan `setup.sh` (One-Time)

@@ -36,7 +36,7 @@ export const menu2: MenuDefinition = {
       modal: {
         title: "Delete User",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
+          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan/shadowsocks/shadowsocks2022" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
         ],
       },

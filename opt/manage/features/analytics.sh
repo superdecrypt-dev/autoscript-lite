@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Traffic Analytics
-# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan}/*.json
+# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan,shadowsocks,shadowsocks2022}/*.json
 # - Menggunakan quota_used sebagai dasar traffic usage.
 # -------------------------
 traffic_analytics_dataset_build_to_file() {
@@ -180,7 +180,7 @@ print()
 print("By Protocol:")
 
 protocols = data.get("protocols") or {}
-for proto in ("vless", "vmess", "trojan"):
+for proto in ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"):
   info = protocols.get(proto) or {}
   users = int(info.get("users") or 0)
   used = int(info.get("used_bytes") or 0)

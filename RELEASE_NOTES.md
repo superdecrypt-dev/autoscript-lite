@@ -52,7 +52,7 @@ Rilis ini menambahkan full parity WARP untuk bot Telegram agar setara kontrol ne
 ## Rilis 2026-02-25 (Update Malam)
 
 ### Ringkasan
-Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk operasi harian, dan penghapusan transport `xhttp` dari stack default karena tidak stabil untuk mode domain fronting.
+Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk operasi harian, dan pembersihan transport legacy dari stack default karena tidak stabil untuk mode domain fronting.
 
 ### Perubahan Utama
 1. Bot Telegram: UX flow dipoles untuk operasional nyata
@@ -64,18 +64,18 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 - `Delete User` memakai picker protocol + daftar username, jadi admin tidak perlu mengetik username manual.
 - `/cleanup` diperbarui agar mode default membersihkan chat dan menyisakan 1 pesan hasil cleanup.
 
-2. Penghapusan Transport `xhttp` dari Stack Default
+2. Penghapusan Transport Legacy dari Stack Default
 - `setup.sh`:
-  - inbound `xhttp` dihapus dari template Xray
-  - route/mapping/location `xhttp` di template Nginx dihapus
+  - inbound legacy dihapus dari template Xray
+  - route/mapping/location legacy di template Nginx dihapus
 - `manage.sh`:
-  - generator link account tidak lagi membuat link `xhttp`
+  - generator link account tidak lagi membuat link transport legacy
   - compat checker account info diperbarui (basis validasi ke baris `gRPC`)
 - Bot backend (`bot-discord` + `bot-telegram`):
-  - generator link account tidak lagi memasukkan `xhttp`
-  - output account info tidak lagi menampilkan baris `XHTTP`
+  - generator link account tidak lagi memasukkan transport legacy
+  - output account info tidak lagi menampilkan baris transport legacy
 - `opt/manage/features/network.sh`:
-  - deteksi tag default Xray disesuaikan tanpa suffix `-xhttp`
+  - deteksi tag default Xray disesuaikan tanpa suffix transport legacy
 
 3. Sinkronisasi Runtime Live
 - Konfigurasi runtime ikut dibersihkan:
@@ -88,7 +88,7 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 
 ### Commit
 - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
-- `8bcf1d4` — `fix(xray): remove xhttp transport from setup, manage, and bot links`
+- `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
 
 ### Hasil Validasi
 - Shell:

@@ -50,9 +50,9 @@ CLEANUP_MAX_LIMIT = 200
 CLEANUP_KEEP_MESSAGES = 1
 CLEANUP_MAX_SCAN_IDS = 2000
 DELETE_PICK_PAGE_SIZE = 12
-DELETE_PICK_PROTOCOLS = ("vless", "vmess", "trojan")
+DELETE_PICK_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 FORM_CHOICE_PAGE_SIZE = 12
-FORM_CHOICE_PROTOCOLS = ("vless", "vmess", "trojan")
+FORM_CHOICE_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",

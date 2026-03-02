@@ -32,7 +32,7 @@ READONLY_GEOSITE_DOMAINS = (
     "geosite:netflix",
     "geosite:reddit",
 )
-PROTOCOLS = ("vless", "vmess", "trojan")
+PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
@@ -484,18 +484,17 @@ def list_accounts() -> list[tuple[str, str]]:
 def op_user_list() -> tuple[str, str]:
     records = list_accounts()
     if not records:
-        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan}}"
+        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
 
     counts = {p: 0 for p in PROTOCOLS}
     for proto, _ in records:
         counts[proto] += 1
 
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(records[:250])]
+    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in PROTOCOLS])
     body = (
         f"Total user: {len(records)}\n"
-        f"- vless : {counts['vless']}\n"
-        f"- vmess : {counts['vmess']}\n"
-        f"- trojan: {counts['trojan']}\n\n"
+        f"{protocol_lines}\n\n"
         "Daftar (maks 250):\n"
         + "\n".join(lines)
     )
@@ -778,7 +777,9 @@ def op_quota_summary() -> tuple[str, str]:
             break
 
     if not lines:
-        return "Quota & Access Control - Summary", f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan}}"
+        return "Quota & Access Control - Summary", (
+            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
+        )
     return "Quota & Access Control - Summary", "Maks 200 entri:\n" + "\n".join(lines)
 
 

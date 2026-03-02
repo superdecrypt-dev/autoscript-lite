@@ -3,7 +3,7 @@ from datetime import datetime
 
 from .response import error_response
 
-PROTOCOLS = {"vless", "vmess", "trojan"}
+PROTOCOLS = {"vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TRUE_SET = {"1", "true", "yes", "y", "on", "aktif", "enable", "enabled"}
 FALSE_SET = {"0", "false", "no", "n", "off", "nonaktif", "disable", "disabled"}
@@ -22,7 +22,11 @@ def require_protocol(params: dict, title: str, key: str = "proto") -> tuple[bool
         return False, proto_or_err
     proto = str(proto_or_err).strip().lower()
     if proto not in PROTOCOLS:
-        return False, error_response("invalid_param", title, "Protocol harus vless/vmess/trojan.")
+        return False, error_response(
+            "invalid_param",
+            title,
+            "Protocol harus vless/vmess/trojan/shadowsocks/shadowsocks2022.",
+        )
     return True, proto
 
 

@@ -45,7 +45,7 @@ SRC_REPO="${BOT_SOURCE_REPO:-autoscript}"
 SRC_REF="${BOT_SOURCE_REF:-main}"
 SRC_ARCHIVE_DEFAULT_URL="https://github.com/${SRC_OWNER}/${SRC_REPO}/raw/${SRC_REF}/bot_telegram.zip"
 SRC_ARCHIVE_URL="${BOT_SOURCE_ARCHIVE_URL:-${SRC_ARCHIVE_DEFAULT_URL}}"
-SRC_ARCHIVE_SHA256="${BOT_SOURCE_ARCHIVE_SHA256:-c3e056cd869b85fbab99e4a96f6950d716f533e0c7031939d2218d5f72a7c000}"
+SRC_ARCHIVE_SHA256="${BOT_SOURCE_ARCHIVE_SHA256:-be766dcaf0006f488d71b4e804f47c6fb29257c6183da71724e7c840ffdf2b93}"
 SRC_ARCHIVE_SHA256_URL="${BOT_SOURCE_ARCHIVE_SHA256_URL:-}"
 ALLOW_UNVERIFIED_ARCHIVE="${BOT_ALLOW_UNVERIFIED_ARCHIVE:-0}"
 
@@ -311,9 +311,9 @@ TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=false
 TELEGRAM_ACTION_COOLDOWN_SECONDS=1
 TELEGRAM_CLEANUP_COOLDOWN_SECONDS=30
 TELEGRAM_MAX_INPUT_LENGTH=128
-BACKEND_BASE_URL=http://127.0.0.1:8080
+BACKEND_BASE_URL=http://127.0.0.1:8081
 BACKEND_HOST=127.0.0.1
-BACKEND_PORT=8080
+BACKEND_PORT=8081
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
 ENABLE_DANGEROUS_ACTIONS=true
 ENVEOF
@@ -472,9 +472,9 @@ configure_env_interactive() {
   set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-true}" "${staged_env}"
   set_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${allow_unrestricted:-false}" "${staged_env}"
 
-  set_env_value BACKEND_BASE_URL "http://127.0.0.1:8080" "${staged_env}"
+  set_env_value BACKEND_BASE_URL "http://127.0.0.1:8081" "${staged_env}"
   set_env_value BACKEND_HOST "127.0.0.1" "${staged_env}"
-  set_env_value BACKEND_PORT "8080" "${staged_env}"
+  set_env_value BACKEND_PORT "8081" "${staged_env}"
   set_env_value COMMANDS_FILE "${BOT_HOME}/shared/commands.json" "${staged_env}"
 
   chmod 600 "${staged_env}" || true

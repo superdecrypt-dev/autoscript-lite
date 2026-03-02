@@ -77,14 +77,14 @@ PY
 validate_email_user() {
   # args: email (username@protocol)
   local email="${1:-}"
-  [[ "${email}" =~ ^[A-Za-z0-9._-]+@(vless|vmess|trojan)$ ]]
+  [[ "${email}" =~ ^[A-Za-z0-9._-]+@(vless|vmess|trojan|shadowsocks|shadowsocks2022)$ ]]
 }
 
 is_default_xray_email_or_tag() {
   # Default/bawaan Xray (disembunyikan dari menu WARP per-user):
-  # default@(vless|vmess|trojan)-(ws|hup|grpc)
+  # default@(vless|vmess|trojan|shadowsocks|shadowsocks2022)-(ws|hup|grpc)
   local s="${1:-}"
-  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(ws|hup|grpc)$ ]]
+  [[ "${s}" =~ ^default@(vless|vmess|trojan|shadowsocks|shadowsocks2022)-(ws|hup|grpc)$ ]]
 }
 
 is_readonly_geosite_domain() {
