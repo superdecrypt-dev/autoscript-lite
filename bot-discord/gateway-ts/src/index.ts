@@ -55,7 +55,58 @@ let notifLastWarnAtMs = 0;
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 async function registerSlashCommands(): Promise<void> {
-  const commands = [new SlashCommandBuilder().setName("panel").setDescription("Buka panel operasional Xray").toJSON()];
+  const commands = [
+    new SlashCommandBuilder().setName("panel").setDescription("Buka panel operasional Xray").toJSON(),
+    new SlashCommandBuilder().setName("status").setDescription("Cek status backend dan host").toJSON(),
+    new SlashCommandBuilder()
+      .setName("purge_bot")
+      .setDescription("Hapus pesan bot atau semua pesan terbaru di channel")
+      .addStringOption((opt) =>
+        opt
+          .setName("mode")
+          .setDescription("Mode penghapusan pesan")
+          .setRequired(true)
+          .addChoices(
+            { name: "bot_only", value: "bot_only" },
+            { name: "all_messages", value: "all_messages" }
+          )
+      )
+      .addIntegerOption((opt) =>
+        opt
+          .setName("jumlah")
+          .setDescription("Jumlah target pesan (1-1000)")
+          .setRequired(false)
+          .setMinValue(1)
+          .setMaxValue(1000)
+      )
+      .addChannelOption((opt) =>
+        opt
+          .setName("channel")
+          .setDescription("Channel target (default: channel sekarang)")
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      )
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName("set_notif_service")
+      .setDescription("Set channel dan interval notifikasi status service")
+      .addChannelOption((opt) =>
+        opt
+          .setName("channel")
+          .setDescription("Channel notifikasi service")
+          .setRequired(true)
+          .addChannelTypes(ChannelType.GuildText)
+      )
+      .addIntegerOption((opt) =>
+        opt
+          .setName("durasi_menit")
+          .setDescription(`Interval notifikasi ${NOTIF_MINUTES_MIN}-${NOTIF_MINUTES_MAX} menit`)
+          .setRequired(true)
+          .setMinValue(NOTIF_MINUTES_MIN)
+          .setMaxValue(NOTIF_MINUTES_MAX)
+      )
+      .toJSON(),
+  ];
   const rest = new REST({ version: "10" }).setToken(cfg.token);
   await rest.put(Routes.applicationGuildCommands(cfg.applicationId, cfg.guildId), { body: commands });
 }
@@ -121,7 +172,7 @@ async function registerSlashCommandsWithRetry(maxAttempts = 5): Promise<boolean>
 
 async function assertAuthorized(interaction: ChatInputCommandInteraction): Promise<boolean> {
   const member = interaction.inGuild() ? interaction.member : null;
-  if (!interaction.inGuild() || !isAuthorized(member as any, interaction.user.id, cfg)) {
+  if (!interaction.inGuild() || !isAuthorized(member, interaction.user.id, cfg)) {
     await interaction.reply({ content: "Akses ditolak. Hubungi admin.", flags: MessageFlags.Ephemeral });
     return false;
   }
@@ -570,10 +621,12 @@ client.once(Events.ClientReady, async (ready) => {
   console.log(`[gateway] logged in as ${ready.user.tag}`);
   const registered = await registerSlashCommandsWithRetry();
   if (registered) {
-    console.log("[gateway] slash commands registered: /panel.");
-    return;
+    console.log("[gateway] slash commands registered: /panel, /status, /purge_bot, /set_notif_service.");
+  } else {
+    console.error("[gateway] slash command registration failed after retries; bot continues running.");
   }
-  console.error("[gateway] slash command registration failed after retries; bot continues running.");
+  startNotifScheduler();
+  console.log("[gateway] notifier scheduler started (tick=60s).");
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -584,12 +637,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handlePanelCommand(interaction);
         return;
       }
+      if (interaction.commandName === "status") {
+        await handleStatusCommand(interaction);
+        return;
+      }
+      if (interaction.commandName === "purge_bot") {
+        await handlePurgeBotCommand(interaction);
+        return;
+      }
+      if (interaction.commandName === "set_notif_service") {
+        await handleSetNotifServiceCommand(interaction);
+        return;
+      }
       await interaction.reply({ content: "Command tidak dikenali.", flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (interaction.isButton()) {
-      if (!interaction.inGuild() || !isAuthorized(interaction.member as any, interaction.user.id, cfg)) {
+      if (!interaction.inGuild() || !isAuthorized(interaction.member, interaction.user.id, cfg)) {
         await interaction.reply({ content: "Akses ditolak.", flags: MessageFlags.Ephemeral });
         return;
       }
@@ -603,7 +668,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
-      if (!interaction.inGuild() || !isAuthorized(interaction.member as any, interaction.user.id, cfg)) {
+      if (!interaction.inGuild() || !isAuthorized(interaction.member, interaction.user.id, cfg)) {
         await interaction.reply({ content: "Akses ditolak.", flags: MessageFlags.Ephemeral });
         return;
       }
@@ -615,7 +680,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu()) {
-      if (!interaction.inGuild() || !isAuthorized(interaction.member as any, interaction.user.id, cfg)) {
+      if (!interaction.inGuild() || !isAuthorized(interaction.member, interaction.user.id, cfg)) {
         await interaction.reply({ content: "Akses ditolak.", flags: MessageFlags.Ephemeral });
         return;
       }

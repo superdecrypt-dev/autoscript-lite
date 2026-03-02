@@ -19,6 +19,19 @@ Agent AI baru wajib memulai dari konteks di atas.
   - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
   - `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
 - Perubahan penting terbaru:
+  - Hardening auth bot Discord:
+    - gateway fail-closed jika ACL admin kosong (`DISCORD_ADMIN_ROLE_IDS` / `DISCORD_ADMIN_USER_IDS` wajib minimal salah satu)
+    - fallback izin `Administrator` saat ACL kosong dihapus
+    - parser role interaction diperkuat untuk member partial/API object (tanpa cast `as any`).
+  - Hardening flow installer bot Discord/Telegram:
+    - default `ENABLE_DANGEROUS_ACTIONS=false`
+    - `configure-env` kini gagal jika env belum valid
+    - `start/restart services` hard-block jika env belum valid
+    - Telegram installer fail-closed saat ACL admin kosong (kecuali override eksplisit `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true`).
+  - Hysteria2 sekarang terintegrasi di `setup.sh` (tanpa installer terpisah) dengan default `UDP 443`.
+  - `setup.sh` mengaktifkan `hysteria-server` + `xray-hy2-sync` untuk sync quota/ip-limit/expired.
+  - `manage.sh` `2) User Management` menambahkan bonus akun Hysteria2 saat add user `vless/vmess/trojan`.
+  - `XRAY ACCOUNT INFO` kini menampilkan `HY2 User`, `HY2 Pass`, `HY2 URI` untuk akun bonus.
   - Dukungan protocol account sekarang mencakup `shadowsocks` dan `shadowsocks2022` (multi-user) di CLI + bot.
   - Method default SS:
     - `shadowsocks`: `aes-128-gcm`
@@ -35,7 +48,7 @@ Agent AI baru wajib memulai dari konteks di atas.
     - masking output sensitif.
   - UX bot Telegram dipoles (flow panel, picker user delete, cleanup, Add User speed limit).
   - Transport legacy non-default dibersihkan dari template `setup.sh`, generator `manage.sh`, dan backend bot Discord/Telegram.
-  - Menu CLI sekarang menampilkan `10) Traffic Analytics` dan `11) Install BOT Telegram` (input `12` tetap kompatibel ke Traffic Analytics).
+  - Menu CLI saat ini: `9) Traffic Analytics`, `10) Install BOT Discord`, `11) Install BOT Telegram`.
 - Validasi runtime terakhir:
   - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
   - `nginx -t` -> valid

@@ -315,7 +315,7 @@ BACKEND_BASE_URL=http://127.0.0.1:8081
 BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8081
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
-ENABLE_DANGEROUS_ACTIONS=true
+ENABLE_DANGEROUS_ACTIONS=false
 ENVEOF
     chmod 600 "${BOT_ENV_FILE}"
     ok "File env dibuat: ${BOT_ENV_FILE}"
@@ -342,6 +342,7 @@ validate_required_env() {
   allow_unrestricted="$(printf '%s' "$(get_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${BOT_ENV_FILE}")" | tr '[:upper:]' '[:lower:]')"
   if [[ -z "${admin_chat_ids}" && -z "${admin_user_ids}" && "${allow_unrestricted}" != "true" ]]; then
     warn "Admin ACL kosong. Isi TELEGRAM_ADMIN_* atau set TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true (tidak direkomendasikan)."
+    return 1
   fi
   return 0
 }
@@ -469,7 +470,7 @@ configure_env_interactive() {
   set_env_value TELEGRAM_DEFAULT_CHAT_ID "${default_chat_id}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_CHAT_IDS "${admin_chat_ids}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_USER_IDS "${admin_user_ids}" "${staged_env}"
-  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-true}" "${staged_env}"
+  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-false}" "${staged_env}"
   set_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${allow_unrestricted:-false}" "${staged_env}"
 
   set_env_value BACKEND_BASE_URL "http://127.0.0.1:8081" "${staged_env}"
@@ -480,7 +481,10 @@ configure_env_interactive() {
   chmod 600 "${staged_env}" || true
   mv -f "${staged_env}" "${BOT_ENV_FILE}"
   chmod 600 "${BOT_ENV_FILE}" || true
-  validate_required_env || warn "Beberapa field wajib belum terisi."
+  if ! validate_required_env; then
+    warn "Konfigurasi env tersimpan tetapi belum valid. Lengkapi field wajib sebelum restart service."
+    return 1
+  fi
   ok "Konfigurasi env selesai."
 }
 
@@ -799,6 +803,7 @@ install_or_update_systemd() {
 start_or_restart_services() {
   need_root
   command_exists systemctl || die "systemctl tidak tersedia di host ini."
+  validate_required_env || die "Env belum valid. Jalankan menu 3 (Configure Bot) dulu."
 
   service_unit_exists "${BACKEND_SERVICE}" || die "Service ${BACKEND_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."
   service_unit_exists "${GATEWAY_SERVICE}" || die "Service ${GATEWAY_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."

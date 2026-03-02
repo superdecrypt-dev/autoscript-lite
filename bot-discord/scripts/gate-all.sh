@@ -132,7 +132,7 @@ run_gate_3() {
     trap 'kill "${uv_pid}" >/dev/null 2>&1 || true' EXIT
 
     for _ in $(seq 1 60); do
-      if curl -fsS "http://127.0.0.1:18082/health" >/dev/null 2>&1; then
+      if curl -fsS -H "X-Internal-Shared-Secret: gate3-gateall-secret" "http://127.0.0.1:18082/health" >/dev/null 2>&1; then
         break
       fi
       sleep 0.25
@@ -172,7 +172,7 @@ def rec(name, ok):
     checks.append((name, bool(ok)))
     print(f"gate3_{name}={'PASS' if ok else 'FAIL'}")
 
-s, b = get("/health")
+s, b = get("/health", headers={"X-Internal-Shared-Secret": SECRET})
 rec("health", s == 200 and b.get("status") == "ok")
 s, b = get("/api/main-menu", headers={"X-Internal-Shared-Secret": SECRET})
 menu_ids = [str(m.get("id")) for m in (b.get("menus") or []) if isinstance(m, dict)]
@@ -232,7 +232,7 @@ def rec(name, ok):
     status_text = "PASS" if ok else "FAIL"
     print(f"gate3_1_{name}={status_text}")
 
-s,b=get("/health")
+s,b=get("/health", headers={"X-Internal-Shared-Secret":SECRET})
 rec("health", s==200 and b.get("status")=="ok")
 s,b=get("/api/main-menu", headers={"X-Internal-Shared-Secret":SECRET})
 menu_ids=[str(m.get("id")) for m in (b.get("menus") or []) if isinstance(m, dict)]
@@ -312,8 +312,10 @@ import json, os
 data = json.loads(os.environ["RESP_JSON"])
 names = sorted(str(x.get("name") or "") for x in data if isinstance(x, dict))
 print("gate5_commands=" + ",".join(names))
-if "panel" not in names:
-    raise SystemExit("gate5_panel_missing")
+required = {"panel", "status", "purge_bot", "set_notif_service"}
+missing = sorted(required.difference(set(names)))
+if missing:
+    raise SystemExit("gate5_commands_missing:" + ",".join(missing))
 PY
 '
 }

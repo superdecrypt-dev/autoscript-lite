@@ -35,6 +35,15 @@ SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
 SPEED_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
+HY2_CONFIG_DIR="/etc/hysteria"
+HY2_CONFIG_FILE="${HY2_CONFIG_DIR}/config.yaml"
+HY2_CERT_FILE="${HY2_CONFIG_DIR}/server.crt"
+HY2_KEY_FILE="${HY2_CONFIG_DIR}/server.key"
+HY2_AUTH_SCRIPT="/usr/local/bin/hy2-auth"
+HY2_SYNC_SCRIPT="/usr/local/bin/hy2-sync-users"
+HY2_TRAFFIC_SECRET_FILE="${HY2_CONFIG_DIR}/traffic_secret"
+HY2_TRAFFIC_LISTEN="127.0.0.1:10990"
+HY2_MASQUERADE_URL="${HY2_MASQUERADE_URL:-https://www.cloudflare.com/}"
 OBS_CONFIG_DIR="/etc/xray-observe"
 OBS_CONFIG_FILE="${OBS_CONFIG_DIR}/config.env"
 OBS_STATE_DIR="/var/lib/xray-observe"
@@ -2055,6 +2064,549 @@ EOF
   ok "Nginx reverse proxy aktif (public paths -> internal port/path via map \$uri)."
 }
 
+hy2_rand_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+  else
+    date +%s%N | sha256sum | awk '{print $1}'
+  fi
+}
+
+install_hysteria2_integrated() {
+  ok "Setup Hysteria2 terintegrasi (UDP 443)..."
+
+  local hy2_domain hy2_secret installer hy2_service_user hy2_service_group
+  hy2_domain="${DOMAIN:-}"
+  [[ -n "${hy2_domain}" ]] || hy2_domain="$(detect_domain || true)"
+  [[ -n "${hy2_domain}" ]] || die "Domain untuk Hysteria2 belum tersedia."
+
+  [[ -s "${CERT_FULLCHAIN}" && -s "${CERT_PRIVKEY}" ]] || die "Cert TLS belum siap di ${CERT_DIR}."
+
+  if ! command -v hysteria >/dev/null 2>&1; then
+    installer="$(mktemp)"
+    download_file_or_die "https://get.hy2.sh/" "${installer}" "" "installer hysteria2"
+    bash "${installer}" >/dev/null
+    rm -f "${installer}" >/dev/null 2>&1 || true
+  fi
+  command -v hysteria >/dev/null 2>&1 || die "Binary hysteria tidak ditemukan setelah instalasi."
+
+  hy2_service_user="$(systemctl show -p User --value hysteria-server 2>/dev/null | tr -d '[:space:]')"
+  hy2_service_group="$(systemctl show -p Group --value hysteria-server 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "${hy2_service_user}" ]] || hy2_service_user="root"
+  if ! id -u "${hy2_service_user}" >/dev/null 2>&1; then
+    hy2_service_user="root"
+  fi
+  if [[ -z "${hy2_service_group}" ]]; then
+    hy2_service_group="$(id -gn "${hy2_service_user}" 2>/dev/null || echo root)"
+  fi
+  if ! getent group "${hy2_service_group}" >/dev/null 2>&1; then
+    hy2_service_group="root"
+  fi
+
+  mkdir -p "${HY2_CONFIG_DIR}" /opt/account/hysteria2
+  chmod 700 /opt/account/hysteria2 || true
+  install -m 640 -o root -g "${hy2_service_group}" "${CERT_FULLCHAIN}" "${HY2_CERT_FILE}"
+  install -m 640 -o root -g "${hy2_service_group}" "${CERT_PRIVKEY}" "${HY2_KEY_FILE}"
+
+  if [[ -s "${HY2_TRAFFIC_SECRET_FILE}" ]]; then
+    hy2_secret="$(tr -d '[:space:]' < "${HY2_TRAFFIC_SECRET_FILE}")"
+  else
+    hy2_secret="$(hy2_rand_secret)"
+    printf '%s\n' "${hy2_secret}" > "${HY2_TRAFFIC_SECRET_FILE}"
+    chmod 600 "${HY2_TRAFFIC_SECRET_FILE}" || true
+  fi
+  [[ -n "${hy2_secret}" ]] || die "Gagal menyiapkan secret trafficStats Hysteria2."
+
+  cat > "${HY2_AUTH_SCRIPT}" <<'EOF'
+#!/usr/bin/env python3
+import hmac
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ACCOUNT_ROOT = "/opt/account/hysteria2"
+QUOTA_ROOT = "/opt/quota"
+ALLOWED_PROTO = {"vless", "vmess", "trojan"}
+
+def load_json(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      d = json.load(f)
+    if isinstance(d, dict):
+      return d
+  except Exception:
+    pass
+  return {}
+
+def parse_auth(raw):
+  if ":" not in raw:
+    return "", ""
+  user, pwd = raw.split(":", 1)
+  user = user.strip()
+  pwd = pwd.strip()
+  if not user or not pwd:
+    return "", ""
+  if "/" in user or "\\" in user or ".." in user:
+    return "", ""
+  return user, pwd
+
+def quota_path(source_proto, username):
+  p1 = os.path.join(QUOTA_ROOT, source_proto, f"{username}@{source_proto}.json")
+  if os.path.isfile(p1):
+    return p1
+  p2 = os.path.join(QUOTA_ROOT, source_proto, f"{username}.json")
+  if os.path.isfile(p2):
+    return p2
+  return ""
+
+def is_expired(meta):
+  exp = str(meta.get("expired_at") or "").strip()
+  if not exp:
+    return False
+  exp = exp[:10]
+  try:
+    exp_date = datetime.strptime(exp, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+  except Exception:
+    return False
+  return exp_date <= datetime.now(timezone.utc)
+
+def is_blocked(meta):
+  st = meta.get("status")
+  if not isinstance(st, dict):
+    return False
+  if bool(st.get("manual_block", False)):
+    return True
+  if bool(st.get("quota_exhausted", False)):
+    return True
+  if bool(st.get("ip_limit_locked", False)):
+    return True
+  return False
+
+def main():
+  if len(sys.argv) < 3:
+    return 1
+  user, pwd = parse_auth(sys.argv[2])
+  if not user or not pwd:
+    return 1
+
+  acc_path = os.path.join(ACCOUNT_ROOT, f"{user}.json")
+  acc = load_json(acc_path)
+  if not acc:
+    return 1
+  stored = str(acc.get("password") or "")
+  if not stored or not hmac.compare_digest(stored, pwd):
+    return 1
+
+  source_proto = str(acc.get("source_proto") or "").strip().lower()
+  bare_username = str(acc.get("username") or "").strip()
+  if source_proto not in ALLOWED_PROTO or not bare_username:
+    return 1
+
+  qpath = quota_path(source_proto, bare_username)
+  if not qpath:
+    return 1
+  meta = load_json(qpath)
+  if not meta:
+    return 1
+  if is_expired(meta) or is_blocked(meta):
+    return 1
+
+  print(user)
+  return 0
+
+if __name__ == "__main__":
+  raise SystemExit(main())
+EOF
+  chmod 755 "${HY2_AUTH_SCRIPT}"
+
+  cat > "${HY2_SYNC_SCRIPT}" <<'EOF'
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+import fcntl
+from datetime import datetime, timezone
+
+ACCOUNT_ROOT = "/opt/account/hysteria2"
+QUOTA_ROOT = "/opt/quota"
+API_BASE_DEFAULT = "http://127.0.0.1:10990"
+SECRET_FILE_DEFAULT = "/etc/hysteria/traffic_secret"
+ALLOWED_PROTO = {"vless", "vmess", "trojan"}
+
+def now_iso():
+  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def parse_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def load_json(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      d = json.load(f)
+    if isinstance(d, dict):
+      return d
+  except Exception:
+    pass
+  return {}
+
+def save_json_atomic(path, data):
+  import tempfile
+  d = os.path.dirname(path) or "."
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=d)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(data, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+def quota_path(source_proto, username):
+  p1 = os.path.join(QUOTA_ROOT, source_proto, f"{username}@{source_proto}.json")
+  if os.path.isfile(p1):
+    return p1
+  p2 = os.path.join(QUOTA_ROOT, source_proto, f"{username}.json")
+  if os.path.isfile(p2):
+    return p2
+  return ""
+
+def parse_expired(meta):
+  s = str(meta.get("expired_at") or "").strip()
+  if not s:
+    return False
+  s = s[:10]
+  try:
+    dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+  except Exception:
+    return False
+  return dt <= datetime.now(timezone.utc)
+
+def recompute_lock_reason(st):
+  mb = bool(st.get("manual_block", False))
+  qe = bool(st.get("quota_exhausted", False))
+  il = bool(st.get("ip_limit_locked", False))
+  if mb:
+    st["lock_reason"] = "manual"
+    st["locked_at"] = str(st.get("locked_at") or now_iso())
+    return
+  if qe:
+    st["lock_reason"] = "quota"
+    st["locked_at"] = str(st.get("locked_at") or now_iso())
+    return
+  if il:
+    st["lock_reason"] = "ip_limit"
+    st["locked_at"] = str(st.get("locked_at") or now_iso())
+    return
+  st["lock_reason"] = ""
+  st["locked_at"] = ""
+
+def load_secret(path):
+  try:
+    return open(path, "r", encoding="utf-8").read().strip()
+  except Exception:
+    return ""
+
+def api_request(base, path, secret, method="GET", payload=None):
+  url = base.rstrip("/") + path
+  headers = {"Authorization": secret}
+  data = None
+  if payload is not None:
+    data = json.dumps(payload).encode("utf-8")
+    headers["Content-Type"] = "application/json"
+  req = urllib.request.Request(url, data=data, headers=headers, method=method)
+  with urllib.request.urlopen(req, timeout=5) as resp:
+    raw = resp.read().decode("utf-8", errors="replace")
+  if not raw.strip():
+    return {}
+  try:
+    obj = json.loads(raw)
+    if isinstance(obj, dict):
+      return obj
+  except Exception:
+    pass
+  return {}
+
+def extract_traffic_map(obj):
+  cands = []
+  if isinstance(obj.get("traffic"), dict):
+    cands.append(obj.get("traffic"))
+  if isinstance(obj.get("users"), dict):
+    cands.append(obj.get("users"))
+  if isinstance(obj.get("data"), dict):
+    cands.append(obj.get("data"))
+  cands.append(obj)
+  for cand in cands:
+    out = {}
+    if not isinstance(cand, dict):
+      continue
+    for k, v in cand.items():
+      if not isinstance(k, str):
+        continue
+      if isinstance(v, dict):
+        tx = parse_int(v.get("tx", v.get("uplink", 0)), 0)
+        rx = parse_int(v.get("rx", v.get("downlink", 0)), 0)
+      else:
+        tx = parse_int(v, 0)
+        rx = 0
+      if tx > 0 or rx > 0:
+        out[k] = tx + rx
+    if out:
+      return out
+  return {}
+
+def extract_online_map(obj):
+  cands = []
+  if isinstance(obj.get("online"), dict):
+    cands.append(obj.get("online"))
+  if isinstance(obj.get("users"), dict):
+    cands.append(obj.get("users"))
+  if isinstance(obj.get("data"), dict):
+    cands.append(obj.get("data"))
+  cands.append(obj)
+  for cand in cands:
+    out = {}
+    if not isinstance(cand, dict):
+      continue
+    for k, v in cand.items():
+      if not isinstance(k, str):
+        continue
+      if isinstance(v, dict):
+        n = parse_int(v.get("count", v.get("online", 0)), 0)
+      else:
+        n = parse_int(v, 0)
+      out[k] = max(0, n)
+    if out:
+      return out
+  return {}
+
+def kick_user(base, secret, user_id):
+  attempts = (
+    ("POST", "/kick", [user_id]),
+    ("POST", "/kick", {"id": user_id}),
+    ("POST", "/kick", {"ids": [user_id]}),
+    ("POST", "/kick?" + urllib.parse.urlencode({"id": user_id}), None),
+  )
+  for method, path, payload in attempts:
+    try:
+      api_request(base, path, secret, method=method, payload=payload)
+      return True
+    except Exception:
+      continue
+  return False
+
+def iter_accounts():
+  if not os.path.isdir(ACCOUNT_ROOT):
+    return []
+  out = []
+  for name in os.listdir(ACCOUNT_ROOT):
+    if not name.endswith(".json"):
+      continue
+    path = os.path.join(ACCOUNT_ROOT, name)
+    obj = load_json(path)
+    if not obj:
+      continue
+    source_proto = str(obj.get("source_proto") or "").strip().lower()
+    username = str(obj.get("username") or "").strip()
+    auth_user = str(obj.get("auth_user") or "").strip()
+    if source_proto not in ALLOWED_PROTO or not username or not auth_user:
+      continue
+    out.append((path, obj, source_proto, username, auth_user))
+  return out
+
+def update_quota_file(qpath, delta_traffic, online_count):
+  lock_path = f"{qpath}.lock"
+  os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+  with open(lock_path, "a+", encoding="utf-8") as lf:
+    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    try:
+      meta = load_json(qpath)
+      if not meta:
+        return False, False
+      changed = False
+      st = meta.get("status")
+      if not isinstance(st, dict):
+        st = {}
+        meta["status"] = st
+        changed = True
+
+      hy2_before = max(0, parse_int(meta.get("hy2_usage_bytes"), 0))
+      xray_used = max(0, parse_int(meta.get("xray_usage_bytes"), max(parse_int(meta.get("quota_used"), 0) - hy2_before, 0)))
+      hy2_after = hy2_before + max(0, parse_int(delta_traffic, 0))
+      total_used = xray_used + hy2_after
+
+      if parse_int(meta.get("xray_usage_bytes"), -1) != xray_used:
+        meta["xray_usage_bytes"] = xray_used
+        changed = True
+      if parse_int(meta.get("hy2_usage_bytes"), -1) != hy2_after:
+        meta["hy2_usage_bytes"] = hy2_after
+        changed = True
+      if parse_int(meta.get("quota_used"), -1) != total_used:
+        meta["quota_used"] = total_used
+        changed = True
+
+      quota_limit = max(0, parse_int(meta.get("quota_limit"), 0))
+      exhausted = quota_limit > 0 and total_used >= quota_limit
+      if bool(st.get("quota_exhausted", False)) != exhausted:
+        st["quota_exhausted"] = exhausted
+        changed = True
+
+      ip_enabled = bool(st.get("ip_limit_enabled", False))
+      ip_limit = max(0, parse_int(st.get("ip_limit", 0), 0))
+      if ip_enabled and ip_limit > 0 and online_count > ip_limit and not bool(st.get("ip_limit_locked", False)):
+        st["ip_limit_locked"] = True
+        changed = True
+
+      old_reason = str(st.get("lock_reason") or "")
+      old_locked_at = str(st.get("locked_at") or "")
+      recompute_lock_reason(st)
+      if str(st.get("lock_reason") or "") != old_reason or str(st.get("locked_at") or "") != old_locked_at:
+        changed = True
+
+      should_kick = bool(st.get("manual_block", False)) or bool(st.get("quota_exhausted", False)) or bool(st.get("ip_limit_locked", False)) or parse_expired(meta)
+
+      if changed:
+        save_json_atomic(qpath, meta)
+      return should_kick, changed
+    finally:
+      fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+def run_once(api_base, secret_file):
+  secret = load_secret(secret_file)
+  if not secret:
+    return 0
+
+  try:
+    traffic_obj = api_request(api_base, "/traffic?clear=1", secret, method="GET")
+  except Exception:
+    traffic_obj = {}
+  try:
+    online_obj = api_request(api_base, "/online", secret, method="GET")
+  except Exception:
+    online_obj = {}
+
+  traffic_map = extract_traffic_map(traffic_obj)
+  online_map = extract_online_map(online_obj)
+  kick_ids = set()
+
+  for _, _, source_proto, username, auth_user in iter_accounts():
+    qpath = quota_path(source_proto, username)
+    if not qpath:
+      kick_ids.add(auth_user)
+      continue
+    should_kick, _ = update_quota_file(qpath, traffic_map.get(auth_user, 0), max(0, parse_int(online_map.get(auth_user, 0), 0)))
+    if should_kick:
+      kick_ids.add(auth_user)
+
+  for user_id in sorted(kick_ids):
+    kick_user(api_base, secret, user_id)
+  return 0
+
+def main():
+  ap = argparse.ArgumentParser(prog="hy2-sync-users")
+  sub = ap.add_subparsers(dest="cmd", required=True)
+
+  p_once = sub.add_parser("once")
+  p_once.add_argument("--api-base", default=API_BASE_DEFAULT)
+  p_once.add_argument("--secret-file", default=SECRET_FILE_DEFAULT)
+
+  p_watch = sub.add_parser("watch")
+  p_watch.add_argument("--api-base", default=API_BASE_DEFAULT)
+  p_watch.add_argument("--secret-file", default=SECRET_FILE_DEFAULT)
+  p_watch.add_argument("--interval", type=int, default=5)
+
+  args = ap.parse_args()
+  if args.cmd == "once":
+    return run_once(args.api_base, args.secret_file)
+
+  interval = max(2, int(args.interval))
+  while True:
+    try:
+      run_once(args.api_base, args.secret_file)
+    except Exception:
+      pass
+    import time
+    time.sleep(interval)
+
+if __name__ == "__main__":
+  raise SystemExit(main())
+EOF
+  chmod 755 "${HY2_SYNC_SCRIPT}"
+
+  cat > "${HY2_CONFIG_FILE}" <<EOF
+listen: :443
+
+tls:
+  cert: ${HY2_CERT_FILE}
+  key: ${HY2_KEY_FILE}
+
+auth:
+  type: command
+  command: ${HY2_AUTH_SCRIPT}
+
+trafficStats:
+  listen: ${HY2_TRAFFIC_LISTEN}
+  secret: ${hy2_secret}
+
+masquerade:
+  type: proxy
+  proxy:
+    url: ${HY2_MASQUERADE_URL}
+    rewriteHost: true
+EOF
+  chmod 640 "${HY2_CONFIG_FILE}" || true
+  chown root:"${hy2_service_group}" "${HY2_CONFIG_FILE}" 2>/dev/null || true
+
+  cat > /etc/systemd/system/xray-hy2-sync.service <<EOF
+[Unit]
+Description=Hysteria2 quota/ip-limit sync
+After=network-online.target hysteria-server.service xray.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${HY2_SYNC_SCRIPT} watch --api-base http://${HY2_TRAFFIC_LISTEN} --secret-file ${HY2_TRAFFIC_SECRET_FILE} --interval 5
+Restart=always
+RestartSec=3
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  service_enable_restart_checked hysteria-server || die "hysteria-server gagal diaktifkan."
+  service_enable_restart_checked xray-hy2-sync || die "xray-hy2-sync gagal diaktifkan."
+  "${HY2_SYNC_SCRIPT}" once --api-base "http://${HY2_TRAFFIC_LISTEN}" --secret-file "${HY2_TRAFFIC_SECRET_FILE}" >/dev/null 2>&1 || true
+
+  ok "Hysteria2 aktif (integrated):"
+  ok "  - service : hysteria-server (UDP 443)"
+  ok "  - auth    : command (${HY2_AUTH_SCRIPT})"
+  ok "  - sync    : xray-hy2-sync (quota/ip_limit/expired)"
+}
+
 
 # =========================
 # Add-ons: WARP (wgcf + wireproxy), fail2ban aggressive, BBR, swap, ulimit, chrony
@@ -2625,9 +3177,9 @@ EOF
 install_management_scripts() {
   ok "Menyiapkan script manajemen (placeholder) ..."
 
-  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/hysteria2
   mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
-  chmod 700 /opt/account /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
+  chmod 700 /opt/account /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/hysteria2
   chmod 700 /opt/quota  /opt/quota/vless  /opt/quota/vmess  /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
 
   cat > /usr/local/bin/xray-expired <<'EOF'
@@ -2840,6 +3392,9 @@ def delete_user_artifacts(proto, user_key, quota_path):
   }
   for sp in speed_candidates:
     _remove_file(sp)
+
+  # 6) bonus account Hysteria2 yang terkait source proto ini
+  _remove_file(os.path.join(ACCOUNT_ROOT, "hysteria2", f"{bare}@{proto}.json"))
 
 def run_once(inbounds_path, routing_path, dry_run=False):
   ts = now_utc()
@@ -3729,6 +4284,14 @@ def parse_int(v):
   except Exception:
     return 0
 
+def parse_bool(v):
+  if isinstance(v, bool):
+    return v
+  if v is None:
+    return False
+  s = str(v).strip().lower()
+  return s in ("1", "true", "yes", "y", "on")
+
 def normalize_quota_limit(meta, raw_limit):
   unit_raw = (meta.get("quota_unit") if isinstance(meta, dict) else "") or ""
   unit = str(unit_raw).strip().lower()
@@ -3873,29 +4436,25 @@ def fetch_all_user_traffic(api_server):
     totals[email] = parse_int(d.get("uplink")) + parse_int(d.get("downlink"))
   return totals
 
-def ensure_quota_status(meta, exhausted, q_limit, q_used, q_unit, bpg):
+def ensure_quota_status(meta, exhausted, q_limit, xray_used, hy2_used, q_unit, bpg):
   st_raw = meta.get("status") if isinstance(meta, dict) else {}
   st = st_raw if isinstance(st_raw, dict) else {}
   changed = False
 
-  prev_used = parse_int(meta.get("quota_used"))
-  # BUG-11 fix: removed unconditional max(prev_used, api_used).
-  # Previously quota_used could never decrease, so a manual reset to 0 from
-  # Menu 3 would be immediately overwritten by the daemon with the old high value.
-  # New logic: trust api_used when it is positive (xray stats are live).
-  # Only fall back to prev_used if api_used is 0, which likely means xray was
-  # restarted and stats were reset — in that case keep prev_used to avoid
-  # losing accumulated usage data. If admin has explicitly reset quota_used via
-  # Menu 3, they should also restart xray so stats reset to 0 simultaneously.
-  api_used_int = parse_int(q_used)
-  if api_used_int > 0:
-    q_used_eff = api_used_int
-  else:
-    # api returns 0: xray just restarted or no traffic. Keep accumulated value.
-    q_used_eff = prev_used
+  xray_used_eff = max(0, parse_int(xray_used))
+  hy2_used_eff = max(0, parse_int(hy2_used))
+  q_used_eff = xray_used_eff + hy2_used_eff
 
   if meta.get("quota_limit") != q_limit:
     meta["quota_limit"] = q_limit
+    changed = True
+
+  if parse_int(meta.get("xray_usage_bytes")) != xray_used_eff:
+    meta["xray_usage_bytes"] = xray_used_eff
+    changed = True
+
+  if parse_int(meta.get("hy2_usage_bytes")) != hy2_used_eff:
+    meta["hy2_usage_bytes"] = hy2_used_eff
     changed = True
 
   if meta.get("quota_used") != q_used_eff:
@@ -3967,41 +4526,102 @@ def run_once(config_path, marker, api_server, dry_run=False):
   exhausted_users = []
   ok_users = []
 
-  for _, path in iter_quota_files():
-    try:
-      meta = load_json(path)
-    except Exception:
-      continue
-
-    username = os.path.splitext(os.path.basename(path))[0]
-    if isinstance(meta, dict):
-      u2 = meta.get("username")
-      if isinstance(u2, str) and u2.strip():
-        username = u2.strip()
-    if not username:
-      continue
-
-    raw_limit = parse_int(meta.get("quota_limit") if isinstance(meta, dict) else 0)
-    q_limit, q_unit, bpg = normalize_quota_limit(meta, raw_limit) if isinstance(meta, dict) else (raw_limit, "decimal", GB_DECIMAL)
-    prev_used = parse_int(meta.get("quota_used") if isinstance(meta, dict) else 0)
-    api_used = parse_int(totals.get(username, 0))
-    # Sinkron dengan ensure_quota_status: gunakan nilai API saat >0,
-    # fallback ke nilai lama saat API 0 (mis. setelah restart xray).
-    q_used = api_used if api_used > 0 else prev_used
-
-    exhausted = (q_limit > 0 and q_used >= q_limit)
-    meta_changed = ensure_quota_status(meta, exhausted, q_limit, q_used, q_unit, bpg) if isinstance(meta, dict) else False
-
-    if meta_changed and not dry_run:
+  import fcntl
+  for proto, path in iter_quota_files():
+    lock_path = f"{path}.lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as lf:
+      fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
       try:
-        save_json_atomic(path, meta)
-      except Exception:
-        pass
+        try:
+          meta = load_json(path)
+        except Exception:
+          continue
+        if not isinstance(meta, dict):
+          continue
 
-    if exhausted:
-      exhausted_users.append(username)
-    else:
-      ok_users.append(username)
+        username = os.path.splitext(os.path.basename(path))[0]
+        u2 = meta.get("username")
+        if isinstance(u2, str) and u2.strip():
+          username = u2.strip()
+        if not username:
+          continue
+        user_email = username if "@" in username else f"{username}@{proto}"
+
+        raw_limit = parse_int(meta.get("quota_limit"))
+        q_limit, q_unit, bpg = normalize_quota_limit(meta, raw_limit)
+        prev_used = parse_int(meta.get("quota_used"))
+        prev_hy2_used = parse_int(meta.get("hy2_usage_bytes"))
+        prev_xray_used = parse_int(meta.get("xray_usage_bytes") if "xray_usage_bytes" in meta else max(prev_used - prev_hy2_used, 0))
+        baseline = max(0, parse_int(meta.get("xray_api_baseline_bytes")))
+        carry = max(0, parse_int(meta.get("xray_usage_carry_bytes")))
+        last_total = max(0, parse_int(meta.get("xray_api_last_total_bytes")))
+        reset_pending = parse_bool(meta.get("xray_usage_reset_pending", False))
+        has_api_total = (user_email in totals)
+        api_total = parse_int(totals.get(user_email, 0))
+
+        meta_changed = False
+        if reset_pending:
+          # Tahan reset_pending sampai API Xray tersedia, agar baseline bisa
+          # diambil dari counter kumulatif real-time dan tidak rebound saat API
+          # sempat unavailable.
+          carry = 0
+          xray_used = 0
+          if has_api_total:
+            baseline = api_total
+            last_total = api_total
+            if parse_bool(meta.get("xray_usage_reset_pending", False)):
+              meta["xray_usage_reset_pending"] = False
+              meta_changed = True
+          else:
+            # API belum ada: biarkan reset_pending tetap true untuk dicoba lagi
+            # di siklus berikutnya.
+            pass
+        else:
+          # Gunakan nilai API Xray kumulatif dan kurangi baseline reset.
+          # Jika API tidak memberi nilai, fallback ke nilai metadata sebelumnya.
+          if has_api_total:
+            # Jika counter API restart/turun (api_total < last_total), lanjutkan
+            # akumulasi dari usage sebelumnya agar quota tidak "jatuh" ke 0.
+            if api_total < last_total:
+              carry = max(0, prev_xray_used)
+              baseline = 0
+            xray_used = max(0, carry + max(0, api_total - baseline))
+            last_total = api_total
+          else:
+            xray_used = prev_xray_used
+          if parse_bool(meta.get("xray_usage_reset_pending", False)):
+            meta["xray_usage_reset_pending"] = False
+            meta_changed = True
+
+        if parse_int(meta.get("xray_api_baseline_bytes")) != baseline:
+          meta["xray_api_baseline_bytes"] = baseline
+          meta_changed = True
+        if parse_int(meta.get("xray_usage_carry_bytes")) != carry:
+          meta["xray_usage_carry_bytes"] = carry
+          meta_changed = True
+        if parse_int(meta.get("xray_api_last_total_bytes")) != last_total:
+          meta["xray_api_last_total_bytes"] = last_total
+          meta_changed = True
+
+        hy2_used = prev_hy2_used
+        q_used = xray_used + hy2_used
+        exhausted = (q_limit > 0 and q_used >= q_limit)
+        if ensure_quota_status(meta, exhausted, q_limit, xray_used, hy2_used, q_unit, bpg):
+          meta_changed = True
+
+        if meta_changed and not dry_run:
+          try:
+            save_json_atomic(path, meta)
+          except Exception:
+            pass
+
+        if exhausted:
+          exhausted_users.append(user_email)
+        else:
+          ok_users.append(user_email)
+      finally:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
   if not exhausted_users and not ok_users:
     return 0
@@ -5831,6 +6451,24 @@ sanity_check() {
     failed=1
   fi
 
+  if systemctl is-active --quiet hysteria-server; then
+    ok "sanity: hysteria-server active"
+  else
+    warn "sanity: hysteria-server NOT active"
+    systemctl status hysteria-server --no-pager >&2 || true
+    journalctl -u hysteria-server -n 200 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet xray-hy2-sync; then
+    ok "sanity: xray-hy2-sync active"
+  else
+    warn "sanity: xray-hy2-sync NOT active"
+    systemctl status xray-hy2-sync --no-pager >&2 || true
+    journalctl -u xray-hy2-sync -n 200 --no-pager >&2 || true
+    failed=1
+  fi
+
   # Config sanity (non-fatal if tools missing)
   if command -v nginx >/dev/null 2>&1; then
     if nginx -t >/dev/null 2>&1; then
@@ -5861,10 +6499,18 @@ sanity_check() {
   fi
 
   # Listener hints (informational only)
-  if ss -lntp 2>/dev/null | grep -q ':443'; then
+  # Match exact port 443 agar tidak false-positive ke :4430 dst.
+  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
     ok "sanity: port 443 is listening"
   else
     warn "sanity: port 443 not detected as listening (check nginx)"
+  fi
+
+  if ss -lunp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+    ok "sanity: UDP 443 is listening"
+  else
+    warn "sanity: UDP 443 not detected as listening (check hysteria-server)"
+    failed=1
   fi
 
   if [[ "$failed" -ne 0 ]]; then
@@ -5903,6 +6549,7 @@ main() {
   configure_xray_service_confdir
   write_nginx_config
   install_management_scripts
+  install_hysteria2_integrated
   sync_manage_modules_layout
   install_xray_speed_limiter_foundation
   install_observability_alerting

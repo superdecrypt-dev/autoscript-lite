@@ -1,5 +1,66 @@
 # Release Notes
 
+## Rilis 2026-03-02 (Bot Auth Hardening + Installer Validation Guard)
+
+### Ringkasan
+Rilis ini memfokuskan hardening akses admin bot Discord/Telegram dan memastikan flow installer fail-closed saat konfigurasi env belum valid.
+
+### Perubahan Utama
+1. Hardening authz gateway Discord
+- Gateway sekarang fail-closed bila `DISCORD_ADMIN_ROLE_IDS` dan `DISCORD_ADMIN_USER_IDS` sama-sama kosong.
+- Fallback otorisasi berbasis permission `Administrator` saat ACL kosong dihapus.
+- Handler auth di interaction Discord diperkuat agar aman terhadap variasi bentuk `interaction.member` (termasuk member partial/API object), tanpa cast `as any`.
+
+2. Hardening backend secret check
+- Verifikasi shared secret backend memakai `hmac.compare_digest`.
+- Endpoint health backend bot Discord/Telegram kini tetap berada di jalur ber-auth secret.
+
+3. Guard installer Discord/Telegram (env validation)
+- Default `ENABLE_DANGEROUS_ACTIONS` diset ke `false`.
+- `configure-env` sekarang mengembalikan gagal jika env belum valid (tidak lagi menampilkan sukses palsu).
+- `start/restart services` sekarang hard-block jika env belum valid.
+- Installer Telegram kini fail-closed saat ACL admin kosong (kecuali `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true`).
+
+### Hasil Validasi
+- `bash -n manage.sh setup.sh install-discord-bot.sh install-telegram-bot.sh` -> PASS
+- `python3 -m py_compile` backend/gateway bot Discord/Telegram -> PASS
+- `cd bot-discord/gateway-ts && npm run -s build` -> PASS
+- `bot-discord/scripts/gate-all.sh local` -> PASS
+- `bot-telegram/scripts/gate-all.sh` -> PASS
+
+## Rilis 2026-03-02 (Hysteria2 UDP 443 Integration)
+
+### Ringkasan
+Rilis ini memindahkan Hysteria2 menjadi fitur terintegrasi di jalur CLI (`setup.sh` + `manage.sh`) tanpa installer terpisah.
+
+### Perubahan Utama
+1. Integrasi Hysteria2 ke `setup.sh`
+- `setup.sh` kini otomatis:
+  - install binary `hysteria`
+  - menulis config `/etc/hysteria/config.yaml`
+  - mengaktifkan `hysteria-server` dan `xray-hy2-sync`
+- Default setup:
+  - listen `UDP :443`
+  - TLS cert dari `/opt/cert/fullchain.pem` + `/opt/cert/privkey.pem`
+  - auth mode `command` (`/usr/local/bin/hy2-auth`)
+  - traffic API secret + sinkronisasi quota/ip-limit/expired (`/usr/local/bin/hy2-sync-users`)
+
+2. Integrasi Hysteria2 ke `manage.sh`
+- `2) User Management > Add user` untuk `vless/vmess/trojan` otomatis membuat bonus akun Hysteria2.
+- `XRAY ACCOUNT INFO` kini menampilkan:
+  - `HY2 User`
+  - `HY2 Pass`
+  - `HY2 URI`
+- Hapus/extend user dan perubahan quota/ip-limit ikut sinkron ke Hysteria2 (`hy2-sync-users once`).
+
+3. Cleanup jalur installer terpisah
+- Referensi installer standalone `install-hysteria2.sh` di menu bootstrap dihapus.
+- Main menu `manage` kembali fokus ke 11 item operasional utama.
+
+### Hasil Validasi
+- `bash -n setup.sh manage.sh run.sh` -> PASS
+- Hasil patch memastikan setup memanggil `install_hysteria2_integrated()` dan `sanity_check` memverifikasi `hysteria-server` + `xray-hy2-sync`.
+
 ## Rilis 2026-03-02 (SS Multi-User + Bot Coexist Stability)
 
 ### Ringkasan

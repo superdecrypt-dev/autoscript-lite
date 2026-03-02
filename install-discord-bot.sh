@@ -312,7 +312,7 @@ BACKEND_BASE_URL=http://127.0.0.1:8080
 BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8080
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
-ENABLE_DANGEROUS_ACTIONS=true
+ENABLE_DANGEROUS_ACTIONS=false
 ENVEOF
     chmod 600 "${BOT_ENV_FILE}"
     ok "File env dibuat: ${BOT_ENV_FILE}"
@@ -323,7 +323,7 @@ ENVEOF
 
 validate_required_env() {
   local missing=()
-  local key val
+  local key val role_ids user_ids
   for key in INTERNAL_SHARED_SECRET DISCORD_BOT_TOKEN DISCORD_APPLICATION_ID DISCORD_GUILD_ID; do
     val="$(get_env_value "$key" "${BOT_ENV_FILE}")"
     [[ -n "${val}" ]] || missing+=("$key")
@@ -331,6 +331,12 @@ validate_required_env() {
 
   if (( ${#missing[@]} > 0 )); then
     warn "Env belum lengkap: ${missing[*]}"
+    return 1
+  fi
+  role_ids="$(get_env_value DISCORD_ADMIN_ROLE_IDS "${BOT_ENV_FILE}")"
+  user_ids="$(get_env_value DISCORD_ADMIN_USER_IDS "${BOT_ENV_FILE}")"
+  if [[ -z "${role_ids}" && -z "${user_ids}" ]]; then
+    warn "Admin ACL kosong. Isi minimal salah satu: DISCORD_ADMIN_ROLE_IDS atau DISCORD_ADMIN_USER_IDS."
     return 1
   fi
   return 0
@@ -420,12 +426,12 @@ configure_env_interactive() {
     cancel_env_config
     return 0
   fi
-  role_ids="$(prompt_with_default_or_back "DISCORD_ADMIN_ROLE_IDS (opsional, pisahkan koma)" "${current_role_ids}")"
+  role_ids="$(prompt_with_default_or_back "DISCORD_ADMIN_ROLE_IDS (boleh kosong jika USER_IDS terisi)" "${current_role_ids}")"
   if [[ "${role_ids}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
     return 0
   fi
-  user_ids="$(prompt_with_default_or_back "DISCORD_ADMIN_USER_IDS (opsional, pisahkan koma)" "${current_user_ids}")"
+  user_ids="$(prompt_with_default_or_back "DISCORD_ADMIN_USER_IDS (boleh kosong jika ROLE_IDS terisi)" "${current_user_ids}")"
   if [[ "${user_ids}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
     return 0
@@ -455,7 +461,7 @@ configure_env_interactive() {
   [[ -n "${guild_id}" ]] && set_env_value DISCORD_GUILD_ID "${guild_id}" "${staged_env}"
   set_env_value DISCORD_ADMIN_ROLE_IDS "${role_ids}" "${staged_env}"
   set_env_value DISCORD_ADMIN_USER_IDS "${user_ids}" "${staged_env}"
-  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-true}" "${staged_env}"
+  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-false}" "${staged_env}"
 
   set_env_value BACKEND_BASE_URL "http://127.0.0.1:8080" "${staged_env}"
   set_env_value BACKEND_HOST "127.0.0.1" "${staged_env}"
@@ -465,7 +471,10 @@ configure_env_interactive() {
   chmod 600 "${staged_env}" || true
   mv -f "${staged_env}" "${BOT_ENV_FILE}"
   chmod 600 "${BOT_ENV_FILE}" || true
-  validate_required_env || warn "Beberapa field wajib belum terisi."
+  if ! validate_required_env; then
+    warn "Konfigurasi env tersimpan tetapi belum valid. Lengkapi field wajib sebelum restart service."
+    return 1
+  fi
   ok "Konfigurasi env selesai."
 }
 
@@ -778,6 +787,7 @@ install_or_update_systemd() {
 start_or_restart_services() {
   need_root
   command_exists systemctl || die "systemctl tidak tersedia di host ini."
+  validate_required_env || die "Env belum valid. Jalankan menu 3 (Configure Bot) dulu."
 
   service_unit_exists "${BACKEND_SERVICE}" || die "Service ${BACKEND_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."
   service_unit_exists "${GATEWAY_SERVICE}" || die "Service ${GATEWAY_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."

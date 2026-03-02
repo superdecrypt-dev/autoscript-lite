@@ -10,7 +10,7 @@
 `setup.sh` dipakai sekali untuk provisioning. `manage.sh` dipakai terus untuk operasi harian.  
 Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Telegram (`bot-telegram/`).
 
-[Quick Install](#quick-install-root) | [Fitur Utama](#fitur-utama-highlight) | [Fitur manage.sh](#fitur-unggulan-managesh) | [Bot Discord](#fitur-bot-discord-standalone) | [Bot Telegram](#fitur-bot-telegram-standalone) | [Transport](#transport-yang-didukung) | [Troubleshooting](#troubleshooting-cepat)
+[Quick Install](#quick-install-root) | [Fitur Utama](#fitur-utama-highlight) | [Fitur manage.sh](#fitur-unggulan-managesh) | [Bot Discord](#fitur-bot-discord-standalone) | [Bot Telegram](#fitur-bot-telegram-standalone) | [Hysteria2](#fitur-hysteria2-integrated) | [Transport](#transport-yang-didukung) | [Troubleshooting](#troubleshooting-cepat)
 
 ## Kenapa Project Ini
 | Nilai Utama | Penjelasan Singkat |
@@ -29,6 +29,8 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Dukungan protokol akun kini mencakup `vless`, `vmess`, `trojan`, `shadowsocks`, dan `shadowsocks2022` (multi-user).
 - Installer bot terpisah (`install-discord-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
+- Hysteria2 terintegrasi di `setup.sh` (service `hysteria-server` + `xray-hy2-sync`) dengan default `UDP 443`.
+- Add user `vless/vmess/trojan` otomatis membuat bonus akun Hysteria2 yang mengikuti quota, ip limit, expired, dan speed limit dari flow yang sama.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
 - Transport legacy non-default sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
 
@@ -77,20 +79,17 @@ Main Menu
   6) Speedtest
   7) Security
   8) Maintenance
-  9) Install BOT Discord
-  10) Traffic Analytics
+  9) Traffic Analytics
+  10) Install BOT Discord
   11) Install BOT Telegram
   0) Exit
 ```
-
-Catatan kompatibilitas:
-- Input `12` tetap diarahkan ke menu Traffic Analytics (alias lama).
 
 Header realtime di Main Menu menampilkan:
 - `SYSTEM OS`, `RAM`, `UPTIME`
 - `IP VPS`, `ISP`, `COUNTRY`
 - `DOMAIN`, `TLS EXPIRED`, `WARP STATUS`
-- Jumlah akun: `VLESS | VMESS | TROJAN`
+- Jumlah akun: `VLESS | VMESS | TROJAN | SS | SS2022`
 
 ### Ringkasan Fitur Per Menu
 | Menu | Fokus Operasional | Dampak |
@@ -103,8 +102,8 @@ Header realtime di Main Menu menampilkan:
 | `6) Speedtest` | Jalankan Ookla speedtest + cek versi | Verifikasi performa jaringan cepat |
 | `7) Security` | TLS ops, fail2ban, hardening status | Meningkatkan keamanan operasional |
 | `8) Maintenance` | Restart service/daemon, tail log, wireproxy status | Maintenance tanpa keluar panel |
-| `9) Install BOT Discord` | Launcher installer bot standalone (`/usr/local/bin/install-discord-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
-| `10) Traffic Analytics` | Overview traffic, top users, search user, export JSON report | Observabilitas pemakaian traffic lebih cepat |
+| `9) Traffic Analytics` | Overview traffic, top users, search user, export JSON report | Observabilitas pemakaian traffic lebih cepat |
+| `10) Install BOT Discord` | Launcher installer bot standalone (`/usr/local/bin/install-discord-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
 | `11) Install BOT Telegram` | Launcher installer bot standalone (`/usr/local/bin/install-telegram-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
 
 ### Detail Penting: `3) Quota & Access Control`
@@ -180,6 +179,17 @@ Highlight kemampuan:
   - Restore memakai safety snapshot + rollback otomatis saat validasi/restart service gagal.
 - Deploy produksi via `install-telegram-bot.sh` ke `/opt/bot-telegram` + systemd service terpisah.
 
+## Fitur Hysteria2 (Integrated)
+Hysteria2 dipasang otomatis saat `setup.sh` untuk kebutuhan tunneling `UDP 443`.
+
+Highlight kemampuan:
+- Default bind: `UDP 443` (`listen: :443`).
+- Default TLS: memakai cert existing dari `/opt/cert/fullchain.pem` + `/opt/cert/privkey.pem`.
+- Service sinkronisasi: `xray-hy2-sync` untuk update quota usage, ip-limit lock, dan kick user blocked/expired.
+- Bonus akun Hysteria2 otomatis dibuat saat add user `vless/vmess/trojan` di `2) User Management`.
+- Bonus akun Hysteria2 tampil pada `XRAY ACCOUNT INFO` (HY2 User, HY2 Pass, HY2 URI).
+- Bisa berjalan berdampingan dengan Nginx/Xray di `TCP 443` karena Hysteria2 memakai `UDP 443`.
+
 ## Transport Yang Didukung
 Stack default saat ini menyediakan endpoint berikut:
 - `ws`
@@ -206,9 +216,10 @@ Stack provisioning/runtime saat ini mendukung protokol akun berikut:
 4. Generate modular config di `/usr/local/etc/xray/conf.d/`
 5. Issue TLS via acme.sh (standalone atau `dns_cf_wildcard`)
 6. Install WARP stack (`wgcf` + `wireproxy`)
-7. Install daemon runtime: `xray-expired`, `xray-quota`, `xray-limit-ip`, `xray-speed`
-8. Apply baseline hardening (fail2ban, sysctl/BBR, swap, ulimit, logrotate)
-9. Install speedtest via snap
+7. Install Hysteria2 integrated (`hysteria-server` + `xray-hy2-sync`)
+8. Install daemon runtime: `xray-expired`, `xray-quota`, `xray-limit-ip`, `xray-speed`
+9. Apply baseline hardening (fail2ban, sysctl/BBR, swap, ulimit, logrotate)
+10. Install speedtest via snap
 
 Catatan custom geosite adblock:
 - Sumber: `https://github.com/superdecrypt-dev/custom-geosite-xray/raw/main/custom.dat`

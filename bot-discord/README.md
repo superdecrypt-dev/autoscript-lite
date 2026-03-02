@@ -1,16 +1,16 @@
 # Bot Discord Standalone (UI Button + Select + Modal)
 
-Bot ini berdiri sendiri dan tidak menjalankan `manage.sh`. Perilaku menunya dibuat mirip struktur `manage.sh` (menu 1-8), tetapi seluruh aksi dieksekusi lewat backend sendiri.
+Bot ini berdiri sendiri dan tidak menjalankan `manage.sh`. Perilaku menunya dibuat mirip struktur `manage.sh` (menu 1-9), tetapi seluruh aksi dieksekusi lewat backend sendiri.
 
 ## Arsitektur
-- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash command minimal (`/panel`), tombol, modal, dan select.
+- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash command (`/panel`, `/status`, `/purge_bot`, `/set_notif_service`), tombol, modal, dan select.
 - `backend-py/`: API internal (`FastAPI`) untuk operasi sistem/Xray.
 - `shared/`: kontrak menu/action yang dipakai gateway dan backend.
 - `systemd/`: template service untuk deployment.
 
 ## Alur Interaksi
 1. Admin jalankan `/panel`.
-2. Gateway kirim panel menu utama (button 1-8).
+2. Gateway kirim panel menu utama (button 1-9).
 3. User pilih action via button/select/modal.
 4. Gateway memanggil backend (`/api/menu/{id}/action`) dengan secret internal.
 5. Backend menjalankan aksi dan mengembalikan hasil ke Discord.
@@ -107,8 +107,10 @@ tail -n 50 /var/log/xray-discord-bot/monitor-lite.log
 - `6) Speedtest`
 - `7) Security`
 - `8) Maintenance`
+- `9) Traffic Analytics`
 
 ## Catatan Keamanan
 - Simpan token hanya di env file (`/etc/xray-discord-bot/bot.env` saat deploy).
 - Secret API internal wajib diset (`INTERNAL_SHARED_SECRET`).
+- Wajib isi minimal salah satu ACL admin: `DISCORD_ADMIN_ROLE_IDS` atau `DISCORD_ADMIN_USER_IDS` (gateway fail-closed jika keduanya kosong).
 - Beberapa aksi maintenance (restart service) butuh root/sudo dan sebaiknya dibatasi role admin Discord.

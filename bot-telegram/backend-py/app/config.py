@@ -59,6 +59,6 @@ def get_settings() -> Settings:
             backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
             backend_port=_get_port("BACKEND_PORT", 8080),
             commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
-            enable_dangerous_actions=_get_bool("ENABLE_DANGEROUS_ACTIONS", True),
+            enable_dangerous_actions=_get_bool("ENABLE_DANGEROUS_ACTIONS", False),
         )
     return _SETTINGS

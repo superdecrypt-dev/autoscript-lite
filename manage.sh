@@ -86,6 +86,8 @@ XRAY_OBSERVE_REPORT_FILE="/var/lib/xray-observe/last-report.txt"
 XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
 XRAY_DOMAIN_GUARD_CONFIG_FILE="/etc/xray-domain-guard/config.env"
 XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-observe/domain-guard.log"
+HY2_ACCOUNT_ROOT="${ACCOUNT_ROOT}/hysteria2"
+HY2_SYNC_BIN="/usr/local/bin/hy2-sync-users"
 
 # Direktori kerja untuk operasi aman (atomic write)
 WORK_DIR="/var/lib/xray-manage"
@@ -164,6 +166,8 @@ ensure_account_quota_dirs() {
     mkdir -p "${ACCOUNT_ROOT}/${proto}"
     chmod 700 "${ACCOUNT_ROOT}/${proto}" || true
   done
+  mkdir -p "${HY2_ACCOUNT_ROOT}"
+  chmod 700 "${HY2_ACCOUNT_ROOT}" || true
 
   for proto in "${QUOTA_PROTO_DIRS[@]}"; do
     mkdir -p "${QUOTA_ROOT}/${proto}"
@@ -572,6 +576,141 @@ proto_menu_pick_to_value() {
     5) echo "shadowsocks2022" ;;
     *) echo "" ;;
   esac
+}
+
+hy2_bonus_enabled_proto() {
+  # Hysteria2 bonus hanya untuk akun xray: vless/vmess/trojan.
+  local proto="${1:-}"
+  case "${proto}" in
+    vless|vmess|trojan) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+hy2_bonus_auth_user() {
+  # args: source_proto username
+  local source_proto="$1"
+  local username="$2"
+  echo "${username}@${source_proto}"
+}
+
+hy2_bonus_account_json_path() {
+  # args: source_proto username
+  local source_proto="$1"
+  local username="$2"
+  echo "${HY2_ACCOUNT_ROOT}/${username}@${source_proto}.json"
+}
+
+hy2_generate_password() {
+  python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+}
+
+hy2_bonus_upsert_account() {
+  # args: source_proto username
+  local source_proto="$1"
+  local username="$2"
+  local auth_user f pass created now
+
+  if ! hy2_bonus_enabled_proto "${source_proto}"; then
+    return 0
+  fi
+
+  ensure_account_quota_dirs
+  need_python3
+
+  auth_user="$(hy2_bonus_auth_user "${source_proto}" "${username}")"
+  f="$(hy2_bonus_account_json_path "${source_proto}" "${username}")"
+
+  pass="$(python3 - <<'PY' "${f}" 2>/dev/null || true
+import json, sys
+p = sys.argv[1]
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  raise SystemExit(0)
+if isinstance(d, dict):
+  v = d.get("password")
+  if isinstance(v, str) and v.strip():
+    print(v.strip())
+PY
+)"
+  [[ -n "${pass}" ]] || pass="$(hy2_generate_password)"
+  created="$(date -u '+%Y-%m-%d')"
+  now="$(date -u '+%Y-%m-%d %H:%M:%S')"
+
+  python3 - <<'PY' "${f}" "${username}" "${source_proto}" "${auth_user}" "${pass}" "${created}" "${now}"
+import json
+import os
+import sys
+import tempfile
+
+path, username, source_proto, auth_user, password, created, updated = sys.argv[1:8]
+data = {}
+if os.path.isfile(path):
+  try:
+    old = json.load(open(path, "r", encoding="utf-8"))
+    if isinstance(old, dict):
+      data.update(old)
+  except Exception:
+    pass
+
+if not data.get("created_at"):
+  data["created_at"] = created
+
+data["username"] = username
+data["source_proto"] = source_proto
+data["auth_user"] = auth_user
+data["password"] = password
+data["updated_at"] = updated
+
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=os.path.dirname(path) or ".")
+try:
+  with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp, path)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
+  local py_rc=$?
+  if (( py_rc != 0 )); then
+    return "${py_rc}"
+  fi
+  chmod 600 "${f}" 2>/dev/null || true
+  return 0
+}
+
+hy2_bonus_delete_account() {
+  # args: source_proto username
+  local source_proto="$1"
+  local username="$2"
+  local f
+  if ! hy2_bonus_enabled_proto "${source_proto}"; then
+    return 0
+  fi
+  f="$(hy2_bonus_account_json_path "${source_proto}" "${username}")"
+  delete_one_file "${f}"
+}
+
+hy2_sync_users_now() {
+  if [[ ! -x "${HY2_SYNC_BIN}" ]]; then
+    return 0
+  fi
+  if ! "${HY2_SYNC_BIN}" once >/dev/null 2>&1; then
+    warn "Sinkronisasi Hysteria2 gagal (cek: ${HY2_SYNC_BIN} once)."
+    return 1
+  fi
+  return 0
 }
 
 account_username_find_protos() {
@@ -3982,18 +4121,24 @@ PY
   return 1
 }
 
-rollback_new_user_after_speed_failure() {
-  # args: proto username
+rollback_new_user_after_create_failure() {
+  # args: proto username [reason]
   local proto="$1"
   local username="$2"
+  local reason="${3:-operasi create gagal}"
   local email="${username}@${proto}"
 
-  warn "Rollback akun ${email} karena setup speed-limit gagal."
+  warn "Rollback akun ${email}: ${reason}."
   speed_policy_remove "${proto}" "${username}"
   speed_policy_sync_xray >/dev/null 2>&1 || true
   speed_policy_apply_now >/dev/null 2>&1 || true
   xray_delete_client "${proto}" "${username}" >/dev/null 2>&1 || true
   delete_account_artifacts "${proto}" "${username}" >/dev/null 2>&1 || true
+}
+
+rollback_new_user_after_speed_failure() {
+  # args: proto username
+  rollback_new_user_after_create_failure "$1" "$2" "setup speed-limit gagal"
 }
 
 write_account_artifacts() {
@@ -4023,7 +4168,7 @@ write_account_artifacts() {
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
 
   python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
-import sys, json, base64, urllib.parse, datetime
+import sys, json, base64, urllib.parse, datetime, os, tempfile
 acc_file, quota_file, inbounds_file, domain, ip, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up = sys.argv[1:18]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
@@ -4070,6 +4215,41 @@ def fmt_mbit(v):
     return str(int(round(n)))
   s=f"{n:.2f}"
   return s.rstrip("0").rstrip(".")
+
+def write_text_atomic(path, content):
+  dirn = os.path.dirname(path) or "."
+  os.makedirs(dirn, exist_ok=True)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".txt", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      f.write(content)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+def write_json_atomic(path, obj):
+  dirn = os.path.dirname(path) or "."
+  os.makedirs(dirn, exist_ok=True)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(obj, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
 
 # Public endpoint harus selaras dengan nginx public path (setup.sh).
 PUBLIC_PATHS = {
@@ -4203,6 +4383,22 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
+
+hy2_file = f"/opt/account/hysteria2/{username}@{proto}.json"
+if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
+  try:
+    hy2_meta = json.load(open(hy2_file, "r", encoding="utf-8"))
+  except Exception:
+    hy2_meta = {}
+  hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
+  hy2_pass = str(hy2_meta.get("password") or "").strip()
+  if hy2_pass:
+    hy2_auth = urllib.parse.quote(f"{hy2_user}:{hy2_pass}", safe="")
+    hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
+    lines.append("Hysteria2   : ENABLED (bonus)")
+    lines.append(f"HY2 User    : {hy2_user}")
+    lines.append(f"HY2 Pass    : {hy2_pass}")
+    lines.append(f"HY2 URI     : {hy2_uri}")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws','-')}")
@@ -4210,8 +4406,7 @@ lines.append(f"  HTTPUpgrade : {links.get('httpupgrade','-')}")
 lines.append(f"  gRPC        : {links.get('grpc','-')}")
 lines.append("")
 
-with open(acc_file, "w", encoding="utf-8") as f:
-  f.write("\n".join(lines))
+write_text_atomic(acc_file, "\n".join(lines))
 
 # Write quota json metadata
 meta={
@@ -4220,6 +4415,12 @@ meta={
   "quota_limit": quota_bytes,
   "quota_unit": "binary",
   "quota_used": 0,
+  "xray_usage_bytes": 0,
+  "hy2_usage_bytes": 0,
+  "xray_api_baseline_bytes": 0,
+  "xray_usage_carry_bytes": 0,
+  "xray_api_last_total_bytes": 0,
+  "xray_usage_reset_pending": False,
   "created_at": created_at,
   "expired_at": expired_at,
   "status": {
@@ -4235,12 +4436,15 @@ meta={
     "locked_at": ""
   }
 }
-with open(quota_file, "w", encoding="utf-8") as f:
-  json.dump(meta, f, ensure_ascii=False, indent=2)
-  f.write("\n")
+write_json_atomic(quota_file, meta)
 PY
+  local py_rc=$?
+  if (( py_rc != 0 )); then
+    return "${py_rc}"
+  fi
 
   chmod 600 "${acc_file}" "${quota_file}" || true
+  return 0
 }
 
 account_info_refresh_for_user() {
@@ -4644,6 +4848,21 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
+hy2_file = f"/opt/account/hysteria2/{username}@{proto}.json"
+if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
+  try:
+    hy2_meta = json.load(open(hy2_file, "r", encoding="utf-8"))
+  except Exception:
+    hy2_meta = {}
+  hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
+  hy2_pass = str(hy2_meta.get("password") or "").strip()
+  if hy2_pass:
+    hy2_auth = urllib.parse.quote(f"{hy2_user}:{hy2_pass}", safe="")
+    hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
+    lines.append("Hysteria2   : ENABLED (bonus)")
+    lines.append(f"HY2 User    : {hy2_user}")
+    lines.append(f"HY2 Pass    : {hy2_pass}")
+    lines.append(f"HY2 URI     : {hy2_uri}")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws', '-')}")
@@ -4747,6 +4966,7 @@ delete_account_artifacts() {
   delete_one_file "${acc_file_legacy}"
   delete_one_file "${quota_file}"
   delete_one_file "${quota_file_legacy}"
+  hy2_bonus_delete_account "${proto}" "${username}"
   speed_policy_remove "${proto}" "${username}"
 }
 
@@ -4892,6 +5112,10 @@ user_add_menu() {
   local speed_enabled="false"
   local speed_down_mbit="0"
   local speed_up_mbit="0"
+  local hy2_bonus="false"
+  if hy2_bonus_enabled_proto "${proto}"; then
+    hy2_bonus="true"
+  fi
   if is_yes "${speed_toggle}"; then
     speed_enabled="true"
 
@@ -4926,6 +5150,7 @@ user_add_menu() {
   echo "  Expired  : ${days} hari"
   echo "  Quota    : ${quota_gb} GB"
   echo "  IP Limit : ${ip_enabled} $( [[ "${ip_enabled}" == "true" ]] && echo "(${ip_limit})" )"
+  echo "  HY2 Bonus: ${hy2_bonus}"
   if [[ "${speed_enabled}" == "true" ]]; then
     echo "  Speed    : true (DOWN ${speed_down_mbit} Mbps | UP ${speed_up_mbit} Mbps)"
   else
@@ -4952,7 +5177,20 @@ PY
   fi
 
   xray_add_client "${proto}" "${username}" "${cred}"
-  write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"
+  if [[ "${hy2_bonus}" == "true" ]]; then
+    if ! hy2_bonus_upsert_account "${proto}" "${username}"; then
+      warn "Akun ${username}@${proto} dibatalkan: gagal menyiapkan bonus Hysteria2."
+      rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menyiapkan bonus Hysteria2"
+      pause
+      return 0
+    fi
+  fi
+  if ! write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"; then
+    warn "Akun ${username}@${proto} dibatalkan: gagal menulis metadata akun/quota."
+    rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menulis metadata akun/quota"
+    pause
+    return 0
+  fi
 
   if [[ "${speed_enabled}" == "true" ]]; then
     local speed_mark="" speed_err=""
@@ -4966,7 +5204,7 @@ PY
 
     if [[ -n "${speed_err}" ]]; then
       warn "Akun ${username}@${proto} dibatalkan: ${speed_err}."
-      rollback_new_user_after_speed_failure "${proto}" "${username}"
+      rollback_new_user_after_create_failure "${proto}" "${username}" "${speed_err}"
       pause
       return 0
     fi
@@ -4978,6 +5216,10 @@ PY
       speed_policy_sync_xray >/dev/null 2>&1 || true
     fi
     speed_policy_apply_now >/dev/null 2>&1 || true
+  fi
+
+  if [[ "${hy2_bonus}" == "true" ]]; then
+    hy2_sync_users_now || true
   fi
 
   title
@@ -5079,6 +5321,9 @@ user_del_menu() {
 
   xray_delete_client "${proto}" "${username}"
   delete_account_artifacts "${proto}" "${username}"
+  if hy2_bonus_enabled_proto "${proto}"; then
+    hy2_sync_users_now || true
+  fi
   if ! speed_policy_sync_xray; then
     speed_sync_ok="false"
     warn "Delete user selesai, tetapi sinkronisasi speed policy gagal (cek log xray / konfigurasi routing)."
@@ -5381,6 +5626,10 @@ PY
   if [[ "${st_iplocked}" == "true" ]]; then
     xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" on
     log "IP limit routing di-restore setelah extend expiry (ip_limit_locked=true)."
+  fi
+
+  if hy2_bonus_enabled_proto "${proto}"; then
+    hy2_sync_users_now || true
   fi
 
   title
@@ -6100,6 +6349,11 @@ with open(lock_path, "a+", encoding="utf-8") as lf:
 
     elif action == "reset_quota_used_recompute":
       d["quota_used"] = 0
+      d["xray_usage_bytes"] = 0
+      d["hy2_usage_bytes"] = 0
+      d["xray_api_last_total_bytes"] = 0
+      d["xray_usage_carry_bytes"] = 0
+      d["xray_usage_reset_pending"] = True
       st["quota_exhausted"] = False
       recompute_lock_reason(st)
 
@@ -6337,6 +6591,7 @@ quota_edit_flow() {
         fi
         qb="$(bytes_from_gb "${gb_num}")"
         quota_atomic_update_file "${qf}" set_quota_limit_recompute "${qb}"
+        hy2_sync_users_now || true
         log "Quota limit diubah: ${gb_num} GB"
         pause
         ;;
@@ -6345,6 +6600,7 @@ quota_edit_flow() {
         # BUG-05 fix: correct priority quota > ip_limit.
         quota_atomic_update_file "${qf}" reset_quota_used_recompute
         xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" off
+        hy2_sync_users_now || true
         log "Quota used di-reset: 0 (status quota dibersihkan)"
         pause
         ;;
@@ -6358,10 +6614,12 @@ quota_edit_flow() {
           # BUG-05 fix applied here too: correct priority is quota > ip_limit (not reversed).
           quota_atomic_update_file "${qf}" manual_block_set off
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" off
+          hy2_sync_users_now || true
           log "Manual block: OFF"
         else
           quota_atomic_update_file "${qf}" manual_block_set on
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" on
+          hy2_sync_users_now || true
           log "Manual block: ON"
         fi
         pause
@@ -6375,10 +6633,12 @@ quota_edit_flow() {
           quota_atomic_update_file "${qf}" ip_limit_enabled_set off
           xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" off
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
+          hy2_sync_users_now || true
           log "IP limit: OFF"
         else
           quota_atomic_update_file "${qf}" ip_limit_enabled_set on
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
+          hy2_sync_users_now || true
           log "IP limit: ON"
         fi
         account_info_refresh_warn "${proto}" "${speed_username}" || true
@@ -6396,6 +6656,7 @@ quota_edit_flow() {
         fi
         quota_atomic_update_file "${qf}" set_ip_limit "${lim}"
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
+        hy2_sync_users_now || true
         log "IP limit diubah: ${lim}"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6406,6 +6667,7 @@ quota_edit_flow() {
         # BUG-05 fix: correct priority quota > ip_limit.
         quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
+        hy2_sync_users_now || true
         log "IP lock di-unlock"
         pause
         ;;
@@ -6424,6 +6686,7 @@ quota_edit_flow() {
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
+        hy2_sync_users_now || true
         log "Speed download diubah: ${speed_down_input} Mbps"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6443,6 +6706,7 @@ quota_edit_flow() {
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
+        hy2_sync_users_now || true
         log "Speed upload diubah: ${speed_up_input} Mbps"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6453,6 +6717,7 @@ quota_edit_flow() {
         if [[ "${speed_on}" == "true" ]]; then
           quota_atomic_update_file "${qf}" speed_limit_set off
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
+          hy2_sync_users_now || true
           log "Speed limit: OFF"
           account_info_refresh_warn "${proto}" "${speed_username}" || true
           pause
@@ -6489,6 +6754,7 @@ quota_edit_flow() {
 
         quota_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
         quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
+        hy2_sync_users_now || true
         log "Speed limit: ON"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause

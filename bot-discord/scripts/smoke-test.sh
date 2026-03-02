@@ -18,7 +18,8 @@ if [[ -z "${INTERNAL_SHARED_SECRET}" ]]; then
 fi
 
 echo "== health =="
-curl -fsS "${BACKEND_BASE_URL}/health" | sed 's/.*/&/'
+curl -fsS "${BACKEND_BASE_URL}/health" \
+  -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" | sed 's/.*/&/'
 
 echo
 echo "== menu 1 overview =="
