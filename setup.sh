@@ -6,7 +6,7 @@ SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="${SAFE_PATH}"
 export PATH
 
-trap 'rc=$?; echo "[ERROR] line ${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit ${rc}' ERR
+trap 'rc=$?; echo "[ERROR] line ${LINENO}: command failed (exit ${rc})" >&2; exit ${rc}' ERR
 
 # =========================
 # Setup-only autoscript:
@@ -76,7 +76,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MANAGE_MODULES_SRC_DIR="${SCRIPT_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
 MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
-MANAGE_BUNDLE_SHA256="${MANAGE_BUNDLE_SHA256:-}"
+MANAGE_BUNDLE_LOCAL_SHA256=""
+if [[ -z "${MANAGE_BUNDLE_SHA256:-}" ]] && [[ -f "${SCRIPT_DIR}/manage_bundle.zip" ]] && command -v sha256sum >/dev/null 2>&1; then
+  MANAGE_BUNDLE_LOCAL_SHA256="$(sha256sum "${SCRIPT_DIR}/manage_bundle.zip" | awk '{print tolower($1)}')"
+fi
+MANAGE_BUNDLE_SHA256="${MANAGE_BUNDLE_SHA256:-${MANAGE_BUNDLE_LOCAL_SHA256}}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
 
 die() {
@@ -368,13 +372,18 @@ cf_api() {
   [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Isi token Cloudflare di setup.sh atau export env CLOUDFLARE_API_TOKEN."
 
   local url="https://api.cloudflare.com/client/v4${endpoint}"
-  local resp code body trimmed
+  local resp code body trimmed header_file=""
+  header_file="$(mktemp)" || die "Gagal membuat temporary header file Cloudflare."
+  printf 'Authorization: Bearer %s\n' "${CLOUDFLARE_API_TOKEN}" > "${header_file}"
+  printf 'Content-Type: application/json\n' >> "${header_file}"
+  chmod 600 "${header_file}" >/dev/null 2>&1 || true
 
   if [[ -n "$data" ]]; then
-    resp="$(curl -sS -L -X "$method" "$url"       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"       -H "Content-Type: application/json"       --connect-timeout 10       --max-time 30       --data "$data"       -w $'\n%{http_code}' || true)"
+    resp="$(curl -sS -L -X "$method" "$url"       -H "@${header_file}"       --connect-timeout 10       --max-time 30       --data "$data"       -w $'\n%{http_code}' || true)"
   else
-    resp="$(curl -sS -L -X "$method" "$url"       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"       -H "Content-Type: application/json"       --connect-timeout 10       --max-time 30       -w $'\n%{http_code}' || true)"
+    resp="$(curl -sS -L -X "$method" "$url"       -H "@${header_file}"       --connect-timeout 10       --max-time 30       -w $'\n%{http_code}' || true)"
   fi
+  rm -f "${header_file}" >/dev/null 2>&1 || true
 
   code="${resp##*$'\n'}"
   body="${resp%$'\n'*}"
@@ -5062,7 +5071,9 @@ sync_manage_modules_layout() {
 
   ok "Sinkronisasi modular manage ke ${MANAGE_MODULES_DST_DIR} ..."
 
-  if download_file_with_sha_check "${MANAGE_BUNDLE_URL}" "${bundle_file}" "${bundle_expected_sha}" "manage_bundle.zip"; then
+  if [[ -z "${bundle_expected_sha}" ]]; then
+    warn "MANAGE_BUNDLE_SHA256 kosong; lewati download bundle remote demi keamanan."
+  elif download_file_with_sha_check "${MANAGE_BUNDLE_URL}" "${bundle_file}" "${bundle_expected_sha}" "manage_bundle.zip"; then
     downloaded="1"
     ok "manage_bundle.zip berhasil diunduh dari repo."
   else

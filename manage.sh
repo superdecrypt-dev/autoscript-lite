@@ -1157,24 +1157,27 @@ cf_api() {
   [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set."
 
   local url="https://api.cloudflare.com/client/v4${endpoint}"
-  local resp code body trimmed
+  local resp code body trimmed header_file=""
+  header_file="$(mktemp)" || die "Gagal membuat temporary header file Cloudflare."
+  printf 'Authorization: Bearer %s\n' "${CLOUDFLARE_API_TOKEN}" > "${header_file}"
+  printf 'Content-Type: application/json\n' >> "${header_file}"
+  chmod 600 "${header_file}" >/dev/null 2>&1 || true
 
   if [[ -n "$data" ]]; then
     resp="$(curl -sS -L -X "$method" "$url" \
-      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-      -H "Content-Type: application/json" \
+      -H "@${header_file}" \
       --connect-timeout 10 \
       --max-time 30 \
       --data "$data" \
       -w $'\n%{http_code}' || true)"
   else
     resp="$(curl -sS -L -X "$method" "$url" \
-      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-      -H "Content-Type: application/json" \
+      -H "@${header_file}" \
       --connect-timeout 10 \
       --max-time 30 \
       -w $'\n%{http_code}' || true)"
   fi
+  rm -f "${header_file}" >/dev/null 2>&1 || true
 
   code="${resp##*$'\n'}"
   body="${resp%$'\n'*}"

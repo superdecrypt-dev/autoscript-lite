@@ -55,6 +55,8 @@ BALANCER_ALLOWED_STRATEGIES = {"random", "roundRobin", "leastPing", "leastLoad"}
 DEFAULT_EGRESS_PORTS = {"1-65535", "0-65535"}
 DNS_LOCK_FILE = "/var/lock/xray-dns.lock"
 DNS_QUERY_STRATEGY_ALLOWED = {"UseIP", "UseIPv4", "UseIPv6", "PreferIPv4", "PreferIPv6"}
+DNS_RESTART_TIMEOUT_SEC = 8
+DNS_ROLLBACK_RESTART_TIMEOUT_SEC = 5
 WARP_TIER_STATE_KEY = "warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY = "warp_plus_license_key"
 WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
@@ -134,7 +136,21 @@ def _service_is_active(name: str) -> bool:
 
 
 def _restart_and_wait(name: str, timeout_sec: int = 20) -> bool:
-    _run_cmd(["systemctl", "restart", name], timeout=30)
+    if not _service_exists(name):
+        return False
+
+    cmd_timeout = max(4, min(30, timeout_sec + 4))
+    ok_restart, _ = _run_cmd(["systemctl", "restart", name], timeout=cmd_timeout)
+    if ok_restart and _service_is_active(name):
+        return True
+
+    # Jika restart langsung gagal dan service belum aktif, lakukan recovery sekali
+    # tanpa menunggu loop panjang.
+    if not ok_restart and not _service_is_active(name):
+        _run_cmd(["systemctl", "reset-failed", name], timeout=10)
+        _run_cmd(["systemctl", "start", name], timeout=cmd_timeout)
+        return _service_is_active(name)
+
     end = time.time() + max(1, timeout_sec)
     while time.time() < end:
         if _service_is_active(name):
@@ -1635,6 +1651,9 @@ def _is_valid_dns_server_value(value: str) -> bool:
 
 
 def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
+    if not _service_exists("xray"):
+        return False, "Service xray tidak tersedia; update DNS dibatalkan."
+
     with file_lock(DNS_LOCK_FILE):
         cfg_original: dict[str, Any]
         if XRAY_DNS_CONF.exists():
@@ -1655,15 +1674,15 @@ def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
                 return False, str(msg_mut)
 
             _write_json_atomic(XRAY_DNS_CONF, cfg_work)
-            if not _restart_and_wait("xray", timeout_sec=20):
+            if not _restart_and_wait("xray", timeout_sec=DNS_RESTART_TIMEOUT_SEC):
                 _write_json_atomic(XRAY_DNS_CONF, cfg_snapshot)
-                _restart_and_wait("xray", timeout_sec=20)
+                _restart_and_wait("xray", timeout_sec=DNS_ROLLBACK_RESTART_TIMEOUT_SEC)
                 return False, "xray tidak aktif setelah update DNS (rollback)."
             return True, str(msg_mut)
         except Exception as exc:
             try:
                 _write_json_atomic(XRAY_DNS_CONF, cfg_snapshot)
-                _restart_and_wait("xray", timeout_sec=20)
+                _restart_and_wait("xray", timeout_sec=DNS_ROLLBACK_RESTART_TIMEOUT_SEC)
             except Exception:
                 pass
             return False, f"Gagal update DNS: {exc}"

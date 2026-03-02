@@ -7,7 +7,7 @@ export PATH
 
 on_err() {
   local rc="$?"
-  echo "[ERROR] line ${BASH_LINENO[0]}: ${BASH_COMMAND} (exit ${rc})" >&2
+  echo "[ERROR] line ${BASH_LINENO[0]}: command failed (exit ${rc})" >&2
   exit "${rc}"
 }
 trap on_err ERR
@@ -47,7 +47,7 @@ SRC_ARCHIVE_DEFAULT_URL="https://github.com/${SRC_OWNER}/${SRC_REPO}/raw/${SRC_R
 SRC_ARCHIVE_URL="${BOT_SOURCE_ARCHIVE_URL:-${SRC_ARCHIVE_DEFAULT_URL}}"
 SRC_ARCHIVE_SHA256="${BOT_SOURCE_ARCHIVE_SHA256:-c3e056cd869b85fbab99e4a96f6950d716f533e0c7031939d2218d5f72a7c000}"
 SRC_ARCHIVE_SHA256_URL="${BOT_SOURCE_ARCHIVE_SHA256_URL:-}"
-ALLOW_UNVERIFIED_ARCHIVE="${BOT_ALLOW_UNVERIFIED_ARCHIVE:-1}"
+ALLOW_UNVERIFIED_ARCHIVE="${BOT_ALLOW_UNVERIFIED_ARCHIVE:-0}"
 
 OS_DEPS=(
   curl
@@ -541,19 +541,91 @@ extract_source_archive() {
 
   if [[ "${archive_lower}" == *.zip ]]; then
     python3 - "${archive}" "${dst}" <<'PY' || die "Gagal extract archive zip."
+import os
+import shutil
+import stat
 import sys
 import zipfile
 
 archive_path = sys.argv[1]
 dest_path = sys.argv[2]
+dest_real = os.path.realpath(dest_path)
+
+def safe_target(base_real: str, member_name: str):
+  name = member_name.replace("\\", "/")
+  if "\x00" in name:
+    raise ValueError("zip entry contains NUL byte")
+  normalized = os.path.normpath(name).lstrip("/")
+  if normalized in ("", "."):
+    return None
+  if normalized == ".." or normalized.startswith("../"):
+    raise ValueError(f"unsafe zip entry path: {member_name}")
+  target = os.path.realpath(os.path.join(base_real, normalized))
+  if target != base_real and not target.startswith(base_real + os.sep):
+    raise ValueError(f"zip entry escapes destination: {member_name}")
+  return target
 
 with zipfile.ZipFile(archive_path, "r") as zf:
-  zf.extractall(dest_path)
+  for member in zf.infolist():
+    target = safe_target(dest_real, member.filename)
+    if target is None:
+      continue
+    mode = (member.external_attr >> 16) & 0o170000
+    if mode in (stat.S_IFLNK, stat.S_IFCHR, stat.S_IFBLK, stat.S_IFIFO, stat.S_IFSOCK):
+      raise ValueError(f"unsupported zip entry type: {member.filename}")
+    if member.is_dir():
+      os.makedirs(target, exist_ok=True)
+      continue
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with zf.open(member, "r") as src, open(target, "wb") as dst:
+      shutil.copyfileobj(src, dst)
 PY
     return 0
   fi
 
-  tar -xzf "${archive}" -C "${dst}" || die "Gagal extract archive tar.gz."
+  python3 - "${archive}" "${dst}" <<'PY' || die "Gagal extract archive tar.gz."
+import os
+import shutil
+import sys
+import tarfile
+
+archive_path = sys.argv[1]
+dest_path = sys.argv[2]
+dest_real = os.path.realpath(dest_path)
+
+def safe_target(base_real: str, member_name: str):
+  name = member_name.replace("\\", "/")
+  if "\x00" in name:
+    raise ValueError("tar entry contains NUL byte")
+  normalized = os.path.normpath(name).lstrip("/")
+  if normalized in ("", "."):
+    return None
+  if normalized == ".." or normalized.startswith("../"):
+    raise ValueError(f"unsafe tar entry path: {member_name}")
+  target = os.path.realpath(os.path.join(base_real, normalized))
+  if target != base_real and not target.startswith(base_real + os.sep):
+    raise ValueError(f"tar entry escapes destination: {member_name}")
+  return target
+
+with tarfile.open(archive_path, "r:*") as tf:
+  for member in tf.getmembers():
+    if member.issym() or member.islnk() or member.isdev():
+      raise ValueError(f"unsupported tar entry type: {member.name}")
+    target = safe_target(dest_real, member.name)
+    if target is None:
+      continue
+    if member.isdir():
+      os.makedirs(target, exist_ok=True)
+      continue
+    if not member.isfile():
+      raise ValueError(f"unsupported tar entry type: {member.name}")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    extracted = tf.extractfile(member)
+    if extracted is None:
+      raise ValueError(f"failed to read tar entry: {member.name}")
+    with extracted, open(target, "wb") as dst:
+      shutil.copyfileobj(extracted, dst)
+PY
 }
 
 resolve_archive_checksum() {
