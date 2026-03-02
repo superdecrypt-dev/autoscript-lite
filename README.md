@@ -26,6 +26,7 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Bot Discord standalone dengan UX interaktif tombol/select/modal (`/panel` sebagai entry point minimal).
 - Bot Telegram standalone dengan UX interaktif tombol/select/modal (`/panel` + `/cleanup`).
 - Bot Telegram kini setara penuh kontrol WARP (status/restart/global/per-user/per-inbound/per-domain/tier/reconnect).
+- Dukungan protokol akun kini mencakup `vless`, `vmess`, `trojan`, `shadowsocks`, dan `shadowsocks2022` (multi-user).
 - Installer bot terpisah (`install-discord-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
@@ -172,6 +173,7 @@ Highlight kemampuan:
   - ACL default-deny (wajib isi admin IDs, kecuali override eksplisit).
   - Output hasil action disanitasi agar token/secret sensitif tidak bocor ke chat.
   - Throttle/cooldown action dan cleanup untuk menekan spam/double-trigger.
+  - Default backend Telegram memakai port `127.0.0.1:8081` agar tidak bentrok dengan backend Discord (`127.0.0.1:8080`) saat keduanya aktif bersamaan.
 - Menu `10) Backup/Restore`:
   - `create_backup`, `list_backups`, `restore_latest`, `restore_from_upload`.
   - Scope backup mencakup conf Xray/Nginx, state account/quota/speed, network state, wireproxy config, dan cert TLS.
@@ -187,6 +189,14 @@ Stack default saat ini menyediakan endpoint berikut:
 Catatan:
 - Jalur transport non-default sudah dibersihkan dari template `setup.sh`, `manage.sh`, dan generator link bot.
 - Tujuan perubahan: mencegah masalah koneksi pada skenario domain fronting.
+
+## Protokol Akun Yang Didukung
+Stack provisioning/runtime saat ini mendukung protokol akun berikut:
+- `vless`
+- `vmess`
+- `trojan`
+- `shadowsocks` (method default: `aes-128-gcm`)
+- `shadowsocks2022` (method default: `2022-blake3-aes-128-gcm`)
 
 ## Ringkasan `setup.sh` (One-Time)
 `setup.sh` menangani provisioning awal end-to-end:

@@ -7,17 +7,26 @@ Agent AI baru wajib memulai dari konteks di atas.
 
 ## Baseline Saat Ini
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
-- Workspace aktif (Codex): `/codex/autoscript`
+- Workspace aktif (Codex): `/project/autoscript`
 - Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas lama: `/root/xray-core_discord`)
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-02-25)
+## Status Operasional Terkini (2026-03-02)
 - Commit terbaru di `main`:
+  - `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
   - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
   - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
   - `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
 - Perubahan penting terbaru:
+  - Dukungan protocol account sekarang mencakup `shadowsocks` dan `shadowsocks2022` (multi-user) di CLI + bot.
+  - Method default SS:
+    - `shadowsocks`: `aes-128-gcm`
+    - `shadowsocks2022`: `2022-blake3-aes-128-gcm`
+  - Telegram installer distabilkan:
+    - checksum archive default diperbarui
+    - default backend Telegram ke `127.0.0.1:8081`
+    - unit backend Telegram memakai `${BACKEND_HOST}`/`${BACKEND_PORT}` (tidak hardcoded).
   - Bot Telegram sekarang punya full parity WARP di menu `4) Network Controls` (status/restart/global/per-user/per-inbound/per-domain/tier/reconnect).
   - Hardening Telegram aktif:
     - backend health butuh secret header
@@ -31,7 +40,10 @@ Agent AI baru wajib memulai dari konteks di atas.
   - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
   - `nginx -t` -> valid
   - `systemctl is-active xray nginx` -> `active`
+  - `systemctl is-active xray-discord-backend xray-discord-gateway` -> `active active`
   - `systemctl is-active xray-telegram-backend xray-telegram-gateway` -> `active active`
+  - `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health` -> `200`
+  - `curl -s -o /dev/null -w '%{http_code}' -H "X-Internal-Shared-Secret: <secret>" http://127.0.0.1:8081/health` -> `200`
   - `set -a; . /etc/xray-telegram-bot/bot.env; set +a; /opt/bot-telegram/scripts/smoke-test.sh` -> PASS
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
@@ -45,7 +57,7 @@ Agent AI baru wajib memulai dari konteks di atas.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan utama Telegram WARP + hardening sudah commit + push ke `main` (`af6aabe`).
+- Perubahan utama SS multi-user + stabilisasi E2E bot sudah commit + push ke `main` (`5d0a08c`).
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.

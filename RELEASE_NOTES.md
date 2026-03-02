@@ -1,5 +1,42 @@
 # Release Notes
 
+## Rilis 2026-03-02 (SS Multi-User + Bot Coexist Stability)
+
+### Ringkasan
+Rilis ini menambahkan dukungan multi-user untuk Shadowsocks dan Shadowsocks 2022 di jalur CLI dan bot, sekaligus menstabilkan deploy bot Telegram/Discord agar bisa aktif bersamaan tanpa konflik port.
+
+### Perubahan Utama
+1. Dukungan Shadowsocks + Shadowsocks 2022 multi-user
+- Protokol `shadowsocks` dan `shadowsocks2022` aktif di `setup.sh`, `manage.sh`, backend bot Discord/Telegram, serta command schema gateway.
+- Method default:
+  - `shadowsocks`: `aes-128-gcm`
+  - `shadowsocks2022`: `2022-blake3-aes-128-gcm`
+- Generator account info/link dan validasi protocol diperluas agar mencakup kedua protokol baru.
+
+2. Pembersihan transport legacy non-default
+- Jalur transport non-default (termasuk `xhttp` dan `wireguard`) dibersihkan dari stack default provisioning/runtime.
+- Tujuan: menjaga kompatibilitas domain fronting dan mengurangi noise konfigurasi yang tidak dipakai default.
+
+3. Stabilitas installer Telegram (hasil temuan E2E)
+- Default checksum `bot_telegram.zip` diperbarui agar sesuai artefak terbaru.
+- Default env Telegram backend dipindah ke `127.0.0.1:8081` agar tidak bentrok dengan Discord backend `127.0.0.1:8080`.
+- Template systemd Telegram backend tidak lagi hardcode port, melainkan memakai `${BACKEND_HOST}` dan `${BACKEND_PORT}`.
+
+### Commit
+- `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
+
+### Hasil Validasi
+- E2E `run.sh` sampai setup domain: PASS.
+- Deploy bot Discord:
+  - `xray-discord-backend` -> `active`
+  - `xray-discord-gateway` -> `active`
+- Deploy bot Telegram:
+  - `xray-telegram-backend` -> `active`
+  - `xray-telegram-gateway` -> `active`
+- Health backend:
+  - `http://127.0.0.1:8080/health` -> `200` (Discord)
+  - `http://127.0.0.1:8081/health` + `X-Internal-Shared-Secret` -> `200` (Telegram)
+
 ## Rilis 2026-02-25 (Telegram WARP Parity + Hardening)
 
 ### Ringkasan
