@@ -252,7 +252,7 @@ def op_xray_test() -> tuple[bool, str, str]:
         "FAILED\n"
         "- Test config Xray gagal dijalankan atau konfigurasi tidak valid.\n"
         "- Detail log tidak ditampilkan di Telegram.\n"
-        "- Cek manual via SSH: xray run -test -confdir /usr/local/etc/xray/conf.d"
+        "- Cek manual di server: xray run -test -confdir /usr/local/etc/xray/conf.d"
     )
     if deprec_lines:
         msg += (
