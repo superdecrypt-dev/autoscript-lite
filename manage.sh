@@ -4393,7 +4393,7 @@ if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
   hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
   hy2_pass = str(hy2_meta.get("password") or "").strip()
   if hy2_pass:
-    hy2_auth = urllib.parse.quote(f"{hy2_user}:{hy2_pass}", safe="")
+    hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
     hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
     lines.append("Hysteria2   : ENABLED (bonus)")
     lines.append(f"HY2 User    : {hy2_user}")
@@ -4857,7 +4857,7 @@ if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
   hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
   hy2_pass = str(hy2_meta.get("password") or "").strip()
   if hy2_pass:
-    hy2_auth = urllib.parse.quote(f"{hy2_user}:{hy2_pass}", safe="")
+    hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
     hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
     lines.append("Hysteria2   : ENABLED (bonus)")
     lines.append(f"HY2 User    : {hy2_user}")
