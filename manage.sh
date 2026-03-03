@@ -84,8 +84,6 @@ XRAY_OBSERVE_REPORT_FILE="/var/lib/xray-observe/last-report.txt"
 XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
 XRAY_DOMAIN_GUARD_CONFIG_FILE="/etc/xray-domain-guard/config.env"
 XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-observe/domain-guard.log"
-HY2_ACCOUNT_ROOT="${ACCOUNT_ROOT}/hysteria2"
-HY2_SYNC_BIN="/usr/local/bin/hy2-sync-users"
 
 # Direktori kerja untuk operasi aman (atomic write)
 WORK_DIR="/var/lib/xray-manage"
@@ -141,38 +139,6 @@ else
   UI_ERR=''
 fi
 
-hy2_hysteria_group_name() {
-  if getent group hysteria >/dev/null 2>&1; then
-    echo "hysteria"
-  else
-    echo ""
-  fi
-}
-
-hy2_set_hysteria_dir_perms() {
-  # Directory must be traversable/readable by hysteria for command-auth checks.
-  local path="${1:-}"
-  local grp=""
-  [[ -d "${path}" ]] || return 0
-  grp="$(hy2_hysteria_group_name)"
-  if [[ -n "${grp}" ]]; then
-    chgrp "${grp}" "${path}" 2>/dev/null || true
-  fi
-  chmod 750 "${path}" 2>/dev/null || true
-}
-
-hy2_set_hysteria_file_perms() {
-  # Account/quota JSON must be readable by hysteria (service user).
-  local path="${1:-}"
-  local grp=""
-  [[ -f "${path}" ]] || return 0
-  grp="$(hy2_hysteria_group_name)"
-  if [[ -n "${grp}" ]]; then
-    chgrp "${grp}" "${path}" 2>/dev/null || true
-  fi
-  chmod 640 "${path}" 2>/dev/null || true
-}
-
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
   chmod 700 "${WORK_DIR}"
@@ -190,25 +156,16 @@ ensure_account_quota_dirs() {
   local proto
   mkdir -p "${ACCOUNT_ROOT}"
   mkdir -p "${QUOTA_ROOT}"
-  chmod 711 "${ACCOUNT_ROOT}" "${QUOTA_ROOT}" || true
+  chmod 700 "${ACCOUNT_ROOT}" "${QUOTA_ROOT}" || true
 
   for proto in "${ACCOUNT_PROTO_DIRS[@]}"; do
     mkdir -p "${ACCOUNT_ROOT}/${proto}"
     chmod 700 "${ACCOUNT_ROOT}/${proto}" || true
   done
-  mkdir -p "${HY2_ACCOUNT_ROOT}"
-  hy2_set_hysteria_dir_perms "${HY2_ACCOUNT_ROOT}"
 
   for proto in "${QUOTA_PROTO_DIRS[@]}"; do
     mkdir -p "${QUOTA_ROOT}/${proto}"
-    case "${proto}" in
-      vless|vmess|trojan)
-        hy2_set_hysteria_dir_perms "${QUOTA_ROOT}/${proto}"
-        ;;
-      *)
-        chmod 700 "${QUOTA_ROOT}/${proto}" || true
-        ;;
-    esac
+    chmod 700 "${QUOTA_ROOT}/${proto}" || true
   done
 }
 
@@ -616,137 +573,31 @@ proto_menu_pick_to_value() {
 }
 
 hy2_bonus_enabled_proto() {
-  # Hysteria2 bonus hanya untuk akun xray: vless/vmess/trojan.
-  local proto="${1:-}"
-  case "${proto}" in
-    vless|vmess|trojan) return 0 ;;
-    *) return 1 ;;
-  esac
+  # HY2 dinonaktifkan dari project.
+  return 1
 }
 
 hy2_bonus_auth_user() {
-  # args: source_proto username
-  local source_proto="$1"
-  local username="$2"
-  echo "${username}@${source_proto}"
+  return 1
 }
 
 hy2_bonus_account_json_path() {
-  # args: source_proto username
-  local source_proto="$1"
-  local username="$2"
-  echo "${HY2_ACCOUNT_ROOT}/${username}@${source_proto}.json"
+  return 1
 }
 
 hy2_generate_password() {
-  python3 - <<'PY'
-import secrets
-print(secrets.token_hex(16))
-PY
+  return 1
 }
 
 hy2_bonus_upsert_account() {
-  # args: source_proto username
-  local source_proto="$1"
-  local username="$2"
-  local auth_user f pass created now
-
-  if ! hy2_bonus_enabled_proto "${source_proto}"; then
-    return 0
-  fi
-
-  ensure_account_quota_dirs
-  need_python3
-
-  auth_user="$(hy2_bonus_auth_user "${source_proto}" "${username}")"
-  f="$(hy2_bonus_account_json_path "${source_proto}" "${username}")"
-
-  pass="$(python3 - <<'PY' "${f}" 2>/dev/null || true
-import json, sys
-p = sys.argv[1]
-try:
-  d = json.load(open(p, "r", encoding="utf-8"))
-except Exception:
-  raise SystemExit(0)
-if isinstance(d, dict):
-  v = d.get("password")
-  if isinstance(v, str) and v.strip():
-    print(v.strip())
-PY
-)"
-  [[ -n "${pass}" ]] || pass="$(hy2_generate_password)"
-  created="$(date -u '+%Y-%m-%d')"
-  now="$(date -u '+%Y-%m-%d %H:%M:%S')"
-
-  python3 - <<'PY' "${f}" "${username}" "${source_proto}" "${auth_user}" "${pass}" "${created}" "${now}"
-import json
-import os
-import sys
-import tempfile
-
-path, username, source_proto, auth_user, password, created, updated = sys.argv[1:8]
-data = {}
-if os.path.isfile(path):
-  try:
-    old = json.load(open(path, "r", encoding="utf-8"))
-    if isinstance(old, dict):
-      data.update(old)
-  except Exception:
-    pass
-
-if not data.get("created_at"):
-  data["created_at"] = created
-
-data["username"] = username
-data["source_proto"] = source_proto
-data["auth_user"] = auth_user
-data["password"] = password
-data["updated_at"] = updated
-
-os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=os.path.dirname(path) or ".")
-try:
-  with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-    f.flush()
-    os.fsync(f.fileno())
-  os.replace(tmp, path)
-finally:
-  try:
-    if os.path.exists(tmp):
-      os.remove(tmp)
-  except Exception:
-    pass
-PY
-  local py_rc=$?
-  if (( py_rc != 0 )); then
-    return "${py_rc}"
-  fi
-  hy2_set_hysteria_file_perms "${f}"
   return 0
 }
 
 hy2_bonus_delete_account() {
-  # args: source_proto username
-  local source_proto="$1"
-  local username="$2"
-  local f
-  if ! hy2_bonus_enabled_proto "${source_proto}"; then
-    return 0
-  fi
-  f="$(hy2_bonus_account_json_path "${source_proto}" "${username}")"
-  delete_one_file "${f}"
+  return 0
 }
 
 hy2_sync_users_now() {
-  if [[ ! -x "${HY2_SYNC_BIN}" ]]; then
-    return 0
-  fi
-  if ! "${HY2_SYNC_BIN}" once >/dev/null 2>&1; then
-    warn "Sinkronisasi Hysteria2 gagal (cek: ${HY2_SYNC_BIN} once)."
-    return 1
-  fi
   return 0
 }
 
@@ -1724,9 +1575,9 @@ domain_menu_v2() {
   echo
   local proxy_rc=0
   if confirm_yn_or_back "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    warn "Cloudflare proxy (orange cloud) tidak kompatibel untuk Hysteria2 UDP 443. Dipaksa OFF."
+    warn "Cloudflare proxy (orange cloud) dinonaktifkan pada mode ini."
     CF_PROXIED="false"
-    log "Cloudflare proxy: OFF (proxied=false, kompatibel Hysteria2 UDP 443)"
+    log "Cloudflare proxy: OFF (proxied=false)"
   else
     proxy_rc=$?
     if (( proxy_rc == 2 )); then
@@ -1734,7 +1585,7 @@ domain_menu_v2() {
       return 2
     fi
     CF_PROXIED="false"
-    log "Cloudflare proxy: OFF (proxied=false, kompatibel Hysteria2 UDP 443)"
+    log "Cloudflare proxy: OFF (proxied=false)"
   fi
 
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
@@ -4472,23 +4323,6 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
-
-hy2_file = f"/opt/account/hysteria2/{username}@{proto}.json"
-if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
-  try:
-    hy2_meta = json.load(open(hy2_file, "r", encoding="utf-8"))
-  except Exception:
-    hy2_meta = {}
-  hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
-  hy2_pass = str(hy2_meta.get("password") or "").strip()
-  if hy2_pass:
-    hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
-    hy2_host = ip if is_public_ipv4(ip) else domain
-    hy2_uri = f"hysteria2://{hy2_auth}@{hy2_host}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
-    lines.append("Hysteria2   : ENABLED (bonus)")
-    lines.append(f"HY2 User    : {hy2_user}")
-    lines.append(f"HY2 Pass    : {hy2_pass}")
-    lines.append(f"HY2 URI     : {hy2_uri}")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws','-')}")
@@ -4533,12 +4367,7 @@ PY
     return "${py_rc}"
   fi
 
-  chmod 600 "${acc_file}" || true
-  if hy2_bonus_enabled_proto "${proto}"; then
-    hy2_set_hysteria_file_perms "${quota_file}"
-  else
-    chmod 600 "${quota_file}" || true
-  fi
+  chmod 600 "${acc_file}" "${quota_file}" || true
   return 0
 }
 
@@ -4960,22 +4789,6 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
-hy2_file = f"/opt/account/hysteria2/{username}@{proto}.json"
-if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
-  try:
-    hy2_meta = json.load(open(hy2_file, "r", encoding="utf-8"))
-  except Exception:
-    hy2_meta = {}
-  hy2_user = str(hy2_meta.get("auth_user") or f"{username}@{proto}").strip()
-  hy2_pass = str(hy2_meta.get("password") or "").strip()
-  if hy2_pass:
-    hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
-    hy2_host = ip if is_public_ipv4(ip) else domain
-    hy2_uri = f"hysteria2://{hy2_auth}@{hy2_host}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
-    lines.append("Hysteria2   : ENABLED (bonus)")
-    lines.append(f"HY2 User    : {hy2_user}")
-    lines.append(f"HY2 Pass    : {hy2_pass}")
-    lines.append(f"HY2 URI     : {hy2_uri}")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws', '-')}")
@@ -5225,10 +5038,6 @@ user_add_menu() {
   local speed_enabled="false"
   local speed_down_mbit="0"
   local speed_up_mbit="0"
-  local hy2_bonus="false"
-  if hy2_bonus_enabled_proto "${proto}"; then
-    hy2_bonus="true"
-  fi
   if is_yes "${speed_toggle}"; then
     speed_enabled="true"
 
@@ -5263,7 +5072,6 @@ user_add_menu() {
   echo "  Expired  : ${days} hari"
   echo "  Quota    : ${quota_gb} GB"
   echo "  IP Limit : ${ip_enabled} $( [[ "${ip_enabled}" == "true" ]] && echo "(${ip_limit})" )"
-  echo "  HY2 Bonus: ${hy2_bonus}"
   if [[ "${speed_enabled}" == "true" ]]; then
     echo "  Speed    : true (DOWN ${speed_down_mbit} Mbps | UP ${speed_up_mbit} Mbps)"
   else
@@ -5290,14 +5098,6 @@ PY
   fi
 
   xray_add_client "${proto}" "${username}" "${cred}"
-  if [[ "${hy2_bonus}" == "true" ]]; then
-    if ! hy2_bonus_upsert_account "${proto}" "${username}"; then
-      warn "Akun ${username}@${proto} dibatalkan: gagal menyiapkan bonus Hysteria2."
-      rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menyiapkan bonus Hysteria2"
-      pause
-      return 0
-    fi
-  fi
   if ! write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"; then
     warn "Akun ${username}@${proto} dibatalkan: gagal menulis metadata akun/quota."
     rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menulis metadata akun/quota"
@@ -5329,10 +5129,6 @@ PY
       speed_policy_sync_xray >/dev/null 2>&1 || true
     fi
     speed_policy_apply_now >/dev/null 2>&1 || true
-  fi
-
-  if [[ "${hy2_bonus}" == "true" ]]; then
-    hy2_sync_users_now || true
   fi
 
   title
