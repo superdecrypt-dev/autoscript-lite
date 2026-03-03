@@ -41,8 +41,6 @@ CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtd
 PROVIDED_ROOT_DOMAINS=(
 "vyxara1.web.id"
 "vyxara2.web.id"
-"vyxara1.qzz.io"
-"vyxara2.qzz.io"
 )
 ACME_SH_INSTALL_REF="${ACME_SH_INSTALL_REF:-f39d066ced0271d87790dc426556c1e02a88c91b}"
 ACME_SH_SCRIPT_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/acme.sh"
@@ -1450,6 +1448,41 @@ EOF
     || die "Gagal membuat A record Cloudflare untuk $name"
 }
 
+cf_force_a_record_dns_only() {
+  # args: zone_id fqdn ip
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local json
+  local lines=()
+  local line rid rip rprox payload
+
+  json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
+  if [[ -z "${json:-}" ]] || ! echo "$json" | jq -e '.success == true' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mapfile -t lines < <(echo "$json" | jq -r '.result[] | "\(.id)\t\(.content)\t\(.proxied)"' 2>/dev/null || true)
+  if [[ ${#lines[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  for line in "${lines[@]}"; do
+    rid="${line%%$'\t'*}"
+    line="${line#*$'\t'}"
+    rip="${line%%$'\t'*}"
+    rprox="${line#*$'\t'}"
+    if [[ "${rip}" == "${ip}" && "${rprox}" == "true" ]]; then
+      payload="$(cat <<EOF
+{"type":"A","name":"$fqdn","content":"$ip","ttl":1,"proxied":false}
+EOF
+)"
+      cf_api PUT "/zones/${zone_id}/dns_records/${rid}" "$payload" >/dev/null \
+        || warn "Gagal memaksa DNS only untuk record ${fqdn} (${rid})"
+    fi
+  done
+}
+
 gen_subdomain_random() {
   rand_str 5
 }
@@ -1458,7 +1491,7 @@ validate_subdomain() {
   local s="$1"
   [[ -n "$s" ]] || return 1
   [[ "$s" == "${s,,}" ]] || return 1
-  [[ "$s" =~ ^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$ ]] || return 1
+  [[ "$s" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]] || return 1
   [[ "$s" != *" "* ]] || return 1
   return 0
 }
@@ -1488,10 +1521,15 @@ cf_prepare_subdomain_a_record() {
         fi
       done
 
+      if [[ "$any_diff" == "1" ]]; then
+        die "Subdomain $fqdn sudah ada di Cloudflare tetapi IP berbeda (${rec_ips[*]}). Gunakan nama subdomain lain."
+      fi
+
       if [[ "$any_same" == "1" ]]; then
         warn "A record sudah ada: $fqdn -> $ip (sama dengan IP VPS)"
         local ask_rc=0
         if confirm_yn_or_back "Lanjut menggunakan domain ini?"; then
+          cf_force_a_record_dns_only "$zone_id" "$fqdn" "$ip"
           log "Melanjutkan proses."
           target_ready="1"
         else
@@ -1503,10 +1541,6 @@ cf_prepare_subdomain_a_record() {
           warn "Dibatalkan oleh pengguna."
           return 1
         fi
-      fi
-
-      if [[ "$any_diff" == "1" ]]; then
-        die "Subdomain $fqdn sudah ada di Cloudflare tetapi IP berbeda (${rec_ips[*]}). Gunakan nama subdomain lain."
       fi
     fi
   fi
@@ -1651,8 +1685,9 @@ domain_menu_v2() {
   echo
   local proxy_rc=0
   if confirm_yn_or_back "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    CF_PROXIED="true"
-    log "Cloudflare proxy: ON (proxied=true)"
+    warn "Cloudflare proxy (orange cloud) tidak kompatibel untuk Hysteria2 UDP 443. Dipaksa OFF."
+    CF_PROXIED="false"
+    log "Cloudflare proxy: OFF (proxied=false, kompatibel Hysteria2 UDP 443)"
   else
     proxy_rc=$?
     if (( proxy_rc == 2 )); then
@@ -1660,7 +1695,7 @@ domain_menu_v2() {
       return 2
     fi
     CF_PROXIED="false"
-    log "Cloudflare proxy: OFF (proxied=false)"
+    log "Cloudflare proxy: OFF (proxied=false, kompatibel Hysteria2 UDP 443)"
   fi
 
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
@@ -4168,7 +4203,7 @@ write_account_artifacts() {
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
 
   python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
-import sys, json, base64, urllib.parse, datetime, os, tempfile
+import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
 acc_file, quota_file, inbounds_file, domain, ip, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up = sys.argv[1:18]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
@@ -4215,6 +4250,21 @@ def fmt_mbit(v):
     return str(int(round(n)))
   s=f"{n:.2f}"
   return s.rstrip("0").rstrip(".")
+
+def is_public_ipv4(raw):
+  try:
+    addr = ipaddress.ip_address(str(raw).strip())
+  except Exception:
+    return False
+  return (
+    addr.version == 4
+    and not addr.is_private
+    and not addr.is_loopback
+    and not addr.is_link_local
+    and not addr.is_multicast
+    and not addr.is_unspecified
+    and not addr.is_reserved
+  )
 
 def write_text_atomic(path, content):
   dirn = os.path.dirname(path) or "."
@@ -4394,7 +4444,8 @@ if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
   hy2_pass = str(hy2_meta.get("password") or "").strip()
   if hy2_pass:
     hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
-    hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
+    hy2_host = ip if is_public_ipv4(ip) else domain
+    hy2_uri = f"hysteria2://{hy2_auth}@{hy2_host}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
     lines.append("Hysteria2   : ENABLED (bonus)")
     lines.append(f"HY2 User    : {hy2_user}")
     lines.append(f"HY2 Pass    : {hy2_pass}")
@@ -4482,6 +4533,7 @@ account_info_refresh_for_user() {
   set +e
   python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${username}" "${proto}"
 import base64
+import ipaddress
 import json
 import os
 import re
@@ -4547,6 +4599,22 @@ def fmt_mbit(v):
   if abs(n - round(n)) < 1e-9:
     return str(int(round(n)))
   return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+def is_public_ipv4(raw):
+  try:
+    addr = ipaddress.ip_address(str(raw).strip())
+  except Exception:
+    return False
+  return (
+    addr.version == 4
+    and not addr.is_private
+    and not addr.is_loopback
+    and not addr.is_link_local
+    and not addr.is_multicast
+    and not addr.is_unspecified
+    and not addr.is_reserved
+  )
 
 
 def parse_date_only(raw):
@@ -4858,7 +4926,8 @@ if proto in ("vless", "vmess", "trojan") and os.path.isfile(hy2_file):
   hy2_pass = str(hy2_meta.get("password") or "").strip()
   if hy2_pass:
     hy2_auth = f"{urllib.parse.quote(hy2_user, safe='')}:{urllib.parse.quote(hy2_pass, safe='')}"
-    hy2_uri = f"hysteria2://{hy2_auth}@{domain}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
+    hy2_host = ip if is_public_ipv4(ip) else domain
+    hy2_uri = f"hysteria2://{hy2_auth}@{hy2_host}:443/?sni={domain}&insecure=0#{urllib.parse.quote(hy2_user + '@hysteria2')}"
     lines.append("Hysteria2   : ENABLED (bonus)")
     lines.append(f"HY2 User    : {hy2_user}")
     lines.append(f"HY2 Pass    : {hy2_pass}")

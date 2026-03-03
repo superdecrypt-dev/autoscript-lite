@@ -373,6 +373,18 @@ get_public_ipv4() {
   echo "$ip"
 }
 
+detect_domain() {
+  local dom=""
+  if [[ -n "${DOMAIN:-}" ]]; then
+    dom="${DOMAIN}"
+  elif [[ -s "/etc/xray/domain" ]]; then
+    dom="$(head -n1 /etc/xray/domain 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  elif [[ -f "${NGINX_CONF}" ]]; then
+    dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
+  fi
+  echo "${dom}"
+}
+
 cf_api() {
   local method="$1"
   local endpoint="$2"
@@ -517,6 +529,41 @@ EOF
   )"
   cf_api POST "/zones/${zone_id}/dns_records" "$payload" >/dev/null || die "Gagal membuat A record Cloudflare untuk $name"
 }
+
+cf_force_a_record_dns_only() {
+  # args: zone_id fqdn ip
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local json
+  local lines=()
+  local line rid rip rprox payload
+
+  json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
+  if [[ -z "${json:-}" ]] || ! echo "$json" | jq -e '.success == true' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mapfile -t lines < <(echo "$json" | jq -r '.result[] | "\(.id)\t\(.content)\t\(.proxied)"' 2>/dev/null || true)
+  if [[ ${#lines[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  for line in "${lines[@]}"; do
+    rid="${line%%$'\t'*}"
+    line="${line#*$'\t'}"
+    rip="${line%%$'\t'*}"
+    rprox="${line#*$'\t'}"
+    if [[ "${rip}" == "${ip}" && "${rprox}" == "true" ]]; then
+      payload="$(cat <<EOF
+{"type":"A","name":"$fqdn","content":"$ip","ttl":1,"proxied":false}
+EOF
+)"
+      cf_api PUT "/zones/${zone_id}/dns_records/${rid}" "${payload}" >/dev/null \
+        || warn "Gagal memaksa DNS only untuk record ${fqdn} (${rid})"
+    fi
+  done
+}
 gen_subdomain_random() {
   rand_str 5
 }
@@ -559,17 +606,18 @@ cf_prepare_subdomain_a_record() {
         fi
       done
 
+      if [[ "$any_diff" == "1" ]]; then
+        die "Subdomain $fqdn sudah ada di Cloudflare tetapi IP berbeda (${rec_ips[*]}). Gunakan nama subdomain lain."
+      fi
+
       if [[ "$any_same" == "1" ]]; then
         warn "A record sudah ada: $fqdn -> $ip (sama dengan IP VPS)"
         if confirm_yn "Lanjut menggunakan domain ini?"; then
+          cf_force_a_record_dns_only "$zone_id" "$fqdn" "$ip"
           ok "Melanjutkan proses."
           return 0
         fi
         die "Dibatalkan oleh pengguna."
-      fi
-
-      if [[ "$any_diff" == "1" ]]; then
-        die "Subdomain $fqdn sudah ada di Cloudflare tetapi IP berbeda (${rec_ips[*]}). Gunakan nama subdomain lain."
       fi
     fi
   fi
@@ -699,12 +747,10 @@ fi
 
 echo
 if confirm_yn "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-  CF_PROXIED="true"
-  ok "Cloudflare proxy: ON (proxied=true)"
-else
-CF_PROXIED="false"
-ok "Cloudflare proxy: OFF (proxied=false)"
+  warn "Cloudflare proxy (orange cloud) tidak kompatibel untuk Hysteria2 UDP 443. Dipaksa OFF."
 fi
+CF_PROXIED="false"
+ok "Cloudflare proxy: OFF (proxied=false, kompatibel Hysteria2 UDP 443)"
 DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
 ok "Domain final: $DOMAIN"
 
