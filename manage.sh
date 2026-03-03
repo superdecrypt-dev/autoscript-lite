@@ -141,6 +141,38 @@ else
   UI_ERR=''
 fi
 
+hy2_hysteria_group_name() {
+  if getent group hysteria >/dev/null 2>&1; then
+    echo "hysteria"
+  else
+    echo ""
+  fi
+}
+
+hy2_set_hysteria_dir_perms() {
+  # Directory must be traversable/readable by hysteria for command-auth checks.
+  local path="${1:-}"
+  local grp=""
+  [[ -d "${path}" ]] || return 0
+  grp="$(hy2_hysteria_group_name)"
+  if [[ -n "${grp}" ]]; then
+    chgrp "${grp}" "${path}" 2>/dev/null || true
+  fi
+  chmod 750 "${path}" 2>/dev/null || true
+}
+
+hy2_set_hysteria_file_perms() {
+  # Account/quota JSON must be readable by hysteria (service user).
+  local path="${1:-}"
+  local grp=""
+  [[ -f "${path}" ]] || return 0
+  grp="$(hy2_hysteria_group_name)"
+  if [[ -n "${grp}" ]]; then
+    chgrp "${grp}" "${path}" 2>/dev/null || true
+  fi
+  chmod 640 "${path}" 2>/dev/null || true
+}
+
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
   chmod 700 "${WORK_DIR}"
@@ -158,18 +190,25 @@ ensure_account_quota_dirs() {
   local proto
   mkdir -p "${ACCOUNT_ROOT}"
   mkdir -p "${QUOTA_ROOT}"
-  chmod 700 "${ACCOUNT_ROOT}" "${QUOTA_ROOT}" || true
+  chmod 711 "${ACCOUNT_ROOT}" "${QUOTA_ROOT}" || true
 
   for proto in "${ACCOUNT_PROTO_DIRS[@]}"; do
     mkdir -p "${ACCOUNT_ROOT}/${proto}"
     chmod 700 "${ACCOUNT_ROOT}/${proto}" || true
   done
   mkdir -p "${HY2_ACCOUNT_ROOT}"
-  chmod 700 "${HY2_ACCOUNT_ROOT}" || true
+  hy2_set_hysteria_dir_perms "${HY2_ACCOUNT_ROOT}"
 
   for proto in "${QUOTA_PROTO_DIRS[@]}"; do
     mkdir -p "${QUOTA_ROOT}/${proto}"
-    chmod 700 "${QUOTA_ROOT}/${proto}" || true
+    case "${proto}" in
+      vless|vmess|trojan)
+        hy2_set_hysteria_dir_perms "${QUOTA_ROOT}/${proto}"
+        ;;
+      *)
+        chmod 700 "${QUOTA_ROOT}/${proto}" || true
+        ;;
+    esac
   done
 }
 
@@ -684,7 +723,7 @@ PY
   if (( py_rc != 0 )); then
     return "${py_rc}"
   fi
-  chmod 600 "${f}" 2>/dev/null || true
+  hy2_set_hysteria_file_perms "${f}"
   return 0
 }
 
@@ -4494,7 +4533,12 @@ PY
     return "${py_rc}"
   fi
 
-  chmod 600 "${acc_file}" "${quota_file}" || true
+  chmod 600 "${acc_file}" || true
+  if hy2_bonus_enabled_proto "${proto}"; then
+    hy2_set_hysteria_file_perms "${quota_file}"
+  else
+    chmod 600 "${quota_file}" || true
+  fi
   return 0
 }
 

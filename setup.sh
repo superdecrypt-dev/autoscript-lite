@@ -2149,8 +2149,12 @@ install_hysteria2_integrated() {
     hy2_service_group="root"
   fi
 
-  mkdir -p "${HY2_CONFIG_DIR}" /opt/account/hysteria2
-  chmod 700 /opt/account/hysteria2 || true
+  mkdir -p "${HY2_CONFIG_DIR}" /opt/account/hysteria2 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan
+  chmod 711 /opt/account /opt/quota 2>/dev/null || true
+  chgrp "${hy2_service_group}" /opt/account/hysteria2 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan 2>/dev/null || true
+  chmod 750 /opt/account/hysteria2 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan 2>/dev/null || true
+  find /opt/account/hysteria2 -maxdepth 1 -type f -name '*.json' -exec chgrp "${hy2_service_group}" {} + -exec chmod 640 {} + 2>/dev/null || true
+  find /opt/quota/vless /opt/quota/vmess /opt/quota/trojan -maxdepth 1 -type f -name '*.json' -exec chgrp "${hy2_service_group}" {} + -exec chmod 640 {} + 2>/dev/null || true
   install -m 640 -o root -g "${hy2_service_group}" "${CERT_FULLCHAIN}" "${HY2_CERT_FILE}"
   install -m 640 -o root -g "${hy2_service_group}" "${CERT_PRIVKEY}" "${HY2_KEY_FILE}"
 
@@ -2269,6 +2273,7 @@ EOF
   cat > "${HY2_SYNC_SCRIPT}" <<'EOF'
 #!/usr/bin/env python3
 import argparse
+import grp
 import json
 import os
 import urllib.error
@@ -2311,6 +2316,22 @@ def load_json(path):
     pass
   return {}
 
+def apply_hysteria_read_perms(path):
+  gid = -1
+  try:
+    gid = grp.getgrnam("hysteria").gr_gid
+  except Exception:
+    gid = -1
+  if gid >= 0:
+    try:
+      os.chown(path, -1, gid)
+    except Exception:
+      pass
+  try:
+    os.chmod(path, 0o640)
+  except Exception:
+    pass
+
 def save_json_atomic(path, data):
   import tempfile
   d = os.path.dirname(path) or "."
@@ -2322,6 +2343,7 @@ def save_json_atomic(path, data):
       f.flush()
       os.fsync(f.fileno())
     os.replace(tmp, path)
+    apply_hysteria_read_perms(path)
   finally:
     try:
       if os.path.exists(tmp):
@@ -3225,8 +3247,11 @@ install_management_scripts() {
 
   mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/hysteria2
   mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
-  chmod 700 /opt/account /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/hysteria2
-  chmod 700 /opt/quota  /opt/quota/vless  /opt/quota/vmess  /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
+  chmod 711 /opt/account /opt/quota
+  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
+  chmod 750 /opt/account/hysteria2
+  chmod 750 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan
+  chmod 700 /opt/quota/shadowsocks /opt/quota/shadowsocks2022
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
