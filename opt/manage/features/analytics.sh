@@ -2055,6 +2055,20 @@ ssh_add_user_menu() {
     return 0
   fi
 
+  local active_days
+  if ! read -r -p "Masa aktif SSH (hari) (atau kembali): " active_days; then
+    echo
+    return 0
+  fi
+  if is_back_word_choice "${active_days}"; then
+    return 0
+  fi
+  if [[ -z "${active_days}" || ! "${active_days}" =~ ^[0-9]+$ || "${active_days}" -le 0 ]]; then
+    warn "Masa aktif SSH harus angka hari > 0."
+    pause
+    return 0
+  fi
+
   local quota_input quota_gb quota_bytes
   if ! read -r -p "Quota (GB) (0=unlimited) (atau kembali): " quota_input; then
     echo
@@ -2157,7 +2171,12 @@ ssh_add_user_menu() {
   esac
 
   local expired_at created_at
-  expired_at="-"
+  expired_at="$(date -u -d "+${active_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
+  if [[ -z "${expired_at}" ]]; then
+    warn "Gagal menghitung tanggal expiry SSH."
+    pause
+    return 0
+  fi
   created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
@@ -2173,7 +2192,7 @@ ssh_add_user_menu() {
     return 0
   fi
 
-  if ! chage -E -1 "${username}" >/dev/null 2>&1; then
+  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
     userdel -r "${username}" >/dev/null 2>&1 || true
     warn "Gagal set expiry user '${username}'."
     pause

@@ -2328,25 +2328,14 @@ EOF
 #!/usr/bin/env python3
 import argparse
 import asyncio
-import base64
-import hashlib
 import signal
 import ssl
-
-GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-MAX_FRAME_SIZE = 1024 * 1024
-
 
 class HandshakeError(Exception):
   def __init__(self, code, reason):
     super().__init__(reason)
     self.code = code
     self.reason = reason
-
-
-def _build_accept(key):
-  digest = hashlib.sha1((key + GUID).encode("utf-8")).digest()
-  return base64.b64encode(digest).decode("ascii")
 
 
 async def _send_http_error(writer, code, reason):
@@ -2397,93 +2386,30 @@ async def _read_handshake(reader, expected_path):
     headers[key.strip().lower()] = value.strip()
 
   upgrade = headers.get("upgrade", "").lower()
-  connection = headers.get("connection", "").lower()
-  ws_key = headers.get("sec-websocket-key", "")
-  version = headers.get("sec-websocket-version", "")
   if upgrade != "websocket":
     raise HandshakeError(400, "Bad Request")
-  if "upgrade" not in connection:
-    raise HandshakeError(400, "Bad Request")
-  if version != "13":
-    raise HandshakeError(426, "Upgrade Required")
-  if not ws_key:
-    raise HandshakeError(400, "Bad Request")
-  return ws_key
+  return
 
 
-async def _send_handshake_ok(writer, ws_key):
-  accept = _build_accept(ws_key)
+async def _send_handshake_ok(writer):
+  # Mode legacy penuh ala sshws nanotechid/supreme:
+  # cukup respons 101, lalu stream raw TCP.
   resp = (
     "HTTP/1.1 101 Switching Protocols\r\n"
-    "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
-    "Sec-WebSocket-Accept: {}\r\n".format(accept) +
+    "Content-Length: 104857600000\r\n"
     "\r\n"
   ).encode("ascii")
   writer.write(resp)
   await writer.drain()
 
 
-async def _read_ws_frame(reader):
-  head = await reader.readexactly(2)
-  b1, b2 = head[0], head[1]
-  opcode = b1 & 0x0F
-  masked = (b2 & 0x80) != 0
-  length = b2 & 0x7F
-  if length == 126:
-    length = int.from_bytes(await reader.readexactly(2), "big")
-  elif length == 127:
-    length = int.from_bytes(await reader.readexactly(8), "big")
-
-  if length > MAX_FRAME_SIZE:
-    raise ValueError("frame too large")
-
-  if not masked:
-    raise ValueError("unmasked client frame")
-
-  mask_key = b""
-  if masked:
-    mask_key = await reader.readexactly(4)
-
-  payload = await reader.readexactly(length)
-  if masked:
-    payload = bytes(byte ^ mask_key[idx % 4] for idx, byte in enumerate(payload))
-  return opcode, payload
-
-
-def _build_ws_frame(opcode, payload=b""):
-  header = bytearray()
-  header.append(0x80 | (opcode & 0x0F))
-  n = len(payload)
-  if n < 126:
-    header.append(n)
-  elif n <= 0xFFFF:
-    header.append(126)
-    header.extend(n.to_bytes(2, "big"))
-  else:
-    header.append(127)
-    header.extend(n.to_bytes(8, "big"))
-  return bytes(header) + payload
-
-
-async def _ws_to_backend(ws_reader, ws_writer, backend_writer):
+async def _legacy_to_backend(client_reader, backend_writer):
   while True:
-    opcode, payload = await _read_ws_frame(ws_reader)
-    if opcode == 0x8:
-      ws_writer.write(_build_ws_frame(0x8, payload[:2] if payload else b""))
-      await ws_writer.drain()
+    data = await client_reader.read(16384)
+    if not data:
       break
-    if opcode == 0x9:
-      ws_writer.write(_build_ws_frame(0xA, payload))
-      await ws_writer.drain()
-      continue
-    if opcode == 0xA:
-      continue
-    if opcode not in (0x0, 0x1, 0x2):
-      break
-    if payload:
-      backend_writer.write(payload)
-      await backend_writer.drain()
+    backend_writer.write(data)
+    await backend_writer.drain()
 
   try:
     backend_writer.close()
@@ -2492,25 +2418,19 @@ async def _ws_to_backend(ws_reader, ws_writer, backend_writer):
     pass
 
 
-async def _backend_to_ws(backend_reader, ws_writer):
+async def _backend_to_legacy(backend_reader, client_writer):
   while True:
     data = await backend_reader.read(16384)
     if not data:
       break
-    ws_writer.write(_build_ws_frame(0x2, data))
-    await ws_writer.drain()
-
-  try:
-    ws_writer.write(_build_ws_frame(0x8, b""))
-    await ws_writer.drain()
-  except Exception:
-    pass
+    client_writer.write(data)
+    await client_writer.drain()
 
 
 async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
   try:
-    ws_key = await _read_handshake(ws_reader, args.path)
-    await _send_handshake_ok(ws_writer, ws_key)
+    await _read_handshake(ws_reader, args.path)
+    await _send_handshake_ok(ws_writer)
   except HandshakeError as exc:
     await _send_http_error(ws_writer, exc.code, exc.reason)
     ws_writer.close()
@@ -2530,8 +2450,8 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
       ssl=backend_ssl,
       server_hostname=None,
     )
-    pump1 = asyncio.create_task(_ws_to_backend(ws_reader, ws_writer, backend_writer))
-    pump2 = asyncio.create_task(_backend_to_ws(backend_reader, ws_writer))
+    pump1 = asyncio.create_task(_legacy_to_backend(ws_reader, backend_writer))
+    pump2 = asyncio.create_task(_backend_to_legacy(backend_reader, ws_writer))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
       task.cancel()
@@ -2540,11 +2460,7 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
     for task in done:
       task.exception()
   except Exception:
-    try:
-      ws_writer.write(_build_ws_frame(0x8, b""))
-      await ws_writer.drain()
-    except Exception:
-      pass
+    pass
   finally:
     if backend_writer is not None:
       try:
