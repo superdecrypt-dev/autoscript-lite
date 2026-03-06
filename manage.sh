@@ -6901,6 +6901,13 @@ quota_menu() {
 # Modular load (stage-1 split)
 # -------------------------
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+MANAGE_REQUIRED_MODULES=(
+  "features/network.sh"
+  "features/analytics.sh"
+  "menus/maintenance_menu.sh"
+  "menus/main_menu.sh"
+  "app/main.sh"
+)
 
 manage_modules_dir_trusted() {
   local dir="$1"
@@ -6923,10 +6930,12 @@ manage_modules_dir_trusted() {
 
 manage_module_file_trusted() {
   local file="$1"
+  local modules_dir="${2:-${MANAGE_MODULES_DIR:-}}"
+  [[ -n "${modules_dir}" ]] || return 1
   [[ -f "${file}" && -r "${file}" ]] || return 1
 
   local modules_real file_real
-  modules_real="$(readlink -f -- "${MANAGE_MODULES_DIR}" 2>/dev/null || true)"
+  modules_real="$(readlink -f -- "${modules_dir}" 2>/dev/null || true)"
   file_real="$(readlink -f -- "${file}" 2>/dev/null || true)"
   [[ -n "${modules_real}" && -n "${file_real}" ]] || return 1
   [[ "${file_real}" == "${modules_real}/"* ]] || return 1
@@ -6947,26 +6956,38 @@ manage_module_file_trusted() {
   return 0
 }
 
+manage_modules_dir_ready() {
+  local dir="$1"
+  local rel file
+  manage_modules_dir_trusted "${dir}" || return 1
+  for rel in "${MANAGE_REQUIRED_MODULES[@]}"; do
+    file="${dir}/${rel}"
+    [[ -r "${file}" ]] || return 1
+    manage_module_file_trusted "${file}" "${dir}" || return 1
+  done
+  return 0
+}
+
 resolve_manage_modules_dir() {
   local local_modules="${MANAGE_SCRIPT_DIR}/opt/manage"
-  if manage_modules_dir_trusted "${local_modules}"; then
-    printf '%s\n' "${local_modules}"
-    return 0
-  fi
-  if manage_modules_dir_trusted "/opt/manage"; then
+  if manage_modules_dir_ready "/opt/manage"; then
     printf '%s\n' "/opt/manage"
     return 0
   fi
-  if manage_modules_dir_trusted "/opt/autoscript/opt/manage"; then
+  if manage_modules_dir_ready "/opt/autoscript/opt/manage"; then
     printf '%s\n' "/opt/autoscript/opt/manage"
+    return 0
+  fi
+  if manage_modules_dir_ready "${local_modules}"; then
+    printf '%s\n' "${local_modules}"
     return 0
   fi
   return 1
 }
 
 if [[ -n "${MANAGE_MODULES_DIR:-}" ]]; then
-  if ! manage_modules_dir_trusted "${MANAGE_MODULES_DIR}"; then
-    die "MANAGE_MODULES_DIR tidak trusted/tidak valid: ${MANAGE_MODULES_DIR}"
+  if ! manage_modules_dir_ready "${MANAGE_MODULES_DIR}"; then
+    die "MANAGE_MODULES_DIR tidak valid/tidak lengkap/tidak trusted: ${MANAGE_MODULES_DIR}"
   fi
 else
   MANAGE_MODULES_DIR="$(resolve_manage_modules_dir)" \
@@ -6985,10 +7006,9 @@ manage_source_required() {
 }
 
 # Stage-1 modules moved out from monolith manage.sh
-manage_source_required "features/network.sh"
-manage_source_required "features/analytics.sh"
-manage_source_required "menus/maintenance_menu.sh"
-manage_source_required "menus/main_menu.sh"
-manage_source_required "app/main.sh"
+for _mod in "${MANAGE_REQUIRED_MODULES[@]}"; do
+  manage_source_required "${_mod}"
+done
+unset _mod
 
 main "$@"

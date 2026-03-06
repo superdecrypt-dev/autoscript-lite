@@ -2060,7 +2060,7 @@ ssh_add_user_menu() {
     echo
     return 0
   fi
-  if is_back_word_choice "${active_days}"; then
+  if is_back_choice "${active_days}"; then
     return 0
   fi
   if [[ -z "${active_days}" || ! "${active_days}" =~ ^[0-9]+$ || "${active_days}" -le 0 ]]; then

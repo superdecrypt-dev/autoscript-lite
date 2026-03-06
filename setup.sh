@@ -2330,6 +2330,7 @@ import argparse
 import asyncio
 import signal
 import ssl
+from urllib.parse import urlsplit
 
 class HandshakeError(Exception):
   def __init__(self, code, reason):
@@ -2370,11 +2371,32 @@ async def _read_handshake(reader, expected_path):
   if len(req) < 3:
     raise HandshakeError(400, "Bad Request")
   method = req[0]
-  path = req[1]
+  target = req[1]
+
+  # Legacy payload bisa memakai origin-form ("/"), query ("/?ed=..."),
+  # atau absolute-form ("wss://host/path"). Normalisasi ke path HTTP.
+  if "://" in target:
+    try:
+      parsed = urlsplit(target)
+      path = parsed.path or "/"
+      if parsed.query:
+        path = "{}?{}".format(path, parsed.query)
+    except Exception:
+      path = target
+  else:
+    path = target
+
+  path_only = (path.split("?", 1)[0].split("#", 1)[0] or "/")
+  expected_only = ((expected_path or "/").split("?", 1)[0].split("#", 1)[0] or "/")
+
   if method.upper() != "GET":
     raise HandshakeError(405, "Method Not Allowed")
-  if path != expected_path:
-    raise HandshakeError(404, "Not Found")
+  if expected_only == "/":
+    if not path_only.startswith("/"):
+      raise HandshakeError(404, "Not Found")
+  else:
+    if path_only != expected_only and not path_only.startswith(expected_only + "/"):
+      raise HandshakeError(404, "Not Found")
 
   headers = {}
   for line in lines[1:]:
@@ -2430,7 +2452,6 @@ async def _backend_to_legacy(backend_reader, client_writer):
 async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
   try:
     await _read_handshake(ws_reader, args.path)
-    await _send_handshake_ok(ws_writer)
   except HandshakeError as exc:
     await _send_http_error(ws_writer, exc.code, exc.reason)
     ws_writer.close()
@@ -2450,6 +2471,21 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
       ssl=backend_ssl,
       server_hostname=None,
     )
+  except Exception:
+    # Hindari false-positive connected: jika backend gagal, jangan kirim 101.
+    try:
+      await _send_http_error(ws_writer, 502, "Bad Gateway")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+    return
+
+  try:
+    await _send_handshake_ok(ws_writer)
     pump1 = asyncio.create_task(_legacy_to_backend(ws_reader, backend_writer))
     pump2 = asyncio.create_task(_backend_to_legacy(backend_reader, ws_writer))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
