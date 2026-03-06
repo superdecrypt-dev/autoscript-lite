@@ -99,7 +99,9 @@ OBS_LOCK_FILE="/var/lock/xray-observatory.lock"
 REPORT_DIR="/var/log/xray-manage"
 WARP_TIER_STATE_KEY="warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY="warp_plus_license_key"
-SSH_USERS_STATE_DIR="${WORK_DIR}/ssh-users"
+SSH_ACCOUNT_DIR="${ACCOUNT_ROOT}/ssh"
+SSH_QUOTA_DIR="${QUOTA_ROOT}/ssh"
+SSH_USERS_STATE_DIR="${SSH_QUOTA_DIR}"
 SSHWS_DROPBEAR_SERVICE="sshws-dropbear"
 SSHWS_STUNNEL_SERVICE="sshws-stunnel"
 SSHWS_PROXY_SERVICE="sshws-proxy"
@@ -109,7 +111,8 @@ SSHWS_QAC_ENFORCER_TIMER="sshws-qac-enforcer.timer"
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}" \
   "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" \
-  "${SSH_USERS_STATE_DIR}" "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
+  "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
+  "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
   "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
@@ -150,6 +153,8 @@ fi
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
   chmod 700 "${WORK_DIR}"
+  mkdir -p "${SSH_ACCOUNT_DIR}"
+  chmod 700 "${SSH_ACCOUNT_DIR}" || true
   mkdir -p "${SSH_USERS_STATE_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" || true
 
@@ -177,6 +182,9 @@ ensure_account_quota_dirs() {
     mkdir -p "${QUOTA_ROOT}/${proto}"
     chmod 700 "${QUOTA_ROOT}/${proto}" || true
   done
+
+  mkdir -p "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}"
+  chmod 700 "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" || true
 }
 
 ensure_speed_policy_dirs() {
@@ -6712,12 +6720,12 @@ quota_menu() {
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 resolve_manage_modules_dir() {
-  if [[ -d "/opt/manage" ]]; then
-    printf '%s\n' "/opt/manage"
-    return 0
-  fi
   if [[ -d "${MANAGE_SCRIPT_DIR}/opt/manage" ]]; then
     printf '%s\n' "${MANAGE_SCRIPT_DIR}/opt/manage"
+    return 0
+  fi
+  if [[ -d "/opt/manage" ]]; then
+    printf '%s\n' "/opt/manage"
     return 0
   fi
   if [[ -d "/opt/autoscript/opt/manage" ]]; then

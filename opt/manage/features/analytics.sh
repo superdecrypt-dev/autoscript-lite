@@ -1286,14 +1286,65 @@ ssh_username_valid() {
   [[ "${username}" =~ ^[a-z_][a-z0-9_-]{1,31}$ ]]
 }
 
+ssh_username_from_key() {
+  local raw="${1:-}"
+  raw="${raw%@ssh}"
+  if [[ "${raw}" == *"@"* ]]; then
+    raw="${raw%%@*}"
+  fi
+  printf '%s\n' "${raw}"
+}
+
+ssh_state_dirs_prepare() {
+  local legacy_dir="/var/lib/xray-manage/ssh-users"
+  mkdir -p "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" || true
+
+  if [[ -d "${legacy_dir}" && "${legacy_dir}" != "${SSH_USERS_STATE_DIR}" ]]; then
+    local f base username dst
+    while IFS= read -r -d '' f; do
+      base="$(basename "${f}")"
+      base="${base%.json}"
+      username="$(ssh_username_from_key "${base}")"
+      [[ -n "${username}" ]] || continue
+      dst="$(ssh_user_state_file "${username}")"
+      if [[ ! -f "${dst}" ]]; then
+        cp -a "${f}" "${dst}" >/dev/null 2>&1 || true
+        chmod 600 "${dst}" >/dev/null 2>&1 || true
+      fi
+    done < <(find "${legacy_dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+  fi
+
+  local f base username dst
+  while IFS= read -r -d '' f; do
+    base="$(basename "${f}")"
+    base="${base%.json}"
+    username="$(ssh_username_from_key "${base}")"
+    [[ -n "${username}" ]] || continue
+    dst="$(ssh_user_state_file "${username}")"
+    if [[ "${f}" != "${dst}" ]]; then
+      if [[ ! -f "${dst}" ]]; then
+        mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
+        chmod 600 "${dst}" >/dev/null 2>&1 || true
+      fi
+    fi
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+}
+
 ssh_user_state_file() {
   local username="${1:-}"
-  printf '%s/%s.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+  printf '%s/%s@ssh.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+}
+
+ssh_account_info_file() {
+  local username="${1:-}"
+  printf '%s/%s@ssh.txt\n' "${SSH_ACCOUNT_DIR}" "${username}"
 }
 
 ssh_user_state_created_at_get() {
   local username="${1:-}"
   local state_file
+  ssh_state_dirs_prepare
   state_file="$(ssh_user_state_file "${username}")"
   [[ -s "${state_file}" ]] || {
     echo ""
@@ -1316,8 +1367,7 @@ ssh_user_state_write() {
   local username="${1:-}" created_at="${2:-}" expired_at="${3:-}"
   local state_file tmp
   state_file="$(ssh_user_state_file "${username}")"
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
   tmp="$(mktemp "${SSH_USERS_STATE_DIR}/.${username}.XXXXXX")" || return 1
   need_python3
   if ! python3 - <<'PY' "${state_file}" "${username}" "${created_at}" "${expired_at}" > "${tmp}"; then
@@ -1415,6 +1465,7 @@ expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
+payload["protocol"] = "ssh"
 payload["created_at"] = created
 payload["expired_at"] = expired
 payload["quota_limit"] = quota_limit
@@ -1448,18 +1499,210 @@ PY
   return 0
 }
 
+ssh_account_info_password_get() {
+  local username="${1:-}"
+  local acc_file
+  acc_file="$(ssh_account_info_file "${username}")"
+  [[ -f "${acc_file}" ]] || {
+    echo "-"
+    return 0
+  }
+  awk -F':' '/^Password[[:space:]]*:/{sub(/^[[:space:]]*/, "", $2); print $2; found=1; exit} END{if(!found) print "-"}' "${acc_file}" 2>/dev/null
+}
+
+ssh_account_info_write() {
+  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up
+  local username="${1:-}"
+  local password="${2:-}"
+  local quota_bytes="${3:-0}"
+  local expired_at="${4:--}"
+  local created_at="${5:-}"
+  local ip_enabled="${6:-false}"
+  local ip_limit="${7:-0}"
+  local speed_enabled="${8:-false}"
+  local speed_down="${9:-0}"
+  local speed_up="${10:-0}"
+
+  ssh_state_dirs_prepare
+
+  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp
+  acc_file="$(ssh_account_info_file "${username}")"
+  domain="$(detect_domain)"
+  ip="$(detect_public_ip_ipapi)"
+  [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
+  [[ -n "${domain}" ]] || domain="-"
+  [[ -n "${ip}" ]] || ip="-"
+  [[ -n "${password}" ]] || password="-"
+  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  [[ -n "${expired_at}" ]] || expired_at="-"
+
+  quota_limit_disp="$(python3 - <<'PY' "${quota_bytes}"
+import sys
+def fmt(v):
+  s=f"{v:.3f}".rstrip("0").rstrip(".")
+  return s if s else "0"
+try:
+  b=int(float(sys.argv[1]))
+except Exception:
+  b=0
+if b < 0:
+  b = 0
+print(f"{fmt(b/(1024**3))} GB")
+PY
+)"
+
+  valid_until="${expired_at}"
+  expired_disp="$(python3 - <<'PY' "${expired_at}"
+import sys
+from datetime import datetime, timezone
+v = (sys.argv[1] or "").strip()
+if not v or v == "-":
+  print("unlimited")
+  raise SystemExit(0)
+try:
+  dt = datetime.strptime(v[:10], "%Y-%m-%d").date()
+  today = datetime.now(timezone.utc).date()
+  days = (dt - today).days
+  if days < 0:
+    days = 0
+  print(f"{days} days")
+except Exception:
+  print("unknown")
+PY
+)"
+
+  if [[ "${ip_enabled}" == "true" ]]; then
+    if [[ "${ip_limit}" =~ ^[0-9]+$ ]] && (( ip_limit > 0 )); then
+      ip_disp="ON (${ip_limit})"
+    else
+      ip_disp="ON"
+    fi
+  else
+    ip_disp="OFF"
+  fi
+
+  if [[ "${speed_enabled}" == "true" ]]; then
+    speed_disp="ON (DOWN ${speed_down} Mbps | UP ${speed_up} Mbps)"
+  else
+    speed_disp="OFF"
+  fi
+
+  cat > "${acc_file}" <<EOF
+=== SSH ACCOUNT INFO ===
+Domain      : ${domain}
+IP          : ${ip}
+Username    : ${username}
+Password    : ${password}
+Quota Limit : ${quota_limit_disp}
+Expired     : ${expired_disp}
+Valid Until : ${valid_until}
+Created     : ${created_at}
+IP Limit    : ${ip_disp}
+Speed Limit : ${speed_disp}
+
+Standard Payload:
+Payload WSS:
+    GET wss://${domain}/ HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: Websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+
+Payload WS:
+    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: Websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+EOF
+  chmod 600 "${acc_file}" >/dev/null 2>&1 || true
+}
+
+ssh_account_info_refresh_from_state() {
+  # args: username [password_override]
+  local username="${1:-}"
+  local password_override="${2:-}"
+  local qf
+  qf="$(ssh_user_state_file "${username}")"
+  [[ -f "${qf}" ]] || return 1
+
+  local fields quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up password
+  need_python3
+  fields="$(python3 - <<'PY' "${qf}"
+import json
+import sys
+p = sys.argv[1]
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  d = {}
+if not isinstance(d, dict):
+  d = {}
+s = d.get("status")
+if not isinstance(s, dict):
+  s = {}
+def tb(v):
+  if isinstance(v, bool):
+    return "true" if v else "false"
+  if isinstance(v, (int, float)):
+    return "true" if bool(v) else "false"
+  return "true" if str(v or "").strip().lower() in ("1", "true", "yes", "on", "y") else "false"
+def ti(v, d=0):
+  try:
+    if v is None:
+      return d
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    t = str(v).strip()
+    if not t:
+      return d
+    return int(float(t))
+  except Exception:
+    return d
+def tf(v, d=0.0):
+  try:
+    if v is None:
+      return d
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    t = str(v).strip()
+    if not t:
+      return d
+    return float(t)
+  except Exception:
+    return d
+def fm(v):
+  s = f"{float(v):.3f}".rstrip("0").rstrip(".")
+  return s if s else "0"
+print("|".join([
+  str(max(0, ti(d.get("quota_limit"), 0))),
+  str(d.get("expired_at") or "-")[:10] if str(d.get("expired_at") or "-").strip() else "-",
+  str(d.get("created_at") or "-"),
+  tb(s.get("ip_limit_enabled")),
+  str(max(0, ti(s.get("ip_limit"), 0))),
+  tb(s.get("speed_limit_enabled")),
+  fm(max(0.0, tf(s.get("speed_down_mbit"), 0.0))),
+  fm(max(0.0, tf(s.get("speed_up_mbit"), 0.0))),
+]))
+PY
+)"
+  IFS='|' read -r quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up <<<"${fields}"
+
+  password="${password_override}"
+  if [[ -z "${password}" ]]; then
+    password="$(ssh_account_info_password_get "${username}")"
+  fi
+
+  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+}
+
 ssh_pick_managed_user() {
   local -n _out_ref="$1"
   _out_ref=""
 
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
 
   local -a users=()
   while IFS= read -r u; do
     [[ -n "${u}" ]] || continue
     users+=("${u}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/\.json$//' | sort)
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
 
   if (( ${#users[@]} == 0 )); then
     warn "Belum ada akun SSH terkelola."
@@ -1536,21 +1779,91 @@ ssh_add_user_menu() {
     return 0
   fi
 
-  local days
-  read -r -p "Masa aktif (hari) [default 30]: " days
-  if is_back_choice "${days}"; then
+  local quota_input quota_gb quota_bytes
+  read -r -p "Quota (GB) (0=unlimited) (atau kembali): " quota_input
+  if is_back_choice "${quota_input}"; then
     return 0
   fi
-  days="${days:-30}"
-  if [[ ! "${days}" =~ ^[0-9]+$ ]] || (( days < 1 || days > 3650 )); then
-    warn "Masa aktif harus angka 1-3650."
+  quota_gb="$(normalize_gb_input "${quota_input}")"
+  if [[ -z "${quota_gb}" ]]; then
+    warn "Format quota tidak valid. Contoh: 5 atau 5GB."
     pause
     return 0
   fi
+  quota_bytes="$(bytes_from_gb "${quota_gb}")"
+
+  local ip_toggle ip_enabled="false" ip_limit="0"
+  read -r -p "Limit IP (on/off) (atau kembali): " ip_toggle
+  if is_back_word_choice "${ip_toggle}"; then
+    return 0
+  fi
+  ip_toggle="${ip_toggle,,}"
+  case "${ip_toggle}" in
+    on)
+      ip_enabled="true"
+      read -r -p "Limit IP (angka) (atau kembali): " ip_limit
+      if is_back_word_choice "${ip_limit}"; then
+        return 0
+      fi
+      if [[ -z "${ip_limit}" || ! "${ip_limit}" =~ ^[0-9]+$ || "${ip_limit}" -le 0 ]]; then
+        warn "Limit IP harus angka > 0."
+        pause
+        return 0
+      fi
+      ;;
+    off) ip_enabled="false" ; ip_limit="0" ;;
+    *)
+      warn "Pilihan Limit IP harus on/off."
+      pause
+      return 0
+      ;;
+  esac
+
+  local speed_toggle speed_enabled="false" speed_down="0" speed_up="0"
+  read -r -p "Limit speed per user SSH (on/off) (atau kembali): " speed_toggle
+  if is_back_word_choice "${speed_toggle}"; then
+    return 0
+  fi
+  speed_toggle="${speed_toggle,,}"
+  case "${speed_toggle}" in
+    on)
+      speed_enabled="true"
+      read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down
+      if is_back_word_choice "${speed_down}"; then
+        return 0
+      fi
+      speed_down="$(normalize_speed_mbit_input "${speed_down}")"
+      if [[ -z "${speed_down}" ]] || ! speed_mbit_is_positive "${speed_down}"; then
+        warn "Speed download tidak valid. Gunakan angka > 0."
+        pause
+        return 0
+      fi
+
+      read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up
+      if is_back_word_choice "${speed_up}"; then
+        return 0
+      fi
+      speed_up="$(normalize_speed_mbit_input "${speed_up}")"
+      if [[ -z "${speed_up}" ]] || ! speed_mbit_is_positive "${speed_up}"; then
+        warn "Speed upload tidak valid. Gunakan angka > 0."
+        pause
+        return 0
+      fi
+      ;;
+    off)
+      speed_enabled="false"
+      speed_down="0"
+      speed_up="0"
+      ;;
+    *)
+      warn "Pilihan speed limit harus on/off."
+      pause
+      return 0
+      ;;
+  esac
 
   local expired_at created_at
-  expired_at="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || true)"
-  [[ -n "${expired_at}" ]] || expired_at="$(date -u '+%Y-%m-%d')"
+  expired_at="-"
   created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
@@ -1565,9 +1878,8 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
-  password=""
 
-  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+  if ! chage -E -1 "${username}" >/dev/null 2>&1; then
     userdel -r "${username}" >/dev/null 2>&1 || true
     warn "Gagal set expiry user '${username}'."
     pause
@@ -1575,13 +1887,57 @@ ssh_add_user_menu() {
   fi
 
   if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
     warn "Gagal menulis metadata akun SSH."
     pause
     return 0
   fi
 
+  local qf
+  qf="$(ssh_user_state_file "${username}")"
+  if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    rm -f "${qf}" >/dev/null 2>&1 || true
+    warn "Gagal set quota metadata SSH."
+    pause
+    return 0
+  fi
+
+  if [[ "${ip_enabled}" == "true" ]]; then
+    ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}" || true
+    ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on || true
+  else
+    ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off || true
+  fi
+
+  if [[ "${speed_enabled}" == "true" ]]; then
+    ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}" || true
+  else
+    ssh_qac_atomic_update_file "${qf}" speed_limit_set off || true
+  fi
+
+  ssh_qac_enforce_now "${username}" || true
+  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+  password=""
+
+  local acc_file
+  acc_file="$(ssh_account_info_file "${username}")"
   log "Akun SSH berhasil dibuat: ${username}"
-  log "Expired: ${expired_at}"
+  title
+  echo "Add SSH user sukses ✅"
+  hr
+  echo "Account file:"
+  echo "  ${acc_file}"
+  echo "Metadata file:"
+  echo "  ${qf}"
+  hr
+  echo "SSH ACCOUNT INFO:"
+  if [[ -f "${acc_file}" ]]; then
+    cat "${acc_file}"
+  else
+    echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
+  fi
+  hr
   pause
 }
 
@@ -1615,7 +1971,10 @@ ssh_delete_user_menu() {
     }
   fi
 
-  rm -f "$(ssh_user_state_file "${username}")" >/dev/null 2>&1 || true
+  rm -f "$(ssh_user_state_file "${username}")" \
+        "${SSH_USERS_STATE_DIR}/${username}.json" \
+        "$(ssh_account_info_file "${username}")" \
+        "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
   log "Akun SSH '${username}' dihapus."
   pause
 }
@@ -1703,6 +2062,7 @@ ssh_extend_expiry_menu() {
     created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   fi
   ssh_user_state_write "${username}" "${created_at}" "${new_expiry}" || true
+  ssh_account_info_refresh_from_state "${username}" || true
 
   log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
   pause
@@ -1735,6 +2095,8 @@ ssh_reset_password_menu() {
     pause
     return 0
   fi
+
+  ssh_account_info_refresh_from_state "${username}" "${password}" || true
   password=""
 
   log "Password akun '${username}' berhasil direset."
@@ -1746,8 +2108,7 @@ ssh_list_users_menu() {
   echo "3) SSH Management > List Managed SSH Users"
   hr
 
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
   need_python3
   python3 - <<'PY' "${SSH_USERS_STATE_DIR}"
 import json
@@ -1758,10 +2119,20 @@ root = pathlib.Path(sys.argv[1])
 rows = []
 for path in sorted(root.glob("*.json")):
   username = path.stem
+  if username.endswith("@ssh"):
+    username = username[:-4]
   created = "-"
   expired = "-"
   try:
     data = json.loads(path.read_text(encoding="utf-8"))
+    u = str(data.get("username") or "").strip()
+    if u:
+      if u.endswith("@ssh"):
+        u = u[:-4]
+      if "@" in u:
+        u = u.split("@", 1)[0]
+      if u:
+        username = u
     created = str(data.get("created_at") or "-")
     expired = str(data.get("expired_at") or "-")
   except Exception:
@@ -1859,8 +2230,7 @@ ssh_active_sessions_count() {
 
 ssh_qac_enforce_once_internal() {
   local target_user="${1:-}"
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
   need_python3
   python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${target_user}"
 import json
@@ -1872,6 +2242,7 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 target = (sys.argv[2] or "").strip()
+target_norm = ""
 
 def to_int(v, default=0):
   try:
@@ -1910,6 +2281,16 @@ def to_bool(v):
     return bool(v)
   s = str(v or "").strip().lower()
   return s in ("1", "true", "yes", "on", "y")
+
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
+target_norm = norm_user(target)
 
 def active_sessions(username):
   if not username:
@@ -1976,7 +2357,7 @@ def normalize_payload(path):
     except Exception:
       payload = {}
 
-  username = str(payload.get("username") or path.stem).strip() or path.stem
+  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
@@ -2003,6 +2384,7 @@ def normalize_payload(path):
     ip_limit = 0
 
   payload["managed_by"] = "autoscript-manage"
+  payload["protocol"] = "ssh"
   payload["username"] = username
   payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
   payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
@@ -2030,8 +2412,10 @@ if not root.is_dir():
 paths = sorted(root.glob("*.json"), key=lambda p: p.name.lower())
 for path in paths:
   payload = normalize_payload(path)
-  username = str(payload.get("username") or path.stem).strip() or path.stem
-  if target and target not in (username, path.stem):
+  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  stem = path.stem
+  stem_user = norm_user(stem)
+  if target and target not in (username, stem, stem_user) and target_norm not in (username, stem_user):
     continue
 
   status = payload["status"]
@@ -2110,8 +2494,7 @@ ssh_qac_enforce_now() {
 
 ssh_qac_collect_files() {
   SSH_QAC_FILES=()
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
 
   local f
   while IFS= read -r -d '' f; do
@@ -2146,6 +2529,7 @@ ssh_qac_build_view_indexes() {
     f="${SSH_QAC_FILES[$i]}"
     base="$(basename "${f}")"
     base="${base%.json}"
+    base="$(ssh_username_from_key "${base}")"
     if echo "${base}" | tr '[:upper:]' '[:lower:]' | grep -qF -- "${q}"; then
       SSH_QAC_VIEW_INDEXES+=("${i}")
     fi
@@ -2163,7 +2547,15 @@ import pathlib
 import sys
 
 p = pathlib.Path(sys.argv[1])
-username_fallback = p.stem
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
+username_fallback = norm_user(p.stem) or p.stem
 
 def to_int(v, default=0):
   try:
@@ -2219,7 +2611,7 @@ try:
 except Exception:
   data = {}
 
-username = str(data.get("username") or username_fallback).strip() or username_fallback
+username = norm_user(data.get("username") or username_fallback) or username_fallback
 quota_limit = to_int(data.get("quota_limit"), 0)
 quota_used = to_int(data.get("quota_used"), 0)
 unit = str(data.get("quota_unit") or "binary").strip().lower()
@@ -2263,7 +2655,15 @@ import pathlib
 import sys
 
 p = pathlib.Path(sys.argv[1])
-username_fallback = p.stem
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
+username_fallback = norm_user(p.stem) or p.stem
 
 def to_int(v, default=0):
   try:
@@ -2344,7 +2744,7 @@ try:
 except Exception:
   data = {}
 
-username = str(data.get("username") or username_fallback).strip() or username_fallback
+username = norm_user(data.get("username") or username_fallback) or username_fallback
 quota_limit = to_int(data.get("quota_limit"), 0)
 quota_used = to_int(data.get("quota_used"), 0)
 unit = str(data.get("quota_unit") or "binary").strip().lower()
@@ -2471,8 +2871,7 @@ ssh_qac_atomic_update_file() {
   local action="$2"
   shift 2 || true
 
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
   need_python3
   python3 - <<'PY' "${qf}" "${action}" "$@"
 import json
@@ -2522,6 +2921,14 @@ def to_bool(v):
   s = str(v or "").strip().lower()
   return s in ("1", "true", "yes", "on", "y")
 
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
 def parse_onoff(v):
   s = str(v or "").strip().lower()
   if s in ("on", "1", "true", "yes", "y"):
@@ -2560,6 +2967,7 @@ if os.path.isfile(qf):
 username_fallback = os.path.basename(qf)
 if username_fallback.endswith(".json"):
   username_fallback = username_fallback[:-5]
+username_fallback = norm_user(username_fallback) or username_fallback
 
 status_raw = payload.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
@@ -2587,7 +2995,8 @@ if unit not in ("binary", "decimal"):
   unit = "binary"
 
 payload["managed_by"] = "autoscript-manage"
-payload["username"] = str(payload.get("username") or username_fallback).strip() or username_fallback
+payload["protocol"] = "ssh"
+payload["username"] = norm_user(payload.get("username") or username_fallback) or username_fallback
 payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
 payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
 payload["quota_limit"] = quota_limit
@@ -2872,12 +3281,14 @@ ssh_qac_edit_flow() {
         qb="$(bytes_from_gb "${gb_num}")"
         ssh_qac_atomic_update_file "${qf}" set_quota_limit "${qb}"
         ssh_qac_enforce_now "${username}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "Quota limit SSH diubah: ${gb_num} GB"
         pause
         ;;
       3)
         ssh_qac_atomic_update_file "${qf}" reset_quota_used
         ssh_qac_enforce_now "${username}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "Quota used SSH di-reset: 0"
         pause
         ;;
@@ -2887,10 +3298,12 @@ ssh_qac_edit_flow() {
         if [[ "${st_mb}" == "true" ]]; then
           ssh_qac_atomic_update_file "${qf}" manual_block_set off
           ssh_qac_enforce_now "${username}"
+          ssh_account_info_refresh_from_state "${username}" || true
           log "Manual block SSH: OFF"
         else
           ssh_qac_atomic_update_file "${qf}" manual_block_set on
           ssh_qac_enforce_now "${username}"
+          ssh_account_info_refresh_from_state "${username}" || true
           log "Manual block SSH: ON"
         fi
         pause
@@ -2901,10 +3314,12 @@ ssh_qac_edit_flow() {
         if [[ "${ip_on}" == "true" ]]; then
           ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off
           ssh_qac_enforce_now "${username}"
+          ssh_account_info_refresh_from_state "${username}" || true
           log "IP/Login limit SSH: OFF"
         else
           ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on
           ssh_qac_enforce_now "${username}"
+          ssh_account_info_refresh_from_state "${username}" || true
           log "IP/Login limit SSH: ON"
         fi
         pause
@@ -2921,12 +3336,14 @@ ssh_qac_edit_flow() {
         fi
         ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"
         ssh_qac_enforce_now "${username}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "IP/Login limit SSH diubah: ${lim}"
         pause
         ;;
       7)
         ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked
         ssh_qac_enforce_now "${username}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "IP/Login lock SSH di-unlock"
         pause
         ;;
@@ -2942,6 +3359,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "Speed download SSH diubah: ${speed_down_input} Mbps"
         pause
         ;;
@@ -2957,6 +3375,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "Speed upload SSH diubah: ${speed_up_input} Mbps"
         pause
         ;;
@@ -2965,6 +3384,7 @@ ssh_qac_edit_flow() {
         speed_on="$(ssh_qac_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
           ssh_qac_atomic_update_file "${qf}" speed_limit_set off
+          ssh_account_info_refresh_from_state "${username}" || true
           log "Speed limit SSH: OFF"
           pause
           continue
@@ -2999,6 +3419,7 @@ ssh_qac_edit_flow() {
         fi
 
         ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
+        ssh_account_info_refresh_from_state "${username}" || true
         log "Speed limit SSH: ON"
         pause
         ;;
@@ -3011,8 +3432,7 @@ ssh_qac_edit_flow() {
 }
 
 ssh_quota_menu() {
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  ssh_state_dirs_prepare
   need_python3
 
   SSH_QAC_PAGE=0

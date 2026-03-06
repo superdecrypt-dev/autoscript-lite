@@ -2567,7 +2567,7 @@ import pathlib
 import subprocess
 import tempfile
 
-STATE_ROOT = pathlib.Path("/var/lib/xray-manage/ssh-users")
+STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 
 def to_int(v, default=0):
   try:
@@ -2606,6 +2606,14 @@ def to_bool(v):
     return bool(v)
   s = str(v or "").strip().lower()
   return s in ("1", "true", "yes", "on", "y")
+
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
 
 def cmd_ok(cmd):
   try:
@@ -2674,7 +2682,7 @@ def normalize_payload(path):
     except Exception:
       payload = {}
 
-  username = str(payload.get("username") or path.stem).strip() or path.stem
+  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
@@ -2701,6 +2709,7 @@ def normalize_payload(path):
     ip_limit = 0
 
   payload["managed_by"] = "autoscript-manage"
+  payload["protocol"] = "ssh"
   payload["username"] = username
   payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
   payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
@@ -2727,7 +2736,7 @@ def enforce_user(path):
   status = payload["status"]
   before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
-  username = str(payload.get("username") or path.stem).strip() or path.stem
+  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
   ip_enabled = bool(status.get("ip_limit_enabled"))
   ip_limit = to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
@@ -2788,15 +2797,17 @@ def run_once(target_user):
   if not STATE_ROOT.exists():
     return 0
   paths = sorted(STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower())
+  target_norm = norm_user(target_user)
   for path in paths:
     if target_user:
       stem = path.stem
+      stem_norm = norm_user(stem)
       try:
         current = json.loads(path.read_text(encoding="utf-8"))
       except Exception:
         current = {}
-      username = str(current.get("username") or stem).strip() or stem
-      if target_user not in (stem, username):
+      username = norm_user(current.get("username") or stem) or stem_norm or stem
+      if target_user not in (stem, username) and target_norm not in (stem_norm, username):
         continue
     enforce_user(path)
   return 0
@@ -3427,11 +3438,11 @@ EOF
 install_management_scripts() {
   ok "Menyiapkan script manajemen (placeholder) ..."
 
-  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
-  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
   chmod 700 /opt/account /opt/quota
-  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022
-  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022
+  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
+  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
