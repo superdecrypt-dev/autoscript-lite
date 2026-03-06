@@ -14,8 +14,13 @@ export PATH
 # -------------------------
 # Konstanta
 # -------------------------
-REPO_URL="https://github.com/superdecrypt-dev/autoscript.git"
-REPO_DIR="/opt/autoscript"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+RUN_USE_LOCAL_SOURCE="${RUN_USE_LOCAL_SOURCE:-0}"
+REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript.git}"
+REPO_DIR="${REPO_DIR:-/opt/autoscript}"
+if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
+  REPO_DIR="${SCRIPT_DIR}"
+fi
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
@@ -125,6 +130,13 @@ check_deps() {
 # Langkah instalasi
 # -------------------------
 clone_repo() {
+  if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
+    [[ -f "${REPO_DIR}/setup.sh" ]] || die "RUN_USE_LOCAL_SOURCE=1 tetapi setup.sh tidak ditemukan di ${REPO_DIR}"
+    [[ -f "${REPO_DIR}/manage.sh" ]] || die "RUN_USE_LOCAL_SOURCE=1 tetapi manage.sh tidak ditemukan di ${REPO_DIR}"
+    log "RUN_USE_LOCAL_SOURCE=1 -> gunakan source lokal: ${REPO_DIR}"
+    return 0
+  fi
+
   mkdir -p "$(dirname "${REPO_DIR}")"
 
   if [[ -d "${REPO_DIR}" && ! -d "${REPO_DIR}/.git" ]]; then
@@ -231,6 +243,11 @@ seed_telegram_bot_home() {
 }
 
 cleanup_repo_after_success() {
+  if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
+    warn "RUN_USE_LOCAL_SOURCE=1 -> lewati hapus source lokal (${REPO_DIR})."
+    return 0
+  fi
+
   if [[ "${KEEP_REPO_AFTER_INSTALL:-0}" == "1" ]]; then
     warn "KEEP_REPO_AFTER_INSTALL=1 -> lewati hapus source repo (${REPO_DIR})."
     return 0

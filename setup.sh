@@ -835,6 +835,21 @@ stop_conflicting_services() {
   systemctl stop lighttpd 2>/dev/null || true
 }
 
+nginx_installed_from_nginx_org() {
+  # Return success jika paket nginx terpasang dan source install yang aktif berasal
+  # dari repo nginx.org/mainline.
+  if ! dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q "install ok installed"; then
+    return 1
+  fi
+
+  local repo_line=""
+  repo_line="$(apt-cache policy nginx 2>/dev/null | awk '
+    /^[[:space:]]*\*\*\*/ { capture=1; next }
+    capture && /^[[:space:]]+[0-9]+[[:space:]]/ { print; exit }
+  ')"
+  echo "${repo_line}" | grep -qi 'nginx\.org/packages/mainline'
+}
+
 install_nginx_official_repo() {
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -845,7 +860,15 @@ install_nginx_official_repo() {
   [[ -n "$codename" ]] || die "Gagal mendeteksi codename OS."
 
   ensure_dpkg_consistent
-  apt_get_with_lock_retry remove -y nginx nginx-common nginx-full nginx-core 2>/dev/null || true
+  if nginx_installed_from_nginx_org; then
+    ok "Nginx mainline dari nginx.org sudah terpasang; skip uninstall paket nginx lama."
+  elif dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q "install ok installed" \
+    || dpkg-query -W -f='${Status}' nginx-common 2>/dev/null | grep -q "install ok installed" \
+    || dpkg-query -W -f='${Status}' nginx-full 2>/dev/null | grep -q "install ok installed" \
+    || dpkg-query -W -f='${Status}' nginx-core 2>/dev/null | grep -q "install ok installed"; then
+    ok "Migrasi paket Nginx lama ke nginx.org mainline..."
+    apt_get_with_lock_retry remove -y nginx nginx-common nginx-full nginx-core 2>/dev/null || true
+  fi
 
   mkdir -p /usr/share/keyrings
   local key_tmp key_gpg_tmp
@@ -6051,9 +6074,7 @@ EOF
 }
 
 sync_manage_modules_layout() {
-  local tmpdir bundle_file downloaded="0" bundle_expected_sha=""
-  tmpdir="$(mktemp -d)"
-  bundle_file="${tmpdir}/manage_bundle.zip"
+  local tmpdir="" bundle_file="" downloaded="0" bundle_expected_sha=""
   bundle_expected_sha="${MANAGE_BUNDLE_SHA256:-}"
 
   install_bot_installer_if_present() {
@@ -6069,7 +6090,41 @@ sync_manage_modules_layout() {
     fi
   }
 
+  sync_manage_from_local_source() {
+    [[ -d "${MANAGE_MODULES_SRC_DIR}" ]] || return 1
+
+    mkdir -p "${MANAGE_MODULES_DST_DIR}"
+    cp -a "${MANAGE_MODULES_SRC_DIR}/." "${MANAGE_MODULES_DST_DIR}/"
+    find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+    chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
+
+    if [[ -f "${SCRIPT_DIR}/manage.sh" ]]; then
+      mkdir -p "$(dirname "${MANAGE_BIN}")"
+      install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
+      chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+      ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
+    fi
+    install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
+    install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
+    ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
+    return 0
+  }
+
   ok "Sinkronisasi modular manage ke ${MANAGE_MODULES_DST_DIR} ..."
+
+  # Pada flow run.sh normal, source lokal dari repo selalu tersedia.
+  # Default: prioritaskan source lokal agar rerun idempotent dan tidak tergantung
+  # freshness manage_bundle.zip remote.
+  if [[ "${PREFER_LOCAL_MANAGE_SOURCE:-1}" == "1" ]]; then
+    if sync_manage_from_local_source; then
+      return 0
+    fi
+    warn "Source lokal manage tidak ditemukan, beralih ke bundle remote."
+  fi
+
+  tmpdir="$(mktemp -d)"
+  bundle_file="${tmpdir}/manage_bundle.zip"
 
   if [[ -z "${bundle_expected_sha}" ]]; then
     warn "MANAGE_BUNDLE_SHA256 kosong; lewati download bundle remote demi keamanan."
@@ -6188,32 +6243,19 @@ PY
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
       ok "Binary manage disegarkan dari bundle: ${MANAGE_BIN}"
-      rm -rf "${tmpdir}" >/dev/null 2>&1 || true
+      [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
       return 0
     fi
     warn "Ekstrak manage_bundle.zip gagal; fallback ke source lokal."
   fi
 
-  if [[ ! -d "${MANAGE_MODULES_SRC_DIR}" ]]; then
-    rm -rf "${tmpdir}" >/dev/null 2>&1 || true
-    die "Sinkronisasi modular manage gagal total: bundle gagal/invalid dan source lokal tidak ditemukan (${MANAGE_MODULES_SRC_DIR})."
+  if sync_manage_from_local_source; then
+    [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
+    return 0
   fi
 
-  mkdir -p "${MANAGE_MODULES_DST_DIR}"
-  cp -a "${MANAGE_MODULES_SRC_DIR}/." "${MANAGE_MODULES_DST_DIR}/"
-  find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
-  find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
-  chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
-  if [[ -f "${SCRIPT_DIR}/manage.sh" ]]; then
-    mkdir -p "$(dirname "${MANAGE_BIN}")"
-    install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
-    chown root:root "${MANAGE_BIN}" 2>/dev/null || true
-    ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
-  fi
-  install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
-  install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
-  ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (fallback lokal)"
-  rm -rf "${tmpdir}" >/dev/null 2>&1 || true
+  [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
+  die "Sinkronisasi modular manage gagal total: bundle gagal/invalid dan source lokal tidak ditemukan (${MANAGE_MODULES_SRC_DIR})."
 }
 
 install_domain_cert_guard() {

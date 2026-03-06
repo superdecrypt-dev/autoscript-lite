@@ -2723,8 +2723,10 @@ ssh_qac_print_table_page() {
   local page="${1:-0}"
   local total="${#SSH_QAC_VIEW_INDEXES[@]}"
   local pages=0
+  local display_pages=1
   if (( total > 0 )); then
     pages=$(( (total + SSH_QAC_PAGE_SIZE - 1) / SSH_QAC_PAGE_SIZE ))
+    display_pages="${pages}"
   fi
   if (( page < 0 )); then
     page=0
@@ -2734,7 +2736,7 @@ ssh_qac_print_table_page() {
   fi
   SSH_QAC_PAGE="${page}"
 
-  echo "SSH accounts: ${total} | page $((page + 1))/${pages:-1}"
+  echo "SSH accounts: ${total} | page $((page + 1))/${display_pages}"
   if [[ -n "${SSH_QAC_QUERY}" ]]; then
     echo "Filter: '${SSH_QAC_QUERY}'"
   fi
