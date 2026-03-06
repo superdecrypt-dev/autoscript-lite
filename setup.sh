@@ -31,6 +31,9 @@ NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
 CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
+SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
+SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
+SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
@@ -207,6 +210,17 @@ need_root() {
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Jalankan sebagai root."
 }
 
+ensure_stdin_available() {
+  # Fail-fast untuk mode non-interaktif tanpa input (mis. `</dev/null`).
+  # Script ini membutuhkan input user pada flow domain, jadi lebih baik berhenti
+  # sebelum melakukan provisioning panjang.
+  local stdin_target=""
+  stdin_target="$(readlink -f /proc/$$/fd/0 2>/dev/null || true)"
+  if [[ "${stdin_target}" == "/dev/null" ]]; then
+    die "stdin terdeteksi /dev/null. setup.sh membutuhkan input domain. Jalankan secara interaktif atau pipe jawaban lengkap."
+  fi
+}
+
 check_os() {
   [[ -f /etc/os-release ]] || die "Tidak menemukan /etc/os-release"
   # shellcheck disable=SC1091
@@ -346,7 +360,9 @@ confirm_yn() {
   local prompt="$1"
   local ans
   while true; do
-    read -r -p "$prompt (y/n): " ans
+    if ! read -r -p "$prompt (y/n): " ans; then
+      die "Input terhenti (EOF) saat konfirmasi '${prompt}'. Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+    fi
     case "${ans,,}" in
       y|yes) return 0 ;;
       n|no) return 1 ;;
@@ -641,7 +657,9 @@ domain_menu_v2() {
 
   local choice=""
   while true; do
-    read -r -p "Pilih opsi (1-2): " choice
+    if ! read -r -p "Pilih opsi (1-2): " choice; then
+      die "Input terhenti (EOF) pada pemilihan opsi domain (1-2). Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+    fi
     case "$choice" in
       1|2) break ;;
       *) echo "Pilihan tidak valid." ;;
@@ -652,7 +670,9 @@ domain_menu_v2() {
     # Input domain sendiri (standalone)
     local re='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
     while true; do
-      read -r -p "Masukkan domain: " DOMAIN
+      if ! read -r -p "Masukkan domain: " DOMAIN; then
+        die "Input terhenti (EOF) saat memasukkan domain. Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+      fi
       DOMAIN="${DOMAIN,,}"
 
       [[ -n "${DOMAIN:-}" ]] || {
@@ -688,9 +708,11 @@ for root in "${PROVIDED_ROOT_DOMAINS[@]}"; do
   i=$((i+1))
 done
 
-local pick=""
-while true; do
-  read -r -p "Pilih nomor domain induk (1-${#PROVIDED_ROOT_DOMAINS[@]}): " pick
+  local pick=""
+  while true; do
+  if ! read -r -p "Pilih nomor domain induk (1-${#PROVIDED_ROOT_DOMAINS[@]}): " pick; then
+    die "Input terhenti (EOF) saat memilih domain induk. Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+  fi
   [[ "$pick" =~ ^[0-9]+$ ]] || { echo "Input harus angka."; continue; }
   [[ "$pick" -ge 1 && "$pick" -le ${#PROVIDED_ROOT_DOMAINS[@]} ]] || { echo "Di luar range."; continue; }
   break
@@ -710,9 +732,11 @@ echo -e "${BOLD}Pilih metode pembuatan subdomain${NC}"
 echo -e "  ${CYAN}1)${NC} Generate acak"
 echo -e "  ${CYAN}2)${NC} Input manual"
 
-local mth=""
-while true; do
-  read -r -p "Pilih opsi (1-2): " mth
+  local mth=""
+  while true; do
+  if ! read -r -p "Pilih opsi (1-2): " mth; then
+    die "Input terhenti (EOF) saat memilih metode subdomain. Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+  fi
   case "$mth" in
     1|2) break ;;
     *) echo "Pilihan tidak valid." ;;
@@ -725,7 +749,9 @@ if [[ "$mth" == "1" ]]; then
   ok "Subdomain acak: $sub"
 else
 while true; do
-  read -r -p "Masukkan nama subdomain: " sub
+  if ! read -r -p "Masukkan nama subdomain: " sub; then
+    die "Input terhenti (EOF) saat memasukkan subdomain. Jalankan setup.sh secara interaktif atau berikan stdin yang lengkap."
+  fi
   sub="${sub,,}"
   if validate_subdomain "$sub"; then
     ok "Subdomain valid: $sub"
@@ -2007,12 +2033,28 @@ server {
 	http2 on;
   server_name ${DOMAIN};
 
-  if (\$scheme = http) { return 301 https://\$host\$request_uri; }
-
   ssl_certificate ${CERT_DIR}/fullchain.pem;
   ssl_certificate_key ${CERT_DIR}/privkey.pem;
   ssl_protocols TLSv1.2 TLSv1.3;
   ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+
+  # --- SSH WebSocket ---
+  location = / {
+    if (\$http_upgrade !~* websocket) { return 404; }
+
+    proxy_redirect off;
+    proxy_pass http://127.0.0.1:${SSHWS_PROXY_PORT};
+
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$connection_upgrade;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+
+    proxy_read_timeout 7d;
+    proxy_send_timeout 7d;
+  }
 
   # --- WebSocket ---
   location ~ ^/(vless|vmess|trojan|shadowsocks|shadowsocks2022)-ws(?:/|\$) {
@@ -2103,6 +2145,698 @@ EOF
 
 # Hysteria2 sudah dihapus dari stack default. Fungsi ini sengaja ditiadakan.
 
+install_sshws_stack() {
+  ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy)..."
+  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
+  [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
+
+  local stunnel_bin
+  if command -v stunnel4 >/dev/null 2>&1; then
+    stunnel_bin="$(command -v stunnel4)"
+  elif command -v stunnel >/dev/null 2>&1; then
+    stunnel_bin="$(command -v stunnel)"
+  else
+    die "stunnel4/stunnel tidak ditemukan."
+  fi
+
+  install -d -m 755 /etc/systemd/system
+  install -d -m 755 /etc/stunnel
+  install -d -m 755 /run/stunnel
+
+  # Gunakan unit dedicated agar bind address terkunci local-only dan tidak bentrok
+  # dengan default service bawaan paket.
+  systemctl disable --now dropbear >/dev/null 2>&1 || true
+  systemctl disable --now stunnel4 >/dev/null 2>&1 || true
+
+  # Migrasi: hapus nama unit lama yang masih memakai prefix "xray-sshws".
+  systemctl disable --now xray-sshws-dropbear xray-sshws-stunnel xray-sshws-proxy >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/xray-sshws-dropbear.service \
+        /etc/systemd/system/xray-sshws-stunnel.service \
+        /etc/systemd/system/xray-sshws-proxy.service >/dev/null 2>&1 || true
+  rm -f /usr/local/bin/xray-sshws-proxy /etc/stunnel/xray-sshws.conf >/dev/null 2>&1 || true
+
+  cat > /etc/systemd/system/sshws-dropbear.service <<EOF
+[Unit]
+Description=Dropbear SSH local endpoint for SSH WebSocket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dropbear -F -E -R -w -g -p 127.0.0.1:${SSHWS_DROPBEAR_PORT}
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > /etc/stunnel/sshws.conf <<EOF
+foreground = yes
+setuid = root
+setgid = root
+pid = /run/stunnel/sshws.pid
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[sshws]
+accept = 127.0.0.1:${SSHWS_STUNNEL_PORT}
+connect = 127.0.0.1:${SSHWS_DROPBEAR_PORT}
+cert = ${CERT_FULLCHAIN}
+key = ${CERT_PRIVKEY}
+client = no
+EOF
+  chmod 600 /etc/stunnel/sshws.conf
+
+  cat > /etc/systemd/system/sshws-stunnel.service <<EOF
+[Unit]
+Description=Stunnel local TLS bridge for SSH WebSocket
+After=sshws-dropbear.service
+Requires=sshws-dropbear.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/stunnel
+ExecStart=${stunnel_bin} /etc/stunnel/sshws.conf
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > /usr/local/bin/sshws-proxy <<'PY'
+#!/usr/bin/env python3
+import argparse
+import asyncio
+import base64
+import hashlib
+import signal
+import ssl
+
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_FRAME_SIZE = 1024 * 1024
+
+
+class HandshakeError(Exception):
+  def __init__(self, code, reason):
+    super().__init__(reason)
+    self.code = code
+    self.reason = reason
+
+
+def _build_accept(key):
+  digest = hashlib.sha1((key + GUID).encode("utf-8")).digest()
+  return base64.b64encode(digest).decode("ascii")
+
+
+async def _send_http_error(writer, code, reason):
+  body = "{} {}\n".format(code, reason).encode("utf-8")
+  resp = (
+    "HTTP/1.1 {} {}\r\n".format(code, reason) +
+    "Content-Type: text/plain\r\n" +
+    "Content-Length: {}\r\n".format(len(body)) +
+    "Connection: close\r\n" +
+    "\r\n"
+  ).encode("ascii")
+  writer.write(resp + body)
+  await writer.drain()
+
+
+async def _read_handshake(reader, expected_path):
+  try:
+    raw = await reader.readuntil(b"\r\n\r\n")
+  except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+    raise HandshakeError(400, "Bad Request") from exc
+
+  try:
+    text = raw.decode("latin1")
+  except UnicodeDecodeError as exc:
+    raise HandshakeError(400, "Bad Request") from exc
+
+  lines = text.split("\r\n")
+  if not lines or not lines[0]:
+    raise HandshakeError(400, "Bad Request")
+
+  req = lines[0].split()
+  if len(req) < 3:
+    raise HandshakeError(400, "Bad Request")
+  method = req[0]
+  path = req[1]
+  if method.upper() != "GET":
+    raise HandshakeError(405, "Method Not Allowed")
+  if path != expected_path:
+    raise HandshakeError(404, "Not Found")
+
+  headers = {}
+  for line in lines[1:]:
+    if not line:
+      continue
+    if ":" not in line:
+      continue
+    key, value = line.split(":", 1)
+    headers[key.strip().lower()] = value.strip()
+
+  upgrade = headers.get("upgrade", "").lower()
+  connection = headers.get("connection", "").lower()
+  ws_key = headers.get("sec-websocket-key", "")
+  version = headers.get("sec-websocket-version", "")
+  if upgrade != "websocket":
+    raise HandshakeError(400, "Bad Request")
+  if "upgrade" not in connection:
+    raise HandshakeError(400, "Bad Request")
+  if version != "13":
+    raise HandshakeError(426, "Upgrade Required")
+  if not ws_key:
+    raise HandshakeError(400, "Bad Request")
+  return ws_key
+
+
+async def _send_handshake_ok(writer, ws_key):
+  accept = _build_accept(ws_key)
+  resp = (
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Accept: {}\r\n".format(accept) +
+    "\r\n"
+  ).encode("ascii")
+  writer.write(resp)
+  await writer.drain()
+
+
+async def _read_ws_frame(reader):
+  head = await reader.readexactly(2)
+  b1, b2 = head[0], head[1]
+  opcode = b1 & 0x0F
+  masked = (b2 & 0x80) != 0
+  length = b2 & 0x7F
+  if length == 126:
+    length = int.from_bytes(await reader.readexactly(2), "big")
+  elif length == 127:
+    length = int.from_bytes(await reader.readexactly(8), "big")
+
+  if length > MAX_FRAME_SIZE:
+    raise ValueError("frame too large")
+
+  if not masked:
+    raise ValueError("unmasked client frame")
+
+  mask_key = b""
+  if masked:
+    mask_key = await reader.readexactly(4)
+
+  payload = await reader.readexactly(length)
+  if masked:
+    payload = bytes(byte ^ mask_key[idx % 4] for idx, byte in enumerate(payload))
+  return opcode, payload
+
+
+def _build_ws_frame(opcode, payload=b""):
+  header = bytearray()
+  header.append(0x80 | (opcode & 0x0F))
+  n = len(payload)
+  if n < 126:
+    header.append(n)
+  elif n <= 0xFFFF:
+    header.append(126)
+    header.extend(n.to_bytes(2, "big"))
+  else:
+    header.append(127)
+    header.extend(n.to_bytes(8, "big"))
+  return bytes(header) + payload
+
+
+async def _ws_to_backend(ws_reader, ws_writer, backend_writer):
+  while True:
+    opcode, payload = await _read_ws_frame(ws_reader)
+    if opcode == 0x8:
+      ws_writer.write(_build_ws_frame(0x8, payload[:2] if payload else b""))
+      await ws_writer.drain()
+      break
+    if opcode == 0x9:
+      ws_writer.write(_build_ws_frame(0xA, payload))
+      await ws_writer.drain()
+      continue
+    if opcode == 0xA:
+      continue
+    if opcode not in (0x0, 0x1, 0x2):
+      break
+    if payload:
+      backend_writer.write(payload)
+      await backend_writer.drain()
+
+  try:
+    backend_writer.close()
+    await backend_writer.wait_closed()
+  except Exception:
+    pass
+
+
+async def _backend_to_ws(backend_reader, ws_writer):
+  while True:
+    data = await backend_reader.read(16384)
+    if not data:
+      break
+    ws_writer.write(_build_ws_frame(0x2, data))
+    await ws_writer.drain()
+
+  try:
+    ws_writer.write(_build_ws_frame(0x8, b""))
+    await ws_writer.drain()
+  except Exception:
+    pass
+
+
+async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
+  try:
+    ws_key = await _read_handshake(ws_reader, args.path)
+    await _send_handshake_ok(ws_writer, ws_key)
+  except HandshakeError as exc:
+    await _send_http_error(ws_writer, exc.code, exc.reason)
+    ws_writer.close()
+    await ws_writer.wait_closed()
+    return
+  except Exception:
+    await _send_http_error(ws_writer, 400, "Bad Request")
+    ws_writer.close()
+    await ws_writer.wait_closed()
+    return
+
+  backend_writer = None
+  try:
+    backend_reader, backend_writer = await asyncio.open_connection(
+      args.backend_host,
+      args.backend_port,
+      ssl=backend_ssl,
+      server_hostname=None,
+    )
+    pump1 = asyncio.create_task(_ws_to_backend(ws_reader, ws_writer, backend_writer))
+    pump2 = asyncio.create_task(_backend_to_ws(backend_reader, ws_writer))
+    done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+      task.cancel()
+    if pending:
+      await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+      task.exception()
+  except Exception:
+    try:
+      ws_writer.write(_build_ws_frame(0x8, b""))
+      await ws_writer.drain()
+    except Exception:
+      pass
+  finally:
+    if backend_writer is not None:
+      try:
+        backend_writer.close()
+        await backend_writer.wait_closed()
+      except Exception:
+        pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+
+
+async def _run(args):
+  backend_ssl = ssl.create_default_context()
+  backend_ssl.check_hostname = False
+  backend_ssl.verify_mode = ssl.CERT_NONE
+
+  server = await asyncio.start_server(
+    lambda reader, writer: _handle_client(reader, writer, args, backend_ssl),
+    host=args.listen_host,
+    port=args.listen_port,
+    backlog=512,
+  )
+
+  loop = asyncio.get_running_loop()
+  stop = asyncio.Event()
+  for sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+      loop.add_signal_handler(sig, stop.set)
+    except NotImplementedError:
+      pass
+
+  await stop.wait()
+  server.close()
+  await server.wait_closed()
+
+
+def _parse_args():
+  parser = argparse.ArgumentParser(description="SSH websocket proxy")
+  parser.add_argument("--listen-host", default="127.0.0.1")
+  parser.add_argument("--listen-port", type=int, default=10015)
+  parser.add_argument("--backend-host", default="127.0.0.1")
+  parser.add_argument("--backend-port", type=int, default=22443)
+  parser.add_argument("--path", default="/")
+  return parser.parse_args()
+
+
+def main():
+  args = _parse_args()
+  asyncio.run(_run(args))
+
+
+if __name__ == "__main__":
+  main()
+PY
+  chmod 755 /usr/local/bin/sshws-proxy
+
+  cat > /etc/systemd/system/sshws-proxy.service <<EOF
+[Unit]
+Description=SSH websocket proxy service
+After=network-online.target sshws-stunnel.service
+Requires=sshws-stunnel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port ${SSHWS_PROXY_PORT} --backend-host 127.0.0.1 --backend-port ${SSHWS_STUNNEL_PORT} --path /
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  service_enable_restart_checked sshws-dropbear || die "Gagal mengaktifkan sshws-dropbear."
+  service_enable_restart_checked sshws-stunnel || die "Gagal mengaktifkan sshws-stunnel."
+  service_enable_restart_checked sshws-proxy || die "Gagal mengaktifkan sshws-proxy."
+  ok "SSH WebSocket stack aktif (dropbear/stunnel/proxy)."
+}
+
+install_sshws_qac_enforcer() {
+  ok "Setup SSH QAC enforcer (timer 1 menit)..."
+  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH QAC enforcer."
+  install -d -m 755 /etc/systemd/system
+
+  cat > /usr/local/bin/sshws-qac-enforcer <<'PY'
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import tempfile
+
+STATE_ROOT = pathlib.Path("/var/lib/xray-manage/ssh-users")
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def cmd_ok(cmd):
+  try:
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+  except FileNotFoundError:
+    return False
+
+def user_exists(username):
+  return cmd_ok(["id", username])
+
+def active_sessions(username):
+  if not username or not user_exists(username):
+    return 0
+  try:
+    res = subprocess.run(["pgrep", "-u", username, "-x", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  except FileNotFoundError:
+    return 0
+  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+  if lines:
+    return len(lines)
+  try:
+    res = subprocess.run(["pgrep", "-u", username, "-f", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  except FileNotFoundError:
+    return 0
+  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+  return len(lines)
+
+def lock_user(username):
+  if not user_exists(username):
+    return False
+  if cmd_ok(["passwd", "-l", username]):
+    return True
+  return cmd_ok(["usermod", "-L", username])
+
+def unlock_user(username):
+  if not user_exists(username):
+    return False
+  if cmd_ok(["passwd", "-u", username]):
+    return True
+  return cmd_ok(["usermod", "-U", username])
+
+def write_json_atomic(path, payload):
+  text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+  dirn = str(path.parent)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      f.write(text)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+def normalize_payload(path):
+  payload = {}
+  if path.is_file():
+    try:
+      loaded = json.loads(path.read_text(encoding="utf-8"))
+      if isinstance(loaded, dict):
+        payload = loaded
+    except Exception:
+      payload = {}
+
+  username = str(payload.get("username") or path.stem).strip() or path.stem
+  unit = str(payload.get("quota_unit") or "binary").strip().lower()
+  if unit not in ("binary", "decimal"):
+    unit = "binary"
+
+  quota_limit = to_int(payload.get("quota_limit"), 0)
+  if quota_limit < 0:
+    quota_limit = 0
+  quota_used = to_int(payload.get("quota_used"), 0)
+  if quota_used < 0:
+    quota_used = 0
+
+  status_raw = payload.get("status")
+  status = status_raw if isinstance(status_raw, dict) else {}
+
+  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+  if speed_down < 0:
+    speed_down = 0.0
+  if speed_up < 0:
+    speed_up = 0.0
+
+  ip_limit = to_int(status.get("ip_limit"), 0)
+  if ip_limit < 0:
+    ip_limit = 0
+
+  payload["managed_by"] = "autoscript-manage"
+  payload["username"] = username
+  payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
+  payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+  payload["quota_limit"] = quota_limit
+  payload["quota_unit"] = unit
+  payload["quota_used"] = quota_used
+  payload["status"] = {
+    "manual_block": to_bool(status.get("manual_block")),
+    "quota_exhausted": to_bool(status.get("quota_exhausted")),
+    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+    "ip_limit": ip_limit,
+    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+    "speed_down_mbit": speed_down,
+    "speed_up_mbit": speed_up,
+    "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
+    "account_locked": to_bool(status.get("account_locked")),
+    "lock_owner": str(status.get("lock_owner") or "").strip(),
+  }
+  return payload
+
+def enforce_user(path):
+  payload = normalize_payload(path)
+  status = payload["status"]
+  before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+  username = str(payload.get("username") or path.stem).strip() or path.stem
+  ip_enabled = bool(status.get("ip_limit_enabled"))
+  ip_limit = to_int(status.get("ip_limit"), 0)
+  if ip_limit < 0:
+    ip_limit = 0
+  if not ip_enabled:
+    status["ip_limit_locked"] = False
+  elif ip_limit > 0:
+    if active_sessions(username) > ip_limit:
+      status["ip_limit_locked"] = True
+  else:
+    status["ip_limit_locked"] = False
+
+  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_used = to_int(payload.get("quota_used"), 0)
+  status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
+
+  reason = ""
+  if bool(status.get("manual_block")):
+    reason = "manual"
+  elif bool(status.get("quota_exhausted")):
+    reason = "quota"
+  elif bool(status.get("ip_limit_locked")):
+    reason = "ip_limit"
+
+  status["lock_reason"] = reason
+  account_locked = bool(status.get("account_locked"))
+  lock_owner = str(status.get("lock_owner") or "").strip()
+
+  exists = user_exists(username)
+  if reason:
+    if exists and lock_user(username):
+      account_locked = True
+      lock_owner = "ssh_qac"
+    elif not exists:
+      account_locked = False
+      lock_owner = ""
+  else:
+    if exists and account_locked and lock_owner == "ssh_qac":
+      if unlock_user(username):
+        account_locked = False
+        lock_owner = ""
+    elif not account_locked and lock_owner == "ssh_qac":
+      lock_owner = ""
+
+  status["account_locked"] = bool(account_locked)
+  status["lock_owner"] = lock_owner
+  payload["status"] = status
+
+  after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+  if after != before:
+    write_json_atomic(path, payload)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+
+def run_once(target_user):
+  if not STATE_ROOT.exists():
+    return 0
+  paths = sorted(STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower())
+  for path in paths:
+    if target_user:
+      stem = path.stem
+      try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+      except Exception:
+        current = {}
+      username = str(current.get("username") or stem).strip() or stem
+      if target_user not in (stem, username):
+        continue
+    enforce_user(path)
+  return 0
+
+def parse_args():
+  p = argparse.ArgumentParser(description="SSH WS quota/access enforcer")
+  p.add_argument("--once", action="store_true", help="run one enforcement cycle")
+  p.add_argument("--user", default="", help="enforce only for one username")
+  return p.parse_args()
+
+def main():
+  args = parse_args()
+  if args.once:
+    raise SystemExit(run_once((args.user or "").strip()))
+  raise SystemExit(run_once((args.user or "").strip()))
+
+if __name__ == "__main__":
+  main()
+PY
+  chmod 755 /usr/local/bin/sshws-qac-enforcer
+
+  cat > /etc/systemd/system/sshws-qac-enforcer.service <<'EOF'
+[Unit]
+Description=SSH WS quota and access enforcer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sshws-qac-enforcer --once
+User=root
+Group=root
+Nice=10
+EOF
+
+  cat > /etc/systemd/system/sshws-qac-enforcer.timer <<'EOF'
+[Unit]
+Description=Run SSH WS QAC enforcer every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=30s
+Unit=sshws-qac-enforcer.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  if systemctl enable --now sshws-qac-enforcer.timer >/dev/null 2>&1; then
+    systemctl start sshws-qac-enforcer.service >/dev/null 2>&1 || true
+    ok "SSH QAC enforcer aktif:"
+    ok "  - binary: /usr/local/bin/sshws-qac-enforcer"
+    ok "  - timer : sshws-qac-enforcer.timer (1 menit)"
+  else
+    warn "Gagal mengaktifkan sshws-qac-enforcer.timer. Cek: systemctl status sshws-qac-enforcer.timer --no-pager"
+  fi
+}
+
 remove_hysteria2_components() {
   ok "Menonaktifkan komponen Hysteria2 (jika ada)..."
   systemctl disable --now hysteria-server xray-hy2-sync >/dev/null 2>&1 || true
@@ -2127,8 +2861,8 @@ install_extra_deps() {
   mkdir -p /var/log/chrony
 
   ensure_dpkg_consistent
-  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables
-  ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables)."
+  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear stunnel4
+  ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, stunnel4)."
 }
 
 install_speedtest_snap() {
@@ -5956,6 +6690,41 @@ sanity_check() {
     failed=1
   fi
 
+  if systemctl is-active --quiet sshws-dropbear; then
+    ok "sanity: sshws-dropbear active"
+  else
+    warn "sanity: sshws-dropbear NOT active"
+    systemctl status sshws-dropbear --no-pager >&2 || true
+    journalctl -u sshws-dropbear -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet sshws-stunnel; then
+    ok "sanity: sshws-stunnel active"
+  else
+    warn "sanity: sshws-stunnel NOT active"
+    systemctl status sshws-stunnel --no-pager >&2 || true
+    journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet sshws-proxy; then
+    ok "sanity: sshws-proxy active"
+  else
+    warn "sanity: sshws-proxy NOT active"
+    systemctl status sshws-proxy --no-pager >&2 || true
+    journalctl -u sshws-proxy -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet sshws-qac-enforcer.timer; then
+    ok "sanity: sshws-qac-enforcer.timer active"
+  else
+    warn "sanity: sshws-qac-enforcer.timer NOT active"
+    systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
+    failed=1
+  fi
+
   # Config sanity (non-fatal if tools missing)
   if command -v nginx >/dev/null 2>&1; then
     if nginx -t >/dev/null 2>&1; then
@@ -5986,7 +6755,13 @@ sanity_check() {
   fi
 
   # Listener hints (informational only)
-  # Match exact port 443 agar tidak false-positive ke :4430 dst.
+  # Match exact port agar tidak false-positive ke :4430 dst.
+  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
+    ok "sanity: port 80 is listening"
+  else
+    warn "sanity: port 80 not detected as listening (check nginx)"
+  fi
+
   if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
     ok "sanity: port 443 is listening"
   else
@@ -6001,6 +6776,7 @@ sanity_check() {
 main() {
   safe_clear
   need_root
+  ensure_stdin_available
   check_os
   install_base_deps
   need_python3
@@ -6028,6 +6804,8 @@ main() {
   write_xray_modular_configs
   configure_xray_service_confdir
   write_nginx_config
+  install_sshws_stack
+  install_sshws_qac_enforcer
   install_management_scripts
   remove_hysteria2_components
   sync_manage_modules_layout

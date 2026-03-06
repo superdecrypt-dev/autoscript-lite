@@ -127,7 +127,7 @@ traffic_analytics_dataset_make_tmp() {
 
 traffic_analytics_overview_show() {
   title
-  echo "9) Traffic Analytics > Overview"
+  echo "11) Traffic Analytics > Overview"
   hr
 
   local dataset
@@ -207,7 +207,7 @@ PY
 
 traffic_analytics_top_users_show() {
   title
-  echo "9) Traffic Analytics > Top Users by Usage"
+  echo "11) Traffic Analytics > Top Users by Usage"
   hr
 
   local n
@@ -284,7 +284,7 @@ PY
 
 traffic_analytics_search_user_show() {
   title
-  echo "9) Traffic Analytics > Search User Traffic"
+  echo "11) Traffic Analytics > Search User Traffic"
   hr
 
   local q
@@ -365,7 +365,7 @@ PY
 
 traffic_analytics_export_json() {
   title
-  echo "9) Traffic Analytics > Export JSON Report"
+  echo "11) Traffic Analytics > Export JSON Report"
   hr
 
   local dataset out
@@ -392,7 +392,7 @@ traffic_analytics_export_json() {
 traffic_analytics_menu() {
   while true; do
     title
-    echo "9) Traffic Analytics"
+    echo "11) Traffic Analytics"
     hr
     echo "  1) Overview"
     echo "  2) Top Users by Usage"
@@ -1103,7 +1103,7 @@ security_overview_menu() {
 fail2ban_menu() {
   while true; do
     title
-    echo "8) Security"
+    echo "9) Security"
     hr
     echo "  1) TLS & Certificate"
     echo "  2) Fail2ban Protection"
@@ -1130,7 +1130,7 @@ fail2ban_menu() {
 # -------------------------
 wireproxy_status_menu() {
   title
-  echo "9) Maintenance > Wireproxy (WARP) Status"
+  echo "10) Maintenance > Wireproxy (WARP) Status"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1203,7 +1203,7 @@ wireproxy_status_menu() {
 
 wireproxy_restart_menu() {
   title
-  echo "9) Maintenance > Restart Wireproxy (WARP)"
+  echo "10) Maintenance > Restart Wireproxy (WARP)"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1218,12 +1218,1872 @@ wireproxy_restart_menu() {
   pause
 }
 
+sshws_status_menu() {
+  title
+  echo "10) Maintenance > SSH WS Status"
+  hr
+
+  local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
+  local svc
+  for svc in "${services[@]}"; do
+    if svc_exists "${svc}"; then
+      svc_status_line "${svc}"
+    else
+      warn "${svc}.service tidak terpasang"
+    fi
+  done
+
+  hr
+  if have_cmd ss; then
+    if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
+      log "Port 80   : LISTENING ✅"
+    else
+      warn "Port 80   : NOT listening ❌"
+    fi
+    if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+      log "Port 443  : LISTENING ✅"
+    else
+      warn "Port 443  : NOT listening ❌"
+    fi
+  else
+    warn "ss tidak tersedia, skip cek port 80/443"
+  fi
+
+  hr
+  echo "Internal defaults:"
+  echo "  - dropbear local : 127.0.0.1:22022"
+  echo "  - stunnel local  : 127.0.0.1:22443"
+  echo "  - ws proxy local : 127.0.0.1:10015"
+  hr
+  pause
+}
+
+sshws_restart_menu() {
+  title
+  echo "10) Maintenance > Restart SSH WS Stack"
+  hr
+
+  local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
+  local svc restarted="false"
+  for svc in "${services[@]}"; do
+    if svc_exists "${svc}"; then
+      svc_restart "${svc}" || true
+      restarted="true"
+    else
+      warn "${svc}.service tidak terpasang"
+    fi
+  done
+
+  if [[ "${restarted}" != "true" ]]; then
+    warn "Tidak ada service SSH WS yang bisa direstart."
+  fi
+  hr
+  pause
+}
+
+ssh_username_valid() {
+  local username="${1:-}"
+  [[ "${username}" =~ ^[a-z_][a-z0-9_-]{1,31}$ ]]
+}
+
+ssh_user_state_file() {
+  local username="${1:-}"
+  printf '%s/%s.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+}
+
+ssh_user_state_created_at_get() {
+  local username="${1:-}"
+  local state_file
+  state_file="$(ssh_user_state_file "${username}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    d = json.load(f)
+  print(str(d.get("created_at") or "").strip())
+except Exception:
+  print("")
+PY
+}
+
+ssh_user_state_write() {
+  local username="${1:-}" created_at="${2:-}" expired_at="${3:-}"
+  local state_file tmp
+  state_file="$(ssh_user_state_file "${username}")"
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  tmp="$(mktemp "${SSH_USERS_STATE_DIR}/.${username}.XXXXXX")" || return 1
+  need_python3
+  if ! python3 - <<'PY' "${state_file}" "${username}" "${created_at}" "${expired_at}" > "${tmp}"; then
+import datetime
+import json
+import os
+import sys
+
+state_file, username, created_at, expired_at = sys.argv[1:5]
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def norm_date(v):
+  s = str(v or "").strip()
+  if not s:
+    return ""
+  return s[:10]
+
+payload = {}
+if os.path.isfile(state_file):
+  try:
+    loaded = json.load(open(state_file, "r", encoding="utf-8"))
+    if isinstance(loaded, dict):
+      payload = loaded
+  except Exception:
+    payload = {}
+
+status_raw = payload.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
+
+quota_limit = to_int(payload.get("quota_limit"), 0)
+if quota_limit < 0:
+  quota_limit = 0
+
+quota_used = to_int(payload.get("quota_used"), 0)
+if quota_used < 0:
+  quota_used = 0
+
+speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+if speed_down < 0:
+  speed_down = 0.0
+if speed_up < 0:
+  speed_up = 0.0
+
+ip_limit = to_int(status.get("ip_limit"), 0)
+if ip_limit < 0:
+  ip_limit = 0
+
+unit = str(payload.get("quota_unit") or "binary").strip().lower()
+if unit not in ("binary", "decimal"):
+  unit = "binary"
+
+created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
+if not created:
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
+
+payload["managed_by"] = "autoscript-manage"
+payload["username"] = username
+payload["created_at"] = created
+payload["expired_at"] = expired
+payload["quota_limit"] = quota_limit
+payload["quota_unit"] = unit
+payload["quota_used"] = quota_used
+payload["status"] = {
+  "manual_block": to_bool(status.get("manual_block")),
+  "quota_exhausted": to_bool(status.get("quota_exhausted")),
+  "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+  "ip_limit": ip_limit,
+  "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+  "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+  "speed_down_mbit": speed_down,
+  "speed_up_mbit": speed_up,
+  "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
+  "account_locked": to_bool(status.get("account_locked")),
+  "lock_owner": str(status.get("lock_owner") or "").strip(),
+}
+
+print(json.dumps(payload, ensure_ascii=False, indent=2))
+PY
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  printf '\n' >> "${tmp}"
+  install -m 600 "${tmp}" "${state_file}" || {
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
+}
+
+ssh_pick_managed_user() {
+  local -n _out_ref="$1"
+  _out_ref=""
+
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+
+  local -a users=()
+  while IFS= read -r u; do
+    [[ -n "${u}" ]] || continue
+    users+=("${u}")
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/\.json$//' | sort)
+
+  if (( ${#users[@]} == 0 )); then
+    warn "Belum ada akun SSH terkelola."
+    return 1
+  fi
+
+  local i
+  echo "Pilih akun SSH:"
+  for i in "${!users[@]}"; do
+    printf "  %d) %s\n" "$((i + 1))" "${users[$i]}"
+  done
+
+  local pick
+  while true; do
+    read -r -p "Nomor akun (1-${#users[@]}/kembali): " pick
+    if is_back_choice "${pick}"; then
+      return 1
+    fi
+    [[ "${pick}" =~ ^[0-9]+$ ]] || { warn "Input harus angka."; continue; }
+    if (( pick < 1 || pick > ${#users[@]} )); then
+      warn "Di luar range."
+      continue
+    fi
+    _out_ref="${users[$((pick - 1))]}"
+    return 0
+  done
+}
+
+ssh_read_password_confirm() {
+  local -n _out_ref="$1"
+  _out_ref=""
+  local p1="" p2=""
+  read -r -s -p "Password SSH: " p1
+  echo
+  if [[ -z "${p1}" || ${#p1} -lt 6 ]]; then
+    warn "Password minimal 6 karakter."
+    return 1
+  fi
+  read -r -s -p "Ulangi password: " p2
+  echo
+  if [[ "${p1}" != "${p2}" ]]; then
+    warn "Password tidak sama."
+    return 1
+  fi
+  _out_ref="${p1}"
+  return 0
+}
+
+ssh_add_user_menu() {
+  title
+  echo "3) SSH Management > Add SSH User"
+  hr
+
+  local username
+  read -r -p "Username SSH (atau kembali): " username
+  if is_back_choice "${username}"; then
+    return 0
+  fi
+  username="${username,,}"
+  if ! ssh_username_valid "${username}"; then
+    warn "Username tidak valid. Gunakan format Linux user (huruf kecil/angka/_/-)."
+    pause
+    return 0
+  fi
+  if id "${username}" >/dev/null 2>&1; then
+    warn "User '${username}' sudah ada."
+    pause
+    return 0
+  fi
+
+  local password=""
+  if ! ssh_read_password_confirm password; then
+    pause
+    return 0
+  fi
+
+  local days
+  read -r -p "Masa aktif (hari) [default 30]: " days
+  if is_back_choice "${days}"; then
+    return 0
+  fi
+  days="${days:-30}"
+  if [[ ! "${days}" =~ ^[0-9]+$ ]] || (( days < 1 || days > 3650 )); then
+    warn "Masa aktif harus angka 1-3650."
+    pause
+    return 0
+  fi
+
+  local expired_at created_at
+  expired_at="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || true)"
+  [[ -n "${expired_at}" ]] || expired_at="$(date -u '+%Y-%m-%d')"
+  created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
+    warn "Gagal membuat user Linux '${username}'."
+    pause
+    return 0
+  fi
+
+  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    warn "Gagal set password user '${username}'."
+    pause
+    return 0
+  fi
+  password=""
+
+  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    warn "Gagal set expiry user '${username}'."
+    pause
+    return 0
+  fi
+
+  if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+    warn "Gagal menulis metadata akun SSH."
+    pause
+    return 0
+  fi
+
+  log "Akun SSH berhasil dibuat: ${username}"
+  log "Expired: ${expired_at}"
+  pause
+}
+
+ssh_delete_user_menu() {
+  title
+  echo "3) SSH Management > Delete SSH User"
+  hr
+
+  local username
+  if ! ssh_pick_managed_user username; then
+    pause
+    return 0
+  fi
+
+  local ask_rc=0
+  if ! confirm_yn_or_back "Hapus akun SSH '${username}' sekarang?"; then
+    ask_rc=$?
+    if (( ask_rc == 2 )); then
+      return 0
+    fi
+    warn "Dibatalkan."
+    pause
+    return 0
+  fi
+
+  if id "${username}" >/dev/null 2>&1; then
+    userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1 || {
+      warn "Gagal menghapus user Linux '${username}'."
+      pause
+      return 0
+    }
+  fi
+
+  rm -f "$(ssh_user_state_file "${username}")" >/dev/null 2>&1 || true
+  log "Akun SSH '${username}' dihapus."
+  pause
+}
+
+ssh_extend_expiry_menu() {
+  title
+  echo "3) SSH Management > Extend/Set Expiry"
+  hr
+
+  local username
+  if ! ssh_pick_managed_user username; then
+    pause
+    return 0
+  fi
+  if ! id "${username}" >/dev/null 2>&1; then
+    warn "User Linux '${username}' tidak ditemukan."
+    pause
+    return 0
+  fi
+
+  local current_exp
+  current_exp="$(chage -l "${username}" 2>/dev/null | awk -F': ' '/Account expires/{print $2; exit}' || true)"
+  [[ -n "${current_exp}" ]] || current_exp="-"
+  echo "Expiry saat ini: ${current_exp}"
+  hr
+  echo "  1) Tambah hari dari hari ini"
+  echo "  2) Set tanggal expiry (YYYY-MM-DD)"
+  echo "  0) Kembali"
+  hr
+
+  local mode
+  read -r -p "Pilih: " mode
+  if is_back_choice "${mode}"; then
+    return 0
+  fi
+
+  local new_expiry=""
+  case "${mode}" in
+    1)
+      local add_days
+      read -r -p "Tambah berapa hari: " add_days
+      if is_back_choice "${add_days}"; then
+        return 0
+      fi
+      if [[ ! "${add_days}" =~ ^[0-9]+$ ]] || (( add_days < 1 || add_days > 3650 )); then
+        warn "Input hari tidak valid."
+        pause
+        return 0
+      fi
+      new_expiry="$(date -u -d "+${add_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
+      ;;
+    2)
+      read -r -p "Tanggal expiry baru (YYYY-MM-DD): " new_expiry
+      if is_back_choice "${new_expiry}"; then
+        return 0
+      fi
+      if ! date -u -d "${new_expiry}" '+%Y-%m-%d' >/dev/null 2>&1; then
+        warn "Format tanggal tidak valid."
+        pause
+        return 0
+      fi
+      new_expiry="$(date -u -d "${new_expiry}" '+%Y-%m-%d' 2>/dev/null || true)"
+      ;;
+    *)
+      invalid_choice
+      return 0
+      ;;
+  esac
+
+  if [[ -z "${new_expiry}" ]]; then
+    warn "Gagal menentukan expiry baru."
+    pause
+    return 0
+  fi
+
+  if ! chage -E "${new_expiry}" "${username}" >/dev/null 2>&1; then
+    warn "Gagal update expiry untuk '${username}'."
+    pause
+    return 0
+  fi
+
+  local created_at
+  created_at="$(ssh_user_state_created_at_get "${username}")"
+  if [[ -z "${created_at}" ]]; then
+    created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  fi
+  ssh_user_state_write "${username}" "${created_at}" "${new_expiry}" || true
+
+  log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
+  pause
+}
+
+ssh_reset_password_menu() {
+  title
+  echo "3) SSH Management > Reset Password"
+  hr
+
+  local username
+  if ! ssh_pick_managed_user username; then
+    pause
+    return 0
+  fi
+  if ! id "${username}" >/dev/null 2>&1; then
+    warn "User Linux '${username}' tidak ditemukan."
+    pause
+    return 0
+  fi
+
+  local password=""
+  if ! ssh_read_password_confirm password; then
+    pause
+    return 0
+  fi
+
+  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+    warn "Gagal reset password user '${username}'."
+    pause
+    return 0
+  fi
+  password=""
+
+  log "Password akun '${username}' berhasil direset."
+  pause
+}
+
+ssh_list_users_menu() {
+  title
+  echo "3) SSH Management > List Managed SSH Users"
+  hr
+
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  need_python3
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}"
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+rows = []
+for path in sorted(root.glob("*.json")):
+  username = path.stem
+  created = "-"
+  expired = "-"
+  try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    created = str(data.get("created_at") or "-")
+    expired = str(data.get("expired_at") or "-")
+  except Exception:
+    pass
+  rows.append((username, created, expired))
+
+if not rows:
+  print("Belum ada akun SSH terkelola.")
+  raise SystemExit(0)
+
+print(f"{'No':<4} {'Username':<20} {'Created':<22} {'Expired':<12} {'SystemUser':<12}")
+for idx, row in enumerate(rows, start=1):
+  username, created, expired = row
+  sys_user = "present"
+  if pathlib.Path("/etc/passwd").is_file():
+    try:
+      passwd = pathlib.Path("/etc/passwd").read_text(encoding="utf-8", errors="ignore")
+      if f"{username}:" not in passwd:
+        sys_user = "missing"
+    except Exception:
+      pass
+  print(f"{idx:<4} {username:<20} {created:<22} {expired:<12} {sys_user:<12}")
+PY
+
+  hr
+  pause
+}
+
+ssh_menu() {
+  while true; do
+    title
+    echo "3) SSH Management"
+    hr
+    echo "  1) Add SSH User"
+    echo "  2) Delete SSH User"
+    echo "  3) Extend/Set Expiry"
+    echo "  4) Reset Password"
+    echo "  5) List Managed SSH Users"
+    echo "  6) SSH WS Service Status"
+    echo "  7) Restart SSH WS Stack"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
+    case "${c}" in
+      1) ssh_add_user_menu ;;
+      2) ssh_delete_user_menu ;;
+      3) ssh_extend_expiry_menu ;;
+      4) ssh_reset_password_menu ;;
+      5) ssh_list_users_menu ;;
+      6) sshws_status_menu ;;
+      7) sshws_restart_menu ;;
+      0|kembali|k|back|b) break ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+# -------------------------
+# SSH Quota & Access Control
+# -------------------------
+SSH_QAC_FILES=()
+SSH_QAC_PAGE_SIZE=10
+SSH_QAC_PAGE=0
+SSH_QAC_QUERY=""
+SSH_QAC_VIEW_INDEXES=()
+SSH_QAC_ENFORCER_BIN="/usr/local/bin/sshws-qac-enforcer"
+
+ssh_active_sessions_count() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || {
+    echo "0"
+    return 0
+  }
+  if ! id "${username}" >/dev/null 2>&1; then
+    echo "0"
+    return 0
+  fi
+
+  local c="0"
+  if have_cmd pgrep; then
+    c="$(pgrep -u "${username}" -x dropbear 2>/dev/null | wc -l | awk '{print $1}')"
+    c="${c:-0}"
+    [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
+    if [[ "${c}" == "0" ]]; then
+      c="$(pgrep -u "${username}" -f dropbear 2>/dev/null | wc -l | awk '{print $1}')"
+      c="${c:-0}"
+      [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
+    fi
+  fi
+  echo "${c}"
+}
+
+ssh_qac_enforce_once_internal() {
+  local target_user="${1:-}"
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  need_python3
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${target_user}"
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+root = pathlib.Path(sys.argv[1])
+target = (sys.argv[2] or "").strip()
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def active_sessions(username):
+  if not username:
+    return 0
+  try:
+    id_rc = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+  except FileNotFoundError:
+    return 0
+  if id_rc != 0:
+    return 0
+  try:
+    cmd = ["pgrep", "-u", username, "-x", "dropbear"]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  except FileNotFoundError:
+    return 0
+  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+  if lines:
+    return len(lines)
+  try:
+    res = subprocess.run(["pgrep", "-u", username, "-f", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  except FileNotFoundError:
+    return 0
+  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+  return len(lines)
+
+def lock_user(username):
+  if subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+    return False
+  if subprocess.run(["passwd", "-l", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    return True
+  return subprocess.run(["usermod", "-L", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+def unlock_user(username):
+  if subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+    return False
+  if subprocess.run(["passwd", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    return True
+  return subprocess.run(["usermod", "-U", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+def write_json_atomic(path, payload):
+  text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+  dirn = str(path.parent)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      f.write(text)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+def normalize_payload(path):
+  payload = {}
+  if path.is_file():
+    try:
+      loaded = json.loads(path.read_text(encoding="utf-8"))
+      if isinstance(loaded, dict):
+        payload = loaded
+    except Exception:
+      payload = {}
+
+  username = str(payload.get("username") or path.stem).strip() or path.stem
+  unit = str(payload.get("quota_unit") or "binary").strip().lower()
+  if unit not in ("binary", "decimal"):
+    unit = "binary"
+
+  quota_limit = to_int(payload.get("quota_limit"), 0)
+  if quota_limit < 0:
+    quota_limit = 0
+  quota_used = to_int(payload.get("quota_used"), 0)
+  if quota_used < 0:
+    quota_used = 0
+
+  status_raw = payload.get("status")
+  status = status_raw if isinstance(status_raw, dict) else {}
+
+  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+  if speed_down < 0:
+    speed_down = 0.0
+  if speed_up < 0:
+    speed_up = 0.0
+
+  ip_limit = to_int(status.get("ip_limit"), 0)
+  if ip_limit < 0:
+    ip_limit = 0
+
+  payload["managed_by"] = "autoscript-manage"
+  payload["username"] = username
+  payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
+  payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+  payload["quota_limit"] = quota_limit
+  payload["quota_unit"] = unit
+  payload["quota_used"] = quota_used
+  payload["status"] = {
+    "manual_block": to_bool(status.get("manual_block")),
+    "quota_exhausted": to_bool(status.get("quota_exhausted")),
+    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+    "ip_limit": ip_limit,
+    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+    "speed_down_mbit": speed_down,
+    "speed_up_mbit": speed_up,
+    "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
+    "account_locked": to_bool(status.get("account_locked")),
+    "lock_owner": str(status.get("lock_owner") or "").strip(),
+  }
+  return payload
+
+if not root.is_dir():
+  raise SystemExit(0)
+
+paths = sorted(root.glob("*.json"), key=lambda p: p.name.lower())
+for path in paths:
+  payload = normalize_payload(path)
+  username = str(payload.get("username") or path.stem).strip() or path.stem
+  if target and target not in (username, path.stem):
+    continue
+
+  status = payload["status"]
+  before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+  ip_enabled = bool(status.get("ip_limit_enabled"))
+  ip_limit = to_int(status.get("ip_limit"), 0)
+  if ip_limit < 0:
+    ip_limit = 0
+  if not ip_enabled:
+    status["ip_limit_locked"] = False
+  elif ip_limit > 0:
+    if active_sessions(username) > ip_limit:
+      status["ip_limit_locked"] = True
+  else:
+    status["ip_limit_locked"] = False
+
+  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_used = to_int(payload.get("quota_used"), 0)
+  status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
+
+  reason = ""
+  if bool(status.get("manual_block")):
+    reason = "manual"
+  elif bool(status.get("quota_exhausted")):
+    reason = "quota"
+  elif bool(status.get("ip_limit_locked")):
+    reason = "ip_limit"
+
+  status["lock_reason"] = reason
+  account_locked = bool(status.get("account_locked"))
+  lock_owner = str(status.get("lock_owner") or "").strip()
+
+  user_exists = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+  if reason:
+    if user_exists and lock_user(username):
+      account_locked = True
+      lock_owner = "ssh_qac"
+    elif not user_exists:
+      account_locked = False
+      lock_owner = ""
+  else:
+    if user_exists and account_locked and lock_owner == "ssh_qac":
+      if unlock_user(username):
+        account_locked = False
+        lock_owner = ""
+    elif not account_locked and lock_owner == "ssh_qac":
+      lock_owner = ""
+
+  status["account_locked"] = bool(account_locked)
+  status["lock_owner"] = lock_owner
+  payload["status"] = status
+
+  after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+  if after != before:
+    write_json_atomic(path, payload)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+PY
+}
+
+ssh_qac_enforce_now() {
+  local target_user="${1:-}"
+  if [[ -x "${SSH_QAC_ENFORCER_BIN}" ]]; then
+    if [[ -n "${target_user}" ]]; then
+      "${SSH_QAC_ENFORCER_BIN}" --once --user "${target_user}" >/dev/null 2>&1 || true
+    else
+      "${SSH_QAC_ENFORCER_BIN}" --once >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+  ssh_qac_enforce_once_internal "${target_user}" >/dev/null 2>&1 || true
+}
+
+ssh_qac_collect_files() {
+  SSH_QAC_FILES=()
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+
+  local f
+  while IFS= read -r -d '' f; do
+    SSH_QAC_FILES+=("${f}")
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
+}
+
+ssh_qac_total_pages_for_indexes() {
+  local total="${#SSH_QAC_VIEW_INDEXES[@]}"
+  if (( total == 0 )); then
+    echo 0
+    return 0
+  fi
+  echo $(( (total + SSH_QAC_PAGE_SIZE - 1) / SSH_QAC_PAGE_SIZE ))
+}
+
+ssh_qac_build_view_indexes() {
+  SSH_QAC_VIEW_INDEXES=()
+
+  local q
+  q="$(echo "${SSH_QAC_QUERY:-}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "${q}" ]]; then
+    local i
+    for i in "${!SSH_QAC_FILES[@]}"; do
+      SSH_QAC_VIEW_INDEXES+=("${i}")
+    done
+    return 0
+  fi
+
+  local i f base
+  for i in "${!SSH_QAC_FILES[@]}"; do
+    f="${SSH_QAC_FILES[$i]}"
+    base="$(basename "${f}")"
+    base="${base%.json}"
+    if echo "${base}" | tr '[:upper:]' '[:lower:]' | grep -qF -- "${q}"; then
+      SSH_QAC_VIEW_INDEXES+=("${i}")
+    fi
+  done
+}
+
+ssh_qac_read_summary_fields() {
+  # args: json_file
+  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_disp|block_reason|lock_state
+  local qf="$1"
+  need_python3
+  python3 - <<'PY' "${qf}"
+import json
+import pathlib
+import sys
+
+p = pathlib.Path(sys.argv[1])
+username_fallback = p.stem
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def fmt_gb(v):
+  try:
+    n = float(v)
+  except Exception:
+    n = 0.0
+  if n < 0:
+    n = 0.0
+  s = f"{n:.3f}".rstrip("0").rstrip(".")
+  return s if s else "0"
+
+def used_disp(b):
+  try:
+    b = int(b)
+  except Exception:
+    b = 0
+  if b >= 1024**3:
+    return f"{b/(1024**3):.2f} GB"
+  if b >= 1024**2:
+    return f"{b/(1024**2):.2f} MB"
+  if b >= 1024:
+    return f"{b/1024:.2f} KB"
+  return f"{b} B"
+
+data = {}
+try:
+  loaded = json.loads(p.read_text(encoding="utf-8"))
+  if isinstance(loaded, dict):
+    data = loaded
+except Exception:
+  data = {}
+
+username = str(data.get("username") or username_fallback).strip() or username_fallback
+quota_limit = to_int(data.get("quota_limit"), 0)
+quota_used = to_int(data.get("quota_used"), 0)
+unit = str(data.get("quota_unit") or "binary").strip().lower()
+bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
+quota_limit_disp = f"{fmt_gb(quota_limit / bpg)} GB"
+quota_used_disp = used_disp(quota_used)
+expired_at = str(data.get("expired_at") or "-").strip()
+expired_date = expired_at[:10] if expired_at and expired_at != "-" else "-"
+
+status_raw = data.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
+ip_enabled = to_bool(status.get("ip_limit_enabled"))
+ip_limit = to_int(status.get("ip_limit"), 0)
+if ip_limit < 0:
+  ip_limit = 0
+ip_disp = "ON({})".format(ip_limit) if ip_enabled and ip_limit > 0 else ("ON" if ip_enabled else "OFF")
+
+reason = str(status.get("lock_reason") or "").strip().lower()
+if to_bool(status.get("manual_block")):
+  reason = "manual"
+elif to_bool(status.get("quota_exhausted")):
+  reason = "quota"
+elif to_bool(status.get("ip_limit_locked")):
+  reason = "ip_limit"
+reason_disp = reason.upper() if reason else "-"
+
+lock_disp = "ON" if to_bool(status.get("account_locked")) else "OFF"
+
+print(f"{username}|{quota_limit_disp}|{quota_used_disp}|{expired_date}|{ip_disp}|{reason_disp}|{lock_disp}")
+PY
+}
+
+ssh_qac_read_detail_fields() {
+  # args: json_file
+  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_onoff|ip_limit_value|block_reason|speed_onoff|speed_down_mbit|speed_up_mbit|lock_state
+  local qf="$1"
+  need_python3
+  python3 - <<'PY' "${qf}"
+import json
+import pathlib
+import sys
+
+p = pathlib.Path(sys.argv[1])
+username_fallback = p.stem
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def fmt_gb(v):
+  try:
+    n = float(v)
+  except Exception:
+    n = 0.0
+  if n < 0:
+    n = 0.0
+  s = f"{n:.3f}".rstrip("0").rstrip(".")
+  return s if s else "0"
+
+def fmt_mbit(v):
+  try:
+    n = float(v)
+  except Exception:
+    n = 0.0
+  if n < 0:
+    n = 0.0
+  s = f"{n:.3f}".rstrip("0").rstrip(".")
+  return s if s else "0"
+
+def used_disp(b):
+  try:
+    b = int(b)
+  except Exception:
+    b = 0
+  if b >= 1024**3:
+    return f"{b/(1024**3):.2f} GB"
+  if b >= 1024**2:
+    return f"{b/(1024**2):.2f} MB"
+  if b >= 1024:
+    return f"{b/1024:.2f} KB"
+  return f"{b} B"
+
+data = {}
+try:
+  loaded = json.loads(p.read_text(encoding="utf-8"))
+  if isinstance(loaded, dict):
+    data = loaded
+except Exception:
+  data = {}
+
+username = str(data.get("username") or username_fallback).strip() or username_fallback
+quota_limit = to_int(data.get("quota_limit"), 0)
+quota_used = to_int(data.get("quota_used"), 0)
+unit = str(data.get("quota_unit") or "binary").strip().lower()
+bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
+quota_limit_disp = f"{fmt_gb(quota_limit / bpg)} GB"
+quota_used_disp = used_disp(quota_used)
+expired_at = str(data.get("expired_at") or "-").strip()
+expired_date = expired_at[:10] if expired_at and expired_at != "-" else "-"
+
+status_raw = data.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
+
+ip_enabled = to_bool(status.get("ip_limit_enabled"))
+ip_limit = to_int(status.get("ip_limit"), 0)
+if ip_limit < 0:
+  ip_limit = 0
+if not ip_enabled:
+  ip_limit = 0
+
+reason = str(status.get("lock_reason") or "").strip().lower()
+if to_bool(status.get("manual_block")):
+  reason = "manual"
+elif to_bool(status.get("quota_exhausted")):
+  reason = "quota"
+elif to_bool(status.get("ip_limit_locked")):
+  reason = "ip_limit"
+reason_disp = reason.upper() if reason else "-"
+
+speed_enabled = to_bool(status.get("speed_limit_enabled"))
+speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+if speed_down < 0:
+  speed_down = 0.0
+if speed_up < 0:
+  speed_up = 0.0
+
+lock_disp = "ON" if to_bool(status.get("account_locked")) else "OFF"
+print(
+  f"{username}|{quota_limit_disp}|{quota_used_disp}|{expired_date}|"
+  f"{'ON' if ip_enabled else 'OFF'}|{ip_limit}|{reason_disp}|"
+  f"{'ON' if speed_enabled else 'OFF'}|{fmt_mbit(speed_down)}|{fmt_mbit(speed_up)}|{lock_disp}"
+)
+PY
+}
+
+ssh_qac_get_status_bool() {
+  # args: json_file key
+  local qf="$1"
+  local key="$2"
+  need_python3
+  python3 - <<'PY' "${qf}" "${key}"
+import json
+import sys
+
+qf, key = sys.argv[1:3]
+try:
+  data = json.load(open(qf, "r", encoding="utf-8"))
+except Exception:
+  print("false")
+  raise SystemExit(0)
+
+if not isinstance(data, dict):
+  print("false")
+  raise SystemExit(0)
+
+status = data.get("status")
+if not isinstance(status, dict):
+  status = {}
+
+val = status.get(key)
+if isinstance(val, bool):
+  print("true" if val else "false")
+elif isinstance(val, (int, float)):
+  print("true" if bool(val) else "false")
+else:
+  s = str(val or "").strip().lower()
+  print("true" if s in ("1", "true", "yes", "on", "y") else "false")
+PY
+}
+
+ssh_qac_get_status_number() {
+  # args: json_file key
+  local qf="$1"
+  local key="$2"
+  need_python3
+  python3 - <<'PY' "${qf}" "${key}"
+import json
+import sys
+
+qf, key = sys.argv[1:3]
+try:
+  data = json.load(open(qf, "r", encoding="utf-8"))
+except Exception:
+  print("0")
+  raise SystemExit(0)
+
+if not isinstance(data, dict):
+  print("0")
+  raise SystemExit(0)
+
+status = data.get("status")
+if not isinstance(status, dict):
+  status = {}
+
+val = status.get(key)
+try:
+  if val is None:
+    print("0")
+  elif isinstance(val, bool):
+    print(str(int(val)))
+  elif isinstance(val, (int, float)):
+    print(str(val))
+  else:
+    sval = str(val).strip()
+    print(sval if sval else "0")
+except Exception:
+  print("0")
+PY
+}
+
+ssh_qac_atomic_update_file() {
+  # args: json_file action [args...]
+  local qf="$1"
+  local action="$2"
+  shift 2 || true
+
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  need_python3
+  python3 - <<'PY' "${qf}" "${action}" "$@"
+import json
+import os
+import sys
+import tempfile
+
+qf = sys.argv[1]
+action = sys.argv[2]
+args = sys.argv[3:]
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def parse_onoff(v):
+  s = str(v or "").strip().lower()
+  if s in ("on", "1", "true", "yes", "y"):
+    return True
+  if s in ("off", "0", "false", "no", "n"):
+    return False
+  raise SystemExit("nilai on/off tidak valid")
+
+def parse_int(v, key, minv=None):
+  try:
+    n = int(float(str(v).strip()))
+  except Exception:
+    raise SystemExit(f"{key} harus angka")
+  if minv is not None and n < minv:
+    raise SystemExit(f"{key} minimal {minv}")
+  return n
+
+def parse_float(v, key, minv=None):
+  try:
+    n = float(str(v).strip())
+  except Exception:
+    raise SystemExit(f"{key} harus angka")
+  if minv is not None and n < minv:
+    raise SystemExit(f"{key} minimal {minv}")
+  return n
+
+payload = {}
+if os.path.isfile(qf):
+  try:
+    loaded = json.load(open(qf, "r", encoding="utf-8"))
+    if isinstance(loaded, dict):
+      payload = loaded
+  except Exception:
+    payload = {}
+
+username_fallback = os.path.basename(qf)
+if username_fallback.endswith(".json"):
+  username_fallback = username_fallback[:-5]
+
+status_raw = payload.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
+
+quota_limit = to_int(payload.get("quota_limit"), 0)
+if quota_limit < 0:
+  quota_limit = 0
+quota_used = to_int(payload.get("quota_used"), 0)
+if quota_used < 0:
+  quota_used = 0
+
+speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+if speed_down < 0:
+  speed_down = 0.0
+if speed_up < 0:
+  speed_up = 0.0
+
+ip_limit = to_int(status.get("ip_limit"), 0)
+if ip_limit < 0:
+  ip_limit = 0
+
+unit = str(payload.get("quota_unit") or "binary").strip().lower()
+if unit not in ("binary", "decimal"):
+  unit = "binary"
+
+payload["managed_by"] = "autoscript-manage"
+payload["username"] = str(payload.get("username") or username_fallback).strip() or username_fallback
+payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
+payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+payload["quota_limit"] = quota_limit
+payload["quota_unit"] = unit
+payload["quota_used"] = quota_used
+payload["status"] = {
+  "manual_block": to_bool(status.get("manual_block")),
+  "quota_exhausted": to_bool(status.get("quota_exhausted")),
+  "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+  "ip_limit": ip_limit,
+  "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+  "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+  "speed_down_mbit": speed_down,
+  "speed_up_mbit": speed_up,
+  "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
+  "account_locked": to_bool(status.get("account_locked")),
+  "lock_owner": str(status.get("lock_owner") or "").strip(),
+}
+
+st = payload["status"]
+
+if action == "set_quota_limit":
+  if len(args) != 1:
+    raise SystemExit("set_quota_limit butuh 1 argumen (bytes)")
+  payload["quota_limit"] = parse_int(args[0], "quota_limit", 0)
+elif action == "reset_quota_used":
+  payload["quota_used"] = 0
+  st["quota_exhausted"] = False
+elif action == "manual_block_set":
+  if len(args) != 1:
+    raise SystemExit("manual_block_set butuh 1 argumen (on/off)")
+  st["manual_block"] = bool(parse_onoff(args[0]))
+elif action == "ip_limit_enabled_set":
+  if len(args) != 1:
+    raise SystemExit("ip_limit_enabled_set butuh 1 argumen (on/off)")
+  enabled = bool(parse_onoff(args[0]))
+  st["ip_limit_enabled"] = enabled
+  if not enabled:
+    st["ip_limit_locked"] = False
+elif action == "set_ip_limit":
+  if len(args) != 1:
+    raise SystemExit("set_ip_limit butuh 1 argumen (angka)")
+  st["ip_limit"] = parse_int(args[0], "ip_limit", 1)
+elif action == "clear_ip_limit_locked":
+  st["ip_limit_locked"] = False
+elif action == "set_speed_down":
+  if len(args) != 1:
+    raise SystemExit("set_speed_down butuh 1 argumen (Mbps)")
+  st["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
+elif action == "set_speed_up":
+  if len(args) != 1:
+    raise SystemExit("set_speed_up butuh 1 argumen (Mbps)")
+  st["speed_up_mbit"] = parse_float(args[0], "speed_up_mbit", 0.000001)
+elif action == "speed_limit_set":
+  if len(args) != 1:
+    raise SystemExit("speed_limit_set butuh 1 argumen (on/off)")
+  st["speed_limit_enabled"] = bool(parse_onoff(args[0]))
+elif action == "set_speed_all_enable":
+  if len(args) != 2:
+    raise SystemExit("set_speed_all_enable butuh 2 argumen (down up)")
+  st["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
+  st["speed_up_mbit"] = parse_float(args[1], "speed_up_mbit", 0.000001)
+  st["speed_limit_enabled"] = True
+else:
+  raise SystemExit(f"aksi ssh_qac_atomic_update_file tidak dikenali: {action}")
+
+payload["status"] = st
+text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+dirn = os.path.dirname(qf) or "."
+fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+try:
+  with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write(text)
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp, qf)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
+  chmod 600 "${qf}" 2>/dev/null || true
+}
+
+ssh_qac_view_json() {
+  local qf="$1"
+  title
+  echo "SSH QAC metadata: ${qf}"
+  hr
+  need_python3
+  if have_cmd less; then
+    python3 - <<'PY' "${qf}" | less -R
+import json
+import sys
+
+p = sys.argv[1]
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  print(open(p, "r", encoding="utf-8", errors="replace").read())
+  raise SystemExit(0)
+
+exp = d.get("expired_at")
+if isinstance(exp, str) and exp:
+  d["expired_at"] = exp[:10]
+print(json.dumps(d, ensure_ascii=False, indent=2))
+PY
+  else
+    python3 - <<'PY' "${qf}"
+import json
+import sys
+
+p = sys.argv[1]
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  print(open(p, "r", encoding="utf-8", errors="replace").read())
+  raise SystemExit(0)
+
+exp = d.get("expired_at")
+if isinstance(exp, str) and exp:
+  d["expired_at"] = exp[:10]
+print(json.dumps(d, ensure_ascii=False, indent=2))
+PY
+  fi
+  hr
+  pause
+}
+
+ssh_qac_print_table_page() {
+  local page="${1:-0}"
+  local total="${#SSH_QAC_VIEW_INDEXES[@]}"
+  local pages=0
+  if (( total > 0 )); then
+    pages=$(( (total + SSH_QAC_PAGE_SIZE - 1) / SSH_QAC_PAGE_SIZE ))
+  fi
+  if (( page < 0 )); then
+    page=0
+  fi
+  if (( pages > 0 && page >= pages )); then
+    page=$((pages - 1))
+  fi
+  SSH_QAC_PAGE="${page}"
+
+  echo "SSH accounts: ${total} | page $((page + 1))/${pages:-1}"
+  if [[ -n "${SSH_QAC_QUERY}" ]]; then
+    echo "Filter: '${SSH_QAC_QUERY}'"
+  fi
+  echo
+
+  if (( total == 0 )); then
+    echo "Belum ada data SSH QAC."
+    return 0
+  fi
+
+  printf "%-4s %-18s %-11s %-11s %-12s %-10s %-6s\n" "NO" "Username" "Quota" "Used" "Expired" "IPLimit" "Lock"
+  hr
+
+  local start end i list_pos real_idx qf fields username ql qu exp ipd lock
+  start=$((page * SSH_QAC_PAGE_SIZE))
+  end=$((start + SSH_QAC_PAGE_SIZE))
+  if (( end > total )); then
+    end="${total}"
+  fi
+  for (( i=start; i<end; i++ )); do
+    list_pos="${i}"
+    real_idx="${SSH_QAC_VIEW_INDEXES[$list_pos]}"
+    qf="${SSH_QAC_FILES[$real_idx]}"
+    fields="$(ssh_qac_read_summary_fields "${qf}")"
+    IFS='|' read -r username ql qu exp ipd _ lock <<<"${fields}"
+    printf "%-4s %-18s %-11s %-11s %-12s %-10s %-6s\n" "$((i - start + 1))" "${username}" "${ql}" "${qu}" "${exp}" "${ipd}" "${lock}"
+  done
+}
+
+ssh_qac_edit_flow() {
+  # args: view_no (1-based pada halaman aktif)
+  local view_no="$1"
+
+  [[ "${view_no}" =~ ^[0-9]+$ ]] || { warn "Input bukan angka"; pause; return 0; }
+  local total page pages start end rows
+  total="${#SSH_QAC_VIEW_INDEXES[@]}"
+  if (( total <= 0 )); then
+    warn "Tidak ada data"
+    pause
+    return 0
+  fi
+  page="${SSH_QAC_PAGE:-0}"
+  pages=$(( (total + SSH_QAC_PAGE_SIZE - 1) / SSH_QAC_PAGE_SIZE ))
+  if (( page < 0 )); then page=0; fi
+  if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+  start=$((page * SSH_QAC_PAGE_SIZE))
+  end=$((start + SSH_QAC_PAGE_SIZE))
+  if (( end > total )); then end="${total}"; fi
+  rows=$((end - start))
+
+  if (( view_no < 1 || view_no > rows )); then
+    warn "NO di luar range"
+    pause
+    return 0
+  fi
+
+  local list_pos real_idx qf
+  list_pos=$((start + view_no - 1))
+  real_idx="${SSH_QAC_VIEW_INDEXES[$list_pos]}"
+  qf="${SSH_QAC_FILES[$real_idx]}"
+
+  while true; do
+    title
+    echo "5) SSH Quota & Access Control > Detail"
+    hr
+    echo "File  : ${qf}"
+    hr
+
+    local fields username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state
+    fields="$(ssh_qac_read_detail_fields "${qf}")"
+    IFS='|' read -r username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state <<<"${fields}"
+
+    local active_sessions
+    active_sessions="$(ssh_active_sessions_count "${username}")"
+    [[ "${active_sessions}" =~ ^[0-9]+$ ]] || active_sessions="0"
+
+    local label_w=18
+    printf "%-${label_w}s : %s\n" "Username" "${username}"
+    printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
+    printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
+    printf "%-${label_w}s : %s\n" "IP/Login Max" "${ip_lim}"
+    printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
+    printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
+    printf "%-${label_w}s : %s\n" "Active Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
+    hr
+
+    echo "  1) View JSON"
+    echo "  2) Set Quota Limit (GB)"
+    echo "  3) Reset Quota Used (set 0)"
+    echo "  4) Manual Block/Unblock (toggle)"
+    echo "  5) IP/Login Limit Enable/Disable (toggle)"
+    echo "  6) Set IP/Login Limit (angka)"
+    echo "  7) Unlock IP/Login Lock"
+    echo "  8) Set Speed Download (Mbps)"
+    echo "  9) Set Speed Upload (Mbps)"
+    echo " 10) Speed Limit Enable/Disable (toggle)"
+    echo "  0) Kembali"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
+    if is_back_choice "${c}"; then
+      return 0
+    fi
+
+    case "${c}" in
+      1)
+        ssh_qac_view_json "${qf}"
+        ;;
+      2)
+        read -r -p "Quota Limit (GB) (atau kembali): " gb
+        if is_back_choice "${gb}"; then
+          continue
+        fi
+        if [[ -z "${gb}" ]]; then
+          warn "Quota kosong"
+          pause
+          continue
+        fi
+        local gb_num qb
+        gb_num="$(normalize_gb_input "${gb}")"
+        if [[ -z "${gb_num}" ]]; then
+          warn "Format quota tidak valid. Contoh: 5 atau 5GB"
+          pause
+          continue
+        fi
+        qb="$(bytes_from_gb "${gb_num}")"
+        ssh_qac_atomic_update_file "${qf}" set_quota_limit "${qb}"
+        ssh_qac_enforce_now "${username}"
+        log "Quota limit SSH diubah: ${gb_num} GB"
+        pause
+        ;;
+      3)
+        ssh_qac_atomic_update_file "${qf}" reset_quota_used
+        ssh_qac_enforce_now "${username}"
+        log "Quota used SSH di-reset: 0"
+        pause
+        ;;
+      4)
+        local st_mb
+        st_mb="$(ssh_qac_get_status_bool "${qf}" "manual_block")"
+        if [[ "${st_mb}" == "true" ]]; then
+          ssh_qac_atomic_update_file "${qf}" manual_block_set off
+          ssh_qac_enforce_now "${username}"
+          log "Manual block SSH: OFF"
+        else
+          ssh_qac_atomic_update_file "${qf}" manual_block_set on
+          ssh_qac_enforce_now "${username}"
+          log "Manual block SSH: ON"
+        fi
+        pause
+        ;;
+      5)
+        local ip_on
+        ip_on="$(ssh_qac_get_status_bool "${qf}" "ip_limit_enabled")"
+        if [[ "${ip_on}" == "true" ]]; then
+          ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off
+          ssh_qac_enforce_now "${username}"
+          log "IP/Login limit SSH: OFF"
+        else
+          ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on
+          ssh_qac_enforce_now "${username}"
+          log "IP/Login limit SSH: ON"
+        fi
+        pause
+        ;;
+      6)
+        read -r -p "IP/Login limit (angka) (atau kembali): " lim
+        if is_back_word_choice "${lim}"; then
+          continue
+        fi
+        if [[ -z "${lim}" || ! "${lim}" =~ ^[0-9]+$ || "${lim}" -le 0 ]]; then
+          warn "Limit harus angka > 0"
+          pause
+          continue
+        fi
+        ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"
+        ssh_qac_enforce_now "${username}"
+        log "IP/Login limit SSH diubah: ${lim}"
+        pause
+        ;;
+      7)
+        ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked
+        ssh_qac_enforce_now "${username}"
+        log "IP/Login lock SSH di-unlock"
+        pause
+        ;;
+      8)
+        read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_input
+        if is_back_word_choice "${speed_down_input}"; then
+          continue
+        fi
+        speed_down_input="$(normalize_speed_mbit_input "${speed_down_input}")"
+        if [[ -z "${speed_down_input}" ]] || ! speed_mbit_is_positive "${speed_down_input}"; then
+          warn "Speed download tidak valid. Gunakan angka > 0."
+          pause
+          continue
+        fi
+        ssh_qac_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"
+        log "Speed download SSH diubah: ${speed_down_input} Mbps"
+        pause
+        ;;
+      9)
+        read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_input
+        if is_back_word_choice "${speed_up_input}"; then
+          continue
+        fi
+        speed_up_input="$(normalize_speed_mbit_input "${speed_up_input}")"
+        if [[ -z "${speed_up_input}" ]] || ! speed_mbit_is_positive "${speed_up_input}"; then
+          warn "Speed upload tidak valid. Gunakan angka > 0."
+          pause
+          continue
+        fi
+        ssh_qac_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"
+        log "Speed upload SSH diubah: ${speed_up_input} Mbps"
+        pause
+        ;;
+      10)
+        local speed_on speed_down_now speed_up_now
+        speed_on="$(ssh_qac_get_status_bool "${qf}" "speed_limit_enabled")"
+        if [[ "${speed_on}" == "true" ]]; then
+          ssh_qac_atomic_update_file "${qf}" speed_limit_set off
+          log "Speed limit SSH: OFF"
+          pause
+          continue
+        fi
+
+        speed_down_now="$(ssh_qac_get_status_number "${qf}" "speed_down_mbit")"
+        speed_up_now="$(ssh_qac_get_status_number "${qf}" "speed_up_mbit")"
+
+        if ! speed_mbit_is_positive "${speed_down_now}"; then
+          read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_now
+          if is_back_choice "${speed_down_now}"; then
+            continue
+          fi
+          speed_down_now="$(normalize_speed_mbit_input "${speed_down_now}")"
+          if [[ -z "${speed_down_now}" ]] || ! speed_mbit_is_positive "${speed_down_now}"; then
+            warn "Speed download tidak valid. Speed limit tetap OFF."
+            pause
+            continue
+          fi
+        fi
+        if ! speed_mbit_is_positive "${speed_up_now}"; then
+          read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_now
+          if is_back_choice "${speed_up_now}"; then
+            continue
+          fi
+          speed_up_now="$(normalize_speed_mbit_input "${speed_up_now}")"
+          if [[ -z "${speed_up_now}" ]] || ! speed_mbit_is_positive "${speed_up_now}"; then
+            warn "Speed upload tidak valid. Speed limit tetap OFF."
+            pause
+            continue
+          fi
+        fi
+
+        ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
+        log "Speed limit SSH: ON"
+        pause
+        ;;
+      *)
+        warn "Pilihan tidak valid"
+        sleep 1
+        ;;
+    esac
+  done
+}
+
+ssh_quota_menu() {
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  need_python3
+
+  SSH_QAC_PAGE=0
+  SSH_QAC_QUERY=""
+
+  while true; do
+    title
+    echo "5) SSH Quota & Access Control"
+    hr
+
+    ssh_qac_enforce_now
+    ssh_qac_collect_files
+    ssh_qac_build_view_indexes
+    ssh_qac_print_table_page "${SSH_QAC_PAGE}"
+    hr
+
+    echo "Masukkan NO untuk view/edit, atau ketik:"
+    echo "  search) filter username"
+    echo "  clear) hapus filter"
+    echo "  next / previous"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
+
+    if is_back_choice "${c}"; then
+      break
+    fi
+
+    case "${c}" in
+      next|n)
+        local pages
+        pages="$(ssh_qac_total_pages_for_indexes)"
+        if (( pages > 0 && SSH_QAC_PAGE < pages - 1 )); then
+          SSH_QAC_PAGE=$((SSH_QAC_PAGE + 1))
+        fi
+        ;;
+      previous|p|prev)
+        if (( SSH_QAC_PAGE > 0 )); then
+          SSH_QAC_PAGE=$((SSH_QAC_PAGE - 1))
+        fi
+        ;;
+      search)
+        read -r -p "Search username (atau kembali): " q
+        if is_back_choice "${q}"; then
+          continue
+        fi
+        SSH_QAC_QUERY="${q}"
+        SSH_QAC_PAGE=0
+        ;;
+      clear)
+        SSH_QAC_QUERY=""
+        SSH_QAC_PAGE=0
+        ;;
+      *)
+        if [[ "${c}" =~ ^[0-9]+$ ]]; then
+          ssh_qac_edit_flow "${c}"
+        else
+          warn "Pilihan tidak valid"
+          sleep 1
+        fi
+        ;;
+    esac
+  done
+}
+
 daemon_log_tail_show() {
   # args: service_name [lines]
   local svc="$1"
   local lines="${2:-20}"
   title
-  echo "9) Maintenance > Log ${svc}"
+  echo "10) Maintenance > Log ${svc}"
   hr
   if svc_exists "${svc}"; then
     journalctl -u "${svc}" --no-pager -n "${lines}" 2>/dev/null || true
@@ -1237,7 +3097,7 @@ daemon_log_tail_show() {
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
   title
-  echo "11) Install BOT Discord"
+  echo "12) Install BOT Discord"
   hr
 
   if [[ ! -x "${installer_cmd}" ]]; then
@@ -1264,7 +3124,7 @@ install_discord_bot_menu() {
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
   title
-  echo "12) Install BOT Telegram"
+  echo "13) Install BOT Telegram"
   hr
 
   if [[ ! -x "${installer_cmd}" ]]; then
@@ -1290,10 +3150,10 @@ install_telegram_bot_menu() {
 
 daemon_status_menu() {
   title
-  echo "9) Maintenance > Daemon Status"
+  echo "10) Maintenance > Daemon Status"
   hr
 
-  local daemons=("xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy")
+  local daemons=("xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy" "sshws-qac-enforcer.timer")
   local d
   for d in "${daemons[@]}"; do
     if svc_exists "${d}"; then

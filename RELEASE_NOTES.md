@@ -1,5 +1,49 @@
 # Release Notes
 
+## Rilis 2026-03-06 (SSH WebSocket Share Port 80/443)
+
+### Ringkasan
+Rilis ini menambahkan SSH WebSocket TLS/non-TLS dengan model port share `80/443` tanpa memutus jalur Xray existing.
+
+### Perubahan Utama
+1. Integrasi SSH WS di `setup.sh`
+- Install dependency baru: `dropbear` dan `stunnel4`.
+- Tambah service systemd:
+  - `sshws-dropbear` (local-only `127.0.0.1:22022`)
+  - `sshws-stunnel` (TLS bridge local `127.0.0.1:22443`)
+  - `sshws-proxy` (custom Python websocket tunnel `127.0.0.1:10015`)
+  - `sshws-qac-enforcer.timer` (enforcement SSH QAC tiap 1 menit)
+- `sanity_check` sekarang memverifikasi ketiga service SSH WS, timer enforcer SSH QAC, dan listener port `80/443`.
+
+2. Integrasi nginx share port
+- Redirect global HTTP->HTTPS dihapus.
+- Endpoint SSH WS memakai `location = /`:
+  - `ws://<domain>:80/`
+  - `wss://<domain>:443/`
+- Path Xray existing (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `/shadowsocks-ws`, `-hup`, `-grpc`) tetap dipertahankan.
+
+3. Operasional menu `manage`
+- Maintenance menu menambah:
+  - `SSH WS Status (dropbear/stunnel/proxy)`
+  - `Restart SSH WS Stack`
+- Main Menu menambah top-level `3) SSH Management` dengan fitur:
+  - add/delete akun SSH Linux
+  - extend/set expiry
+  - reset password
+  - list akun terkelola
+  - shortcut status/restart stack SSH WS
+- Main Menu sekarang juga menambah `5) SSH Quota & Access Control`:
+  - opsi detail mirip quota Xray (view JSON, set quota, reset used, manual block, IP/login limit, speed policy)
+  - enforcement lock akun Linux via `passwd -l/-u`
+  - lock otomatis limit sesi/login via timer `sshws-qac-enforcer.timer`
+- Nomor menu lama bergeser (Network jadi `6`, Maintenance `10`, installer bot menjadi `12` dan `13`).
+- Runtime dropbear untuk SSH WS kini password-enabled (flag disable password dihapus).
+
+### Hasil Validasi
+- `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh` -> PASS
+- `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')` -> PASS
+- `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')` -> PASS
+
 ## Rilis 2026-03-02 (Bot Auth Hardening + Installer Validation Guard)
 
 ### Ringkasan

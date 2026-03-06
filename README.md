@@ -22,7 +22,7 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 
 ## Fitur Utama (Highlight)
 - One-time provisioning lengkap via `setup.sh`: Xray, Nginx, TLS, WARP, daemon runtime.
-- Operasional harian terpusat via `manage.sh` menu 1-11 (status, user, quota, network, security, maintenance, analytics, installer bot).
+- Operasional harian terpusat via `manage.sh` menu 1-13 (status, user, SSH, quota, network, security, maintenance, analytics, installer bot).
 - Bot Discord standalone dengan UX interaktif tombol/select/modal (`/panel` sebagai entry point minimal).
 - Bot Telegram standalone dengan UX interaktif tombol/select/modal (`/panel` + `/cleanup`).
 - Bot Telegram kini setara penuh kontrol WARP (status/restart/global/per-user/per-inbound/per-domain/tier/reconnect).
@@ -31,6 +31,7 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
 - Transport legacy non-default sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
+- SSH WebSocket aktif di port share `80/443` via `dropbear` + `stunnel4` + custom Python proxy (`path: /`).
 
 ## Quick Install (Root)
 ```bash
@@ -70,16 +71,18 @@ flowchart LR
 ```text
 Main Menu
   1) Status & Diagnostics
-  2) User Management
-  3) Quota & Access Control
-  4) Network Controls
-  5) Domain Control
-  6) Speedtest
-  7) Security
-  8) Maintenance
-  9) Traffic Analytics
-  10) Install BOT Discord
-  11) Install BOT Telegram
+  2) Xray Management
+  3) SSH Management
+  4) Xray Quota & Access Control
+  5) SSH Quota & Access Control
+  6) Network Controls
+  7) Domain Control
+  8) Speedtest
+  9) Security
+  10) Maintenance
+  11) Traffic Analytics
+  12) Install BOT Discord
+  13) Install BOT Telegram
   0) Exit
 ```
 
@@ -93,18 +96,20 @@ Header realtime di Main Menu menampilkan:
 | Menu | Fokus Operasional | Dampak |
 |---|---|---|
 | `1) Status & Diagnostics` | Cek status `xray/nginx`, daemon, TLS, listener, validasi config | Diagnosa cepat saat ada gangguan |
-| `2) User Management` | Add, delete, set expiry, list user | Lifecycle akun harian lebih efisien |
-| `3) Quota & Access Control` | Quota, block, IP limit, speed limit per user | Kontrol abuse lebih presisi |
-| `4) Network Controls` | Egress direct/warp/balancer, adblock geosite, DNS, WARP tier | Routing fleksibel sesuai kebutuhan |
-| `5) Domain Control` | Set domain + issue cert, cek status cert/key, domain guard | Manajemen domain dari satu menu |
-| `6) Speedtest` | Jalankan Ookla speedtest + cek versi | Verifikasi performa jaringan cepat |
-| `7) Security` | TLS ops, fail2ban, hardening status | Meningkatkan keamanan operasional |
-| `8) Maintenance` | Restart service/daemon, tail log, wireproxy status | Maintenance tanpa keluar panel |
-| `9) Traffic Analytics` | Overview traffic, top users, search user, export JSON report | Observabilitas pemakaian traffic lebih cepat |
-| `10) Install BOT Discord` | Launcher installer bot standalone (`/usr/local/bin/install-discord-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
-| `11) Install BOT Telegram` | Launcher installer bot standalone (`/usr/local/bin/install-telegram-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
+| `2) Xray Management` | Add, delete, set expiry, list user | Lifecycle akun harian lebih efisien |
+| `3) SSH Management` | Add/delete/extend/reset/list akun SSH Linux + status/restart SSH WS stack | Operasional akun SSH terpusat tanpa command manual |
+| `4) Xray Quota & Access Control` | Quota, block, IP limit, speed limit per user Xray | Kontrol abuse akun Xray tetap presisi |
+| `5) SSH Quota & Access Control` | Quota policy, manual block, login-limit lock, speed policy metadata akun SSH | Kontrol akses akun SSH lebih terstruktur |
+| `6) Network Controls` | Egress direct/warp/balancer, adblock geosite, DNS, WARP tier | Routing fleksibel sesuai kebutuhan |
+| `7) Domain Control` | Set domain + issue cert, cek status cert/key, domain guard | Manajemen domain dari satu menu |
+| `8) Speedtest` | Jalankan Ookla speedtest + cek versi | Verifikasi performa jaringan cepat |
+| `9) Security` | TLS ops, fail2ban, hardening status | Meningkatkan keamanan operasional |
+| `10) Maintenance` | Restart service/daemon, tail log, wireproxy status, SSH WS status/restart | Maintenance tanpa keluar panel |
+| `11) Traffic Analytics` | Overview traffic, top users, search user, export JSON report | Observabilitas pemakaian traffic lebih cepat |
+| `12) Install BOT Discord` | Launcher installer bot standalone (`/usr/local/bin/install-discord-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
+| `13) Install BOT Telegram` | Launcher installer bot standalone (`/usr/local/bin/install-telegram-bot`) | Setup, deploy, update, restart, dan uninstall bot dari menu |
 
-### Detail Penting: `3) Quota & Access Control`
+### Detail Penting: `4) Xray Quota & Access Control`
 ```text
 1) View JSON
 2) Set Quota Limit (GB)
@@ -125,7 +130,13 @@ Status detail akun menampilkan:
 - Lock reason: `manual`, `quota`, `ip_limit`
 - Speed download/upload + status speed limiter
 
-### Detail Penting: `4) Network Controls`
+### Detail Penting: `5) SSH Quota & Access Control`
+- Struktur menu detail mirip quota Xray (view JSON, set quota, reset used, manual block, limit login, speed policy).
+- Enforcement akses menggunakan lock/unlock akun Linux (`passwd -l/-u`) dengan lock owner `ssh_qac`.
+- `IP Limit` di konteks SSH diperlakukan sebagai limit sesi/login bersamaan.
+- Enforcer otomatis berjalan tiap 1 menit via `sshws-qac-enforcer.timer`.
+
+### Detail Penting: `6) Network Controls`
 - Egress mode: `direct`, `warp`, `balancer`
 - Balancer strategy, selector, observatory tuning
 - Adblock geosite custom (`ext:custom.dat:adblock`) dengan mode:
@@ -182,10 +193,12 @@ Stack default saat ini menyediakan endpoint berikut:
 - `ws`
 - `httpupgrade`
 - `grpc`
+- `ssh-ws` (`ws://<domain>:80/` dan `wss://<domain>:443/`, share port dengan nginx)
 
 Catatan:
 - Jalur transport non-default sudah dibersihkan dari template `setup.sh`, `manage.sh`, dan generator link bot.
 - Tujuan perubahan: mencegah masalah koneksi pada skenario domain fronting.
+- SSH WebSocket diproksikan lewat nginx `location = /` ke service lokal `sshws-proxy`.
 
 ## Protokol Akun Yang Didukung
 Stack provisioning/runtime saat ini mendukung protokol akun berikut:
@@ -210,7 +223,7 @@ Stack provisioning/runtime saat ini mendukung protokol akun berikut:
 Catatan custom geosite adblock:
 - Sumber: `https://github.com/superdecrypt-dev/custom-geosite-xray/raw/main/custom.dat`
 - Lokasi install: `/usr/local/share/xray/custom.dat`
-- Aktivasi routing dilakukan dari `manage.sh` -> `4) Network Controls` -> `6) Adblock (Custom Geosite)`
+- Aktivasi routing dilakukan dari `manage.sh` -> `6) Network Controls` -> `6) Adblock (Custom Geosite)`
 
 ## Daemon Runtime
 | Service | Fungsi |
@@ -258,6 +271,7 @@ Atau:
 | `Jalankan sebagai root` | Jalankan dengan `sudo` atau login root |
 | TLS issue gagal (dns_cf) | Pastikan token Cloudflare valid, scope DNS edit + zone read |
 | Speed limit tidak terasa | Cek service `xray-speed` dan status apply policy |
+| SSH WS tidak tersambung | Cek `systemctl status sshws-dropbear sshws-stunnel sshws-proxy nginx --no-pager` |
 | User tidak auto-lock/unlock | Cek service `xray-quota` + `xray-limit-ip` |
 | `Target Tier` unknown | Jalankan switch tier (Free/Plus) sekali agar target tersimpan |
 

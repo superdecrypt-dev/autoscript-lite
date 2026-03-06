@@ -40,6 +40,8 @@ Sudah tercakup di bagian preflight.
 
 ```bash
 printf "0\n" | timeout 20 bash manage.sh
+printf "3\n5\n0\n0\n" | timeout 30 bash manage.sh
+printf "5\n0\n0\n" | timeout 30 bash manage.sh
 bash install-discord-bot.sh status
 printf "0\n" | timeout 20 bash install-discord-bot.sh menu
 bash install-telegram-bot.sh status
@@ -49,6 +51,8 @@ printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
+- SSH menu (`3) SSH Management`) bisa dibuka, list user tampil aman walau data kosong.
+- Menu SSH QAC (`5) SSH Quota & Access Control`) bisa dibuka walau data user masih kosong.
 
 ### 3.3 Negative/Failure
 
@@ -80,11 +84,38 @@ Contoh pola (sesuaikan environment staging):
 ```bash
 systemctl status xray xray-expired xray-quota xray-limit-ip xray-speed --no-pager
 xray run -test -confdir /usr/local/etc/xray/conf.d
+systemctl status sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer --no-pager
 ```
 
 Kriteria lulus:
 - Service utama aktif.
 - Konfigurasi Xray valid.
+- Service SSH WS aktif (`sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`).
+- Timer enforcer SSH QAC aktif (`sshws-qac-enforcer.timer`).
+
+Khusus SSH WebSocket (staging):
+
+```bash
+# Handshake check non-TLS (port 80, path /)
+curl -i -N --max-time 5 \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  "http://<domain>/"
+
+# Handshake check TLS (port 443, path /)
+curl -k -i -N --max-time 5 \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  "https://<domain>/"
+```
+
+Kriteria lulus:
+- Kedua endpoint mengembalikan `101 Switching Protocols`.
+- Request non-upgrade ke `/` ditolak (`4xx`), path Xray lain tetap berfungsi.
 
 Khusus runtime bot Telegram:
 

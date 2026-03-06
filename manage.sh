@@ -99,10 +99,18 @@ OBS_LOCK_FILE="/var/lock/xray-observatory.lock"
 REPORT_DIR="/var/log/xray-manage"
 WARP_TIER_STATE_KEY="warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY="warp_plus_license_key"
+SSH_USERS_STATE_DIR="${WORK_DIR}/ssh-users"
+SSHWS_DROPBEAR_SERVICE="sshws-dropbear"
+SSHWS_STUNNEL_SERVICE="sshws-stunnel"
+SSHWS_PROXY_SERVICE="sshws-proxy"
+SSHWS_QAC_ENFORCER_SERVICE="sshws-qac-enforcer"
+SSHWS_QAC_ENFORCER_TIMER="sshws-qac-enforcer.timer"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}" \
-  "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}"
+  "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" \
+  "${SSH_USERS_STATE_DIR}" "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
+  "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
 MAIN_INFO_CACHE_TTL=300
@@ -142,6 +150,8 @@ fi
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
   chmod 700 "${WORK_DIR}"
+  mkdir -p "${SSH_USERS_STATE_DIR}"
+  chmod 700 "${SSH_USERS_STATE_DIR}" || true
 
   mkdir -p "$(dirname "${ROUTING_LOCK_FILE}")" 2>/dev/null || true
   mkdir -p "$(dirname "${DNS_LOCK_FILE}")" 2>/dev/null || true
@@ -2517,7 +2527,7 @@ account_view_flow() {
 
 account_search_flow() {
   title
-  echo "User Management > Search (read-only)"
+  echo "Xray Management > Search (read-only)"
   hr
   if ! have_cmd grep; then
     warn "grep tidak tersedia"
@@ -4902,7 +4912,7 @@ user_add_menu() {
   local page=0
   while true; do
     title
-    echo "User Management > Add user"
+    echo "Xray Management > Add user"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -4930,7 +4940,7 @@ user_add_menu() {
   done
 
   title
-  echo "User Management > Add user"
+  echo "Xray Management > Add user"
   hr
 
   ensure_account_quota_dirs
@@ -5160,7 +5170,7 @@ user_del_menu() {
   local page=0
   while true; do
     title
-    echo "User Management > Delete user"
+    echo "Xray Management > Delete user"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -5188,7 +5198,7 @@ user_del_menu() {
   done
 
   title
-  echo "User Management > Delete user"
+  echo "Xray Management > Delete user"
   hr
 
   ensure_account_quota_dirs
@@ -5258,7 +5268,7 @@ user_extend_expiry_menu() {
   local page=0
   while true; do
     title
-    echo "User Management > Extend/Set Expiry"
+    echo "Xray Management > Extend/Set Expiry"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -5286,7 +5296,7 @@ user_extend_expiry_menu() {
   done
 
   title
-  echo "User Management > Extend/Set Expiry"
+  echo "Xray Management > Extend/Set Expiry"
   hr
 
   ensure_account_quota_dirs
@@ -5554,7 +5564,7 @@ user_list_menu() {
   ACCOUNT_PAGE=0
   while true; do
     title
-    echo "User Management > List users (from ${ACCOUNT_ROOT})"
+    echo "Xray Management > List users (from ${ACCOUNT_ROOT})"
     hr
 
     account_collect_files
@@ -5597,7 +5607,7 @@ user_list_menu() {
 user_menu() {
   while true; do
     title
-    echo "2) User Management (Xray Accounts)"
+    echo "2) Xray Management"
     hr
     echo "  1. Add user"
     echo "  2. Delete user"
@@ -6423,7 +6433,7 @@ quota_edit_flow() {
 
   while true; do
     title
-    echo "Quota & Access Control > Detail"
+    echo "Xray Quota & Access Control > Detail"
     hr
     echo "Proto : ${proto}"
     echo "File  : ${qf}"
@@ -6686,7 +6696,7 @@ quota_menu() {
 
   while true; do
     title
-    echo "4) Quota & Access Control"
+    echo "4) Xray Quota & Access Control"
     hr
 
     quota_collect_files
