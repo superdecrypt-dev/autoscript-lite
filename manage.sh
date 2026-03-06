@@ -582,35 +582,6 @@ proto_menu_pick_to_value() {
   esac
 }
 
-hy2_bonus_enabled_proto() {
-  # HY2 dinonaktifkan dari project.
-  return 1
-}
-
-hy2_bonus_auth_user() {
-  return 1
-}
-
-hy2_bonus_account_json_path() {
-  return 1
-}
-
-hy2_generate_password() {
-  return 1
-}
-
-hy2_bonus_upsert_account() {
-  return 0
-}
-
-hy2_bonus_delete_account() {
-  return 0
-}
-
-hy2_sync_users_now() {
-  return 0
-}
-
 account_username_find_protos() {
   # args: username
   local username="$1"
@@ -4350,7 +4321,6 @@ meta={
   "quota_unit": "binary",
   "quota_used": 0,
   "xray_usage_bytes": 0,
-  "hy2_usage_bytes": 0,
   "xray_api_baseline_bytes": 0,
   "xray_usage_carry_bytes": 0,
   "xray_api_last_total_bytes": 0,
@@ -4902,7 +4872,6 @@ delete_account_artifacts() {
   delete_one_file "${acc_file_legacy}"
   delete_one_file "${quota_file}"
   delete_one_file "${quota_file_legacy}"
-  hy2_bonus_delete_account "${proto}" "${username}"
   speed_policy_remove "${proto}" "${username}"
 }
 
@@ -5240,9 +5209,6 @@ user_del_menu() {
 
   xray_delete_client "${proto}" "${username}"
   delete_account_artifacts "${proto}" "${username}"
-  if hy2_bonus_enabled_proto "${proto}"; then
-    hy2_sync_users_now || true
-  fi
   if ! speed_policy_sync_xray; then
     speed_sync_ok="false"
     warn "Delete user selesai, tetapi sinkronisasi speed policy gagal (cek log xray / konfigurasi routing)."
@@ -5545,10 +5511,6 @@ PY
   if [[ "${st_iplocked}" == "true" ]]; then
     xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" on
     log "IP limit routing di-restore setelah extend expiry (ip_limit_locked=true)."
-  fi
-
-  if hy2_bonus_enabled_proto "${proto}"; then
-    hy2_sync_users_now || true
   fi
 
   title
@@ -6269,7 +6231,6 @@ with open(lock_path, "a+", encoding="utf-8") as lf:
     elif action == "reset_quota_used_recompute":
       d["quota_used"] = 0
       d["xray_usage_bytes"] = 0
-      d["hy2_usage_bytes"] = 0
       d["xray_api_last_total_bytes"] = 0
       d["xray_usage_carry_bytes"] = 0
       d["xray_usage_reset_pending"] = True
@@ -6510,7 +6471,6 @@ quota_edit_flow() {
         fi
         qb="$(bytes_from_gb "${gb_num}")"
         quota_atomic_update_file "${qf}" set_quota_limit_recompute "${qb}"
-        hy2_sync_users_now || true
         log "Quota limit diubah: ${gb_num} GB"
         pause
         ;;
@@ -6519,7 +6479,6 @@ quota_edit_flow() {
         # BUG-05 fix: correct priority quota > ip_limit.
         quota_atomic_update_file "${qf}" reset_quota_used_recompute
         xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" off
-        hy2_sync_users_now || true
         log "Quota used di-reset: 0 (status quota dibersihkan)"
         pause
         ;;
@@ -6533,12 +6492,10 @@ quota_edit_flow() {
           # BUG-05 fix applied here too: correct priority is quota > ip_limit (not reversed).
           quota_atomic_update_file "${qf}" manual_block_set off
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" off
-          hy2_sync_users_now || true
           log "Manual block: OFF"
         else
           quota_atomic_update_file "${qf}" manual_block_set on
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" on
-          hy2_sync_users_now || true
           log "Manual block: ON"
         fi
         pause
@@ -6552,12 +6509,10 @@ quota_edit_flow() {
           quota_atomic_update_file "${qf}" ip_limit_enabled_set off
           xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" off
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
-          hy2_sync_users_now || true
           log "IP limit: OFF"
         else
           quota_atomic_update_file "${qf}" ip_limit_enabled_set on
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
-          hy2_sync_users_now || true
           log "IP limit: ON"
         fi
         account_info_refresh_warn "${proto}" "${speed_username}" || true
@@ -6575,7 +6530,6 @@ quota_edit_flow() {
         fi
         quota_atomic_update_file "${qf}" set_ip_limit "${lim}"
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
-        hy2_sync_users_now || true
         log "IP limit diubah: ${lim}"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6586,7 +6540,6 @@ quota_edit_flow() {
         # BUG-05 fix: correct priority quota > ip_limit.
         quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
-        hy2_sync_users_now || true
         log "IP lock di-unlock"
         pause
         ;;
@@ -6605,7 +6558,6 @@ quota_edit_flow() {
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
-        hy2_sync_users_now || true
         log "Speed download diubah: ${speed_down_input} Mbps"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6625,7 +6577,6 @@ quota_edit_flow() {
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
-        hy2_sync_users_now || true
         log "Speed upload diubah: ${speed_up_input} Mbps"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
@@ -6636,7 +6587,6 @@ quota_edit_flow() {
         if [[ "${speed_on}" == "true" ]]; then
           quota_atomic_update_file "${qf}" speed_limit_set off
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
-          hy2_sync_users_now || true
           log "Speed limit: OFF"
           account_info_refresh_warn "${proto}" "${speed_username}" || true
           pause
@@ -6673,7 +6623,6 @@ quota_edit_flow() {
 
         quota_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
         quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
-        hy2_sync_users_now || true
         log "Speed limit: ON"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause

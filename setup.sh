@@ -2166,8 +2166,6 @@ EOF
   ok "Nginx reverse proxy aktif (public paths -> internal port/path via map \$uri)."
 }
 
-# Hysteria2 sudah dihapus dari stack default. Fungsi ini sengaja ditiadakan.
-
 install_sshws_stack() {
   ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy)..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
@@ -2859,18 +2857,6 @@ EOF
     warn "Gagal mengaktifkan sshws-qac-enforcer.timer. Cek: systemctl status sshws-qac-enforcer.timer --no-pager"
   fi
 }
-
-remove_hysteria2_components() {
-  ok "Menonaktifkan komponen Hysteria2 (jika ada)..."
-  systemctl disable --now hysteria-server xray-hy2-sync >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/hysteria-server.service /etc/systemd/system/xray-hy2-sync.service
-  rm -f /usr/local/bin/hy2-auth /usr/local/bin/hy2-sync-users /usr/local/bin/hysteria
-  rm -f /etc/hysteria/client.txt
-  rm -rf /etc/hysteria /opt/account/hysteria2
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  ok "Komponen Hysteria2 dinonaktifkan."
-}
-
 
 # =========================
 # Add-ons: WARP (wgcf + wireproxy), fail2ban aggressive, BBR, swap, ulimit, chrony
@@ -4698,14 +4684,12 @@ def fetch_all_user_traffic(api_server):
     totals[email] = parse_int(d.get("uplink")) + parse_int(d.get("downlink"))
   return totals
 
-def ensure_quota_status(meta, exhausted, q_limit, xray_used, hy2_used, q_unit, bpg):
+def ensure_quota_status(meta, exhausted, q_limit, xray_used, q_unit, bpg):
   st_raw = meta.get("status") if isinstance(meta, dict) else {}
   st = st_raw if isinstance(st_raw, dict) else {}
   changed = False
 
   xray_used_eff = max(0, parse_int(xray_used))
-  hy2_used_eff = max(0, parse_int(hy2_used))
-  q_used_eff = xray_used_eff + hy2_used_eff
 
   if meta.get("quota_limit") != q_limit:
     meta["quota_limit"] = q_limit
@@ -4715,12 +4699,8 @@ def ensure_quota_status(meta, exhausted, q_limit, xray_used, hy2_used, q_unit, b
     meta["xray_usage_bytes"] = xray_used_eff
     changed = True
 
-  if parse_int(meta.get("hy2_usage_bytes")) != hy2_used_eff:
-    meta["hy2_usage_bytes"] = hy2_used_eff
-    changed = True
-
-  if meta.get("quota_used") != q_used_eff:
-    meta["quota_used"] = q_used_eff
+  if meta.get("quota_used") != xray_used_eff:
+    meta["quota_used"] = xray_used_eff
     changed = True
 
   if meta.get("quota_unit") != q_unit:
@@ -4813,8 +4793,7 @@ def run_once(config_path, marker, api_server, dry_run=False):
         raw_limit = parse_int(meta.get("quota_limit"))
         q_limit, q_unit, bpg = normalize_quota_limit(meta, raw_limit)
         prev_used = parse_int(meta.get("quota_used"))
-        prev_hy2_used = parse_int(meta.get("hy2_usage_bytes"))
-        prev_xray_used = parse_int(meta.get("xray_usage_bytes") if "xray_usage_bytes" in meta else max(prev_used - prev_hy2_used, 0))
+        prev_xray_used = parse_int(meta.get("xray_usage_bytes") if "xray_usage_bytes" in meta else prev_used)
         baseline = max(0, parse_int(meta.get("xray_api_baseline_bytes")))
         carry = max(0, parse_int(meta.get("xray_usage_carry_bytes")))
         last_total = max(0, parse_int(meta.get("xray_api_last_total_bytes")))
@@ -4866,10 +4845,8 @@ def run_once(config_path, marker, api_server, dry_run=False):
           meta["xray_api_last_total_bytes"] = last_total
           meta_changed = True
 
-        hy2_used = prev_hy2_used
-        q_used = xray_used + hy2_used
-        exhausted = (q_limit > 0 and q_used >= q_limit)
-        if ensure_quota_status(meta, exhausted, q_limit, xray_used, hy2_used, q_unit, bpg):
+        exhausted = (q_limit > 0 and xray_used >= q_limit)
+        if ensure_quota_status(meta, exhausted, q_limit, xray_used, q_unit, bpg):
           meta_changed = True
 
         if meta_changed and not dry_run:
@@ -6849,7 +6826,6 @@ main() {
   install_sshws_stack
   install_sshws_qac_enforcer
   install_management_scripts
-  remove_hysteria2_components
   sync_manage_modules_layout
   install_xray_speed_limiter_foundation
   install_observability_alerting
