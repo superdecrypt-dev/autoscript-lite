@@ -30,8 +30,8 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Installer bot terpisah (`install-discord-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
-- Transport legacy non-default sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
-- SSH WebSocket aktif di port share `80/443` via `dropbear` + `stunnel4` + custom Python proxy (`path: /`, mode legacy payload).
+- Transport non-default terdepresiasi sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
+- SSH WebSocket aktif di port share `80/443` via `dropbear` + `stunnel4` + custom Python proxy (`path: /`, mode autoscript-stream payload).
 
 ## Quick Install (Root)
 ```bash
@@ -45,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 
 Catatan path source:
 - Canonical source installer: `/opt/autoscript`
-- Alias kompatibilitas lama: `/root/xray-core_discord`
+- Alias kompatibilitas historis: `/root/xray-core_discord`
 
 ## Alur Operasional
 ```mermaid
@@ -199,7 +199,8 @@ Catatan:
 - Jalur transport non-default sudah dibersihkan dari template `setup.sh`, `manage.sh`, dan generator link bot.
 - Tujuan perubahan: mencegah masalah koneksi pada skenario domain fronting.
 - SSH WebSocket diproksikan lewat nginx `location = /` ke service lokal `sshws-proxy`.
-- SSHWS saat ini memakai mode legacy payload (tanpa `Sec-WebSocket-*` wajib).
+- Konsep SSHWS yang dipakai adalah pola autoscript-stream (stream raw TCP setelah `101`, bukan mode hybrid).
+- SSHWS saat ini memakai mode autoscript-stream payload (tanpa `Sec-WebSocket-*` wajib).
 - Jika backend internal `sshws-stunnel` down/tidak siap, endpoint SSHWS merespons `502 Bad Gateway` (bukan `101`).
 
 ## Protokol Akun Yang Didukung

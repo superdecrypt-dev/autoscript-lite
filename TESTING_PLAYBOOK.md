@@ -94,14 +94,15 @@ Kriteria lulus:
 - Timer enforcer SSH QAC aktif (`sshws-qac-enforcer.timer`).
 
 Khusus SSH WebSocket (staging):
+- Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
 
 ```bash
-# Handshake check non-TLS (legacy payload, port 80)
+# Handshake check non-TLS (autoscript-stream payload, port 80)
 curl -i -N --max-time 5 \
   -H "Upgrade: websocket" \
   "http://<domain>/?ed=2048"
 
-# Handshake check TLS (legacy payload, port 443)
+# Handshake check TLS (autoscript-stream payload, port 443)
 curl -k -i -N --max-time 5 \
   -H "Upgrade: websocket" \
   "https://<domain>/?ed=2048"

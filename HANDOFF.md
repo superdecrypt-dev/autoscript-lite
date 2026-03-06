@@ -8,18 +8,18 @@ Agent AI baru wajib memulai dari konteks di atas.
 ## Baseline Saat Ini
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
 - Workspace aktif (Codex): `/project/autoscript`
-- Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas lama: `/root/xray-core_discord`)
+- Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas historis: `/root/xray-core_discord`)
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
 ## Status Operasional Terkini (2026-03-06)
 - Commit terbaru di `main`:
   - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
-  - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws to legacy mode`
+  - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
   - `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
   - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
 - Perubahan penting terbaru:
-  - SSHWS mode runtime sekarang legacy-compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload style lama.
+  - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
   - SSHWS handshake kini fail-close:
     - backend internal down -> `502 Bad Gateway`
     - backend internal ready -> `101 Switching Protocols`
@@ -48,12 +48,12 @@ Agent AI baru wajib memulai dari konteks di atas.
 3. Penyederhanaan Domain Control (`Manual` vs `Auto`) dengan root domain select.
 4. Penambahan Observability + Domain Guard + Traffic Analytics.
 5. Penambahan installer Telegram (`install-telegram-bot.sh`) sebagai pelengkap menu CLI.
-6. Penghapusan jalur transport legacy untuk menstabilkan skenario domain fronting.
+6. Penghapusan jalur transport terdepresiasi untuk menstabilkan skenario domain fronting.
 7. Full parity WARP + hardening baseline bot Telegram.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSHWS legacy + runtime hardening loader module sudah commit + push ke `main` (`87b43fb`, `edd9852`).
+- Perubahan SSHWS autoscript-stream + runtime hardening loader module sudah commit + push ke `main` (`87b43fb`, `edd9852`).
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.
@@ -89,4 +89,4 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Jika ada konflik langkah uji antar dokumen, prioritaskan `TESTING_PLAYBOOK.md` lalu sinkronkan dokumen lain.
 
 ## Catatan Risiko Diterima
-- Hardcoded Cloudflare token pada lokasi legacy diperlakukan sebagai accepted risk/by design, kecuali ada instruksi eksplisit untuk mengubah.
+- Hardcoded Cloudflare token pada lokasi historis diperlakukan sebagai accepted risk/by design, kecuali ada instruksi eksplisit untuk mengubah.

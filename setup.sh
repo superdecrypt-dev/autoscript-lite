@@ -35,7 +35,7 @@ SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
 NGINX_SIGNING_KEY_FPRS="${NGINX_SIGNING_KEY_FPRS:-8540A6F18833A80E9C1653A42FD21310B49F6B46 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3}"
-# Backward compatibility: jika user hanya set 1 fingerprint via env lama.
+# Backward compatibility: jika user hanya set 1 fingerprint via env sebelumnya.
 NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-}"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
@@ -910,12 +910,12 @@ install_nginx_official_repo() {
 
   ensure_dpkg_consistent
   if nginx_installed_from_nginx_org; then
-    ok "Nginx mainline dari nginx.org sudah terpasang; skip uninstall paket nginx lama."
+    ok "Nginx mainline dari nginx.org sudah terpasang; skip uninstall paket nginx distro."
   elif dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-common 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-full 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-core 2>/dev/null | grep -q "install ok installed"; then
-    ok "Migrasi paket Nginx lama ke nginx.org mainline..."
+    ok "Migrasi paket Nginx distro ke nginx.org mainline..."
     apt_get_with_lock_retry remove -y nginx nginx-common nginx-full nginx-core 2>/dev/null || true
   fi
 
@@ -1026,7 +1026,7 @@ install_acme_and_issue_cert() {
     [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong untuk mode wildcard dns_cf."
     ok "Issue sertifikat wildcard untuk ${DOMAIN} via acme.sh (dns_cf)..."
 
-    # Beberapa instalasi lama tidak membawa dnsapi hook. Pulihkan otomatis jika hilang.
+    # Beberapa instalasi sebelumnya tidak membawa dnsapi hook. Pulihkan otomatis jika hilang.
     if [[ ! -s /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
       warn "dns_cf hook tidak ditemukan, mencoba bootstrap dari ref ${ACME_SH_INSTALL_REF} ..."
       mkdir -p /root/.acme.sh/dnsapi
@@ -1123,7 +1123,7 @@ PY
   P_API="10080"
 
   if ! is_port_free "$P_API"; then
-    warn "Port API Xray (${P_API}) sedang dipakai. Mencoba stop service xray lama..."
+    warn "Port API Xray (${P_API}) sedang dipakai. Mencoba stop service xray sebelumnya..."
     if command -v systemctl >/dev/null 2>&1; then
       systemctl stop xray >/dev/null 2>&1 || true
       sleep 1
@@ -2007,7 +2007,7 @@ write_nginx_main_conf() {
 
   # Hindari konflik dari default server bawaan paket nginx.org
   rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
-  # Hindari warning/konflik dari xray.conf lama saat validasi nginx -t awal.
+  # Hindari warning/konflik dari xray.conf sebelumnya saat validasi nginx -t awal.
   rm -f "${NGINX_CONF}" 2>/dev/null || true
 
   cat > /etc/nginx/nginx.conf <<EOF
@@ -2255,7 +2255,7 @@ install_sshws_stack() {
   install -d -m 755 /etc/stunnel
   install -d -m 755 /run/stunnel
 
-  # Migrasi: hapus nama unit lama yang masih memakai prefix "xray-sshws".
+  # Migrasi: hapus nama unit historis yang masih memakai prefix "xray-sshws".
   systemctl disable --now xray-sshws-dropbear xray-sshws-stunnel xray-sshws-proxy >/dev/null 2>&1 || true
   # Pastikan unit baru juga dihentikan dulu agar validasi port tidak false-positive saat reinstall.
   systemctl disable --now sshws-dropbear sshws-stunnel sshws-proxy >/dev/null 2>&1 || true
@@ -2338,6 +2338,8 @@ class HandshakeError(Exception):
     self.code = code
     self.reason = reason
 
+HANDSHAKE_TIMEOUT_DEFAULT = 10.0
+
 
 async def _send_http_error(writer, code, reason):
   body = "{} {}\n".format(code, reason).encode("utf-8")
@@ -2352,9 +2354,11 @@ async def _send_http_error(writer, code, reason):
   await writer.drain()
 
 
-async def _read_handshake(reader, expected_path):
+async def _read_handshake(reader, expected_path, timeout_sec):
   try:
-    raw = await reader.readuntil(b"\r\n\r\n")
+    raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout_sec)
+  except asyncio.TimeoutError as exc:
+    raise HandshakeError(408, "Request Timeout") from exc
   except (asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
     raise HandshakeError(400, "Bad Request") from exc
 
@@ -2373,7 +2377,7 @@ async def _read_handshake(reader, expected_path):
   method = req[0]
   target = req[1]
 
-  # Legacy payload bisa memakai origin-form ("/"), query ("/?ed=..."),
+  # Payload autoscript-stream bisa memakai origin-form ("/"), query ("/?ed=..."),
   # atau absolute-form ("wss://host/path"). Normalisasi ke path HTTP.
   if "://" in target:
     try:
@@ -2414,7 +2418,7 @@ async def _read_handshake(reader, expected_path):
 
 
 async def _send_handshake_ok(writer):
-  # Mode legacy penuh ala sshws nanotechid/supreme:
+  # Mode autoscript-stream:
   # cukup respons 101, lalu stream raw TCP.
   resp = (
     "HTTP/1.1 101 Switching Protocols\r\n"
@@ -2425,7 +2429,7 @@ async def _send_handshake_ok(writer):
   await writer.drain()
 
 
-async def _legacy_to_backend(client_reader, backend_writer):
+async def _client_to_backend(client_reader, backend_writer):
   while True:
     data = await client_reader.read(16384)
     if not data:
@@ -2440,7 +2444,7 @@ async def _legacy_to_backend(client_reader, backend_writer):
     pass
 
 
-async def _backend_to_legacy(backend_reader, client_writer):
+async def _backend_to_client(backend_reader, client_writer):
   while True:
     data = await backend_reader.read(16384)
     if not data:
@@ -2451,7 +2455,7 @@ async def _backend_to_legacy(backend_reader, client_writer):
 
 async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
   try:
-    await _read_handshake(ws_reader, args.path)
+    await _read_handshake(ws_reader, args.path, args.handshake_timeout)
   except HandshakeError as exc:
     await _send_http_error(ws_writer, exc.code, exc.reason)
     ws_writer.close()
@@ -2486,8 +2490,8 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
 
   try:
     await _send_handshake_ok(ws_writer)
-    pump1 = asyncio.create_task(_legacy_to_backend(ws_reader, backend_writer))
-    pump2 = asyncio.create_task(_backend_to_legacy(backend_reader, ws_writer))
+    pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer))
+    pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
       task.cancel()
@@ -2543,11 +2547,14 @@ def _parse_args():
   parser.add_argument("--backend-host", default="127.0.0.1")
   parser.add_argument("--backend-port", type=int, default=22443)
   parser.add_argument("--path", default="/")
+  parser.add_argument("--handshake-timeout", type=float, default=HANDSHAKE_TIMEOUT_DEFAULT)
   return parser.parse_args()
 
 
 def main():
   args = _parse_args()
+  if args.handshake_timeout <= 0:
+    args.handshake_timeout = HANDSHAKE_TIMEOUT_DEFAULT
   asyncio.run(_run(args))
 
 
@@ -2565,7 +2572,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port ${SSHWS_PROXY_PORT} --backend-host 127.0.0.1 --backend-port ${SSHWS_STUNNEL_PORT} --path /
+ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port ${SSHWS_PROXY_PORT} --backend-host 127.0.0.1 --backend-port ${SSHWS_STUNNEL_PORT} --path / --handshake-timeout 10
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -2579,16 +2586,16 @@ EOF
   service_enable_restart_checked sshws-stunnel || die "Gagal mengaktifkan sshws-stunnel."
   service_enable_restart_checked sshws-proxy || die "Gagal mengaktifkan sshws-proxy."
 
-  # Legacy stunnel4 tidak lagi diperlukan setelah stack dedicated aktif.
+  # stunnel4 distro tidak lagi diperlukan setelah stack dedicated aktif.
   systemctl disable --now stunnel4 >/dev/null 2>&1 || true
 
-  # Hindari lockout: dropbear legacy hanya didisable jika fallback OpenSSH aktif.
+  # Hindari lockout: dropbear distro hanya didisable jika fallback OpenSSH aktif.
   # Jangan stop langsung agar sesi admin yang mungkin sedang via dropbear tidak terputus.
   if systemctl is-active --quiet ssh >/dev/null 2>&1 || systemctl is-active --quiet sshd >/dev/null 2>&1; then
     systemctl disable dropbear >/dev/null 2>&1 || true
-    ok "Legacy dropbear diset disabled (fallback OpenSSH aktif)."
+    ok "Dropbear distro diset disabled (fallback OpenSSH aktif)."
   else
-    warn "Legacy dropbear dipertahankan untuk mencegah lockout SSH (OpenSSH tidak aktif)."
+    warn "Dropbear distro dipertahankan untuk mencegah lockout SSH (OpenSSH tidak aktif)."
   fi
   ok "SSH WebSocket stack aktif (dropbear/stunnel/proxy)."
 }
@@ -3285,7 +3292,7 @@ expect {
 }
 EOF
     else
-      # Fallback legacy (lebih rentan), tapi tetap kita log.
+      # Fallback kompatibilitas (lebih rentan), tapi tetap kita log.
       set +o pipefail
       yes | wgcf register >"$reg_log" 2>&1 || true
       set -o pipefail
@@ -3321,7 +3328,7 @@ setup_wireproxy() {
   cp -f /etc/wgcf/wgcf-profile.conf /etc/wireproxy/config.conf
 
   # wireproxy v1.0.9 memakai section [Socks5], bukan [Socks].
-  # Rebuild section SOCKS agar idempotent dan menghindari salah format lama.
+  # Rebuild section SOCKS agar idempotent dan menghindari salah format kompatibilitas.
   local wp_conf="/etc/wireproxy/config.conf"
   local wp_tmp
   wp_tmp="$(mktemp)"
@@ -3481,7 +3488,7 @@ setup_logrotate() {
 }
 EOF
 
-  # Jika ada mekanisme cron truncate lama, hapus supaya tidak double.
+  # Jika ada mekanisme cron truncate sebelumnya, hapus supaya tidak double.
   rm -f /etc/cron.d/cleanup-xray-nginx-logs /usr/local/bin/cleanup-xray-nginx-logs 2>/dev/null || true
 
   ok "Logrotate aktif: /etc/logrotate.d/xray-nginx"
@@ -3664,7 +3671,7 @@ def quota_key_from_path(path):
   return os.path.splitext(os.path.basename(path))[0]
 
 def canonical_email(proto, user_key):
-  # Legacy quota file bisa bernama "username.json" (tanpa @proto).
+  # Quota file format kompatibilitas bisa bernama "username.json" (tanpa @proto).
   # Untuk operasi config Xray, normalisasikan ke format email "username@proto".
   if not user_key:
     return user_key
@@ -3692,18 +3699,18 @@ def delete_user_artifacts(proto, user_key, quota_path):
   # 2) account txt (format baru): /opt/account/<proto>/<username@proto>.txt
   _remove_file(os.path.join(ACCOUNT_ROOT, proto, f"{user_key}.txt"))
 
-  # 3) account txt (format lama/legacy): /opt/account/<proto>/<username>.txt
+  # 3) account txt (format kompatibilitas): /opt/account/<proto>/<username>.txt
   # Konsisten dengan manage.sh delete_account_artifacts yang juga hapus keduanya.
   bare = user_key.split("@")[0] if "@" in user_key else user_key
   if bare != user_key:
     _remove_file(os.path.join(ACCOUNT_ROOT, proto, f"{bare}.txt"))
 
-  # 4) quota json legacy: /opt/quota/<proto>/<username>.json
-  # Jika ada sisa file lama, bersihkan juga.
+  # 4) quota json format kompatibilitas: /opt/quota/<proto>/<username>.json
+  # Jika ada sisa file kompatibilitas, bersihkan juga.
   if bare != user_key:
     _remove_file(os.path.join(QUOTA_ROOT, proto, f"{bare}.json"))
 
-  # 5) speed policy (format baru + fallback legacy)
+  # 5) speed policy (format baru + fallback format kompatibilitas)
   speed_candidates = {
     os.path.join(SPEED_ROOT, proto, f"{user_key}.json"),
     os.path.join(SPEED_ROOT, proto, f"{bare}@{proto}.json"),
@@ -4007,9 +4014,9 @@ def remove_user(rule, username):
 
 def quota_paths(username):
   """Kembalikan semua path quota JSON yang cocok untuk username.
-  Mendukung format baru (username@proto.json) dan lama (username.json).
+  Mendukung format baru (username@proto.json) dan format kompatibilitas (username.json).
   Jika username berisi '@', hanya cari di proto yang sesuai (bukan semua proto).
-  Jika bare username, coba username@proto.json dulu di semua proto lalu fallback legacy."""
+  Jika bare username, coba username@proto.json dulu di semua proto lalu fallback format kompatibilitas."""
   paths = []
   if "@" in username:
     # Full email (mis. "alice@vless"): ekstrak proto dari email, cari hanya di proto itu.
@@ -4031,7 +4038,7 @@ def quota_paths(username):
         if os.path.isfile(p) and p not in paths:
           paths.append(p)
   else:
-    # Bare username: coba username@proto.json (format baru manage.sh) lalu fallback legacy
+    # Bare username: coba username@proto.json (format baru manage.sh) lalu fallback format kompatibilitas
     for proto in PROTO_DIRS:
       candidates = [
         os.path.join(QUOTA_ROOT, proto, f"{username}@{proto}.json"),
@@ -4085,7 +4092,7 @@ def lock_user(username):
     st = st_raw if isinstance(st_raw, dict) else {}
     st["ip_limit_locked"] = True
     # Hanya set lock_reason='ip_limit' jika tidak ada lock prioritas lebih tinggi
-    # BUG-FIX #5: prioritas seragam: manual > quota > ip_limit (komentar lama salah).
+    # BUG-FIX #5: prioritas seragam: manual > quota > ip_limit (komentar sebelumnya salah).
     # lock_user hanya cek manual_block karena saat ip_limit trigger, quota belum tentu exhausted;
     # xray-quota akan set lock_reason=quota jika memang quota exhausted juga.
     if not bool(st.get("manual_block", False)):
@@ -4411,7 +4418,7 @@ def remove_user(rule, username):
 
 def quota_paths_for_user(username):
   """Kembalikan path quota JSON untuk username.
-  Mendukung format baru (username@proto.json) dan lama (username.json).
+  Mendukung format baru (username@proto.json) dan format kompatibilitas (username.json).
   Jika username berisi '@', prioritaskan proto yang sesuai sebelum fallback ke semua proto."""
   paths = []
   if "@" in username:

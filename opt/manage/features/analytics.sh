@@ -1387,11 +1387,11 @@ ssh_account_info_password_mode() {
 }
 
 ssh_state_dirs_prepare() {
-  local legacy_dir="/var/lib/xray-manage/ssh-users"
+  local compat_state_dir="/var/lib/xray-manage/ssh-users"
   mkdir -p "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" || true
 
-  if [[ -d "${legacy_dir}" && "${legacy_dir}" != "${SSH_USERS_STATE_DIR}" ]]; then
+  if [[ -d "${compat_state_dir}" && "${compat_state_dir}" != "${SSH_USERS_STATE_DIR}" ]]; then
     local f base username dst
     while IFS= read -r -d '' f; do
       base="$(basename "${f}")"
@@ -1403,11 +1403,11 @@ ssh_state_dirs_prepare() {
         cp -a "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
       elif [[ "${f}" -nt "${dst}" ]]; then
-        # Jika legacy lebih baru, sinkronkan agar metadata terbaru tidak hilang.
+        # Jika file kompatibilitas lebih baru, sinkronkan agar metadata terbaru tidak hilang.
         cp -f "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
       fi
-    done < <(find "${legacy_dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+    done < <(find "${compat_state_dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
   fi
 
   local f base username dst
@@ -1422,11 +1422,11 @@ ssh_state_dirs_prepare() {
         mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
       elif [[ "${f}" -nt "${dst}" ]]; then
-        # Pilih versi paling baru ketika format lama & baru sama-sama ada.
+        # Pilih versi paling baru ketika format kompatibilitas & format canonical sama-sama ada.
         mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
       else
-        # Duplicate lama tidak dibutuhkan lagi setelah format @ssh dipakai.
+        # Duplikat format kompatibilitas tidak dibutuhkan lagi setelah format @ssh dipakai.
         rm -f "${f}" >/dev/null 2>&1 || true
       fi
     fi
@@ -2028,12 +2028,46 @@ ssh_read_password_confirm() {
   return 0
 }
 
+ssh_add_user_rollback() {
+  # args: username qf acc_file reason
+  local username="${1:-}"
+  local qf="${2:-}"
+  local acc_file="${3:-}"
+  local reason="${4:-Gagal membuat akun SSH.}"
+  local deleted="false"
+
+  if id "${username}" >/dev/null 2>&1; then
+    if userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1; then
+      deleted="true"
+    fi
+  else
+    deleted="true"
+  fi
+
+  if [[ "${deleted}" == "true" ]]; then
+    if [[ -n "${qf}" ]]; then
+      rm -f "${qf}" "${SSH_USERS_STATE_DIR}/${username}.json" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${acc_file}" ]]; then
+      rm -f "${acc_file}" "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
+    fi
+    warn "${reason}"
+    return 0
+  fi
+
+  # Hindari orphan-silent: saat userdel gagal, pertahankan metadata agar status masih terlihat.
+  warn "${reason}"
+  warn "Rollback parsial: gagal menghapus user Linux '${username}'."
+  warn "Metadata dipertahankan. Jalankan manual: userdel -r '${username}'"
+  return 1
+}
+
 ssh_add_user_menu() {
   title
   echo "3) SSH Management > Add SSH User"
   hr
 
-  local username
+  local username qf acc_file
   if ! read -r -p "Username SSH (atau kembali): " username; then
     echo
     return 0
@@ -2052,6 +2086,8 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
+  qf="$(ssh_user_state_file "${username}")"
+  acc_file="$(ssh_account_info_file "${username}")"
 
   local password=""
   if ! ssh_read_password_confirm password; then
@@ -2190,32 +2226,25 @@ ssh_add_user_menu() {
   fi
 
   if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    warn "Gagal set password user '${username}'."
+    ssh_add_user_rollback "${username}" "" "" "Gagal set password user '${username}'."
     pause
     return 0
   fi
 
   if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    warn "Gagal set expiry user '${username}'."
+    ssh_add_user_rollback "${username}" "" "" "Gagal set expiry user '${username}'."
     pause
     return 0
   fi
 
   if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    warn "Gagal menulis metadata akun SSH."
+    ssh_add_user_rollback "${username}" "${qf}" "" "Gagal menulis metadata akun SSH."
     pause
     return 0
   fi
 
-  local qf
-  qf="$(ssh_user_state_file "${username}")"
   if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    rm -f "${qf}" >/dev/null 2>&1 || true
-    warn "Gagal set quota metadata SSH."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH."
     pause
     return 0
   fi
@@ -2246,24 +2275,18 @@ ssh_add_user_menu() {
   fi
 
   if [[ -n "${add_fail_msg}" ]]; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    rm -f "${qf}" "$(ssh_account_info_file "${username}")" >/dev/null 2>&1 || true
-    warn "${add_fail_msg}"
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}"
     pause
     return 0
   fi
 
   ssh_qac_enforce_now_warn "${username}" || true
   if ! ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"; then
-    userdel -r "${username}" >/dev/null 2>&1 || true
-    rm -f "${qf}" "$(ssh_account_info_file "${username}")" >/dev/null 2>&1 || true
-    warn "Gagal menulis SSH account info."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info."
     pause
     return 0
   fi
 
-  local acc_file
-  acc_file="$(ssh_account_info_file "${username}")"
   log "Akun SSH berhasil dibuat: ${username}"
   title
   echo "Add SSH user sukses ✅"

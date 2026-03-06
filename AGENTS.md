@@ -3,7 +3,7 @@
 ## Identitas Proyek (Terkini)
 - Nama proyek/repo aktif: `autoscript`
 - Remote utama: `https://github.com/superdecrypt-dev/autoscript`
-- Source kerja installer `run.sh` di VPS: `/opt/autoscript` (alias kompatibilitas lama: `/root/xray-core_discord`)
+- Source kerja installer `run.sh` di VPS: `/opt/autoscript` (alias kompatibilitas historis: `/root/xray-core_discord`)
 - Deploy bot Discord tetap: `/opt/bot-discord`
 - Deploy bot Telegram tetap: `/opt/bot-telegram`
 
@@ -48,14 +48,14 @@ Ikuti konvensi commit yang sudah dipakai: `feat`, `fix`, `docs`, `chore`, `refac
 ## Keamanan & Konfigurasi
 Jangan commit token/secret/key. Simpan rahasia pada env file (contoh: `/etc/xray-discord-bot/bot.env`) dan gunakan masking saat ditampilkan. Semua skrip diasumsikan berjalan sebagai root; selalu uji dulu di VPS non-produksi sebelum rollout ke produksi.
 Standar OAuth2 invite bot Discord: gunakan scope `bot` + `applications.commands`, dengan permissions minimum `View Channels`, `Send Messages`, `Embed Links`, `Read Message History` (permission integer `84992`). Hindari permission `Administrator`; tambahkan `Attach Files` hanya jika fitur kirim file log memang dipakai.
-Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi legacy tertentu diperlakukan sebagai by design (accepted risk) dan diabaikan dalam review rutin, kecuali ada instruksi eksplisit untuk mengubahnya.
+Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi historis tertentu diperlakukan sebagai by design (accepted risk) dan diabaikan dalam review rutin, kecuali ada instruksi eksplisit untuk mengubahnya.
 
 ## Catatan Handoff (Ringkas)
 - Bot Discord dijaga standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 - Bot Telegram juga dijaga standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh alur CLI.
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
-- SSHWS saat ini berjalan pada mode legacy payload (tanpa `Sec-WebSocket-*` wajib) dengan fail-close `502` jika backend internal tidak siap.
+- SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib) dengan fail-close `502` jika backend internal tidak siap.
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.
@@ -63,13 +63,13 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi legacy 
 ## Aktivitas Terkini (Update 2026-03-06)
 - Fokus sprint terbaru: stabilisasi runtime SSHWS + hardening module loader `manage.sh` + sinkronisasi dokumentasi.
 - Perubahan besar yang sudah dilalui:
-  - SSHWS berpindah ke mode legacy penuh untuk kompatibilitas payload lama.
+  - SSHWS berpindah ke mode autoscript-stream penuh untuk kompatibilitas payload klien.
   - Guard runtime SSHWS: backend down -> `502 Bad Gateway`, backend up -> `101 Switching Protocols`.
   - `Add SSH User` kini wajib input masa aktif (hari) dan mendukung `0` sebagai `back`.
   - Resolver source modul `manage.sh` di-hardening dengan validasi `trusted + lengkap`.
   - Path normalisasi handshake SSHWS kini kompatibel untuk `/`, `/?ed=...`, dan `wss://host/path?...`.
 - Commit terbaru yang sudah di-push:
-  - `87b43fb` (`fix(ssh): enforce SSH active-days and switch sshws to legacy mode`)
+  - `87b43fb` (`fix(ssh): enforce SSH active-days and switch sshws mode`)
   - `edd9852` (`fix(runtime): harden sshws handshake and manage module loading`)
   - `71a21a4` (`docs: sync markdown with latest sshws runtime behavior`)
 - Validasi runtime terbaru:

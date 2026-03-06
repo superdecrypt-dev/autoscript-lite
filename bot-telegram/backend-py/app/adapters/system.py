@@ -220,7 +220,7 @@ def op_xray_test() -> tuple[bool, str, str]:
         )
         if deprec_lines:
             msg += (
-                f"\n- Ditemukan {len(deprec_lines)} warning deprecation transport legacy "
+                f"\n- Ditemukan {len(deprec_lines)} warning deprecation transport terdepresiasi "
                 "(WS/HUP/gRPC/VMess/Trojan)."
             )
         return True, title, msg
@@ -256,7 +256,7 @@ def op_xray_test() -> tuple[bool, str, str]:
     )
     if deprec_lines:
         msg += (
-            f"\n- Catatan: terdeteksi {len(deprec_lines)} warning deprecation transport legacy."
+            f"\n- Catatan: terdeteksi {len(deprec_lines)} warning deprecation transport terdepresiasi."
         )
     if error_hint:
         msg += f"\n- Ringkasan error: {error_hint}"

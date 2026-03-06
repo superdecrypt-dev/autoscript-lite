@@ -1,14 +1,14 @@
 # Release Notes
 
-## Rilis 2026-03-06 (SSHWS Legacy Mode + Runtime Guard)
+## Rilis 2026-03-06 (SSHWS Autoscript-Stream Mode + Runtime Guard)
 
 ### Ringkasan
-Update ini menyelaraskan perilaku SSHWS ke mode legacy ala `nanotechid/supreme`, lalu menambah guard runtime agar tidak menghasilkan false-positive koneksi saat backend internal tidak siap.
+Update ini menyelaraskan perilaku SSHWS ke mode autoscript-stream, lalu menambah guard runtime agar tidak menghasilkan false-positive koneksi saat backend internal tidak siap.
 
 ### Perubahan Utama
-1. SSHWS full legacy mode (tanpa `Sec-WebSocket-*` wajib)
-- Proxy SSHWS kini menerima payload legacy minimal (`Upgrade: websocket`) tanpa framing WebSocket RFC6455.
-- Respons handshake memakai pola legacy:
+1. SSHWS full autoscript-stream mode (tanpa `Sec-WebSocket-*` wajib)
+- Proxy SSHWS kini menerima payload autoscript-stream minimal (`Upgrade: websocket`) tanpa framing WebSocket RFC6455.
+- Respons handshake memakai pola autoscript-stream:
   - `HTTP/1.1 101 Switching Protocols`
   - `Content-Length: 104857600000`
 - Normalisasi target request diperluas agar kompatibel untuk:
@@ -37,7 +37,7 @@ Update ini menyelaraskan perilaku SSHWS ke mode legacy ala `nanotechid/supreme`,
 - Input `0` pada prompt masa aktif kini konsisten berfungsi sebagai `back`.
 
 ### Commit
-- `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws to legacy mode`
+- `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
 - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
 
 ### Hasil Validasi
@@ -84,7 +84,7 @@ Rilis ini menambahkan SSH WebSocket TLS/non-TLS dengan model port share `80/443`
   - opsi detail mirip quota Xray (view JSON, set quota, reset used, manual block, IP/login limit, speed policy)
   - enforcement lock akun Linux via `passwd -l/-u`
   - lock otomatis limit sesi/login via timer `sshws-qac-enforcer.timer`
-- Nomor menu lama bergeser (Network jadi `6`, Maintenance `10`, installer bot menjadi `12` dan `13`).
+- Nomor menu sebelumnya bergeser (Network jadi `6`, Maintenance `10`, installer bot menjadi `12` dan `13`).
 - Runtime dropbear untuk SSH WS kini password-enabled (flag disable password dihapus).
 
 ### Hasil Validasi
@@ -166,7 +166,7 @@ Rilis ini menambahkan dukungan multi-user untuk Shadowsocks dan Shadowsocks 2022
   - `shadowsocks2022`: `2022-blake3-aes-128-gcm`
 - Generator account info/link dan validasi protocol diperluas agar mencakup kedua protokol baru.
 
-2. Pembersihan transport legacy non-default
+2. Pembersihan transport terdepresiasi non-default
 - Jalur transport non-default (termasuk `xhttp` dan `wireguard`) dibersihkan dari stack default provisioning/runtime.
 - Tujuan: menjaga kompatibilitas domain fronting dan mengurangi noise konfigurasi yang tidak dipakai default.
 
@@ -242,7 +242,7 @@ Rilis ini menambahkan full parity WARP untuk bot Telegram agar setara kontrol ne
 ## Rilis 2026-02-25 (Update Malam)
 
 ### Ringkasan
-Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk operasi harian, dan pembersihan transport legacy dari stack default karena tidak stabil untuk mode domain fronting.
+Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk operasi harian, dan pembersihan transport terdepresiasi dari stack default karena tidak stabil untuk mode domain fronting.
 
 ### Perubahan Utama
 1. Bot Telegram: UX flow dipoles untuk operasional nyata
@@ -254,18 +254,18 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 - `Delete User` memakai picker protocol + daftar username, jadi admin tidak perlu mengetik username manual.
 - `/cleanup` diperbarui agar mode default membersihkan chat dan menyisakan 1 pesan hasil cleanup.
 
-2. Penghapusan Transport Legacy dari Stack Default
+2. Penghapusan Transport Terdepresiasi dari Stack Default
 - `setup.sh`:
-  - inbound legacy dihapus dari template Xray
-  - route/mapping/location legacy di template Nginx dihapus
+  - inbound terdepresiasi dihapus dari template Xray
+  - route/mapping/location terdepresiasi di template Nginx dihapus
 - `manage.sh`:
-  - generator link account tidak lagi membuat link transport legacy
+  - generator link account tidak lagi membuat link transport terdepresiasi
   - compat checker account info diperbarui (basis validasi ke baris `gRPC`)
 - Bot backend (`bot-discord` + `bot-telegram`):
-  - generator link account tidak lagi memasukkan transport legacy
-  - output account info tidak lagi menampilkan baris transport legacy
+  - generator link account tidak lagi memasukkan transport terdepresiasi
+  - output account info tidak lagi menampilkan baris transport terdepresiasi
 - `opt/manage/features/network.sh`:
-  - deteksi tag default Xray disesuaikan tanpa suffix transport legacy
+  - deteksi tag default Xray disesuaikan tanpa suffix transport terdepresiasi
 
 3. Sinkronisasi Runtime Live
 - Konfigurasi runtime ikut dibersihkan:
@@ -278,7 +278,7 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 
 ### Commit
 - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
-- `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
+- `8bcf1d4` — `fix(xray): cleanup old transport paths in setup/manage/bot links`
 
 ### Hasil Validasi
 - Shell:
@@ -364,7 +364,7 @@ Rilis ini memfokuskan finalisasi bot Discord untuk penggunaan produksi dan harde
 - Perilaku boolean invalid di wizard Cloudflare tidak lagi silent: tetap fallback aman, tetapi sekarang memberi warning eksplisit.
 
 4. Hardening Shell Runtime & Staging
-- `run.sh` menambah kompatibilitas path canonical `/opt/autoscript` dengan alias legacy `/root/xray-core_discord`.
+- `run.sh` menambah kompatibilitas path canonical `/opt/autoscript` dengan alias kompatibilitas historis `/root/xray-core_discord`.
 - `install-discord-bot.sh` merapikan source archive URL agar konsisten memakai `BOT_SOURCE_OWNER/BOT_SOURCE_REPO/BOT_SOURCE_REF`.
 - Generator `xray-quota` di `setup.sh` sekarang mendukung fallback endpoint API (`127.0.0.1:10080` dan `127.0.0.1:10085`) untuk mengurangi warning transien `statsquery`.
 
@@ -394,7 +394,7 @@ Update ini mencatat perubahan identitas proyek ke `autoscript`, pembaruan source
 - Pola clone/update source diperbarui untuk mode deploy server yang lebih konsisten.
 
 3. Perapihan UX Bot Discord
-- Gateway interaction memakai `flags: MessageFlags.Ephemeral` (mengganti opsi lama yang deprecated).
+- Gateway interaction memakai `flags: MessageFlags.Ephemeral` (mengganti opsi sebelumnya yang deprecated).
 - Output result dipotong agar tidak spam panjang di Discord mobile.
 - Copywriting menu/error dipoles agar lebih profesional dan ringkas.
 
@@ -459,7 +459,7 @@ Rilis ini memfinalkan paket stabilisasi bot Discord standalone dan alur operasio
   - `xray-discord-monitor.timer`: active
 
 ### Risiko Diketahui (Accepted Risk)
-- Hardcoded Cloudflare token di lokasi legacy diperlakukan sebagai by design/accepted risk sesuai kebijakan proyek saat ini.
+- Hardcoded Cloudflare token di lokasi historis diperlakukan sebagai by design/accepted risk sesuai kebijakan proyek saat ini.
 - Logika penghapusan A record lain pada IP yang sama tetap dipertahankan sesuai desain operasional.
 
 ### Catatan Operasional

@@ -1569,7 +1569,7 @@ def _account_info_needs_compat_refresh() -> bool:
         for p in sorted(d.glob("*.txt")):
             stem = p.stem
             expected_suffix = f"@{proto}"
-            is_legacy_name = not stem.endswith(expected_suffix)
+            is_noncanonical_name = not stem.endswith(expected_suffix)
 
             try:
                 text = p.read_text(encoding="utf-8", errors="ignore")
@@ -1578,7 +1578,7 @@ def _account_info_needs_compat_refresh() -> bool:
 
             has_links_block = bool(re.search(r"(?m)^Links Import:\s*$", text))
             has_grpc_line = bool(re.search(r"(?m)^\s*gRPC\s*:", text))
-            if is_legacy_name or not has_links_block or not has_grpc_line:
+            if is_noncanonical_name or not has_links_block or not has_grpc_line:
                 return True
     return False
 
@@ -2544,7 +2544,7 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
             pass
         return False, f"Gagal apply domain ke nginx: {exc}"
 
-    # Keep compatibility with legacy scripts that still read active domain from /etc/xray/domain.
+    # Keep compatibility with compatibility scripts that still read active domain from /etc/xray/domain.
     try:
         XRAY_DOMAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(XRAY_DOMAIN_FILE, f"{domain}\n")
@@ -2880,7 +2880,7 @@ def _cf_prepare_subdomain_a_record(
             continue
         ok_del, del_msg = _cf_delete_record(zone_id, rec_id)
         if not ok_del:
-            return False, f"Gagal hapus A record lama {rec_name}: {del_msg}"
+            return False, f"Gagal hapus A record historis {rec_name}: {del_msg}"
 
     ok_create, create_msg = _cf_create_a_record(zone_id, fqdn, ip, proxied=proxied)
     if not ok_create:

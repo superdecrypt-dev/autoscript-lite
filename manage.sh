@@ -287,8 +287,8 @@ PY
 
 speed_policy_resync_after_egress_change() {
   # Default egress/balancer mempengaruhi jalur dasar speed-mark outbounds.
-  # Wajib sinkron ulang supaya speed user tidak memakai topology lama.
-  # Walau policy kosong, tetap perlu sync bila artefak speed lama masih tertinggal.
+  # Wajib sinkron ulang supaya speed user tidak memakai topology sebelumnya.
+  # Walau policy kosong, tetap perlu sync bila artefak speed historis masih tertinggal.
   local need_sync="false"
   if speed_policy_has_entries; then
     need_sync="true"
@@ -799,9 +799,9 @@ account_info_sync_after_domain_change_if_needed() {
 }
 
 account_info_compat_needs_refresh() {
-  # Return 0 jika ditemukan file account info format lama yang perlu disegarkan.
+  # Return 0 jika ditemukan file account info format kompatibilitas yang perlu disegarkan.
   # Kriteria:
-  # - nama file legacy (username.txt, belum username@proto.txt)
+  # - nama file format kompatibilitas (username.txt, belum username@proto.txt)
   # - belum memiliki blok "Links Import" modern
   # - belum memiliki baris link gRPC
   ensure_account_quota_dirs
@@ -834,7 +834,7 @@ account_info_compat_needs_refresh() {
 }
 
 account_info_compat_refresh_if_needed() {
-  # Sinkronisasi one-shot saat startup manage untuk migrasi format account info lama.
+  # Sinkronisasi one-shot saat startup manage untuk migrasi format account info kompatibilitas.
   local domain ip
   if ! account_info_compat_needs_refresh; then
     return 0
@@ -845,7 +845,7 @@ account_info_compat_refresh_if_needed() {
   [[ -n "${domain}" ]] || domain="-"
   ip="$(detect_public_ip_ipapi)"
 
-  log "Format XRAY ACCOUNT INFO lama terdeteksi, menjalankan sinkronisasi kompatibilitas..."
+  log "Format XRAY ACCOUNT INFO kompatibilitas terdeteksi, menjalankan sinkronisasi..."
   if account_refresh_all_info_files "${domain}" "${ip}"; then
     log "Sinkronisasi kompatibilitas XRAY ACCOUNT INFO selesai."
     account_info_domain_sync_state_write "${domain}"
@@ -2199,7 +2199,7 @@ for proto in protos:
     has_at = "@" in base
     prev = chosen.get(username)
     if prev is not None:
-      # Prefer username@proto.json over legacy username.json
+      # Prefer username@proto.json over compatibility-format username.json
       if has_at and not chosen_has_at.get(username, False):
         chosen[username] = os.path.join(d, name)
         chosen_has_at[username] = True
@@ -2258,7 +2258,7 @@ account_collect_files() {
       fi
       key="${proto}:${u}"
 
-      # Prefer file "username@proto.txt" over legacy "username.txt" if both exist.
+      # Prefer file "username@proto.txt" over compatibility-format "username.txt" if both exist.
       if [[ -n "${pos[${key}]:-}" ]]; then
         if [[ "${base}" == *"@"* && "${has_at[${key}]:-0}" != "1" ]]; then
           ACCOUNT_FILES[${pos[${key}]}]="${f}"
@@ -2716,7 +2716,7 @@ xray_confdir_syntax_test() {
 xray_confdir_syntax_test_pretty() {
   # Untuk menu Diagnostics:
   # - tampilkan error penting jika ada
-  # - ringkas warning deprecation transport legacy agar tidak terlihat seperti fatal error
+  # - ringkas warning deprecation transport terdepresiasi agar tidak terlihat seperti fatal error
   if ! have_cmd xray; then
     warn "xray binary tidak ditemukan"
     return 127
@@ -2736,7 +2736,7 @@ xray_confdir_syntax_test_pretty() {
   fi
 
   if (( deprec_count > 0 )); then
-    warn "Ditemukan ${deprec_count} warning deprecation transport legacy (WS/HUP/gRPC/VMess/Trojan)."
+    warn "Ditemukan ${deprec_count} warning deprecation transport terdepresiasi (WS/HUP/gRPC/VMess/Trojan)."
     warn "Ini warning kompatibilitas upstream, bukan syntax error conf.d."
   fi
 
@@ -2966,7 +2966,7 @@ xray_backup_config() {
     die "Gagal membuat backup untuk: ${src}"
   fi
 
-  # Best-effort housekeeping: hapus backup lama (>7 hari) untuk file yang sama.
+  # Best-effort housekeeping: hapus backup historis (>7 hari) untuk file yang sama.
   find "${WORK_DIR}" -maxdepth 1 -type f -name "${base}.prev.*" -mtime +7 -delete 2>/dev/null || true
 
   echo "${b}"
@@ -3921,7 +3921,7 @@ for t in base_selector:
   seen.add(t2)
   effective_selector.append(t2)
 if not effective_selector:
-  # Recovery path untuk konfigurasi legacy/invalid:
+  # Recovery path untuk konfigurasi non-kanonik/tidak valid:
   # jika selector dasar berisi tag speed/internal saja, fallback ke outbound non-speed.
   if "direct" in outbounds_by_tag:
     effective_selector = ["direct"]
@@ -4411,17 +4411,17 @@ account_info_refresh_for_user() {
   ensure_account_quota_dirs
   need_python3
 
-  local acc_file quota_file acc_legacy quota_legacy
+  local acc_file quota_file acc_compatfmt quota_compatfmt
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  acc_legacy="${ACCOUNT_ROOT}/${proto}/${username}.txt"
-  quota_legacy="${QUOTA_ROOT}/${proto}/${username}.json"
+  acc_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  quota_compatfmt="${QUOTA_ROOT}/${proto}/${username}.json"
 
-  if [[ ! -f "${acc_file}" && -f "${acc_legacy}" ]]; then
-    acc_file="${acc_legacy}"
+  if [[ ! -f "${acc_file}" && -f "${acc_compatfmt}" ]]; then
+    acc_file="${acc_compatfmt}"
   fi
-  if [[ ! -f "${quota_file}" && -f "${quota_legacy}" ]]; then
-    quota_file="${quota_legacy}"
+  if [[ ! -f "${quota_file}" && -f "${quota_compatfmt}" ]]; then
+    quota_file="${quota_compatfmt}"
   fi
 
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
@@ -4912,16 +4912,16 @@ delete_account_artifacts() {
   local proto="$1"
   local username="$2"
 
-  local acc_file acc_file_legacy quota_file quota_file_legacy
+  local acc_file acc_file_compatfmt quota_file quota_file_compatfmt
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  acc_file_legacy="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  acc_file_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  quota_file_legacy="${QUOTA_ROOT}/${proto}/${username}.json"
+  quota_file_compatfmt="${QUOTA_ROOT}/${proto}/${username}.json"
 
   delete_one_file "${acc_file}"
-  delete_one_file "${acc_file_legacy}"
+  delete_one_file "${acc_file_compatfmt}"
   delete_one_file "${quota_file}"
-  delete_one_file "${quota_file_legacy}"
+  delete_one_file "${quota_file_compatfmt}"
   speed_policy_remove "${proto}" "${username}"
 }
 
@@ -5523,7 +5523,7 @@ PY
   hr
   echo "Ringkasan perubahan:"
   echo "  Username  : ${username}@${proto}"
-  echo "  Expiry lama : ${current_expiry}"
+  echo "  Expiry sebelumnya : ${current_expiry}"
   echo "  Expiry baru : ${new_expiry}"
   hr
   local confirm_rc=0
@@ -5595,7 +5595,7 @@ PY
   # BUG-FIX #3: xray-expired menghapus user dari SEMUA routing rules (termasuk
   # dummy-block-user dan dummy-limit-user) saat user expired. Setelah extend expiry,
   # kita HARUS me-restore routing marker yang masih aktif secara eksplisit.
-  # Komentar lama "those markers remain intact" TIDAK benar — xray-expired sudah
+  # Komentar sebelumnya "those markers remain intact" TIDAK benar — xray-expired sudah
   # membersihkannya. Fix: restore dummy-block-user jika manual_block=True,
   # dan dummy-limit-user jika ip_limit_locked=True.
   local st_quota st_manual st_iplocked
@@ -5743,7 +5743,7 @@ quota_collect_files() {
 
       key="${proto}:${u}"
 
-      # Prefer file "username@proto.json" over legacy "username.json" if both exist.
+      # Prefer file "username@proto.json" over compatibility-format "username.json" if both exist.
       if [[ -n "${pos[${key}]:-}" ]]; then
         if [[ "${base}" == *"@"* && "${has_at[${key}]:-0}" != "1" ]]; then
           QUOTA_FILES[${pos[${key}]}]="${f}"
@@ -6527,7 +6527,7 @@ quota_edit_flow() {
     IFS='|' read -r username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up <<<"${fields}"
 
     # Normalisasi username ke format email (username@proto) untuk routing calls.
-    # Metadata lama mungkin hanya menyimpan "alice", bukan "alice@vless".
+    # Metadata historis mungkin hanya menyimpan "alice", bukan "alice@vless".
     local email_for_routing="${username}"
     if [[ "${email_for_routing}" != *"@"* ]]; then
       email_for_routing="${email_for_routing}@${proto}"
