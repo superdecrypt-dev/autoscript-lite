@@ -1353,6 +1353,46 @@ ssh_username_valid() {
   [[ "${username}" =~ ^[a-z_][a-z0-9_-]{1,31}$ ]]
 }
 
+ssh_username_duplicate_reason() {
+  # prints reason if duplicate exists; return 0 if duplicate, 1 otherwise.
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 1
+
+  # Cegah duplikat terhadap user Linux yang sudah ada.
+  if id "${username}" >/dev/null 2>&1; then
+    printf "User '%s' sudah ada di sistem Linux.\n" "${username}"
+    return 0
+  fi
+
+  local qf accf qf_compat accf_compat
+  qf="$(ssh_user_state_file "${username}")"
+  accf="$(ssh_account_info_file "${username}")"
+  qf_compat="${SSH_USERS_STATE_DIR}/${username}.json"
+  accf_compat="${SSH_ACCOUNT_DIR}/${username}.txt"
+
+  # Cegah duplikat terhadap metadata managed (format baru/kompatibilitas lama).
+  if [[ -f "${qf}" || -f "${accf}" || -f "${qf_compat}" || -f "${accf_compat}" ]]; then
+    printf "Username '%s' sudah terdaftar pada metadata SSH managed.\n" "${username}"
+    return 0
+  fi
+
+  local listed=""
+  listed="$(
+    find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null \
+      | sed -E 's/@ssh\.json$//' \
+      | sed -E 's/\.json$//' \
+      | tr '[:upper:]' '[:lower:]' \
+      | grep -Fx -- "${username}" \
+      | head -n1 || true
+  )"
+  if [[ -n "${listed}" ]]; then
+    printf "Username '%s' sudah ada pada daftar akun SSH managed.\n" "${username}"
+    return 0
+  fi
+
+  return 1
+}
+
 ssh_username_from_key() {
   local raw="${1:-}"
   raw="${raw%@ssh}"
@@ -2225,8 +2265,9 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
-  if id "${username}" >/dev/null 2>&1; then
-    warn "User '${username}' sudah ada."
+  local dup_reason=""
+  if dup_reason="$(ssh_username_duplicate_reason "${username}")"; then
+    warn "${dup_reason}"
     pause
     return 0
   fi
@@ -2235,6 +2276,11 @@ ssh_add_user_menu() {
 
   local password=""
   if ! ssh_read_password_confirm password; then
+    pause
+    return 0
+  fi
+  if [[ "${username,,}" == "${password,,}" ]]; then
+    warn "Password SSH tidak boleh sama dengan username."
     pause
     return 0
   fi
@@ -2845,294 +2891,68 @@ ssh_active_sessions_count() {
   echo "${c}"
 }
 
-ssh_qac_enforce_once_internal_unlocked() {
-  local target_user="${1:-}"
-  local lock_file
-  ssh_state_dirs_prepare
-  ssh_qac_lock_prepare
-  lock_file="$(ssh_qac_lock_file)"
-  need_python3
-  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${target_user}" "${lock_file}"
-import atexit
-import fcntl
-import json
-import os
-import pathlib
-import subprocess
-import sys
-import tempfile
+ssh_qac_detect_setup_script() {
+  local candidates=()
+  local src_dir="" repo_root=""
+  src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P 2>/dev/null || true)"
+  if [[ -n "${src_dir}" ]]; then
+    repo_root="$(cd "${src_dir}/../../.." && pwd -P 2>/dev/null || true)"
+    [[ -n "${repo_root}" ]] && candidates+=("${repo_root}/setup.sh")
+  fi
+  [[ -n "${AUTOSCRIPT_SETUP_SH:-}" ]] && candidates+=("${AUTOSCRIPT_SETUP_SH}")
+  candidates+=(
+    "/root/project/autoscript/setup.sh"
+    "/root/autoscript/setup.sh"
+    "/opt/autoscript/setup.sh"
+    "$(pwd)/setup.sh"
+  )
 
-root = pathlib.Path(sys.argv[1])
-target = (sys.argv[2] or "").strip()
-lock_file = pathlib.Path(sys.argv[3] or "/run/autoscript/locks/sshws-qac.lock")
-target_norm = ""
-
-def to_int(v, default=0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return int(v)
-    if isinstance(v, (int, float)):
-      return int(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return int(float(s))
-  except Exception:
-    return default
-
-def to_float(v, default=0.0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return float(int(v))
-    if isinstance(v, (int, float)):
-      return float(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return float(s)
-  except Exception:
-    return default
-
-def to_bool(v):
-  if isinstance(v, bool):
-    return v
-  if isinstance(v, (int, float)):
-    return bool(v)
-  s = str(v or "").strip().lower()
-  return s in ("1", "true", "yes", "on", "y")
-
-def norm_user(v):
-  s = str(v or "").strip()
-  if s.endswith("@ssh"):
-    s = s[:-4]
-  if "@" in s:
-    s = s.split("@", 1)[0]
-  return s
-
-target_norm = norm_user(target)
-
-lock_handle = None
-
-def release_lock():
-  global lock_handle
-  if lock_handle is None:
-    return
-  try:
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-  except Exception:
-    pass
-  try:
-    lock_handle.close()
-  except Exception:
-    pass
-  lock_handle = None
-
-try:
-  lock_file.parent.mkdir(parents=True, exist_ok=True)
-except Exception:
-  pass
-
-lock_handle = open(lock_file, "a+", encoding="utf-8")
-fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-atexit.register(release_lock)
-
-def active_sessions(username):
-  if not username:
+  local f
+  for f in "${candidates[@]}"; do
+    [[ -n "${f}" && -f "${f}" ]] || continue
+    echo "${f}"
     return 0
-  try:
-    id_rc = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-  except FileNotFoundError:
-    return 0
-  if id_rc != 0:
-    return 0
-  try:
-    cmd = ["pgrep", "-u", username, "-x", "dropbear"]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-  except FileNotFoundError:
-    return 0
-  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
-  if lines:
-    return len(lines)
-  try:
-    res = subprocess.run(["pgrep", "-u", username, "-f", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-  except FileNotFoundError:
-    return 0
-  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
-  return len(lines)
-
-def lock_user(username):
-  if subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-    return False
-  if subprocess.run(["passwd", "-l", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-    return True
-  return subprocess.run(["usermod", "-L", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-
-def unlock_user(username):
-  if subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-    return False
-  if subprocess.run(["passwd", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-    return True
-  return subprocess.run(["usermod", "-U", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-
-def write_json_atomic(path, payload):
-  text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-  dirn = str(path.parent)
-  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
-  try:
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-      f.write(text)
-      f.flush()
-      os.fsync(f.fileno())
-    os.replace(tmp, path)
-  finally:
-    try:
-      if os.path.exists(tmp):
-        os.remove(tmp)
-    except Exception:
-      pass
-
-def normalize_payload(path):
-  payload = {}
-  if path.is_file():
-    try:
-      loaded = json.loads(path.read_text(encoding="utf-8"))
-      if isinstance(loaded, dict):
-        payload = loaded
-    except Exception:
-      payload = {}
-
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
-  unit = str(payload.get("quota_unit") or "binary").strip().lower()
-  if unit not in ("binary", "decimal"):
-    unit = "binary"
-
-  quota_limit = to_int(payload.get("quota_limit"), 0)
-  if quota_limit < 0:
-    quota_limit = 0
-  quota_used = to_int(payload.get("quota_used"), 0)
-  if quota_used < 0:
-    quota_used = 0
-
-  status_raw = payload.get("status")
-  status = status_raw if isinstance(status_raw, dict) else {}
-
-  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
-  if speed_down < 0:
-    speed_down = 0.0
-  if speed_up < 0:
-    speed_up = 0.0
-
-  ip_limit = to_int(status.get("ip_limit"), 0)
-  if ip_limit < 0:
-    ip_limit = 0
-
-  payload["managed_by"] = "autoscript-manage"
-  payload["protocol"] = "ssh"
-  payload["username"] = username
-  payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
-  payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
-  payload["quota_limit"] = quota_limit
-  payload["quota_unit"] = unit
-  payload["quota_used"] = quota_used
-  payload["status"] = {
-    "manual_block": to_bool(status.get("manual_block")),
-    "quota_exhausted": to_bool(status.get("quota_exhausted")),
-    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
-    "ip_limit": ip_limit,
-    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
-    "speed_down_mbit": speed_down,
-    "speed_up_mbit": speed_up,
-    "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-    "account_locked": to_bool(status.get("account_locked")),
-    "lock_owner": str(status.get("lock_owner") or "").strip(),
-  }
-  return payload
-
-if not root.is_dir():
-  raise SystemExit(0)
-
-paths = sorted(root.glob("*.json"), key=lambda p: p.name.lower())
-for path in paths:
-  payload = normalize_payload(path)
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
-  stem = path.stem
-  stem_user = norm_user(stem)
-  if target and target not in (username, stem, stem_user) and target_norm not in (username, stem_user):
-    continue
-
-  status = payload["status"]
-  before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-  ip_enabled = bool(status.get("ip_limit_enabled"))
-  ip_limit = to_int(status.get("ip_limit"), 0)
-  if ip_limit < 0:
-    ip_limit = 0
-  if not ip_enabled:
-    status["ip_limit_locked"] = False
-  elif ip_limit > 0:
-    status["ip_limit_locked"] = active_sessions(username) > ip_limit
-  else:
-    status["ip_limit_locked"] = False
-
-  quota_limit = to_int(payload.get("quota_limit"), 0)
-  quota_used = to_int(payload.get("quota_used"), 0)
-  status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
-
-  reason = ""
-  if bool(status.get("manual_block")):
-    reason = "manual"
-  elif bool(status.get("quota_exhausted")):
-    reason = "quota"
-  elif bool(status.get("ip_limit_locked")):
-    reason = "ip_limit"
-
-  status["lock_reason"] = reason
-  account_locked = bool(status.get("account_locked"))
-  lock_owner = str(status.get("lock_owner") or "").strip()
-
-  user_exists = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-  if reason:
-    if user_exists and lock_user(username):
-      account_locked = True
-      lock_owner = "ssh_qac"
-    elif not user_exists:
-      account_locked = False
-      lock_owner = ""
-  else:
-    if user_exists and account_locked and lock_owner == "ssh_qac":
-      if unlock_user(username):
-        account_locked = False
-        lock_owner = ""
-    elif not account_locked and lock_owner == "ssh_qac":
-      lock_owner = ""
-
-  status["account_locked"] = bool(account_locked)
-  status["lock_owner"] = lock_owner
-  payload["status"] = status
-
-  after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-  if after != before:
-    write_json_atomic(path, payload)
-    try:
-      os.chmod(path, 0o600)
-    except Exception:
-      pass
-PY
+  done
+  return 1
 }
 
-ssh_qac_enforce_once_internal() {
-  local target_user="${1:-}"
-  ssh_qac_enforce_once_internal_unlocked "${target_user}"
+ssh_qac_install_enforcer_from_setup() {
+  [[ -x "${SSH_QAC_ENFORCER_BIN}" ]] && return 0
+  local setup_file=""
+  local tmp=""
+  setup_file="$(ssh_qac_detect_setup_script || true)"
+  [[ -n "${setup_file}" ]] || return 1
+  command -v awk >/dev/null 2>&1 || return 1
+
+  tmp="$(mktemp)"
+  if ! awk '
+    index($0, "cat > /usr/local/bin/sshws-qac-enforcer <<'\''PY'\''") { capture=1; next }
+    capture && $0 == "PY" { exit }
+    capture { print }
+  ' "${setup_file}" > "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if [[ ! -s "${tmp}" ]]; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! head -n1 "${tmp}" | grep -q '^#!/usr/bin/env python3$'; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  install -d -m 755 "$(dirname "${SSH_QAC_ENFORCER_BIN}")"
+  install -m 755 "${tmp}" "${SSH_QAC_ENFORCER_BIN}"
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  [[ -x "${SSH_QAC_ENFORCER_BIN}" ]]
 }
 
 ssh_qac_enforce_now() {
   local target_user="${1:-}"
+  if [[ ! -x "${SSH_QAC_ENFORCER_BIN}" ]]; then
+    ssh_qac_install_enforcer_from_setup >/dev/null 2>&1 || true
+  fi
   if [[ -x "${SSH_QAC_ENFORCER_BIN}" ]]; then
     if [[ -n "${target_user}" ]]; then
       "${SSH_QAC_ENFORCER_BIN}" --once --user "${target_user}" >/dev/null 2>&1
@@ -3141,16 +2961,16 @@ ssh_qac_enforce_now() {
     fi
     return $?
   fi
-  ssh_qac_enforce_once_internal "${target_user}" >/dev/null 2>&1
+  return 1
 }
 
 ssh_qac_enforce_now_warn() {
   local target_user="${1:-}"
   if ! ssh_qac_enforce_now "${target_user}"; then
     if [[ -n "${target_user}" ]]; then
-      warn "Enforcer SSH QAC gagal untuk '${target_user}'. Timer akan retry otomatis."
+      warn "Enforcer SSH QAC gagal untuk '${target_user}'. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
     else
-      warn "Enforcer SSH QAC gagal dijalankan. Timer akan retry otomatis."
+      warn "Enforcer SSH QAC gagal dijalankan. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
     fi
     return 1
   fi
@@ -4354,7 +4174,15 @@ daemon_status_menu() {
   echo "10) Maintenance > Daemon Status"
   hr
 
-  local daemons=("xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy" "sshws-qac-enforcer.timer")
+  local sshws_dropbear_svc="${SSHWS_DROPBEAR_SERVICE:-sshws-dropbear}"
+  local sshws_stunnel_svc="${SSHWS_STUNNEL_SERVICE:-sshws-stunnel}"
+  local sshws_proxy_svc="${SSHWS_PROXY_SERVICE:-sshws-proxy}"
+  local sshws_qac_timer="${SSHWS_QAC_ENFORCER_TIMER:-sshws-qac-enforcer.timer}"
+
+  local daemons=(
+    "xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy"
+    "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}" "${sshws_qac_timer}"
+  )
   local d
   for d in "${daemons[@]}"; do
     if svc_exists "${d}"; then
@@ -4372,11 +4200,18 @@ daemon_status_menu() {
   echo "  2) Restart xray-quota"
   echo "  3) Restart xray-limit-ip"
   echo "  4) Restart xray-speed"
-  echo "  5) Restart semua daemon (xray-expired + xray-quota + xray-limit-ip + xray-speed)"
+  echo "  5) Restart semua daemon xray (expired + quota + limit-ip + speed)"
   echo "  6) Lihat log xray-expired (20 baris)"
   echo "  7) Lihat log xray-quota (20 baris)"
   echo "  8) Lihat log xray-limit-ip (20 baris)"
   echo "  9) Lihat log xray-speed (20 baris)"
+  echo " 10) Restart ${sshws_dropbear_svc}"
+  echo " 11) Restart ${sshws_stunnel_svc}"
+  echo " 12) Restart ${sshws_proxy_svc}"
+  echo " 13) Restart semua daemon SSHWS (dropbear + stunnel + proxy)"
+  echo " 14) Lihat log ${sshws_dropbear_svc} (20 baris)"
+  echo " 15) Lihat log ${sshws_stunnel_svc} (20 baris)"
+  echo " 16) Lihat log ${sshws_proxy_svc} (20 baris)"
   echo "  0) Back"
   hr
   if ! read -r -p "Pilih: " c; then
@@ -4414,6 +4249,31 @@ daemon_status_menu() {
     7) daemon_log_tail_show xray-quota 20 ;;
     8) daemon_log_tail_show xray-limit-ip 20 ;;
     9) daemon_log_tail_show xray-speed 20 ;;
+    10)
+      if svc_exists "${sshws_dropbear_svc}"; then svc_restart "${sshws_dropbear_svc}" ; else warn "${sshws_dropbear_svc} tidak terpasang" ; fi
+      pause
+      ;;
+    11)
+      if svc_exists "${sshws_stunnel_svc}"; then svc_restart "${sshws_stunnel_svc}" ; else warn "${sshws_stunnel_svc} tidak terpasang" ; fi
+      pause
+      ;;
+    12)
+      if svc_exists "${sshws_proxy_svc}"; then svc_restart "${sshws_proxy_svc}" ; else warn "${sshws_proxy_svc} tidak terpasang" ; fi
+      pause
+      ;;
+    13)
+      for d in "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; do
+        if svc_exists "${d}"; then
+          svc_restart "${d}"
+        else
+          warn "${d} tidak terpasang, skip"
+        fi
+      done
+      pause
+      ;;
+    14) daemon_log_tail_show "${sshws_dropbear_svc}" 20 ;;
+    15) daemon_log_tail_show "${sshws_stunnel_svc}" 20 ;;
+    16) daemon_log_tail_show "${sshws_proxy_svc}" 20 ;;
     0|kembali|k|back|b) return 0 ;;
     *) warn "Pilihan tidak valid" ; sleep 1 ;;
   esac

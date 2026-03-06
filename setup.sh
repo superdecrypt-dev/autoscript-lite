@@ -2242,18 +2242,20 @@ install_sshws_stack() {
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
   [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
 
-  local stunnel_bin
+  local stunnel_bin=""
   if command -v stunnel4 >/dev/null 2>&1; then
     stunnel_bin="$(command -v stunnel4)"
   elif command -v stunnel >/dev/null 2>&1; then
     stunnel_bin="$(command -v stunnel)"
   else
-    die "stunnel4/stunnel tidak ditemukan."
+    warn "stunnel4/stunnel tidak ditemukan. Service sshws-stunnel akan dilewati (opsional)."
   fi
 
   install -d -m 755 /etc/systemd/system
-  install -d -m 755 /etc/stunnel
-  install -d -m 755 /run/stunnel
+  if [[ -n "${stunnel_bin}" ]]; then
+    install -d -m 755 /etc/stunnel
+    install -d -m 755 /run/stunnel
+  fi
 
   # Migrasi: hapus nama unit historis yang masih memakai prefix "xray-sshws".
   systemctl disable --now xray-sshws-dropbear xray-sshws-stunnel xray-sshws-proxy >/dev/null 2>&1 || true
@@ -2289,7 +2291,8 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
-  cat > /etc/stunnel/sshws.conf <<EOF
+  if [[ -n "${stunnel_bin}" ]]; then
+    cat > /etc/stunnel/sshws.conf <<EOF
 foreground = yes
 setuid = root
 setgid = root
@@ -2304,9 +2307,9 @@ cert = ${CERT_FULLCHAIN}
 key = ${CERT_PRIVKEY}
 client = no
 EOF
-  chmod 600 /etc/stunnel/sshws.conf
+    chmod 600 /etc/stunnel/sshws.conf
 
-  cat > /etc/systemd/system/sshws-stunnel.service <<EOF
+    cat > /etc/systemd/system/sshws-stunnel.service <<EOF
 [Unit]
 Description=Stunnel local TLS bridge for SSH WebSocket
 After=sshws-dropbear.service
@@ -2323,6 +2326,9 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
+  else
+    rm -f /etc/stunnel/sshws.conf /etc/systemd/system/sshws-stunnel.service >/dev/null 2>&1 || true
+  fi
 
   cat > /usr/local/bin/sshws-proxy <<'PY'
 #!/usr/bin/env python3
@@ -2777,6 +2783,24 @@ class ConnectionRegistry:
       await ctx.assign_username(user)
 
 
+async def _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.05):
+  tries = max(1, int(attempts))
+  delay = max(0.0, float(delay_sec))
+  for idx in range(tries):
+    if await ctx.username():
+      return True
+    try:
+      pmap = await asyncio.to_thread(scan_dropbear_sessions, int(args.backend_port))
+      await registry.assign_by_port_map(pmap)
+    except Exception:
+      pass
+    if await ctx.username():
+      return True
+    if delay > 0 and (idx + 1) < tries:
+      await asyncio.sleep(delay)
+  return bool(await ctx.username())
+
+
 async def _send_http_error(writer, code, reason):
   body = "{} {}\n".format(code, reason).encode("utf-8")
   resp = (
@@ -2920,6 +2944,8 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
     ctx = ConnectionContext(backend_local_port, quota_mgr)
     await registry.register(ctx)
+    # Coba resolve awal segera untuk mengurangi window under-attribution pada sesi sangat pendek.
+    await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.0)
   except Exception:
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
@@ -2947,6 +2973,17 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     pass
   finally:
     if ctx is not None:
+      # Best-effort resolve terakhir sebelum context dilepas:
+      # mengurangi kemungkinan quota/speed tidak teratribusi pada koneksi pendek.
+      try:
+        if not await ctx.username():
+          await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05)
+      except Exception:
+        pass
+      try:
+        await quota_mgr.flush_once()
+      except Exception:
+        pass
       await registry.unregister(ctx)
     if backend_writer is not None:
       try:
@@ -2962,7 +2999,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
 
 
 async def _session_map_loop(args, stop_evt, registry):
-  interval = max(0.5, float(args.session_scan_interval))
+  interval = max(0.2, float(args.session_scan_interval))
   while not stop_evt.is_set():
     try:
       pmap = await asyncio.to_thread(scan_dropbear_sessions, int(args.backend_port))
@@ -3040,8 +3077,8 @@ def _parse_args():
   parser.add_argument("--qac-state-root", default=str(QAC_STATE_ROOT))
   parser.add_argument("--qac-lock-file", default=str(QAC_LOCK_FILE))
   parser.add_argument("--qac-enforcer-bin", default=str(QAC_ENFORCER_BIN))
-  parser.add_argument("--session-scan-interval", type=float, default=1.0)
-  parser.add_argument("--quota-flush-interval", type=float, default=5.0)
+  parser.add_argument("--session-scan-interval", type=float, default=0.25)
+  parser.add_argument("--quota-flush-interval", type=float, default=1.0)
   return parser.parse_args()
 
 
@@ -3077,7 +3114,17 @@ EOF
 
   systemctl daemon-reload
   service_enable_restart_checked sshws-dropbear || die "Gagal mengaktifkan sshws-dropbear."
-  service_enable_restart_checked sshws-stunnel || die "Gagal mengaktifkan sshws-stunnel."
+  if [[ -n "${stunnel_bin}" ]]; then
+    if service_enable_restart_checked sshws-stunnel; then
+      ok "sshws-stunnel aktif (standby TLS local bridge)."
+    else
+      warn "sshws-stunnel gagal aktif. Layanan utama SSHWS tetap berjalan via jalur proxy -> dropbear direct."
+      systemctl disable --now sshws-stunnel >/dev/null 2>&1 || true
+    fi
+  else
+    ok "sshws-stunnel dilewati (binary stunnel tidak tersedia)."
+    systemctl disable --now sshws-stunnel >/dev/null 2>&1 || true
+  fi
   service_enable_restart_checked sshws-proxy || die "Gagal mengaktifkan sshws-proxy."
 
   # stunnel4 distro tidak lagi diperlukan setelah stack dedicated aktif.
@@ -3433,8 +3480,19 @@ install_extra_deps() {
   mkdir -p /var/log/chrony
 
   ensure_dpkg_consistent
-  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear stunnel4
-  ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, stunnel4)."
+  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear
+
+  # stunnel bersifat opsional pada stack SSHWS terbaru.
+  if command -v stunnel4 >/dev/null 2>&1 || command -v stunnel >/dev/null 2>&1; then
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear; stunnel sudah tersedia)."
+    return 0
+  fi
+  if apt_get_with_lock_retry install -y stunnel4 >/dev/null 2>&1 || apt_get_with_lock_retry install -y stunnel >/dev/null 2>&1; then
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear; stunnel opsional tersedia)."
+  else
+    warn "Paket stunnel tidak tersedia di repo distro. Layanan sshws-stunnel akan dilewati (opsional)."
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear)."
+  fi
 }
 
 install_speedtest_snap() {
@@ -7327,7 +7385,7 @@ sanity_check() {
     warn "sanity: sshws-stunnel NOT active"
     systemctl status sshws-stunnel --no-pager >&2 || true
     journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
-    failed=1
+    warn "sanity: sshws-stunnel bersifat opsional (jalur utama SSHWS tetap via proxy -> dropbear direct)."
   fi
 
   if systemctl is-active --quiet sshws-proxy; then
