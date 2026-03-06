@@ -817,18 +817,31 @@ validate_port_number() {
 }
 
 validate_sshws_ports_config() {
-  validate_port_number "SSHWS_DROPBEAR_PORT" "${SSHWS_DROPBEAR_PORT}"
-  validate_port_number "SSHWS_STUNNEL_PORT" "${SSHWS_STUNNEL_PORT}"
-  validate_port_number "SSHWS_PROXY_PORT" "${SSHWS_PROXY_PORT}"
-
-  if [[ "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_STUNNEL_PORT}" \
-     || "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_PROXY_PORT}" \
-     || "${SSHWS_STUNNEL_PORT}" == "${SSHWS_PROXY_PORT}" ]]; then
-    die "Port SSHWS tidak boleh duplikat (dropbear=${SSHWS_DROPBEAR_PORT}, stunnel=${SSHWS_STUNNEL_PORT}, proxy=${SSHWS_PROXY_PORT})."
+  local stunnel_enabled="false"
+  if command -v stunnel4 >/dev/null 2>&1 || command -v stunnel >/dev/null 2>&1; then
+    stunnel_enabled="true"
   fi
 
+  validate_port_number "SSHWS_DROPBEAR_PORT" "${SSHWS_DROPBEAR_PORT}"
+  validate_port_number "SSHWS_PROXY_PORT" "${SSHWS_PROXY_PORT}"
+  if [[ "${stunnel_enabled}" == "true" ]]; then
+    validate_port_number "SSHWS_STUNNEL_PORT" "${SSHWS_STUNNEL_PORT}"
+  fi
+
+  if [[ "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_PROXY_PORT}" ]]; then
+    die "Port SSHWS tidak boleh duplikat (dropbear=${SSHWS_DROPBEAR_PORT}, proxy=${SSHWS_PROXY_PORT})."
+  fi
+  if [[ "${stunnel_enabled}" == "true" ]] && [[ "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_STUNNEL_PORT}" \
+     || "${SSHWS_STUNNEL_PORT}" == "${SSHWS_PROXY_PORT}" ]]; then
+    die "Port SSHWS tidak boleh duplikat saat stunnel aktif (dropbear=${SSHWS_DROPBEAR_PORT}, stunnel=${SSHWS_STUNNEL_PORT}, proxy=${SSHWS_PROXY_PORT})."
+  fi
+
+  local -a ports=("${SSHWS_DROPBEAR_PORT}" "${SSHWS_PROXY_PORT}")
   local p
-  for p in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
+  if [[ "${stunnel_enabled}" == "true" ]]; then
+    ports+=("${SSHWS_STUNNEL_PORT}")
+  fi
+  for p in "${ports[@]}"; do
     case "${p}" in
       80|443)
         die "Port SSHWS ${p} bentrok dengan port publik Nginx (80/443)."
@@ -838,6 +851,9 @@ validate_sshws_ports_config() {
         ;;
     esac
   done
+  if [[ "${stunnel_enabled}" != "true" ]]; then
+    warn "Validasi port stunnel dilewati (stunnel belum tersedia, mode opsional)."
+  fi
 }
 
 # Registry port yang sudah dipesan dalam sesi ini, disimpan di temp file.
@@ -2266,8 +2282,12 @@ install_sshws_stack() {
         /etc/systemd/system/xray-sshws-proxy.service >/dev/null 2>&1 || true
   rm -f /usr/local/bin/xray-sshws-proxy /etc/stunnel/xray-sshws.conf >/dev/null 2>&1 || true
 
+  local -a required_ports=("${SSHWS_DROPBEAR_PORT}" "${SSHWS_PROXY_PORT}")
   local p
-  for p in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
+  if [[ -n "${stunnel_bin}" ]]; then
+    required_ports+=("${SSHWS_STUNNEL_PORT}")
+  fi
+  for p in "${required_ports[@]}"; do
     if ! is_port_free "${p}"; then
       die "Port SSHWS ${p} sedang dipakai proses lain. Bebaskan port ini atau ubah SSHWS_*_PORT."
     fi
@@ -2469,14 +2489,20 @@ def _username_from_pid(pid, proc_info, children):
   return ""
 
 
-def scan_dropbear_sessions(dropbear_port):
+def scan_dropbear_sessions(dropbear_port, timeout_sec=1.0):
+  try:
+    timeout = float(timeout_sec)
+  except Exception:
+    timeout = 1.0
+  if timeout < 0.05:
+    timeout = 0.05
   try:
     p = subprocess.run(
       ["ss", "-tnpH"],
       check=False,
       capture_output=True,
       text=True,
-      timeout=2,
+      timeout=timeout,
     )
   except Exception:
     return {}
@@ -2783,14 +2809,15 @@ class ConnectionRegistry:
       await ctx.assign_username(user)
 
 
-async def _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.05):
+async def _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.05, scan_timeout_sec=1.0):
   tries = max(1, int(attempts))
   delay = max(0.0, float(delay_sec))
+  scan_timeout = max(0.05, float(scan_timeout_sec))
   for idx in range(tries):
     if await ctx.username():
       return True
     try:
-      pmap = await asyncio.to_thread(scan_dropbear_sessions, int(args.backend_port))
+      pmap = await asyncio.to_thread(scan_dropbear_sessions, int(args.backend_port), scan_timeout)
       await registry.assign_by_port_map(pmap)
     except Exception:
       pass
@@ -2935,6 +2962,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
 
   backend_writer = None
   ctx = None
+  resolver_task = None
   try:
     backend_reader, backend_writer = await asyncio.open_connection(
       args.backend_host,
@@ -2944,8 +2972,6 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
     ctx = ConnectionContext(backend_local_port, quota_mgr)
     await registry.register(ctx)
-    # Coba resolve awal segera untuk mengurangi window under-attribution pada sesi sangat pendek.
-    await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.0)
   except Exception:
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
@@ -2960,6 +2986,10 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
 
   try:
     await _send_handshake_ok(ws_writer)
+    # Resolve username dijalankan async agar handshake ke klien tidak tertahan scan sesi.
+    resolver_task = asyncio.create_task(
+      _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.0, scan_timeout_sec=0.2)
+    )
     pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter))
     pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
@@ -2972,12 +3002,18 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
   except Exception:
     pass
   finally:
+    if resolver_task is not None and not resolver_task.done():
+      resolver_task.cancel()
+      try:
+        await resolver_task
+      except BaseException:
+        pass
     if ctx is not None:
       # Best-effort resolve terakhir sebelum context dilepas:
       # mengurangi kemungkinan quota/speed tidak teratribusi pada koneksi pendek.
       try:
         if not await ctx.username():
-          await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05)
+          await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=2, delay_sec=0.02, scan_timeout_sec=0.2)
       except Exception:
         pass
       try:
@@ -7463,6 +7499,8 @@ main() {
   install_base_deps
   need_python3
   install_extra_deps
+  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
+  validate_sshws_ports_config
   install_speedtest_snap
   enable_cron_service
   setup_time_sync_chrony

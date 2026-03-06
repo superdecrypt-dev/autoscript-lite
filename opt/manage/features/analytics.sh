@@ -2891,6 +2891,27 @@ ssh_active_sessions_count() {
   echo "${c}"
 }
 
+ssh_qac_setup_file_trusted() {
+  local file="${1:-}"
+  [[ -n "${file}" && -f "${file}" && -r "${file}" ]] || return 1
+
+  local real owner mode
+  real="$(readlink -f -- "${file}" 2>/dev/null || true)"
+  [[ -n "${real}" && -f "${real}" && -r "${real}" ]] || return 1
+
+  # Saat root: source restore harus root-owned, non-symlink, dan tidak writable group/other.
+  if [[ "$(id -u)" -eq 0 ]]; then
+    [[ -L "${file}" || -L "${real}" ]] && return 1
+    owner="$(stat -c '%u' "${real}" 2>/dev/null || echo 1)"
+    mode="$(stat -c '%A' "${real}" 2>/dev/null || echo '----------')"
+    [[ "${owner}" == "0" ]] || return 1
+    [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  fi
+
+  printf '%s\n' "${real}"
+  return 0
+}
+
 ssh_qac_detect_setup_script() {
   local candidates=()
   local src_dir="" repo_root=""
@@ -2904,13 +2925,13 @@ ssh_qac_detect_setup_script() {
     "/root/project/autoscript/setup.sh"
     "/root/autoscript/setup.sh"
     "/opt/autoscript/setup.sh"
-    "$(pwd)/setup.sh"
   )
 
-  local f
+  local f trusted_real
   for f in "${candidates[@]}"; do
-    [[ -n "${f}" && -f "${f}" ]] || continue
-    echo "${f}"
+    trusted_real="$(ssh_qac_setup_file_trusted "${f}" || true)"
+    [[ -n "${trusted_real}" ]] || continue
+    echo "${trusted_real}"
     return 0
   done
   return 1
