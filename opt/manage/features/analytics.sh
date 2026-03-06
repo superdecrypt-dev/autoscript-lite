@@ -2444,66 +2444,111 @@ ssh_reset_password_menu() {
 }
 
 ssh_list_users_menu() {
-  title
-  echo "3) SSH Management > List Managed SSH Users"
-  hr
+  local -a users=()
+  local u
 
   ssh_state_dirs_prepare
   need_python3
-  python3 - <<'PY' "${SSH_USERS_STATE_DIR}"
+
+  while IFS= read -r u; do
+    [[ -n "${u}" ]] || continue
+    users+=("${u}")
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
+
+  if (( ${#users[@]} == 0 )); then
+    title
+    echo "3) SSH Management > List Managed SSH Users"
+    hr
+    warn "Belum ada akun SSH terkelola."
+    hr
+    pause
+    return 0
+  fi
+
+  while true; do
+    title
+    echo "3) SSH Management > List Managed SSH Users"
+    hr
+    printf "%-4s %-20s %-22s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
+    local i username qf fields meta_user created expired sys_user
+    for i in "${!users[@]}"; do
+      username="${users[$i]}"
+      qf="$(ssh_user_state_file "${username}")"
+      fields="$(python3 - <<'PY' "${qf}" 2>/dev/null || true
 import json
-import pathlib
 import sys
 
-root = pathlib.Path(sys.argv[1])
-rows = []
-for path in sorted(root.glob("*.json")):
-  username = path.stem
-  if username.endswith("@ssh"):
-    username = username[:-4]
-  created = "-"
-  expired = "-"
-  try:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    u = str(data.get("username") or "").strip()
-    if u:
-      if u.endswith("@ssh"):
-        u = u[:-4]
-      if "@" in u:
-        u = u.split("@", 1)[0]
-      if u:
-        username = u
-    created = str(data.get("created_at") or "-")
-    expired = str(data.get("expired_at") or "-")
-  except Exception:
-    pass
-  rows.append((username, created, expired))
-
-if not rows:
-  print("Belum ada akun SSH terkelola.")
-  raise SystemExit(0)
-
-print(f"{'No':<4} {'Username':<20} {'Created':<22} {'Expired':<12} {'SystemUser':<12}")
-for idx, row in enumerate(rows, start=1):
-  username, created, expired = row
-  sys_user = "present"
-  if pathlib.Path("/etc/passwd").is_file():
-    try:
-      passwd = pathlib.Path("/etc/passwd").read_text(encoding="utf-8", errors="ignore")
-      users = set()
-      for ln in passwd.splitlines():
-        if ":" not in ln:
-          continue
-        users.add(ln.split(":", 1)[0])
-      if username not in users:
-        sys_user = "missing"
-    except Exception:
-      pass
-  print(f"{idx:<4} {username:<20} {created:<22} {expired:<12} {sys_user:<12}")
+path = sys.argv[1]
+username = ""
+created = "-"
+expired = "-"
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    d = json.load(f)
+  if isinstance(d, dict):
+    username = str(d.get("username") or "").strip()
+    created = str(d.get("created_at") or "-")
+    expired = str(d.get("expired_at") or "-")
+except Exception:
+  pass
+print("|".join([username, created, expired]))
 PY
+)"
+      IFS='|' read -r meta_user created expired <<<"${fields}"
+      if [[ -n "${meta_user}" ]]; then
+        meta_user="$(ssh_username_from_key "${meta_user}")"
+        [[ -n "${meta_user}" ]] && username="${meta_user}"
+      fi
+      sys_user="present"
+      if ! id "${username}" >/dev/null 2>&1; then
+        sys_user="missing"
+      fi
+      printf "%-4s %-20s %-22s %-12s %-12s\n" "$((i + 1))" "${username}" "${created}" "${expired}" "${sys_user}"
+    done
+    hr
+    echo "Ketik NO untuk lihat detail SSH ACCOUNT INFO."
+    echo "0/kembali untuk kembali ke SSH Management."
+    hr
 
-  hr
-  pause
+    local pick
+    if ! read -r -p "Pilih: " pick; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${pick}"; then
+      return 0
+    fi
+    if [[ ! "${pick}" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#users[@]} )); then
+      warn "Pilihan tidak valid."
+      sleep 1
+      continue
+    fi
+
+    username="${users[$((pick - 1))]}"
+    local acc_file password_info
+    ssh_account_info_refresh_warn "${username}" || true
+    acc_file="$(ssh_account_info_file "${username}")"
+
+    title
+    echo "3) SSH Management > SSH ACCOUNT INFO"
+    hr
+    echo "Username : ${username}"
+    echo "File     : ${acc_file}"
+    hr
+    if [[ -f "${acc_file}" ]]; then
+      cat "${acc_file}"
+      password_info="$(grep -E '^Password[[:space:]]*:' "${acc_file}" 2>/dev/null | head -n1 | sed -E 's/^Password[[:space:]]*:[[:space:]]*//' || true)"
+      if [[ "$(ssh_account_info_password_mode)" != "store" || -z "${password_info}" || "${password_info}" == "********" ]]; then
+        hr
+        warn "Password plaintext tidak tersedia di account info (mode mask)."
+        echo "Gunakan menu 4) Reset Password untuk mendapatkan one-time password."
+      fi
+    else
+      warn "SSH ACCOUNT INFO tidak ditemukan untuk '${username}'."
+    fi
+    hr
+    pause
+  done
 }
 
 ssh_menu() {
