@@ -1348,6 +1348,264 @@ sshws_restart_menu() {
   pause
 }
 
+sshws_probe_tcp_endpoint() {
+  # args: host port mode(tcp|tls)
+  local host="${1:-127.0.0.1}"
+  local port="${2:-0}"
+  local mode="${3:-tcp}"
+  need_python3
+  python3 - <<'PY' "${host}" "${port}" "${mode}" 2>/dev/null || true
+import socket
+import ssl
+import sys
+
+host, port_s, mode = sys.argv[1:4]
+try:
+  port = int(port_s)
+except Exception:
+  print("fail|invalid-port")
+  raise SystemExit(0)
+
+timeout = 2.0
+sock = None
+try:
+  raw = socket.create_connection((host, port), timeout=timeout)
+  if mode == "tls":
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    sock = ctx.wrap_socket(raw, server_hostname=host or "localhost")
+  else:
+    sock = raw
+  print("ok|connected")
+except Exception as exc:
+  msg = str(exc).strip().replace("\n", " ")
+  print("fail|" + (msg or exc.__class__.__name__.lower()))
+finally:
+  try:
+    if sock is not None:
+      sock.close()
+  except Exception:
+    pass
+PY
+}
+
+sshws_probe_ws_endpoint() {
+  # args: host port path host_header tls_mode sni
+  local host="${1:-127.0.0.1}"
+  local port="${2:-0}"
+  local path="${3:-/}"
+  local host_header="${4:-127.0.0.1}"
+  local tls_mode="${5:-off}"
+  local sni="${6:-}"
+  need_python3
+  python3 - <<'PY' "${host}" "${port}" "${path}" "${host_header}" "${tls_mode}" "${sni}" 2>/dev/null || true
+import socket
+import ssl
+import sys
+
+host, port_s, path, host_header, tls_mode, sni = sys.argv[1:7]
+try:
+  port = int(port_s)
+except Exception:
+  print("fail|invalid-port")
+  raise SystemExit(0)
+
+raw = None
+sock = None
+try:
+  raw = socket.create_connection((host, port), timeout=3.0)
+  raw.settimeout(3.0)
+  if tls_mode == "on":
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    sock = ctx.wrap_socket(raw, server_hostname=sni or host or "localhost")
+  else:
+    sock = raw
+  req = (
+    f"GET {path or '/'} HTTP/1.1\r\n"
+    f"Host: {host_header or host}\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "User-Agent: autoscript-manage/sshws-diagnostics\r\n"
+    "\r\n"
+  ).encode("ascii", "ignore")
+  sock.sendall(req)
+  buf = b""
+  while b"\r\n\r\n" not in buf and len(buf) < 16384:
+    chunk = sock.recv(4096)
+    if not chunk:
+      break
+    buf += chunk
+  if not buf:
+    print("fail|empty-response")
+    raise SystemExit(0)
+  line = buf.split(b"\r\n", 1)[0].decode("latin1", "replace").strip()
+  parts = line.split(None, 2)
+  if len(parts) >= 2 and parts[1].isdigit():
+    code = int(parts[1])
+    reason = parts[2] if len(parts) >= 3 else ""
+    print(f"http|{code}|{reason}")
+  else:
+    print("fail|" + (line or "bad-response"))
+except Exception as exc:
+  msg = str(exc).strip().replace("\n", " ")
+  print("fail|" + (msg or exc.__class__.__name__.lower()))
+finally:
+  try:
+    if sock is not None:
+      sock.close()
+  except Exception:
+    pass
+  try:
+    if raw is not None and raw is not sock:
+      raw.close()
+  except Exception:
+    pass
+PY
+}
+
+sshws_probe_result_disp() {
+  local raw="${1:-}"
+  local kind part1 part2
+  IFS='|' read -r kind part1 part2 <<<"${raw}"
+  case "${kind}" in
+    ok)
+      echo "OK (${part1:-connected})"
+      ;;
+    http)
+      case "${part1:-0}" in
+        101) echo "OK (HTTP 101 ${part2:-})" ;;
+        301|302|307|308) echo "WARN (HTTP ${part1} ${part2:-redirect})" ;;
+        *) echo "FAIL (HTTP ${part1:-0} ${part2:-})" ;;
+      esac
+      ;;
+    fail)
+      echo "FAIL (${part1:-unknown})"
+      ;;
+    *)
+      echo "FAIL (unknown)"
+      ;;
+  esac
+}
+
+sshws_combined_logs_menu() {
+  title
+  echo "10) Maintenance > SSH WS Combined Logs"
+  hr
+
+  local -a svc_args=()
+  local svc
+  for svc in "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}"; do
+    if svc_exists "${svc}"; then
+      svc_args+=(-u "${svc}")
+    fi
+  done
+
+  if (( ${#svc_args[@]} == 0 )); then
+    warn "Belum ada service SSHWS yang terpasang."
+    hr
+    pause
+    return 0
+  fi
+
+  journalctl "${svc_args[@]}" --no-pager -n 120 2>/dev/null || true
+  hr
+  pause
+}
+
+sshws_diagnostics_menu() {
+  local choice=""
+  while true; do
+    title
+    echo "10) Maintenance > SSH WS Diagnostics"
+    hr
+
+    local dropbear_port stunnel_port proxy_port domain
+    local proxy_probe tls443_probe http80_probe dropbear_probe stunnel_probe
+    dropbear_port="$(sshws_detect_dropbear_port)"
+    stunnel_port="$(sshws_detect_stunnel_port)"
+    proxy_port="$(sshws_detect_proxy_port)"
+    domain="$(detect_domain)"
+
+    echo "Services:"
+    if svc_exists "${SSHWS_DROPBEAR_SERVICE}"; then
+      printf "  %-16s : %s\n" "${SSHWS_DROPBEAR_SERVICE}" "$(svc_status_line "${SSHWS_DROPBEAR_SERVICE}")"
+    else
+      printf "  %-16s : %s\n" "${SSHWS_DROPBEAR_SERVICE}" "NOT INSTALLED"
+    fi
+    if svc_exists "${SSHWS_STUNNEL_SERVICE}"; then
+      printf "  %-16s : %s\n" "${SSHWS_STUNNEL_SERVICE}" "$(svc_status_line "${SSHWS_STUNNEL_SERVICE}")"
+    else
+      printf "  %-16s : %s\n" "${SSHWS_STUNNEL_SERVICE}" "OPTIONAL / NOT INSTALLED"
+    fi
+    if svc_exists "${SSHWS_PROXY_SERVICE}"; then
+      printf "  %-16s : %s\n" "${SSHWS_PROXY_SERVICE}" "$(svc_status_line "${SSHWS_PROXY_SERVICE}")"
+    else
+      printf "  %-16s : %s\n" "${SSHWS_PROXY_SERVICE}" "NOT INSTALLED"
+    fi
+
+    hr
+    echo "Internal Ports:"
+    printf "  %-16s : 127.0.0.1:%s\n" "dropbear" "${dropbear_port}"
+    printf "  %-16s : 127.0.0.1:%s\n" "stunnel" "${stunnel_port}"
+    printf "  %-16s : 127.0.0.1:%s\n" "ws proxy" "${proxy_port}"
+    printf "  %-16s : %s\n" "domain" "${domain:-"-"}"
+
+    hr
+    echo "Local Probes:"
+    dropbear_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${dropbear_port}" "tcp")"
+    printf "  %-16s : %s\n" "dropbear tcp" "$(sshws_probe_result_disp "${dropbear_probe}")"
+
+    proxy_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "${proxy_port}" "/" "127.0.0.1:${proxy_port}" "off" "")"
+    printf "  %-16s : %s\n" "proxy ws" "$(sshws_probe_result_disp "${proxy_probe}")"
+
+    if svc_exists "${SSHWS_STUNNEL_SERVICE}"; then
+      stunnel_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${stunnel_port}" "tls")"
+      printf "  %-16s : %s\n" "stunnel tls" "$(sshws_probe_result_disp "${stunnel_probe}")"
+    else
+      printf "  %-16s : %s\n" "stunnel tls" "SKIP (optional)"
+    fi
+
+    hr
+    echo "Public Path Probes:"
+    if have_cmd ss && ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
+      http80_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "80" "/" "${domain:-127.0.0.1}" "off" "")"
+      printf "  %-16s : %s\n" "nginx :80" "$(sshws_probe_result_disp "${http80_probe}")"
+    else
+      printf "  %-16s : %s\n" "nginx :80" "SKIP (not listening)"
+    fi
+    if [[ -n "${domain}" ]] && have_cmd ss && ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+      tls443_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "443" "/" "${domain}" "on" "${domain}")"
+      printf "  %-16s : %s\n" "nginx :443" "$(sshws_probe_result_disp "${tls443_probe}")"
+    else
+      printf "  %-16s : %s\n" "nginx :443" "SKIP (domain/443 unavailable)"
+    fi
+
+    hr
+    echo "Notes:"
+    echo "  - HTTP 101 menandakan chain SSHWS sehat."
+    echo "  - HTTP 502 biasanya berarti backend internal belum siap."
+    echo "  - HTTP 301/308 pada port 80 normal jika force-HTTPS aktif."
+    hr
+    echo "  1) Refresh"
+    echo "  2) Combined SSHWS Logs"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " choice; then
+      echo
+      return 0
+    fi
+    case "${choice}" in
+      1|refresh|r) ;;
+      2|logs|log) sshws_combined_logs_menu ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) warn "Pilihan tidak valid" ; sleep 1 ;;
+    esac
+  done
+}
+
 ssh_username_valid() {
   local username="${1:-}"
   [[ "${username}" =~ ^[a-z_][a-z0-9_-]{1,31}$ ]]
@@ -1796,6 +2054,40 @@ ssh_account_info_password_get() {
   awk '/^Password[[:space:]]*:/{sub(/^Password[[:space:]]*:[[:space:]]*/, ""); print; found=1; exit} END{if(!found) print "-"}' "${acc_file}" 2>/dev/null
 }
 
+ssh_qac_traffic_enforcement_ready() {
+  local proxy_svc="${SSHWS_PROXY_SERVICE:-sshws-proxy}"
+  [[ -x /usr/local/bin/sshws-proxy ]] && return 0
+  [[ -f "/etc/systemd/system/${proxy_svc}.service" ]] && return 0
+  [[ -f "/lib/systemd/system/${proxy_svc}.service" ]] && return 0
+  return 1
+}
+
+ssh_qac_traffic_scope_label() {
+  if ssh_qac_traffic_enforcement_ready; then
+    echo "SSHWS only"
+  else
+    echo "Metadata only (SSHWS not installed)"
+  fi
+}
+
+ssh_qac_traffic_scope_line() {
+  if ssh_qac_traffic_enforcement_ready; then
+    echo "Quota/IP-login/speed berlaku pada jalur SSHWS; native SSH port 22 tidak dihitung atau di-throttle."
+  else
+    echo "SSHWS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
+  fi
+}
+
+ssh_qac_print_scope_notice() {
+  if ssh_qac_traffic_enforcement_ready; then
+    echo "Traffic scope : quota used, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS."
+    echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
+  else
+    echo "Traffic scope : SSHWS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
+    echo "Native SSH    : yang benar-benar berlaku saat ini tetap masa aktif dan manual block."
+  fi
+}
+
 ssh_account_info_write() {
   # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up
   local username="${1:-}"
@@ -1819,7 +2111,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp
+  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -1880,6 +2172,9 @@ PY
     speed_disp="OFF"
   fi
 
+  traffic_scope_disp="$(ssh_qac_traffic_scope_label)"
+  traffic_scope_note="$(ssh_qac_traffic_scope_line)"
+
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
 Domain      : ${domain}
@@ -1892,6 +2187,8 @@ Valid Until : ${valid_until}
 Created     : ${created_at}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
+Traffic Scope : ${traffic_scope_disp}
+Traffic Note  : ${traffic_scope_note}
 
 Standard Payload:
 Payload WSS:
@@ -2237,6 +2534,8 @@ ssh_add_user_menu() {
     echo "3) SSH Management > Add SSH User"
     hr
     ssh_add_user_header_render header_page
+    hr
+    ssh_qac_print_scope_notice
     hr
 
     if ! read -r -p "Username SSH (atau next/previous/kembali): " username; then
@@ -2824,6 +3123,373 @@ PY
   done
 }
 
+sshws_active_sessions_collect_rows() {
+  SSHWS_SESSION_ROWS=()
+  local dropbear_port
+  dropbear_port="$(sshws_detect_dropbear_port)"
+  need_python3
+
+  local row
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    SSHWS_SESSION_ROWS+=("${row}")
+  done < <(python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${dropbear_port}" 2>/dev/null || true
+import glob
+import json
+import os
+import pwd
+import re
+import subprocess
+import sys
+from collections import defaultdict, deque
+
+state_root = sys.argv[1]
+try:
+  dropbear_port = int(sys.argv[2])
+except Exception:
+  dropbear_port = 0
+
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  return str(v or "").strip().lower() in ("1", "true", "yes", "on", "y")
+
+def _parse_port(addr):
+  s = str(addr or "").strip()
+  if not s:
+    return -1
+  if s.startswith("[") and "]:" in s:
+    s = s.rsplit("]:", 1)[-1]
+  elif ":" in s:
+    s = s.rsplit(":", 1)[-1]
+  try:
+    return int(s)
+  except Exception:
+    return -1
+
+def _build_proc_tables():
+  info = {}
+  children = defaultdict(list)
+  for st in glob.glob("/proc/[0-9]*/status"):
+    try:
+      pid = int(st.split("/")[2])
+      ppid = 0
+      uid = 0
+      with open(st, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+          if line.startswith("PPid:"):
+            ppid = int(line.split()[1])
+          elif line.startswith("Uid:"):
+            uid = int(line.split()[1])
+      info[pid] = (ppid, uid)
+      children[ppid].append(pid)
+    except Exception:
+      continue
+  return info, children
+
+def _username_from_pid(pid, proc_info, children):
+  q = deque([int(pid)])
+  seen = set()
+  while q:
+    cur = q.popleft()
+    if cur in seen:
+      continue
+    seen.add(cur)
+    meta = proc_info.get(cur)
+    if not meta:
+      continue
+    uid = int(meta[1])
+    if uid > 0:
+      try:
+        return pwd.getpwuid(uid).pw_name
+      except KeyError:
+        return ""
+    for child in children.get(cur, ()):
+      q.append(child)
+  return ""
+
+meta_map = {}
+if os.path.isdir(state_root):
+  for name in os.listdir(state_root):
+    if not name.endswith(".json"):
+      continue
+    path = os.path.join(state_root, name)
+    username = norm_user(name[:-5])
+    reason = "-"
+    lock_state = "OFF"
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+      if isinstance(data, dict):
+        username = norm_user(data.get("username") or username) or username
+        status = data.get("status")
+        if not isinstance(status, dict):
+          status = {}
+        lock_reason = str(status.get("lock_reason") or "").strip().lower()
+        reason = lock_reason.upper() if lock_reason else "-"
+        lock_state = "ON" if to_bool(status.get("account_locked")) else "OFF"
+    except Exception:
+      pass
+    if username:
+      meta_map[username] = {"reason": reason, "lock": lock_state}
+
+if dropbear_port <= 0:
+  raise SystemExit(0)
+
+try:
+  res = subprocess.run(
+    ["ss", "-tnpH"],
+    check=False,
+    capture_output=True,
+    text=True,
+    timeout=1.5,
+  )
+except Exception:
+  raise SystemExit(0)
+
+if res.returncode != 0:
+  raise SystemExit(0)
+
+proc_info, children = _build_proc_tables()
+rows = []
+for raw in (res.stdout or "").splitlines():
+  line = raw.strip()
+  if not line or "dropbear" not in line:
+    continue
+  cols = line.split()
+  if len(cols) < 6:
+    continue
+  lport = _parse_port(cols[3])
+  if lport != dropbear_port:
+    continue
+  peer = cols[4]
+  m = re.search(r"pid=(\d+)", line)
+  if not m:
+    continue
+  pid = int(m.group(1))
+  username = _username_from_pid(pid, proc_info, children) or "unknown"
+  rows.append({
+    "username": username,
+    "peer": peer,
+    "pid": pid,
+  })
+
+counts = defaultdict(int)
+for row in rows:
+  counts[row["username"]] += 1
+
+rows.sort(key=lambda item: (item["username"].lower(), item["pid"], item["peer"]))
+for row in rows:
+  meta = meta_map.get(row["username"], {})
+  print("|".join([
+    row["username"],
+    row["peer"],
+    str(row["pid"]),
+    str(counts.get(row["username"], 1)),
+    str(meta.get("reason") or "-"),
+    str(meta.get("lock") or "OFF"),
+  ]))
+PY
+)
+}
+
+sshws_active_sessions_apply_filter() {
+  SSHWS_SESSION_VIEW_INDEXES=()
+  local q="${SSHWS_SESSION_QUERY,,}"
+  local i row
+  for i in "${!SSHWS_SESSION_ROWS[@]}"; do
+    row="${SSHWS_SESSION_ROWS[$i]}"
+    if [[ -z "${q}" || "${row,,}" == *"${q}"* ]]; then
+      SSHWS_SESSION_VIEW_INDEXES+=("${i}")
+    fi
+  done
+}
+
+sshws_active_sessions_print_page() {
+  local page="${1:-0}"
+  local total="${#SSHWS_SESSION_VIEW_INDEXES[@]}"
+  local pages=0
+  local display_pages=1
+  if (( total > 0 )); then
+    pages=$(( (total + SSHWS_SESSION_PAGE_SIZE - 1) / SSHWS_SESSION_PAGE_SIZE ))
+    display_pages="${pages}"
+  fi
+  if (( page < 0 )); then
+    page=0
+  fi
+  if (( pages > 0 && page >= pages )); then
+    page=$((pages - 1))
+  fi
+  SSHWS_SESSION_PAGE="${page}"
+
+  echo "Active SSHWS sessions: ${total} | page $((page + 1))/${display_pages}"
+  if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
+    echo "Filter: '${SSHWS_SESSION_QUERY}'"
+  fi
+  echo "Peer = loopback mapping proxy -> dropbear. Client IP asli belum diekspos runtime SSHWS saat ini."
+  echo
+
+  if (( total == 0 )); then
+    echo "Tidak ada sesi SSHWS aktif."
+    return 0
+  fi
+
+  printf "%-4s %-18s %-21s %-7s %-6s %-10s %-6s\n" "NO" "Username" "Peer" "PID" "Sess" "Reason" "Lock"
+  hr
+
+  local start end i list_pos real_idx row username peer pid sess reason lock
+  start=$((page * SSHWS_SESSION_PAGE_SIZE))
+  end=$((start + SSHWS_SESSION_PAGE_SIZE))
+  if (( end > total )); then
+    end="${total}"
+  fi
+  for (( i=start; i<end; i++ )); do
+    list_pos="${i}"
+    real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
+    row="${SSHWS_SESSION_ROWS[$real_idx]}"
+    IFS='|' read -r username peer pid sess reason lock <<<"${row}"
+    printf "%-4s %-18s %-21s %-7s %-6s %-10s %-6s\n" "$((i - start + 1))" "${username}" "${peer}" "${pid}" "${sess}" "${reason}" "${lock}"
+  done
+}
+
+sshws_active_session_detail() {
+  local view_no="${1:-}"
+  [[ "${view_no}" =~ ^[0-9]+$ ]] || { warn "Input bukan angka"; pause; return 0; }
+
+  local total page pages start end rows
+  total="${#SSHWS_SESSION_VIEW_INDEXES[@]}"
+  if (( total <= 0 )); then
+    warn "Tidak ada sesi aktif."
+    pause
+    return 0
+  fi
+
+  page="${SSHWS_SESSION_PAGE:-0}"
+  pages=$(( (total + SSHWS_SESSION_PAGE_SIZE - 1) / SSHWS_SESSION_PAGE_SIZE ))
+  if (( page < 0 )); then page=0; fi
+  if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+  start=$((page * SSHWS_SESSION_PAGE_SIZE))
+  end=$((start + SSHWS_SESSION_PAGE_SIZE))
+  if (( end > total )); then end="${total}"; fi
+  rows=$((end - start))
+
+  if (( view_no < 1 || view_no > rows )); then
+    warn "NO di luar range"
+    pause
+    return 0
+  fi
+
+  local list_pos real_idx row username peer pid sess reason lock
+  list_pos=$((start + view_no - 1))
+  real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
+  row="${SSHWS_SESSION_ROWS[$real_idx]}"
+  IFS='|' read -r username peer pid sess reason lock <<<"${row}"
+
+  title
+  echo "3) SSH Management > Active SSHWS Session Detail"
+  hr
+  printf "%-16s : %s\n" "Username" "${username}"
+  printf "%-16s : %s\n" "Peer" "${peer}"
+  printf "%-16s : %s\n" "Dropbear PID" "${pid}"
+  printf "%-16s : %s\n" "Active Sessions" "${sess}"
+  printf "%-16s : %s\n" "Block Reason" "${reason}"
+  printf "%-16s : %s\n" "Account Lock" "${lock}"
+  printf "%-16s : %s\n" "Client IP" "Unavailable on current SSHWS runtime"
+
+  local qf
+  qf="$(ssh_user_state_file "${username}")"
+  if [[ -f "${qf}" ]]; then
+    local fields ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state
+    fields="$(ssh_qac_read_detail_fields "${qf}")"
+    IFS='|' read -r _ ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state <<<"${fields}"
+    hr
+    printf "%-16s : %s\n" "Quota" "${ql_disp}"
+    printf "%-16s : %s\n" "Used" "${qu_disp}"
+    printf "%-16s : %s\n" "Expired" "${exp_date}"
+    printf "%-16s : %s (%s)\n" "IP/Login Limit" "${ip_state}" "${ip_lim}"
+    printf "%-16s : %s DOWN / %s UP (%s)\n" "Speed Limit" "${speed_down}" "${speed_up}" "${speed_state}"
+    printf "%-16s : %s\n" "Metadata File" "${qf}"
+  fi
+  hr
+  pause
+}
+
+sshws_active_sessions_menu() {
+  SSHWS_SESSION_PAGE=0
+  SSHWS_SESSION_QUERY=""
+  while true; do
+    sshws_active_sessions_collect_rows
+    sshws_active_sessions_apply_filter
+
+    title
+    echo "3) SSH Management > Active SSHWS Sessions"
+    hr
+    sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
+    hr
+    echo "Ketik NO untuk detail, atau: search / clear / next / previous / refresh / 0"
+    hr
+
+    local c=""
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${c}"; then
+      return 0
+    fi
+
+    case "${c}" in
+      next|n)
+        local pages
+        pages=$(( (${#SSHWS_SESSION_VIEW_INDEXES[@]} + SSHWS_SESSION_PAGE_SIZE - 1) / SSHWS_SESSION_PAGE_SIZE ))
+        if (( pages > 0 && SSHWS_SESSION_PAGE < pages - 1 )); then
+          SSHWS_SESSION_PAGE=$((SSHWS_SESSION_PAGE + 1))
+        fi
+        ;;
+      previous|p|prev)
+        if (( SSHWS_SESSION_PAGE > 0 )); then
+          SSHWS_SESSION_PAGE=$((SSHWS_SESSION_PAGE - 1))
+        fi
+        ;;
+      search)
+        if ! read -r -p "Filter username/peer (atau kembali): " c; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${c}"; then
+          continue
+        fi
+        SSHWS_SESSION_QUERY="${c}"
+        SSHWS_SESSION_PAGE=0
+        ;;
+      clear)
+        SSHWS_SESSION_QUERY=""
+        SSHWS_SESSION_PAGE=0
+        ;;
+      refresh|r)
+        ;;
+      *)
+        if [[ "${c}" =~ ^[0-9]+$ ]]; then
+          sshws_active_session_detail "${c}"
+        else
+          warn "Pilihan tidak valid"
+          sleep 1
+        fi
+        ;;
+    esac
+  done
+}
+
 ssh_menu() {
   while true; do
     title
@@ -2836,6 +3502,7 @@ ssh_menu() {
     echo "  5) List Managed SSH Users"
     echo "  6) SSH WS Service Status"
     echo "  7) Restart SSH WS Stack"
+    echo "  8) Active SSHWS Sessions"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -2850,6 +3517,7 @@ ssh_menu() {
       5) ssh_list_users_menu ;;
       6) sshws_status_menu ;;
       7) sshws_restart_menu ;;
+      8) sshws_active_sessions_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -2865,6 +3533,11 @@ SSH_QAC_PAGE=0
 SSH_QAC_QUERY=""
 SSH_QAC_VIEW_INDEXES=()
 SSH_QAC_ENFORCER_BIN="/usr/local/bin/sshws-qac-enforcer"
+SSHWS_SESSION_ROWS=()
+SSHWS_SESSION_VIEW_INDEXES=()
+SSHWS_SESSION_PAGE_SIZE=10
+SSHWS_SESSION_PAGE=0
+SSHWS_SESSION_QUERY=""
 
 ssh_active_sessions_count() {
   local username="${1:-}"
@@ -3776,28 +4449,31 @@ ssh_qac_edit_flow() {
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
-    printf "%-${label_w}s : %s\n" "Quota Used" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used (SSHWS)" "${qu_disp}"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
-    printf "%-${label_w}s : %s\n" "IP Limit" "${ip_state}"
-    printf "%-${label_w}s : %s\n" "IP Limit Max" "${ip_lim}"
+    printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
+    printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active Sessions" "${active_sessions}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
-    printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
+    printf "%-${label_w}s : %s\n" "Active SSHWS Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSHWS)" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSHWS)" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit (SSHWS)" "${speed_state}"
+    printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
+    hr
+    ssh_qac_print_scope_notice
     hr
 
     echo "  1) View JSON"
     echo "  2) Set Quota Limit (GB)"
-    echo "  3) Reset Quota Used (set 0)"
+    echo "  3) Reset Quota Used SSHWS (set 0)"
     echo "  4) Manual Block/Unblock (toggle)"
-    echo "  5) IP Limit Enable/Disable (toggle)"
-    echo "  6) Set IP Limit (angka)"
-    echo "  7) Unlock IP Lock"
-    echo "  8) Set Speed Download (Mbps)"
-    echo "  9) Set Speed Upload (Mbps)"
-    echo " 10) Speed Limit Enable/Disable (toggle)"
+    echo "  5) IP/Login Limit Enable/Disable (toggle)"
+    echo "  6) Set IP/Login Limit (angka)"
+    echo "  7) Unlock IP/Login Lock"
+    echo "  8) Set Speed Download SSHWS (Mbps)"
+    echo "  9) Set Speed Upload SSHWS (Mbps)"
+    echo " 10) Speed Limit SSHWS Enable/Disable (toggle)"
     echo "  0) Kembali"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -4061,6 +4737,8 @@ ssh_quota_menu() {
     hr
 
     ssh_qac_enforce_now_warn || true
+    ssh_qac_print_scope_notice
+    hr
     ssh_qac_collect_files
     ssh_qac_build_view_indexes
     ssh_qac_print_table_page "${SSH_QAC_PAGE}"

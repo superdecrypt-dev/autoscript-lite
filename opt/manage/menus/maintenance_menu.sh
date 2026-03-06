@@ -16,6 +16,7 @@ maintenance_menu() {
     echo "  8. Daemon Status & Restart (xray-expired / xray-quota / xray-limit-ip / xray-speed)"
     echo "  9. SSH WS Status (dropbear/stunnel/proxy)"
     echo "  10. Restart SSH WS Stack"
+    echo "  11. SSH WS Diagnostics"
     echo "  0. Kembali"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -33,6 +34,7 @@ maintenance_menu() {
       8) daemon_status_menu ;;
       9) sshws_status_menu ;;
       10) sshws_restart_menu ;;
+      11) sshws_diagnostics_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

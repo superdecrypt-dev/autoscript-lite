@@ -57,6 +57,10 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
 - SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib) dengan fail-close `502` jika backend internal tidak siap.
 - Baseline audit SSHWS: pertahankan konsep ini sebagai desain resmi; referensi konsep perilaku: `https://github.com/nanotechid/supreme` (tanpa wajib meniru penamaan/struktur repo referensi).
+- Scope enforcement SSH saat ini harus dianggap by design:
+  - `quota_used`, quota traffic, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS.
+  - Login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC.
+  - Masa aktif akun dan manual block tetap berlaku pada SSH native.
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.

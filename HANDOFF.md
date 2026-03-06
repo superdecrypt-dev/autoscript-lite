@@ -34,6 +34,10 @@ Agent AI baru wajib memulai dari konteks di atas.
   - `SSH Management > Add SSH User` kini:
     - mewajibkan input masa aktif (hari)
     - menerima `0` sebagai `back` pada prompt masa aktif
+  - Scope enforcement SSH perlu dianggap eksplisit:
+    - `quota_used`, quota traffic, IP/login limit, dan speed limit saat ini berlaku pada jalur SSHWS
+    - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
+    - masa aktif dan manual block tetap berlaku pada akun SSH native
   - Hardening bot + parity Telegram/WARP + dukungan SS multi-user dari rilis 2026-03-02 tetap berlaku.
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
