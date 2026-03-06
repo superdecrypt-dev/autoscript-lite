@@ -34,6 +34,7 @@ CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
 SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
+NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62}"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
@@ -208,6 +209,10 @@ service_enable_restart_checked() {
 
 need_root() {
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Jalankan sebagai root."
+}
+
+ensure_runtime_lock_dirs() {
+  install -d -m 700 /run/autoscript /run/autoscript/locks
 }
 
 ensure_stdin_available() {
@@ -799,6 +804,40 @@ is_port_free() {
   ! ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"
 }
 
+validate_port_number() {
+  # args: env_name value
+  local name="$1"
+  local value="$2"
+  [[ "${value}" =~ ^[0-9]+$ ]] || die "${name} harus angka 1..65535 (got: ${value})."
+  if (( value < 1 || value > 65535 )); then
+    die "${name} di luar range 1..65535 (got: ${value})."
+  fi
+}
+
+validate_sshws_ports_config() {
+  validate_port_number "SSHWS_DROPBEAR_PORT" "${SSHWS_DROPBEAR_PORT}"
+  validate_port_number "SSHWS_STUNNEL_PORT" "${SSHWS_STUNNEL_PORT}"
+  validate_port_number "SSHWS_PROXY_PORT" "${SSHWS_PROXY_PORT}"
+
+  if [[ "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_STUNNEL_PORT}" \
+     || "${SSHWS_DROPBEAR_PORT}" == "${SSHWS_PROXY_PORT}" \
+     || "${SSHWS_STUNNEL_PORT}" == "${SSHWS_PROXY_PORT}" ]]; then
+    die "Port SSHWS tidak boleh duplikat (dropbear=${SSHWS_DROPBEAR_PORT}, stunnel=${SSHWS_STUNNEL_PORT}, proxy=${SSHWS_PROXY_PORT})."
+  fi
+
+  local p
+  for p in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
+    case "${p}" in
+      80|443)
+        die "Port SSHWS ${p} bentrok dengan port publik Nginx (80/443)."
+        ;;
+      10085)
+        die "Port SSHWS ${p} bentrok dengan Xray API port (10085)."
+        ;;
+    esac
+  done
+}
+
 # Registry port yang sudah dipesan dalam sesi ini, disimpan di temp file.
 # Wajib pakai temp file (bukan array) karena pick_port dipanggil via $(pick_port)
 # yang menjalankan subshell — perubahan array di dalam subshell TIDAK kembali ke
@@ -814,9 +853,17 @@ register_exit_cleanup cleanup_pick_port_registry
 
 pick_port() {
   local p tries=0
+  local reserved
   local max_tries=10000
   while (( tries < max_tries )); do
     p=$(( 20000 + RANDOM % 40000 ))
+    for reserved in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
+      if [[ "${p}" == "${reserved}" ]]; then
+        p=""
+        break
+      fi
+    done
+    [[ -n "${p}" ]] || { tries=$((tries + 1)); continue; }
     # Cek: tidak sedang LISTEN dan belum pernah dipesan di sesi ini
     if is_port_free "$p" && ! grep -qxF "$p" "${_PICK_PORT_REGISTRY}" 2>/dev/null; then
       echo "$p" >> "${_PICK_PORT_REGISTRY}"
@@ -872,10 +919,16 @@ install_nginx_official_repo() {
 
   mkdir -p /usr/share/keyrings
   local key_tmp key_gpg_tmp
+  local key_fpr
   key_tmp="$(mktemp)"
   key_gpg_tmp="$(mktemp)"
 
-  curl -fsSL https://nginx.org/keys/nginx_signing.key -o "$key_tmp"
+  curl -fsSL https://nginx.org/keys/nginx_signing.key -o "$key_tmp" || die "Gagal download nginx signing key."
+  key_fpr="$(gpg --show-keys --with-colons "$key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print toupper($10); exit}')"
+  [[ -n "${key_fpr}" ]] || die "Gagal membaca fingerprint nginx signing key."
+  if [[ "${key_fpr}" != "${NGINX_SIGNING_KEY_FPR^^}" ]]; then
+    die "Fingerprint nginx signing key mismatch (expected=${NGINX_SIGNING_KEY_FPR^^}, got=${key_fpr})."
+  fi
   gpg --dearmor <"$key_tmp" >"$key_gpg_tmp"
   install -m 644 "$key_gpg_tmp" /usr/share/keyrings/nginx-archive-keyring.gpg
 
@@ -2184,17 +2237,21 @@ install_sshws_stack() {
   install -d -m 755 /etc/stunnel
   install -d -m 755 /run/stunnel
 
-  # Gunakan unit dedicated agar bind address terkunci local-only dan tidak bentrok
-  # dengan default service bawaan paket.
-  systemctl disable --now dropbear >/dev/null 2>&1 || true
-  systemctl disable --now stunnel4 >/dev/null 2>&1 || true
-
   # Migrasi: hapus nama unit lama yang masih memakai prefix "xray-sshws".
   systemctl disable --now xray-sshws-dropbear xray-sshws-stunnel xray-sshws-proxy >/dev/null 2>&1 || true
+  # Pastikan unit baru juga dihentikan dulu agar validasi port tidak false-positive saat reinstall.
+  systemctl disable --now sshws-dropbear sshws-stunnel sshws-proxy >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/xray-sshws-dropbear.service \
         /etc/systemd/system/xray-sshws-stunnel.service \
         /etc/systemd/system/xray-sshws-proxy.service >/dev/null 2>&1 || true
   rm -f /usr/local/bin/xray-sshws-proxy /etc/stunnel/xray-sshws.conf >/dev/null 2>&1 || true
+
+  local p
+  for p in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
+    if ! is_port_free "${p}"; then
+      die "Port SSHWS ${p} sedang dipakai proses lain. Bebaskan port ini atau ubah SSHWS_*_PORT."
+    fi
+  done
 
   cat > /etc/systemd/system/sshws-dropbear.service <<EOF
 [Unit]
@@ -2204,7 +2261,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/dropbear -F -E -R -w -g -p 127.0.0.1:${SSHWS_DROPBEAR_PORT}
+ExecStartPre=/usr/bin/mkdir -p /run/dropbear
+ExecStart=/usr/sbin/dropbear -F -E -R -w -g -P /run/dropbear/sshws-dropbear.pid -p 127.0.0.1:${SSHWS_DROPBEAR_PORT}
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -2550,6 +2608,18 @@ EOF
   service_enable_restart_checked sshws-dropbear || die "Gagal mengaktifkan sshws-dropbear."
   service_enable_restart_checked sshws-stunnel || die "Gagal mengaktifkan sshws-stunnel."
   service_enable_restart_checked sshws-proxy || die "Gagal mengaktifkan sshws-proxy."
+
+  # Legacy stunnel4 tidak lagi diperlukan setelah stack dedicated aktif.
+  systemctl disable --now stunnel4 >/dev/null 2>&1 || true
+
+  # Hindari lockout: dropbear legacy hanya didisable jika fallback OpenSSH aktif.
+  # Jangan stop langsung agar sesi admin yang mungkin sedang via dropbear tidak terputus.
+  if systemctl is-active --quiet ssh >/dev/null 2>&1 || systemctl is-active --quiet sshd >/dev/null 2>&1; then
+    systemctl disable dropbear >/dev/null 2>&1 || true
+    ok "Legacy dropbear diset disabled (fallback OpenSSH aktif)."
+  else
+    warn "Legacy dropbear dipertahankan untuk mencegah lockout SSH (OpenSSH tidak aktif)."
+  fi
   ok "SSH WebSocket stack aktif (dropbear/stunnel/proxy)."
 }
 
@@ -2561,6 +2631,7 @@ install_sshws_qac_enforcer() {
   cat > /usr/local/bin/sshws-qac-enforcer <<'PY'
 #!/usr/bin/env python3
 import argparse
+import fcntl
 import json
 import os
 import pathlib
@@ -2568,6 +2639,7 @@ import subprocess
 import tempfile
 
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
+LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 
 def to_int(v, default=0):
   try:
@@ -2796,20 +2868,30 @@ def enforce_user(path):
 def run_once(target_user):
   if not STATE_ROOT.exists():
     return 0
-  paths = sorted(STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower())
-  target_norm = norm_user(target_user)
-  for path in paths:
-    if target_user:
-      stem = path.stem
-      stem_norm = norm_user(stem)
-      try:
-        current = json.loads(path.read_text(encoding="utf-8"))
-      except Exception:
-        current = {}
-      username = norm_user(current.get("username") or stem) or stem_norm or stem
-      if target_user not in (stem, username) and target_norm not in (stem_norm, username):
-        continue
-    enforce_user(path)
+  try:
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(LOCK_FILE.parent), 0o700)
+  except Exception:
+    pass
+  with open(LOCK_FILE, "a+", encoding="utf-8") as lf:
+    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    try:
+      paths = sorted(STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower())
+      target_norm = norm_user(target_user)
+      for path in paths:
+        if target_user:
+          stem = path.stem
+          stem_norm = norm_user(stem)
+          try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+          except Exception:
+            current = {}
+          username = norm_user(current.get("username") or stem) or stem_norm or stem
+          if target_user not in (stem, username) and target_norm not in (stem_norm, username):
+            continue
+        enforce_user(path)
+    finally:
+      fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
   return 0
 
 def parse_args():
@@ -3520,7 +3602,7 @@ def save_json_atomic(path, data):
       pass
     raise
 
-ROUTING_LOCK_PATH = "/var/lock/xray-routing.lock"
+ROUTING_LOCK_PATH = "/run/autoscript/locks/xray-routing.lock"
 
 def save_routing_atomic_locked(inbounds_path, inb_data, routing_path, rt_data):
   """BUG-15 note: xray-expired has a 4-argument signature (inbounds + routing) because
@@ -3530,7 +3612,12 @@ def save_routing_atomic_locked(inbounds_path, inb_data, routing_path, rt_data):
   Tulis kedua file config secara atomik dengan file lock untuk cegah race condition
   dengan daemon lain (xray-quota, limit-ip) yang juga bisa menulis routing config."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -3872,12 +3959,17 @@ def save_json_atomic(path, data):
       pass
     raise
 
-ROUTING_LOCK_PATH = "/var/lock/xray-routing.lock"
+ROUTING_LOCK_PATH = "/run/autoscript/locks/xray-routing.lock"
 
 def save_routing_atomic_locked(config_path, cfg):
   """Tulis routing config secara atomik dengan file lock bersama."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -3889,7 +3981,12 @@ def load_and_modify_routing_locked(config_path, modify_fn):
   """BUG-01 fix: acquire lock FIRST, then reload config from disk, apply modify_fn, save.
   Prevents last-write-wins race condition with other daemons."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -4260,12 +4357,17 @@ def save_json_atomic(path, data):
       pass
     raise
 
-ROUTING_LOCK_PATH = "/var/lock/xray-routing.lock"
+ROUTING_LOCK_PATH = "/run/autoscript/locks/xray-routing.lock"
 
 def save_routing_atomic_locked(config_path, cfg):
   """Tulis routing config secara atomik dengan file lock bersama."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -4278,7 +4380,12 @@ def load_and_modify_routing_locked(config_path, modify_fn):
   This prevents last-write-wins race condition when multiple daemons write routing.
   Returns (changed: bool, cfg: dict)."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -4496,12 +4603,17 @@ def save_json_atomic(path, data):
       pass
     raise
 
-ROUTING_LOCK_PATH = "/var/lock/xray-routing.lock"
+ROUTING_LOCK_PATH = "/run/autoscript/locks/xray-routing.lock"
 
 def save_routing_atomic_locked(config_path, cfg):
   """Tulis routing config secara atomik dengan file lock bersama."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -4513,7 +4625,12 @@ def load_and_modify_routing_locked(config_path, modify_fn):
   """Acquire lock, reload config from disk, apply modify_fn, then save atomically.
   Mencegah race condition last-write-wins antar daemon yang menulis routing."""
   import fcntl
-  os.makedirs(os.path.dirname(ROUTING_LOCK_PATH) or "/var/lock", exist_ok=True)
+  lock_dir = os.path.dirname(ROUTING_LOCK_PATH) or "/run/autoscript/locks"
+  os.makedirs(lock_dir, exist_ok=True)
+  try:
+    os.chmod(lock_dir, 0o700)
+  except Exception:
+    pass
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
@@ -4782,7 +4899,12 @@ def run_once(config_path, marker, api_server, dry_run=False):
   import fcntl
   for proto, path in iter_quota_files():
     lock_path = f"{path}.lock"
-    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    lock_dir = os.path.dirname(lock_path) or "."
+    os.makedirs(lock_dir, exist_ok=True)
+    try:
+      os.chmod(lock_dir, 0o700)
+    except Exception:
+      pass
     with open(lock_path, "a+", encoding="utf-8") as lf:
       fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
       try:
@@ -5771,7 +5893,7 @@ cert_days_left() {
     return 0
   fi
   local end end_ts now_ts
-  end="$(openssl x509 -in "${CERT_FILE}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//')"
+  end="$(openssl x509 -in "${CERT_FILE}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//' || true)"
   [[ -n "${end}" ]] || { echo ""; return 0; }
   end_ts="$(date -d "${end}" +%s 2>/dev/null || true)"
   now_ts="$(date +%s 2>/dev/null || true)"
@@ -6428,7 +6550,7 @@ cert_days_left() {
     return 0
   fi
   local end end_ts now_ts
-  end="$(openssl x509 -in "${CERT_FILE}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//')"
+  end="$(openssl x509 -in "${CERT_FILE}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//' || true)"
   [[ -n "${end}" ]] || { echo ""; return 0; }
   end_ts="$(date -d "${end}" +%s 2>/dev/null || true)"
   now_ts="$(date +%s 2>/dev/null || true)"
@@ -6806,7 +6928,9 @@ sanity_check() {
 main() {
   safe_clear
   need_root
+  ensure_runtime_lock_dirs
   ensure_stdin_available
+  validate_sshws_ports_config
   check_os
   install_base_deps
   need_python3

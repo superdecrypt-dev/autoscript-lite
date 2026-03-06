@@ -91,9 +91,9 @@ WORK_DIR="/var/lib/xray-manage"
 # File lock bersama untuk sinkronisasi write ke routing config dengan daemon Python
 # (xray-quota, limit-ip, user-block). Semua pihak harus acquire lock ini sebelum
 # memodifikasi 30-routing.json untuk menghindari race condition last-write-wins.
-ROUTING_LOCK_FILE="/var/lock/xray-routing.lock"
-DNS_LOCK_FILE="/var/lock/xray-dns.lock"
-OBS_LOCK_FILE="/var/lock/xray-observatory.lock"
+ROUTING_LOCK_FILE="/run/autoscript/locks/xray-routing.lock"
+DNS_LOCK_FILE="/run/autoscript/locks/xray-dns.lock"
+OBS_LOCK_FILE="/run/autoscript/locks/xray-observatory.lock"
 
 # Direktori laporan/export
 REPORT_DIR="/var/log/xray-manage"
@@ -107,13 +107,17 @@ SSHWS_STUNNEL_SERVICE="sshws-stunnel"
 SSHWS_PROXY_SERVICE="sshws-proxy"
 SSHWS_QAC_ENFORCER_SERVICE="sshws-qac-enforcer"
 SSHWS_QAC_ENFORCER_TIMER="sshws-qac-enforcer.timer"
+SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
+SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
+SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}" \
   "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" \
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
-  "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}"
+  "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}" \
+  "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
 MAIN_INFO_CACHE_TTL=300
@@ -158,9 +162,14 @@ init_runtime_dirs() {
   mkdir -p "${SSH_USERS_STATE_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" || true
 
-  mkdir -p "$(dirname "${ROUTING_LOCK_FILE}")" 2>/dev/null || true
-  mkdir -p "$(dirname "${DNS_LOCK_FILE}")" 2>/dev/null || true
-  mkdir -p "$(dirname "${OBS_LOCK_FILE}")" 2>/dev/null || true
+  local lock_dir
+  for lock_dir in \
+    "$(dirname "${ROUTING_LOCK_FILE}")" \
+    "$(dirname "${DNS_LOCK_FILE}")" \
+    "$(dirname "${OBS_LOCK_FILE}")"; do
+    mkdir -p "${lock_dir}" 2>/dev/null || true
+    chmod 700 "${lock_dir}" 2>/dev/null || true
+  done
 
   mkdir -p "${REPORT_DIR}"
   chmod 700 "${REPORT_DIR}"
@@ -675,7 +684,7 @@ detect_domain() {
   # Try nginx conf server_name first, then hostname -f
   local dom=""
   if [[ -f "${NGINX_CONF}" ]]; then
-    dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//')"
+    dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' || true)"
     dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
   fi
   if [[ -z "${dom}" ]]; then
@@ -735,7 +744,7 @@ account_info_probe_domain_from_any_account_file() {
     [[ -d "${dir}" ]] || continue
     f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
     [[ -n "${f}" ]] || continue
-    dom="$(grep -E '^Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^Domain[[:space:]]*:[[:space:]]*//')"
+    dom="$(grep -E '^Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^Domain[[:space:]]*:[[:space:]]*//' || true)"
     dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
     if [[ -n "${dom}" ]]; then
       echo "${dom}"
@@ -1163,7 +1172,10 @@ confirm_yn() {
   local prompt="$1"
   local ans
   while true; do
-    read -r -p "${prompt} (y/n): " ans
+    if ! read -r -p "${prompt} (y/n): " ans; then
+      echo
+      return 1
+    fi
     case "${ans,,}" in
       y|yes) return 0 ;;
       n|no) return 1 ;;
@@ -1177,7 +1189,10 @@ confirm_yn_or_back() {
   local prompt="$1"
   local ans
   while true; do
-    read -r -p "${prompt} (y/n/kembali): " ans
+    if ! read -r -p "${prompt} (y/n/kembali): " ans; then
+      echo
+      return 2
+    fi
     case "${ans,,}" in
       y|yes) return 0 ;;
       n|no) return 1 ;;
@@ -1459,7 +1474,10 @@ domain_menu_v2() {
 
   local choice=""
   while true; do
-    read -r -p "Pilih opsi (1-2/0/kembali): " choice
+    if ! read -r -p "Pilih opsi (1-2/0/kembali): " choice; then
+      echo
+      return 2
+    fi
     case "$choice" in
       1|2) break ;;
       0|kembali|k|back|b) return 2 ;;
@@ -1470,7 +1488,10 @@ domain_menu_v2() {
   if [[ "$choice" == "1" ]]; then
     local re='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
     while true; do
-      read -r -p "Masukkan domain (atau kembali): " DOMAIN
+      if ! read -r -p "Masukkan domain (atau kembali): " DOMAIN; then
+        echo
+        return 2
+      fi
       if is_back_choice "${DOMAIN}"; then
         return 2
       fi
@@ -1510,7 +1531,10 @@ domain_menu_v2() {
 
   local pick=""
   while true; do
-    read -r -p "Pilih nomor domain induk (1-${#PROVIDED_ROOT_DOMAINS[@]}/kembali): " pick
+    if ! read -r -p "Pilih nomor domain induk (1-${#PROVIDED_ROOT_DOMAINS[@]}/kembali): " pick; then
+      echo
+      return 2
+    fi
     if is_back_choice "${pick}"; then
       return 2
     fi
@@ -1534,7 +1558,10 @@ domain_menu_v2() {
 
   local mth=""
   while true; do
-    read -r -p "Pilih opsi (1-2/kembali): " mth
+    if ! read -r -p "Pilih opsi (1-2/kembali): " mth; then
+      echo
+      return 2
+    fi
     case "$mth" in
       1|2) break ;;
       0|kembali|k|back|b) return 2 ;;
@@ -1548,7 +1575,10 @@ domain_menu_v2() {
     log "Subdomain generated: $sub"
   else
     while true; do
-      read -r -p "Masukkan nama subdomain (atau kembali): " sub
+      if ! read -r -p "Masukkan nama subdomain (atau kembali): " sub; then
+        echo
+        return 2
+      fi
       if is_back_choice "${sub}"; then
         return 2
       fi
@@ -1743,7 +1773,7 @@ domain_control_apply_nginx_domain() {
     die "Gagal update server_name di nginx conf."
   fi
 
-  applied_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';')"
+  applied_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
   if [[ -z "${applied_domain}" || "${applied_domain}" != "${domain}" ]]; then
     cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
     die "server_name nginx tidak sesuai setelah update (expect=${domain}, got=${applied_domain:-<kosong>})."
@@ -2468,7 +2498,10 @@ account_view_flow() {
   fi
 
   local n f total page pages start end rows idx
-  read -r -p "Masukkan NO untuk view (atau kembali): " n
+  if ! read -r -p "Masukkan NO untuk view (atau kembali): " n; then
+    echo
+    return 0
+  fi
   if is_back_choice "${n}"; then
     return 0
   fi
@@ -2515,7 +2548,10 @@ account_search_flow() {
   fi
 
   echo "Cari keyword (case-sensitive, gunakan regex bila perlu)."
-  read -r -p "Query: " q
+  if ! read -r -p "Query: " q; then
+    echo
+    return 0
+  fi
   if is_back_choice "${q}"; then
     return 0
   fi
@@ -2557,13 +2593,19 @@ account_search_flow() {
   echo "  1) View salah satu hasil"
   echo "  0) Kembali"
   hr
-  read -r -p "Pilih: " c
-  case "${c}" in
-    1)
-      read -r -p "Masukkan NO untuk view (atau kembali): " n
-  if is_back_choice "${n}"; then
+  if ! read -r -p "Pilih: " c; then
+    echo
     return 0
   fi
+  case "${c}" in
+    1)
+      if ! read -r -p "Masukkan NO untuk view (atau kembali): " n; then
+        echo
+        return 0
+      fi
+      if is_back_choice "${n}"; then
+        return 0
+      fi
       [[ "${n}" =~ ^[0-9]+$ ]] || { warn "Input bukan angka"; pause; return 0; }
       if (( n < 1 || n > ${#matches[@]} )); then
         warn "NO di luar range"
@@ -2705,7 +2747,7 @@ xray_confdir_syntax_test_pretty() {
 check_tls_expiry() {
   if have_cmd openssl && [[ -f "${CERT_FULLCHAIN}" ]]; then
     local end
-    end="$(openssl x509 -in "${CERT_FULLCHAIN}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//')"
+    end="$(openssl x509 -in "${CERT_FULLCHAIN}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//' || true)"
     if [[ -n "${end}" ]]; then
       log "TLS notAfter: ${end}"
     else
@@ -2726,11 +2768,11 @@ show_ports() {
 
 tail_logs() {
   local target="$1"
-  local lines="${2:-120}"
+  local tail_lines="${2:-120}"
   if [[ "${target}" == "xray" ]]; then
-    journalctl -u xray --no-pager -n "${lines}"
+    journalctl -u xray --no-pager -n "${tail_lines}"
   elif [[ "${target}" == "nginx" ]]; then
-    journalctl -u nginx --no-pager -n "${lines}"
+    journalctl -u nginx --no-pager -n "${tail_lines}"
   else
     die "Target log tidak dikenal: ${target}"
   fi
@@ -4385,7 +4427,7 @@ account_info_refresh_for_user() {
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   if [[ -z "${ip}" ]]; then
     if [[ -f "${acc_file}" ]]; then
-      ip="$(grep -E '^IP[[:space:]]*:' "${acc_file}" | head -n1 | sed -E 's/^IP[[:space:]]*:[[:space:]]*//')"
+      ip="$(grep -E '^IP[[:space:]]*:' "${acc_file}" | head -n1 | sed -E 's/^IP[[:space:]]*:[[:space:]]*//' || true)"
     fi
     [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   fi
@@ -4898,7 +4940,10 @@ user_add_menu() {
     account_print_table_page "${ACCOUNT_PAGE}"
     hr
     echo "Ketik: lanjut / next / previous / kembali"
-    read -r -p "Pilihan: " nav
+    if ! read -r -p "Pilihan: " nav; then
+      echo
+      return 0
+    fi
     if is_back_choice "${nav}"; then
       return 0
     fi
@@ -4926,7 +4971,10 @@ user_add_menu() {
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
-  read -r -p "Protocol (1-5/kembali): " p
+  if ! read -r -p "Protocol (1-5/kembali): " p; then
+    echo
+    return 0
+  fi
   if is_back_choice "${p}"; then
     return 0
   fi
@@ -4938,7 +4986,10 @@ user_add_menu() {
     return 0
   fi
 
-  read -r -p "Username (atau kembali): " username
+  if ! read -r -p "Username (atau kembali): " username; then
+    echo
+    return 0
+  fi
   if is_back_choice "${username}"; then
     return 0
   fi
@@ -4968,7 +5019,10 @@ user_add_menu() {
     return 0
   fi
 
-  read -r -p "Masa aktif (hari) (atau kembali): " days
+  if ! read -r -p "Masa aktif (hari) (atau kembali): " days; then
+    echo
+    return 0
+  fi
   if is_back_word_choice "${days}"; then
     return 0
   fi
@@ -4978,7 +5032,10 @@ user_add_menu() {
     return 0
   fi
 
-  read -r -p "Quota (GB) (atau kembali): " quota_gb
+  if ! read -r -p "Quota (GB) (atau kembali): " quota_gb; then
+    echo
+    return 0
+  fi
   if is_back_choice "${quota_gb}"; then
     return 0
   fi
@@ -4998,7 +5055,10 @@ user_add_menu() {
   quota_bytes="$(bytes_from_gb "${quota_gb_num}")"
 
   echo "Limit IP? (on/off)"
-  read -r -p "IP Limit (on/off) (atau kembali): " ip_toggle
+  if ! read -r -p "IP Limit (on/off) (atau kembali): " ip_toggle; then
+    echo
+    return 0
+  fi
   if is_back_choice "${ip_toggle}"; then
     return 0
   fi
@@ -5006,7 +5066,10 @@ user_add_menu() {
   local ip_limit="0"
   if is_yes "${ip_toggle}"; then
     ip_enabled="true"
-    read -r -p "Limit IP (angka) (atau kembali): " ip_limit
+    if ! read -r -p "Limit IP (angka) (atau kembali): " ip_limit; then
+      echo
+      return 0
+    fi
     if is_back_word_choice "${ip_limit}"; then
       return 0
     fi
@@ -5018,7 +5081,10 @@ user_add_menu() {
   fi
 
   echo "Limit speed per user? (on/off)"
-  read -r -p "Speed Limit (on/off) (atau kembali): " speed_toggle
+  if ! read -r -p "Speed Limit (on/off) (atau kembali): " speed_toggle; then
+    echo
+    return 0
+  fi
   if is_back_choice "${speed_toggle}"; then
     return 0
   fi
@@ -5028,7 +5094,10 @@ user_add_menu() {
   if is_yes "${speed_toggle}"; then
     speed_enabled="true"
 
-    read -r -p "Speed Download Mbps (contoh: 20 atau 20mbit) (atau kembali): " speed_down
+    if ! read -r -p "Speed Download Mbps (contoh: 20 atau 20mbit) (atau kembali): " speed_down; then
+      echo
+      return 0
+    fi
     if is_back_word_choice "${speed_down}"; then
       return 0
     fi
@@ -5039,7 +5108,10 @@ user_add_menu() {
       return 0
     fi
 
-    read -r -p "Speed Upload Mbps (contoh: 10 atau 10mbit) (atau kembali): " speed_up
+    if ! read -r -p "Speed Upload Mbps (contoh: 10 atau 10mbit) (atau kembali): " speed_up; then
+      echo
+      return 0
+    fi
     if is_back_word_choice "${speed_up}"; then
       return 0
     fi
@@ -5156,7 +5228,10 @@ user_del_menu() {
     account_print_table_page "${ACCOUNT_PAGE}"
     hr
     echo "Ketik: lanjut / next / previous / kembali"
-    read -r -p "Pilihan: " nav
+    if ! read -r -p "Pilihan: " nav; then
+      echo
+      return 0
+    fi
     if is_back_choice "${nav}"; then
       return 0
     fi
@@ -5184,7 +5259,10 @@ user_del_menu() {
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
-  read -r -p "Protocol (1-5/kembali): " p
+  if ! read -r -p "Protocol (1-5/kembali): " p; then
+    echo
+    return 0
+  fi
   if is_back_choice "${p}"; then
     return 0
   fi
@@ -5196,7 +5274,10 @@ user_del_menu() {
     return 0
   fi
 
-  read -r -p "Username (atau kembali): " username
+  if ! read -r -p "Username (atau kembali): " username; then
+    echo
+    return 0
+  fi
   if is_back_choice "${username}"; then
     return 0
   fi
@@ -5251,7 +5332,10 @@ user_extend_expiry_menu() {
     account_print_table_page "${ACCOUNT_PAGE}"
     hr
     echo "Ketik: lanjut / next / previous / kembali"
-    read -r -p "Pilihan: " nav
+    if ! read -r -p "Pilihan: " nav; then
+      echo
+      return 0
+    fi
     if is_back_choice "${nav}"; then
       return 0
     fi
@@ -5279,7 +5363,10 @@ user_extend_expiry_menu() {
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
-  read -r -p "Protocol (1-5/kembali): " p
+  if ! read -r -p "Protocol (1-5/kembali): " p; then
+    echo
+    return 0
+  fi
   if is_back_choice "${p}"; then
     return 0
   fi
@@ -5291,7 +5378,10 @@ user_extend_expiry_menu() {
     return 0
   fi
 
-  read -r -p "Username (atau kembali): " username
+  if ! read -r -p "Username (atau kembali): " username; then
+    echo
+    return 0
+  fi
   if is_back_choice "${username}"; then
     return 0
   fi
@@ -5339,7 +5429,10 @@ PY
   echo "  2) Set tanggal langsung (YYYY-MM-DD)"
   echo "  0) Kembali"
   hr
-  read -r -p "Pilih mode: " mode
+  if ! read -r -p "Pilih mode: " mode; then
+    echo
+    return 0
+  fi
   if is_back_choice "${mode}"; then
     return 0
   fi
@@ -5348,7 +5441,10 @@ PY
 
   case "${mode}" in
     1)
-      read -r -p "Tambah berapa hari? (atau kembali): " add_days
+      if ! read -r -p "Tambah berapa hari? (atau kembali): " add_days; then
+        echo
+        return 0
+      fi
       if is_back_word_choice "${add_days}"; then
         return 0
       fi
@@ -5377,7 +5473,10 @@ PY
 )"
       ;;
     2)
-      read -r -p "Tanggal expiry baru (YYYY-MM-DD) (atau kembali): " input_date
+      if ! read -r -p "Tanggal expiry baru (YYYY-MM-DD) (atau kembali): " input_date; then
+        echo
+        return 0
+      fi
       if is_back_choice "${input_date}"; then
         return 0
       fi
@@ -5443,7 +5542,11 @@ PY
   fi
 
   # Update quota JSON
-  quota_atomic_update_file "${quota_file}" set_expired_at "${new_expiry}"
+  if ! quota_atomic_update_file "${quota_file}" set_expired_at "${new_expiry}"; then
+    warn "Gagal update metadata expiry quota."
+    pause
+    return 0
+  fi
 
   # Update account txt (baris Valid Until)
   # BUG-18 fix: use atomic write via tmp file instead of sed -i (which is not atomic)
@@ -5470,9 +5573,9 @@ PY
     if [[ -f "${acc_file}" ]]; then
       local cred=""
       if proto_uses_password "${proto}"; then
-        cred="$(grep -E '^Password\s*:' "${acc_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]')"
+        cred="$(grep -E '^Password\s*:' "${acc_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
       else
-        cred="$(grep -E '^UUID\s*:' "${acc_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]')"
+        cred="$(grep -E '^UUID\s*:' "${acc_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
       fi
       if [[ -n "${cred}" ]]; then
         if xray_add_client "${proto}" "${username}" "${cred}" 2>/dev/null; then
@@ -5502,9 +5605,12 @@ PY
 
   if [[ "${st_quota}" == "true" ]]; then
     # Reset quota_exhausted flag and remove from dummy-quota-user routing rule
-    quota_atomic_update_file "${quota_file}" clear_quota_exhausted_recompute
-    xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" off
-    log "Quota exhausted flag di-reset setelah extend expiry."
+    if ! quota_atomic_update_file "${quota_file}" clear_quota_exhausted_recompute; then
+      warn "Gagal reset status quota exhausted setelah extend expiry."
+    else
+      xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" off
+      log "Quota exhausted flag di-reset setelah extend expiry."
+    fi
   fi
 
   # BUG-FIX #3: Restore manual block routing jika masih aktif.
@@ -5547,7 +5653,10 @@ user_list_menu() {
     echo "  previous) Previous page"
     echo "  refresh) Refresh"
     hr
-    read -r -p "Pilih (view/search/next/previous/refresh/kembali): " c
+    if ! read -r -p "Pilih (view/search/next/previous/refresh/kembali): " c; then
+      echo
+      break
+    fi
 
     if is_back_choice "${c}"; then
       break
@@ -6317,9 +6426,14 @@ with open(lock_path, "a+", encoding="utf-8") as lf:
   finally:
     fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 PY
+  local py_rc=$?
+  if (( py_rc != 0 )); then
+    return "${py_rc}"
+  fi
 
   chmod 600 "${qf}" 2>/dev/null || true
   QUOTA_FIELDS_CACHE=()
+  return 0
 }
 
 quota_view_json() {
@@ -6461,7 +6575,10 @@ quota_edit_flow() {
         quota_view_json "${qf}"
         ;;
       2)
-        read -r -p "Quota Limit (GB) (atau kembali): " gb
+        if ! read -r -p "Quota Limit (GB) (atau kembali): " gb; then
+          echo
+          return 0
+        fi
         if is_back_choice "${gb}"; then
           continue
         fi
@@ -6478,14 +6595,22 @@ quota_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
-        quota_atomic_update_file "${qf}" set_quota_limit_recompute "${qb}"
+        if ! quota_atomic_update_file "${qf}" set_quota_limit_recompute "${qb}"; then
+          warn "Gagal update quota limit."
+          pause
+          continue
+        fi
         log "Quota limit diubah: ${gb_num} GB"
         pause
         ;;
       3)
         # BUG-06 fix: read mb/il BEFORE resetting qe so lock_reason is computed correctly.
         # BUG-05 fix: correct priority quota > ip_limit.
-        quota_atomic_update_file "${qf}" reset_quota_used_recompute
+        if ! quota_atomic_update_file "${qf}" reset_quota_used_recompute; then
+          warn "Gagal reset quota used."
+          pause
+          continue
+        fi
         xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" off
         log "Quota used di-reset: 0 (status quota dibersihkan)"
         pause
@@ -6498,11 +6623,19 @@ quota_edit_flow() {
           # Previously mb was read AFTER being set to False, so it was always False
           # and lock_reason could never be 'manual' in this branch.
           # BUG-05 fix applied here too: correct priority is quota > ip_limit (not reversed).
-          quota_atomic_update_file "${qf}" manual_block_set off
+          if ! quota_atomic_update_file "${qf}" manual_block_set off; then
+            warn "Gagal menonaktifkan manual block."
+            pause
+            continue
+          fi
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" off
           log "Manual block: OFF"
         else
-          quota_atomic_update_file "${qf}" manual_block_set on
+          if ! quota_atomic_update_file "${qf}" manual_block_set on; then
+            warn "Gagal mengaktifkan manual block."
+            pause
+            continue
+          fi
           xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" on
           log "Manual block: ON"
         fi
@@ -6514,12 +6647,20 @@ quota_edit_flow() {
         if [[ "${ip_on}" == "true" ]]; then
           # BUG-06 fix: read il BEFORE resetting ip_limit_locked, then determine lock_reason.
           # BUG-05 fix: correct priority is quota > ip_limit.
-          quota_atomic_update_file "${qf}" ip_limit_enabled_set off
+          if ! quota_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+            warn "Gagal menonaktifkan IP limit."
+            pause
+            continue
+          fi
           xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" off
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
           log "IP limit: OFF"
         else
-          quota_atomic_update_file "${qf}" ip_limit_enabled_set on
+          if ! quota_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+            warn "Gagal mengaktifkan IP limit."
+            pause
+            continue
+          fi
           svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
           log "IP limit: ON"
         fi
@@ -6527,7 +6668,10 @@ quota_edit_flow() {
         pause
         ;;
       6)
-        read -r -p "IP Limit (angka) (atau kembali): " lim
+        if ! read -r -p "IP Limit (angka) (atau kembali): " lim; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${lim}"; then
           continue
         fi
@@ -6536,7 +6680,11 @@ quota_edit_flow() {
           pause
           continue
         fi
-        quota_atomic_update_file "${qf}" set_ip_limit "${lim}"
+        if ! quota_atomic_update_file "${qf}" set_ip_limit "${lim}"; then
+          warn "Gagal set IP limit."
+          pause
+          continue
+        fi
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
         log "IP limit diubah: ${lim}"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
@@ -6546,13 +6694,20 @@ quota_edit_flow() {
         /usr/local/bin/limit-ip unlock "${email_for_routing}" >/dev/null 2>&1 || true
         # BUG-06 fix: read il BEFORE resetting, evaluate lock_reason correctly after.
         # BUG-05 fix: correct priority quota > ip_limit.
-        quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute
+        if ! quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute; then
+          warn "Gagal unlock IP lock."
+          pause
+          continue
+        fi
         svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
         log "IP lock di-unlock"
         pause
         ;;
       8)
-        read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_input
+        if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_input; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${speed_down_input}"; then
           continue
         fi
@@ -6562,7 +6717,11 @@ quota_edit_flow() {
           pause
           continue
         fi
-        quota_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"
+        if ! quota_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"; then
+          warn "Gagal set speed download."
+          pause
+          continue
+        fi
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
@@ -6571,7 +6730,10 @@ quota_edit_flow() {
         pause
         ;;
       9)
-        read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_input
+        if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_input; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${speed_up_input}"; then
           continue
         fi
@@ -6581,7 +6743,11 @@ quota_edit_flow() {
           pause
           continue
         fi
-        quota_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"
+        if ! quota_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"; then
+          warn "Gagal set speed upload."
+          pause
+          continue
+        fi
         if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         fi
@@ -6593,7 +6759,11 @@ quota_edit_flow() {
         local speed_on speed_down_now speed_up_now
         speed_on="$(quota_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
-          quota_atomic_update_file "${qf}" speed_limit_set off
+          if ! quota_atomic_update_file "${qf}" speed_limit_set off; then
+            warn "Gagal menonaktifkan speed limit."
+            pause
+            continue
+          fi
           quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
           log "Speed limit: OFF"
           account_info_refresh_warn "${proto}" "${speed_username}" || true
@@ -6605,7 +6775,10 @@ quota_edit_flow() {
         speed_up_now="$(quota_get_status_number "${qf}" "speed_up_mbit")"
 
         if ! speed_mbit_is_positive "${speed_down_now}"; then
-          read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_now
+          if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_now; then
+            echo
+            return 0
+          fi
           if is_back_choice "${speed_down_now}"; then
             continue
           fi
@@ -6617,7 +6790,10 @@ quota_edit_flow() {
           fi
         fi
         if ! speed_mbit_is_positive "${speed_up_now}"; then
-          read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_now
+          if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_now; then
+            echo
+            return 0
+          fi
           if is_back_choice "${speed_up_now}"; then
             continue
           fi
@@ -6629,7 +6805,11 @@ quota_edit_flow() {
           fi
         fi
 
-        quota_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
+        if ! quota_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
+          warn "Gagal mengaktifkan speed limit."
+          pause
+          continue
+        fi
         quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         log "Speed limit: ON"
         account_info_refresh_warn "${proto}" "${speed_username}" || true
@@ -6689,7 +6869,10 @@ quota_menu() {
         fi
         ;;
       search)
-        read -r -p "Search username (atau kembali): " q
+        if ! read -r -p "Search username (atau kembali): " q; then
+          echo
+          break
+        fi
         if is_back_choice "${q}"; then
           continue
         fi
@@ -6719,28 +6902,84 @@ quota_menu() {
 # -------------------------
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
-resolve_manage_modules_dir() {
-  if [[ -d "${MANAGE_SCRIPT_DIR}/opt/manage" ]]; then
-    printf '%s\n' "${MANAGE_SCRIPT_DIR}/opt/manage"
+manage_modules_dir_trusted() {
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 1
+
+  # Untuk non-root, fallback ke path yang ada.
+  if [[ "$(id -u)" -ne 0 ]]; then
     return 0
   fi
-  if [[ -d "/opt/manage" ]]; then
+
+  local owner mode
+  owner="$(stat -c '%u' "${dir}" 2>/dev/null || echo 1)"
+  mode="$(stat -c '%A' "${dir}" 2>/dev/null || echo '----------')"
+
+  # Saat root, hanya izinkan dir modul yang dimiliki root dan tidak writable oleh group/other.
+  [[ "${owner}" == "0" ]] || return 1
+  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  return 0
+}
+
+manage_module_file_trusted() {
+  local file="$1"
+  [[ -f "${file}" && -r "${file}" ]] || return 1
+
+  local modules_real file_real
+  modules_real="$(readlink -f -- "${MANAGE_MODULES_DIR}" 2>/dev/null || true)"
+  file_real="$(readlink -f -- "${file}" 2>/dev/null || true)"
+  [[ -n "${modules_real}" && -n "${file_real}" ]] || return 1
+  [[ "${file_real}" == "${modules_real}/"* ]] || return 1
+
+  # Untuk non-root, cukup validasi keberadaan & canonical path.
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  # Saat root, tolak symlink agar source tidak bisa diarahkan ke path lain.
+  [[ -L "${file}" ]] && return 1
+
+  local owner mode
+  owner="$(stat -c '%u' "${file_real}" 2>/dev/null || echo 1)"
+  mode="$(stat -c '%A' "${file_real}" 2>/dev/null || echo '----------')"
+  [[ "${owner}" == "0" ]] || return 1
+  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  return 0
+}
+
+resolve_manage_modules_dir() {
+  local local_modules="${MANAGE_SCRIPT_DIR}/opt/manage"
+  if manage_modules_dir_trusted "${local_modules}"; then
+    printf '%s\n' "${local_modules}"
+    return 0
+  fi
+  if manage_modules_dir_trusted "/opt/manage"; then
     printf '%s\n' "/opt/manage"
     return 0
   fi
-  if [[ -d "/opt/autoscript/opt/manage" ]]; then
+  if manage_modules_dir_trusted "/opt/autoscript/opt/manage"; then
     printf '%s\n' "/opt/autoscript/opt/manage"
     return 0
   fi
-  printf '%s\n' "/opt/manage"
+  return 1
 }
 
-MANAGE_MODULES_DIR="${MANAGE_MODULES_DIR:-$(resolve_manage_modules_dir)}"
+if [[ -n "${MANAGE_MODULES_DIR:-}" ]]; then
+  if ! manage_modules_dir_trusted "${MANAGE_MODULES_DIR}"; then
+    die "MANAGE_MODULES_DIR tidak trusted/tidak valid: ${MANAGE_MODULES_DIR}"
+  fi
+else
+  MANAGE_MODULES_DIR="$(resolve_manage_modules_dir)" \
+    || die "Direktori module manage tidak ditemukan atau tidak trusted (cek /opt/manage atau ${MANAGE_SCRIPT_DIR}/opt/manage)."
+fi
 
 manage_source_required() {
   local rel="$1"
   local file="${MANAGE_MODULES_DIR}/${rel}"
   [[ -r "${file}" ]] || die "Module wajib tidak ditemukan: ${file}. Jalankan setup.sh/run.sh terbaru untuk sinkronisasi /opt/manage."
+  if ! manage_module_file_trusted "${file}"; then
+    die "Module wajib tidak trusted/tidak valid: ${file}. Pastikan owner root dan tidak writable oleh group/other."
+  fi
   # shellcheck disable=SC1090
   . "${file}"
 }

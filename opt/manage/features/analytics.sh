@@ -211,7 +211,10 @@ traffic_analytics_top_users_show() {
   hr
 
   local n
-  read -r -p "Tampilkan top berapa user? (default 15, max 200, atau kembali): " n
+  if ! read -r -p "Tampilkan top berapa user? (default 15, max 200, atau kembali): " n; then
+    echo
+    return 0
+  fi
   if is_back_choice "${n}"; then
     return 0
   fi
@@ -288,7 +291,10 @@ traffic_analytics_search_user_show() {
   hr
 
   local q
-  read -r -p "Cari username/proto (atau kembali): " q
+  if ! read -r -p "Cari username/proto (atau kembali): " q; then
+    echo
+    return 0
+  fi
   if is_back_choice "${q}"; then
     return 0
   fi
@@ -447,7 +453,7 @@ cert_expiry_days_left() {
   fi
 
   local end end_ts cur_ts diff
-  end="$(openssl x509 -in "${CERT_FULLCHAIN}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//')"
+  end="$(openssl x509 -in "${CERT_FULLCHAIN}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//' || true)"
   if [[ -z "${end}" ]]; then
     echo ""
     return 0
@@ -627,7 +633,10 @@ security_tls_menu() {
     echo "  4) Reload Nginx"
     echo "  0) Back"
     hr
-    read -r -p "Pilih: " c
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
     case "${c}" in
       1) cert_menu_show_info ;;
       2) cert_menu_check_expiry ;;
@@ -813,7 +822,10 @@ fail2ban_menu_unban_ip() {
   echo "  0) Back"
   hr
 
-  read -r -p "Pilih jail (1-${#jails[@]}/0): " c
+  if ! read -r -p "Pilih jail (1-${#jails[@]}/0): " c; then
+    echo
+    return 0
+  fi
   if is_back_choice "${c}"; then
     return 0
   fi
@@ -826,7 +838,10 @@ fail2ban_menu_unban_ip() {
   local jail
   jail="${jails[$((c - 1))]}"
 
-  read -r -p "IP yang ingin di-unban (atau kembali): " ip
+  if ! read -r -p "IP yang ingin di-unban (atau kembali): " ip; then
+    echo
+    return 0
+  fi
   if is_back_choice "${ip}"; then
     return 0
   fi
@@ -877,7 +892,10 @@ security_fail2ban_menu() {
     echo "  4) Restart Fail2ban"
     echo "  0) Back"
     hr
-    read -r -p "Pilih: " c
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
     case "${c}" in
       1) fail2ban_menu_show_jail_status ;;
       2) fail2ban_menu_show_banned_ip ;;
@@ -1002,7 +1020,10 @@ security_hardening_menu() {
     echo "  4) Check Chrony"
     echo "  0) Back"
     hr
-    read -r -p "Pilih: " c
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
     case "${c}" in
       1) hardening_check_bbr ;;
       2) hardening_check_swap ;;
@@ -1218,6 +1239,48 @@ wireproxy_restart_menu() {
   pause
 }
 
+sshws_detect_dropbear_port() {
+  local fallback="${SSHWS_DROPBEAR_PORT:-22022}"
+  local unit_file="/etc/systemd/system/${SSHWS_DROPBEAR_SERVICE}.service"
+  local value=""
+  if [[ -r "${unit_file}" ]]; then
+    value="$(grep -Eo -- '-p[[:space:]]+127\\.0\\.0\\.1:[0-9]+' "${unit_file}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+$' | head -n1 || true)"
+  fi
+  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
+    echo "${value}"
+  else
+    echo "${fallback}"
+  fi
+}
+
+sshws_detect_stunnel_port() {
+  local fallback="${SSHWS_STUNNEL_PORT:-22443}"
+  local conf_file="/etc/stunnel/sshws.conf"
+  local value=""
+  if [[ -r "${conf_file}" ]]; then
+    value="$(sed -nE 's/^[[:space:]]*accept[[:space:]]*=[[:space:]]*127\\.0\\.0\\.1:([0-9]+).*$/\1/p' "${conf_file}" | head -n1)"
+  fi
+  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
+    echo "${value}"
+  else
+    echo "${fallback}"
+  fi
+}
+
+sshws_detect_proxy_port() {
+  local fallback="${SSHWS_PROXY_PORT:-10015}"
+  local unit_file="/etc/systemd/system/${SSHWS_PROXY_SERVICE}.service"
+  local value=""
+  if [[ -r "${unit_file}" ]]; then
+    value="$(grep -Eo -- '--listen-port[[:space:]]+[0-9]+' "${unit_file}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+' | head -n1 || true)"
+  fi
+  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
+    echo "${value}"
+  else
+    echo "${fallback}"
+  fi
+}
+
 sshws_status_menu() {
   title
   echo "10) Maintenance > SSH WS Status"
@@ -1250,10 +1313,14 @@ sshws_status_menu() {
   fi
 
   hr
-  echo "Internal defaults:"
-  echo "  - dropbear local : 127.0.0.1:22022"
-  echo "  - stunnel local  : 127.0.0.1:22443"
-  echo "  - ws proxy local : 127.0.0.1:10015"
+  local dropbear_port stunnel_port proxy_port
+  dropbear_port="$(sshws_detect_dropbear_port)"
+  stunnel_port="$(sshws_detect_stunnel_port)"
+  proxy_port="$(sshws_detect_proxy_port)"
+  echo "Internal ports (detected):"
+  echo "  - dropbear local : 127.0.0.1:${dropbear_port}"
+  echo "  - stunnel local  : 127.0.0.1:${stunnel_port}"
+  echo "  - ws proxy local : 127.0.0.1:${proxy_port}"
   hr
   pause
 }
@@ -1295,6 +1362,30 @@ ssh_username_from_key() {
   printf '%s\n' "${raw}"
 }
 
+ssh_qac_lock_file() {
+  printf '%s\n' "${SSH_QAC_LOCK_FILE:-/run/autoscript/locks/sshws-qac.lock}"
+}
+
+ssh_qac_lock_prepare() {
+  local lock_file
+  local lock_dir
+  lock_file="$(ssh_qac_lock_file)"
+  lock_dir="$(dirname "${lock_file}")"
+  mkdir -p "${lock_dir}" 2>/dev/null || true
+  chmod 700 "${lock_dir}" 2>/dev/null || true
+}
+
+ssh_account_info_password_mode() {
+  case "${SSH_ACCOUNT_INFO_STORE_PASSWORD:-0}" in
+    1|true|yes|on|y)
+      echo "store"
+      ;;
+    *)
+      echo "mask"
+      ;;
+  esac
+}
+
 ssh_state_dirs_prepare() {
   local legacy_dir="/var/lib/xray-manage/ssh-users"
   mkdir -p "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}"
@@ -1311,6 +1402,10 @@ ssh_state_dirs_prepare() {
       if [[ ! -f "${dst}" ]]; then
         cp -a "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
+      elif [[ "${f}" -nt "${dst}" ]]; then
+        # Jika legacy lebih baru, sinkronkan agar metadata terbaru tidak hilang.
+        cp -f "${f}" "${dst}" >/dev/null 2>&1 || true
+        chmod 600 "${dst}" >/dev/null 2>&1 || true
       fi
     done < <(find "${legacy_dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
   fi
@@ -1326,6 +1421,13 @@ ssh_state_dirs_prepare() {
       if [[ ! -f "${dst}" ]]; then
         mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
         chmod 600 "${dst}" >/dev/null 2>&1 || true
+      elif [[ "${f}" -nt "${dst}" ]]; then
+        # Pilih versi paling baru ketika format lama & baru sama-sama ada.
+        mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
+        chmod 600 "${dst}" >/dev/null 2>&1 || true
+      else
+        # Duplicate lama tidak dibutuhkan lagi setelah format @ssh dipakai.
+        rm -f "${f}" >/dev/null 2>&1 || true
       fi
     fi
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
@@ -1368,6 +1470,146 @@ ssh_user_state_write() {
   local state_file tmp
   state_file="$(ssh_user_state_file "${username}")"
   ssh_state_dirs_prepare
+  ssh_qac_lock_prepare
+  local lock_file
+  lock_file="$(ssh_qac_lock_file)"
+
+  if have_cmd flock; then
+    (
+      flock -x 200
+      tmp="$(mktemp "${SSH_USERS_STATE_DIR}/.${username}.XXXXXX")" || exit 1
+      need_python3
+      if ! python3 - <<'PY' "${state_file}" "${username}" "${created_at}" "${expired_at}" > "${tmp}"; then
+import datetime
+import json
+import os
+import sys
+
+state_file, username, created_at, expired_at = sys.argv[1:5]
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+def norm_date(v):
+  s = str(v or "").strip()
+  if not s:
+    return ""
+  return s[:10]
+
+payload = {}
+if os.path.isfile(state_file):
+  try:
+    loaded = json.load(open(state_file, "r", encoding="utf-8"))
+    if isinstance(loaded, dict):
+      payload = loaded
+  except Exception:
+    payload = {}
+
+status_raw = payload.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
+
+quota_limit = to_int(payload.get("quota_limit"), 0)
+if quota_limit < 0:
+  quota_limit = 0
+
+quota_used = to_int(payload.get("quota_used"), 0)
+if quota_used < 0:
+  quota_used = 0
+
+speed_down = to_float(status.get("speed_down_mbit"), 0.0)
+speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+if speed_down < 0:
+  speed_down = 0.0
+if speed_up < 0:
+  speed_up = 0.0
+
+ip_limit = to_int(status.get("ip_limit"), 0)
+if ip_limit < 0:
+  ip_limit = 0
+
+unit = str(payload.get("quota_unit") or "binary").strip().lower()
+if unit not in ("binary", "decimal"):
+  unit = "binary"
+
+created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
+if not created:
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
+
+payload["managed_by"] = "autoscript-manage"
+payload["username"] = username
+payload["protocol"] = "ssh"
+payload["created_at"] = created
+payload["expired_at"] = expired
+payload["quota_limit"] = quota_limit
+payload["quota_unit"] = unit
+payload["quota_used"] = quota_used
+payload["status"] = {
+  "manual_block": to_bool(status.get("manual_block")),
+  "quota_exhausted": to_bool(status.get("quota_exhausted")),
+  "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+  "ip_limit": ip_limit,
+  "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+  "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+  "speed_down_mbit": speed_down,
+  "speed_up_mbit": speed_up,
+  "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
+  "account_locked": to_bool(status.get("account_locked")),
+  "lock_owner": str(status.get("lock_owner") or "").strip(),
+}
+
+print(json.dumps(payload, ensure_ascii=False, indent=2))
+PY
+        rm -f "${tmp}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      printf '\n' >> "${tmp}"
+      install -m 600 "${tmp}" "${state_file}" || {
+        rm -f "${tmp}" >/dev/null 2>&1 || true
+        exit 1
+      }
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      exit 0
+    ) 200>"${lock_file}"
+    return $?
+  fi
+
   tmp="$(mktemp "${SSH_USERS_STATE_DIR}/.${username}.XXXXXX")" || return 1
   need_python3
   if ! python3 - <<'PY' "${state_file}" "${username}" "${created_at}" "${expired_at}" > "${tmp}"; then
@@ -1501,19 +1743,24 @@ PY
 
 ssh_account_info_password_get() {
   local username="${1:-}"
+  if [[ "$(ssh_account_info_password_mode)" != "store" ]]; then
+    echo "-"
+    return 0
+  fi
   local acc_file
   acc_file="$(ssh_account_info_file "${username}")"
   [[ -f "${acc_file}" ]] || {
     echo "-"
     return 0
   }
-  awk -F':' '/^Password[[:space:]]*:/{sub(/^[[:space:]]*/, "", $2); print $2; found=1; exit} END{if(!found) print "-"}' "${acc_file}" 2>/dev/null
+  awk '/^Password[[:space:]]*:/{sub(/^Password[[:space:]]*:[[:space:]]*/, ""); print; found=1; exit} END{if(!found) print "-"}' "${acc_file}" 2>/dev/null
 }
 
 ssh_account_info_write() {
   # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up
   local username="${1:-}"
-  local password="${2:-}"
+  local password_raw="${2:-}"
+  local password_mode password_out
   local quota_bytes="${3:-0}"
   local expired_at="${4:--}"
   local created_at="${5:-}"
@@ -1524,6 +1771,13 @@ ssh_account_info_write() {
   local speed_up="${10:-0}"
 
   ssh_state_dirs_prepare
+  password_mode="$(ssh_account_info_password_mode)"
+  if [[ "${password_mode}" == "store" ]]; then
+    password_out="${password_raw:-"-"}"
+  else
+    # Pada mode mask, selalu tampil hidden agar konsisten di setiap refresh.
+    password_out="(hidden)"
+  fi
 
   local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp
   acc_file="$(ssh_account_info_file "${username}")"
@@ -1532,7 +1786,6 @@ ssh_account_info_write() {
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   [[ -n "${domain}" ]] || domain="-"
   [[ -n "${ip}" ]] || ip="-"
-  [[ -n "${password}" ]] || password="-"
   [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   [[ -n "${expired_at}" ]] || expired_at="-"
 
@@ -1592,7 +1845,7 @@ PY
 Domain      : ${domain}
 IP          : ${ip}
 Username    : ${username}
-Password    : ${password}
+Password    : ${password_out}
 Quota Limit : ${quota_limit_disp}
 Expired     : ${expired_disp}
 Valid Until : ${valid_until}
@@ -1602,10 +1855,10 @@ Speed Limit : ${speed_disp}
 
 Standard Payload:
 Payload WSS:
-    GET wss://${domain}/ HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: Websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]
 
 Payload WS:
-    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: Websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]
 EOF
   chmod 600 "${acc_file}" >/dev/null 2>&1 || true
 }
@@ -1692,6 +1945,17 @@ PY
   ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
 }
 
+ssh_account_info_refresh_warn() {
+  # args: username [password_override]
+  local username="${1:-}"
+  local password_override="${2:-}"
+  if ! ssh_account_info_refresh_from_state "${username}" "${password_override}"; then
+    warn "SSH ACCOUNT INFO belum sinkron untuk '${username}'."
+    return 1
+  fi
+  return 0
+}
+
 ssh_pick_managed_user() {
   local -n _out_ref="$1"
   _out_ref=""
@@ -1717,7 +1981,10 @@ ssh_pick_managed_user() {
 
   local pick
   while true; do
-    read -r -p "Nomor akun (1-${#users[@]}/kembali): " pick
+    if ! read -r -p "Nomor akun (1-${#users[@]}/kembali): " pick; then
+      echo
+      return 1
+    fi
     if is_back_choice "${pick}"; then
       return 1
     fi
@@ -1735,13 +2002,19 @@ ssh_read_password_confirm() {
   local -n _out_ref="$1"
   _out_ref=""
   local p1="" p2=""
-  read -r -s -p "Password SSH: " p1
+  if ! read -r -s -p "Password SSH: " p1; then
+    echo
+    return 1
+  fi
   echo
   if [[ -z "${p1}" || ${#p1} -lt 6 ]]; then
     warn "Password minimal 6 karakter."
     return 1
   fi
-  read -r -s -p "Ulangi password: " p2
+  if ! read -r -s -p "Ulangi password: " p2; then
+    echo
+    return 1
+  fi
   echo
   if [[ "${p1}" != "${p2}" ]]; then
     warn "Password tidak sama."
@@ -1757,7 +2030,10 @@ ssh_add_user_menu() {
   hr
 
   local username
-  read -r -p "Username SSH (atau kembali): " username
+  if ! read -r -p "Username SSH (atau kembali): " username; then
+    echo
+    return 0
+  fi
   if is_back_choice "${username}"; then
     return 0
   fi
@@ -1780,7 +2056,10 @@ ssh_add_user_menu() {
   fi
 
   local quota_input quota_gb quota_bytes
-  read -r -p "Quota (GB) (0=unlimited) (atau kembali): " quota_input
+  if ! read -r -p "Quota (GB) (0=unlimited) (atau kembali): " quota_input; then
+    echo
+    return 0
+  fi
   if is_back_choice "${quota_input}"; then
     return 0
   fi
@@ -1793,7 +2072,10 @@ ssh_add_user_menu() {
   quota_bytes="$(bytes_from_gb "${quota_gb}")"
 
   local ip_toggle ip_enabled="false" ip_limit="0"
-  read -r -p "Limit IP (on/off) (atau kembali): " ip_toggle
+  if ! read -r -p "Limit IP (on/off) (atau kembali): " ip_toggle; then
+    echo
+    return 0
+  fi
   if is_back_word_choice "${ip_toggle}"; then
     return 0
   fi
@@ -1801,7 +2083,10 @@ ssh_add_user_menu() {
   case "${ip_toggle}" in
     on)
       ip_enabled="true"
-      read -r -p "Limit IP (angka) (atau kembali): " ip_limit
+      if ! read -r -p "Limit IP (angka) (atau kembali): " ip_limit; then
+        echo
+        return 0
+      fi
       if is_back_word_choice "${ip_limit}"; then
         return 0
       fi
@@ -1820,7 +2105,10 @@ ssh_add_user_menu() {
   esac
 
   local speed_toggle speed_enabled="false" speed_down="0" speed_up="0"
-  read -r -p "Limit speed per user SSH (on/off) (atau kembali): " speed_toggle
+  if ! read -r -p "Limit speed per user SSH (on/off) (atau kembali): " speed_toggle; then
+    echo
+    return 0
+  fi
   if is_back_word_choice "${speed_toggle}"; then
     return 0
   fi
@@ -1828,7 +2116,10 @@ ssh_add_user_menu() {
   case "${speed_toggle}" in
     on)
       speed_enabled="true"
-      read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down
+      if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down; then
+        echo
+        return 0
+      fi
       if is_back_word_choice "${speed_down}"; then
         return 0
       fi
@@ -1839,7 +2130,10 @@ ssh_add_user_menu() {
         return 0
       fi
 
-      read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up
+      if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up; then
+        echo
+        return 0
+      fi
       if is_back_word_choice "${speed_up}"; then
         return 0
       fi
@@ -1903,22 +2197,41 @@ ssh_add_user_menu() {
     return 0
   fi
 
+  local add_fail_msg=""
   if [[ "${ip_enabled}" == "true" ]]; then
-    ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}" || true
-    ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on || true
+    if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}"; then
+      add_fail_msg="Gagal set IP limit metadata SSH."
+    elif ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+      add_fail_msg="Gagal mengaktifkan IP limit metadata SSH."
+    fi
   else
-    ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off || true
+    if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+      add_fail_msg="Gagal menonaktifkan IP limit metadata SSH."
+    fi
   fi
 
-  if [[ "${speed_enabled}" == "true" ]]; then
-    ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}" || true
-  else
-    ssh_qac_atomic_update_file "${qf}" speed_limit_set off || true
+  if [[ -z "${add_fail_msg}" ]]; then
+    if [[ "${speed_enabled}" == "true" ]]; then
+      if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}"; then
+        add_fail_msg="Gagal set speed limit metadata SSH."
+      fi
+    else
+      if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
+        add_fail_msg="Gagal menonaktifkan speed limit metadata SSH."
+      fi
+    fi
   fi
 
-  ssh_qac_enforce_now "${username}" || true
+  if [[ -n "${add_fail_msg}" ]]; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    rm -f "${qf}" "$(ssh_account_info_file "${username}")" >/dev/null 2>&1 || true
+    warn "${add_fail_msg}"
+    pause
+    return 0
+  fi
+
+  ssh_qac_enforce_now_warn "${username}" || true
   ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
-  password=""
 
   local acc_file
   acc_file="$(ssh_account_info_file "${username}")"
@@ -1937,7 +2250,13 @@ ssh_add_user_menu() {
   else
     echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
   fi
+  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
+    hr
+    echo "One-time Password : ${password}"
+    echo "Note             : password tidak disimpan plaintext di file account info."
+  fi
   hr
+  password=""
   pause
 }
 
@@ -2006,7 +2325,10 @@ ssh_extend_expiry_menu() {
   hr
 
   local mode
-  read -r -p "Pilih: " mode
+  if ! read -r -p "Pilih: " mode; then
+    echo
+    return 0
+  fi
   if is_back_choice "${mode}"; then
     return 0
   fi
@@ -2015,7 +2337,10 @@ ssh_extend_expiry_menu() {
   case "${mode}" in
     1)
       local add_days
-      read -r -p "Tambah berapa hari: " add_days
+      if ! read -r -p "Tambah berapa hari: " add_days; then
+        echo
+        return 0
+      fi
       if is_back_choice "${add_days}"; then
         return 0
       fi
@@ -2027,7 +2352,10 @@ ssh_extend_expiry_menu() {
       new_expiry="$(date -u -d "+${add_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
       ;;
     2)
-      read -r -p "Tanggal expiry baru (YYYY-MM-DD): " new_expiry
+      if ! read -r -p "Tanggal expiry baru (YYYY-MM-DD): " new_expiry; then
+        echo
+        return 0
+      fi
       if is_back_choice "${new_expiry}"; then
         return 0
       fi
@@ -2061,8 +2389,12 @@ ssh_extend_expiry_menu() {
   if [[ -z "${created_at}" ]]; then
     created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   fi
-  ssh_user_state_write "${username}" "${created_at}" "${new_expiry}" || true
-  ssh_account_info_refresh_from_state "${username}" || true
+  if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
+    warn "Metadata SSH gagal diperbarui untuk '${username}'."
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}"; then
+    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+  fi
 
   log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
   pause
@@ -2096,7 +2428,15 @@ ssh_reset_password_menu() {
     return 0
   fi
 
-  ssh_account_info_refresh_from_state "${username}" "${password}" || true
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+  fi
+  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
+    hr
+    echo "One-time Password : ${password}"
+    echo "Note             : password tidak disimpan plaintext di file account info."
+    hr
+  fi
   password=""
 
   log "Password akun '${username}' berhasil direset."
@@ -2150,7 +2490,12 @@ for idx, row in enumerate(rows, start=1):
   if pathlib.Path("/etc/passwd").is_file():
     try:
       passwd = pathlib.Path("/etc/passwd").read_text(encoding="utf-8", errors="ignore")
-      if f"{username}:" not in passwd:
+      users = set()
+      for ln in passwd.splitlines():
+        if ":" not in ln:
+          continue
+        users.add(ln.split(":", 1)[0])
+      if username not in users:
         sys_user = "missing"
     except Exception:
       pass
@@ -2216,11 +2561,11 @@ ssh_active_sessions_count() {
 
   local c="0"
   if have_cmd pgrep; then
-    c="$(pgrep -u "${username}" -x dropbear 2>/dev/null | wc -l | awk '{print $1}')"
+    c="$(pgrep -u "${username}" -x dropbear 2>/dev/null | wc -l | awk '{print $1}' || true)"
     c="${c:-0}"
     [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
     if [[ "${c}" == "0" ]]; then
-      c="$(pgrep -u "${username}" -f dropbear 2>/dev/null | wc -l | awk '{print $1}')"
+      c="$(pgrep -u "${username}" -f dropbear 2>/dev/null | wc -l | awk '{print $1}' || true)"
       c="${c:-0}"
       [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
     fi
@@ -2228,11 +2573,16 @@ ssh_active_sessions_count() {
   echo "${c}"
 }
 
-ssh_qac_enforce_once_internal() {
+ssh_qac_enforce_once_internal_unlocked() {
   local target_user="${1:-}"
+  local lock_file
   ssh_state_dirs_prepare
+  ssh_qac_lock_prepare
+  lock_file="$(ssh_qac_lock_file)"
   need_python3
-  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${target_user}"
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${target_user}" "${lock_file}"
+import atexit
+import fcntl
 import json
 import os
 import pathlib
@@ -2242,6 +2592,7 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 target = (sys.argv[2] or "").strip()
+lock_file = pathlib.Path(sys.argv[3] or "/run/autoscript/locks/sshws-qac.lock")
 target_norm = ""
 
 def to_int(v, default=0):
@@ -2291,6 +2642,31 @@ def norm_user(v):
   return s
 
 target_norm = norm_user(target)
+
+lock_handle = None
+
+def release_lock():
+  global lock_handle
+  if lock_handle is None:
+    return
+  try:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+  except Exception:
+    pass
+  try:
+    lock_handle.close()
+  except Exception:
+    pass
+  lock_handle = None
+
+try:
+  lock_file.parent.mkdir(parents=True, exist_ok=True)
+except Exception:
+  pass
+
+lock_handle = open(lock_file, "a+", encoding="utf-8")
+fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+atexit.register(release_lock)
 
 def active_sessions(username):
   if not username:
@@ -2479,17 +2855,35 @@ for path in paths:
 PY
 }
 
+ssh_qac_enforce_once_internal() {
+  local target_user="${1:-}"
+  ssh_qac_enforce_once_internal_unlocked "${target_user}"
+}
+
 ssh_qac_enforce_now() {
   local target_user="${1:-}"
   if [[ -x "${SSH_QAC_ENFORCER_BIN}" ]]; then
     if [[ -n "${target_user}" ]]; then
-      "${SSH_QAC_ENFORCER_BIN}" --once --user "${target_user}" >/dev/null 2>&1 || true
+      "${SSH_QAC_ENFORCER_BIN}" --once --user "${target_user}" >/dev/null 2>&1
     else
-      "${SSH_QAC_ENFORCER_BIN}" --once >/dev/null 2>&1 || true
+      "${SSH_QAC_ENFORCER_BIN}" --once >/dev/null 2>&1
     fi
-    return 0
+    return $?
   fi
-  ssh_qac_enforce_once_internal "${target_user}" >/dev/null 2>&1 || true
+  ssh_qac_enforce_once_internal "${target_user}" >/dev/null 2>&1
+}
+
+ssh_qac_enforce_now_warn() {
+  local target_user="${1:-}"
+  if ! ssh_qac_enforce_now "${target_user}"; then
+    if [[ -n "${target_user}" ]]; then
+      warn "Enforcer SSH QAC gagal untuk '${target_user}'. Timer akan retry otomatis."
+    else
+      warn "Enforcer SSH QAC gagal dijalankan. Timer akan retry otomatis."
+    fi
+    return 1
+  fi
+  return 0
 }
 
 ssh_qac_collect_files() {
@@ -2865,23 +3259,30 @@ except Exception:
 PY
 }
 
-ssh_qac_atomic_update_file() {
+ssh_qac_atomic_update_file_unlocked() {
   # args: json_file action [args...]
   local qf="$1"
   local action="$2"
+  local lock_file
   shift 2 || true
 
   ssh_state_dirs_prepare
+  ssh_qac_lock_prepare
+  lock_file="$(ssh_qac_lock_file)"
   need_python3
-  python3 - <<'PY' "${qf}" "${action}" "$@"
+  python3 - <<'PY' "${qf}" "${action}" "${lock_file}" "$@"
+import atexit
+import fcntl
 import json
 import os
+import pathlib
 import sys
 import tempfile
 
 qf = sys.argv[1]
 action = sys.argv[2]
-args = sys.argv[3:]
+lock_file = pathlib.Path(sys.argv[3] or "/run/autoscript/locks/sshws-qac.lock")
+args = sys.argv[4:]
 
 def to_int(v, default=0):
   try:
@@ -2954,6 +3355,31 @@ def parse_float(v, key, minv=None):
   if minv is not None and n < minv:
     raise SystemExit(f"{key} minimal {minv}")
   return n
+
+lock_handle = None
+
+def release_lock():
+  global lock_handle
+  if lock_handle is None:
+    return
+  try:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+  except Exception:
+    pass
+  try:
+    lock_handle.close()
+  except Exception:
+    pass
+  lock_handle = None
+
+try:
+  lock_file.parent.mkdir(parents=True, exist_ok=True)
+except Exception:
+  pass
+
+lock_handle = open(lock_file, "a+", encoding="utf-8")
+fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+atexit.register(release_lock)
 
 payload = {}
 if os.path.isfile(qf):
@@ -3080,7 +3506,20 @@ finally:
   except Exception:
     pass
 PY
+  local py_rc=$?
+  if (( py_rc != 0 )); then
+    return "${py_rc}"
+  fi
   chmod 600 "${qf}" 2>/dev/null || true
+  return 0
+}
+
+ssh_qac_atomic_update_file() {
+  # args: json_file action [args...]
+  local qf="$1"
+  local action="$2"
+  shift 2 || true
+  ssh_qac_atomic_update_file_unlocked "${qf}" "${action}" "$@"
 }
 
 ssh_qac_view_json() {
@@ -3262,7 +3701,10 @@ ssh_qac_edit_flow() {
         ssh_qac_view_json "${qf}"
         ;;
       2)
-        read -r -p "Quota Limit (GB) (atau kembali): " gb
+        if ! read -r -p "Quota Limit (GB) (atau kembali): " gb; then
+          echo
+          return 0
+        fi
         if is_back_choice "${gb}"; then
           continue
         fi
@@ -3279,16 +3721,24 @@ ssh_qac_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
-        ssh_qac_atomic_update_file "${qf}" set_quota_limit "${qb}"
-        ssh_qac_enforce_now "${username}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${qb}"; then
+          warn "Gagal update quota limit SSH."
+          pause
+          continue
+        fi
+        ssh_qac_enforce_now_warn "${username}" || true
+        ssh_account_info_refresh_warn "${username}" || true
         log "Quota limit SSH diubah: ${gb_num} GB"
         pause
         ;;
       3)
-        ssh_qac_atomic_update_file "${qf}" reset_quota_used
-        ssh_qac_enforce_now "${username}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" reset_quota_used; then
+          warn "Gagal reset quota used SSH."
+          pause
+          continue
+        fi
+        ssh_qac_enforce_now_warn "${username}" || true
+        ssh_account_info_refresh_warn "${username}" || true
         log "Quota used SSH di-reset: 0"
         pause
         ;;
@@ -3296,14 +3746,22 @@ ssh_qac_edit_flow() {
         local st_mb
         st_mb="$(ssh_qac_get_status_bool "${qf}" "manual_block")"
         if [[ "${st_mb}" == "true" ]]; then
-          ssh_qac_atomic_update_file "${qf}" manual_block_set off
-          ssh_qac_enforce_now "${username}"
-          ssh_account_info_refresh_from_state "${username}" || true
+          if ! ssh_qac_atomic_update_file "${qf}" manual_block_set off; then
+            warn "Gagal menonaktifkan manual block SSH."
+            pause
+            continue
+          fi
+          ssh_qac_enforce_now_warn "${username}" || true
+          ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: OFF"
         else
-          ssh_qac_atomic_update_file "${qf}" manual_block_set on
-          ssh_qac_enforce_now "${username}"
-          ssh_account_info_refresh_from_state "${username}" || true
+          if ! ssh_qac_atomic_update_file "${qf}" manual_block_set on; then
+            warn "Gagal mengaktifkan manual block SSH."
+            pause
+            continue
+          fi
+          ssh_qac_enforce_now_warn "${username}" || true
+          ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: ON"
         fi
         pause
@@ -3312,20 +3770,31 @@ ssh_qac_edit_flow() {
         local ip_on
         ip_on="$(ssh_qac_get_status_bool "${qf}" "ip_limit_enabled")"
         if [[ "${ip_on}" == "true" ]]; then
-          ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off
-          ssh_qac_enforce_now "${username}"
-          ssh_account_info_refresh_from_state "${username}" || true
+          if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+            warn "Gagal menonaktifkan IP/Login limit SSH."
+            pause
+            continue
+          fi
+          ssh_qac_enforce_now_warn "${username}" || true
+          ssh_account_info_refresh_warn "${username}" || true
           log "IP/Login limit SSH: OFF"
         else
-          ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on
-          ssh_qac_enforce_now "${username}"
-          ssh_account_info_refresh_from_state "${username}" || true
+          if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+            warn "Gagal mengaktifkan IP/Login limit SSH."
+            pause
+            continue
+          fi
+          ssh_qac_enforce_now_warn "${username}" || true
+          ssh_account_info_refresh_warn "${username}" || true
           log "IP/Login limit SSH: ON"
         fi
         pause
         ;;
       6)
-        read -r -p "IP/Login limit (angka) (atau kembali): " lim
+        if ! read -r -p "IP/Login limit (angka) (atau kembali): " lim; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${lim}"; then
           continue
         fi
@@ -3334,21 +3803,32 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"
-        ssh_qac_enforce_now "${username}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"; then
+          warn "Gagal set IP/Login limit SSH."
+          pause
+          continue
+        fi
+        ssh_qac_enforce_now_warn "${username}" || true
+        ssh_account_info_refresh_warn "${username}" || true
         log "IP/Login limit SSH diubah: ${lim}"
         pause
         ;;
       7)
-        ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked
-        ssh_qac_enforce_now "${username}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked; then
+          warn "Gagal unlock IP/Login lock SSH."
+          pause
+          continue
+        fi
+        ssh_qac_enforce_now_warn "${username}" || true
+        ssh_account_info_refresh_warn "${username}" || true
         log "IP/Login lock SSH di-unlock"
         pause
         ;;
       8)
-        read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_input
+        if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_input; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${speed_down_input}"; then
           continue
         fi
@@ -3358,13 +3838,20 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        ssh_qac_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"; then
+          warn "Gagal set speed download SSH."
+          pause
+          continue
+        fi
+        ssh_account_info_refresh_warn "${username}" || true
         log "Speed download SSH diubah: ${speed_down_input} Mbps"
         pause
         ;;
       9)
-        read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_input
+        if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_input; then
+          echo
+          return 0
+        fi
         if is_back_word_choice "${speed_up_input}"; then
           continue
         fi
@@ -3374,8 +3861,12 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        ssh_qac_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"; then
+          warn "Gagal set speed upload SSH."
+          pause
+          continue
+        fi
+        ssh_account_info_refresh_warn "${username}" || true
         log "Speed upload SSH diubah: ${speed_up_input} Mbps"
         pause
         ;;
@@ -3383,8 +3874,12 @@ ssh_qac_edit_flow() {
         local speed_on speed_down_now speed_up_now
         speed_on="$(ssh_qac_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
-          ssh_qac_atomic_update_file "${qf}" speed_limit_set off
-          ssh_account_info_refresh_from_state "${username}" || true
+          if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
+            warn "Gagal menonaktifkan speed limit SSH."
+            pause
+            continue
+          fi
+          ssh_account_info_refresh_warn "${username}" || true
           log "Speed limit SSH: OFF"
           pause
           continue
@@ -3394,7 +3889,10 @@ ssh_qac_edit_flow() {
         speed_up_now="$(ssh_qac_get_status_number "${qf}" "speed_up_mbit")"
 
         if ! speed_mbit_is_positive "${speed_down_now}"; then
-          read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_now
+          if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down_now; then
+            echo
+            return 0
+          fi
           if is_back_choice "${speed_down_now}"; then
             continue
           fi
@@ -3406,7 +3904,10 @@ ssh_qac_edit_flow() {
           fi
         fi
         if ! speed_mbit_is_positive "${speed_up_now}"; then
-          read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_now
+          if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up_now; then
+            echo
+            return 0
+          fi
           if is_back_choice "${speed_up_now}"; then
             continue
           fi
@@ -3418,8 +3919,12 @@ ssh_qac_edit_flow() {
           fi
         fi
 
-        ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"
-        ssh_account_info_refresh_from_state "${username}" || true
+        if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
+          warn "Gagal mengaktifkan speed limit SSH."
+          pause
+          continue
+        fi
+        ssh_account_info_refresh_warn "${username}" || true
         log "Speed limit SSH: ON"
         pause
         ;;
@@ -3443,7 +3948,7 @@ ssh_quota_menu() {
     echo "5) SSH Quota & Access Control"
     hr
 
-    ssh_qac_enforce_now
+    ssh_qac_enforce_now_warn || true
     ssh_qac_collect_files
     ssh_qac_build_view_indexes
     ssh_qac_print_table_page "${SSH_QAC_PAGE}"
@@ -3477,7 +3982,10 @@ ssh_quota_menu() {
         fi
         ;;
       search)
-        read -r -p "Search username (atau kembali): " q
+        if ! read -r -p "Search username (atau kembali): " q; then
+          echo
+          break
+        fi
         if is_back_choice "${q}"; then
           continue
         fi
