@@ -34,7 +34,9 @@ CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
 SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
-NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62}"
+NGINX_SIGNING_KEY_FPRS="${NGINX_SIGNING_KEY_FPRS:-8540A6F18833A80E9C1653A42FD21310B49F6B46 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3}"
+# Backward compatibility: jika user hanya set 1 fingerprint via env lama.
+NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-}"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
@@ -919,15 +921,31 @@ install_nginx_official_repo() {
 
   mkdir -p /usr/share/keyrings
   local key_tmp key_gpg_tmp
-  local key_fpr
+  local key_fprs_raw allowed_fprs got_fpr expected_fpr matched="false"
   key_tmp="$(mktemp)"
   key_gpg_tmp="$(mktemp)"
 
   curl -fsSL https://nginx.org/keys/nginx_signing.key -o "$key_tmp" || die "Gagal download nginx signing key."
-  key_fpr="$(gpg --show-keys --with-colons "$key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print toupper($10); exit}')"
-  [[ -n "${key_fpr}" ]] || die "Gagal membaca fingerprint nginx signing key."
-  if [[ "${key_fpr}" != "${NGINX_SIGNING_KEY_FPR^^}" ]]; then
-    die "Fingerprint nginx signing key mismatch (expected=${NGINX_SIGNING_KEY_FPR^^}, got=${key_fpr})."
+  key_fprs_raw="$(gpg --show-keys --with-colons "$key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print toupper($10)}' | tr '\n' ' ' || true)"
+  key_fprs_raw="$(echo "${key_fprs_raw}" | awk '{$1=$1;print}')"
+  [[ -n "${key_fprs_raw}" ]] || die "Gagal membaca fingerprint nginx signing key."
+
+  if [[ -n "${NGINX_SIGNING_KEY_FPR:-}" ]]; then
+    allowed_fprs="${NGINX_SIGNING_KEY_FPR^^}"
+  else
+    allowed_fprs="${NGINX_SIGNING_KEY_FPRS^^}"
+  fi
+
+  for got_fpr in ${key_fprs_raw}; do
+    for expected_fpr in ${allowed_fprs}; do
+      if [[ "${got_fpr}" == "${expected_fpr}" ]]; then
+        matched="true"
+        break 2
+      fi
+    done
+  done
+  if [[ "${matched}" != "true" ]]; then
+    die "Fingerprint nginx signing key mismatch (allowed=${allowed_fprs}, got=${key_fprs_raw})."
   fi
   gpg --dearmor <"$key_tmp" >"$key_gpg_tmp"
   install -m 644 "$key_gpg_tmp" /usr/share/keyrings/nginx-archive-keyring.gpg
