@@ -310,8 +310,10 @@ speed_policy_resync_after_egress_change() {
 }
 
 quota_migrate_dates_to_dateonly() {
-  # Normalisasi created_at/expired_at menjadi YYYY-MM-DD untuk semua metadata quota.
-  # Idempotent: nilai yang sudah date-only tidak diubah.
+  # Normalisasi metadata quota:
+  # - created_at -> YYYY-MM-DD HH:MM
+  # - expired_at -> YYYY-MM-DD
+  # Idempotent untuk nilai yang sudah sesuai.
   need_python3
   python3 - <<'PY' "${QUOTA_ROOT}" "${QUOTA_PROTO_DIRS[@]}"
 import json
@@ -325,35 +327,48 @@ quota_root = sys.argv[1]
 protos = tuple(sys.argv[2:])
 
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DATETIME_MIN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 
-def normalize_date(value):
+def normalize_date(value, keep_time=False):
   if value is None:
     return None
   s = str(value).strip()
   if not s:
     return None
-  if DATE_ONLY_RE.match(s):
+  s = s.replace("T", " ")
+  if s.endswith("Z"):
+    s = s[:-1]
+
+  if keep_time and DATETIME_MIN_RE.match(s):
     return s
+  if DATE_ONLY_RE.match(s):
+    return s + " 00:00" if keep_time else s
 
   candidates = [s]
-  if s.endswith("Z"):
-    candidates.append(s[:-1] + "+00:00")
-  if len(s) >= 10 and DATE_ONLY_RE.match(s[:10]):
-    candidates.append(s[:10])
+  if s.endswith("+00:00"):
+    candidates.append(s[:-6])
+  if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
+    candidates.append(s + ":00")
+  candidates.append(s.replace(" ", "T"))
+  if len(s) >= 10 and DATE_ONLY_RE.match(s[:10]) and keep_time:
+    candidates.append(s[:10] + " 00:00")
 
   for c in candidates:
     try:
-      d = datetime.fromisoformat(c).date()
-      return d.strftime("%Y-%m-%d")
+      d = datetime.fromisoformat(c)
+      return d.strftime("%Y-%m-%d %H:%M") if keep_time else d.strftime("%Y-%m-%d")
     except Exception:
       pass
 
-  for fmt in ("%Y-%m-%d %H:%M:%S",):
+  for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
     try:
-      d = datetime.strptime(s, fmt).date()
-      return d.strftime("%Y-%m-%d")
+      d = datetime.strptime(s, fmt)
+      return d.strftime("%Y-%m-%d %H:%M") if keep_time else d.strftime("%Y-%m-%d")
     except Exception:
       pass
+
+  if keep_time and len(s) >= 10 and DATE_ONLY_RE.match(s[:10]):
+    return s[:10] + " 00:00"
 
   return None
 
@@ -378,7 +393,7 @@ for proto in protos:
     for key in ("created_at", "expired_at"):
       if key not in meta:
         continue
-      nd = normalize_date(meta.get(key))
+      nd = normalize_date(meta.get(key), keep_time=(key == "created_at"))
       if nd is None:
         print(f"[manage][WARN] Skip field {key} (format tidak dikenali) di: {p}", file=sys.stderr)
         continue
@@ -479,7 +494,7 @@ have_cmd() {
 }
 
 now_ts() {
-  date '+%Y-%m-%d %H:%M:%S'
+  date '+%Y-%m-%d %H:%M'
 }
 
 bytes_from_gb() {
@@ -3649,7 +3664,7 @@ payload = {
   "mark": mark,
   "down_mbit": down,
   "up_mbit": up,
-  "updated_at": datetime.now(timezone.utc).isoformat(),
+  "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
 }
 
 os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
@@ -4116,7 +4131,7 @@ write_account_artifacts() {
   local domain ip created expired
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
-  created="$(date -u '+%Y-%m-%d')"
+  created="$(date -u '+%Y-%m-%d %H:%M')"
   expired="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -u '+%Y-%m-%d')"
 
   local acc_file quota_file
@@ -4624,7 +4639,21 @@ if quota_bytes < 0:
 quota_gb_disp = fmt_gb(quota_bytes / (1024 ** 3)) if quota_bytes else "0"
 
 created_at = str(meta.get("created_at") or existing.get("Created") or "").strip()
-created_at = created_at[:10] if created_at else datetime.utcnow().strftime("%Y-%m-%d")
+if created_at:
+  s = created_at.replace("T", " ").strip()
+  if s.endswith("Z"):
+    s = s[:-1]
+  try:
+    created_at = datetime.fromisoformat(s).strftime("%Y-%m-%d %H:%M")
+  except Exception:
+    if len(s) >= 16 and s[4:5] == "-" and s[7:8] == "-" and s[10:11] == " " and s[13:14] == ":":
+      created_at = s[:16]
+    elif len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
+      created_at = s[:10] + " 00:00"
+    else:
+      created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+else:
+  created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 expired_at = str(meta.get("expired_at") or existing.get("Valid Until") or "").strip()
 expired_at = expired_at[:10] if expired_at else "-"
 
@@ -6262,7 +6291,7 @@ args = sys.argv[4:]
 os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
 
 def now_iso():
-  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def parse_onoff(raw):
   v = str(raw or "").strip().lower()
@@ -6456,7 +6485,15 @@ if isinstance(exp, str) and exp:
   d["expired_at"]=exp[:10]
 crt=d.get("created_at")
 if isinstance(crt, str) and crt:
-  d["created_at"]=crt[:10]
+  s=crt.replace("T"," ").strip()
+  if s.endswith("Z"):
+    s=s[:-1]
+  if len(s)>=16 and s[4:5]=="-" and s[7:8]=="-" and s[10:11]==" " and s[13:14]==":":
+    d["created_at"]=s[:16]
+  elif len(s)>=10 and s[4:5]=="-" and s[7:8]=="-":
+    d["created_at"]=s[:10]+" 00:00"
+  else:
+    d["created_at"]=s
 print(json.dumps(d, ensure_ascii=False, indent=2))
 PY
   else
@@ -6473,7 +6510,15 @@ if isinstance(exp, str) and exp:
   d["expired_at"]=exp[:10]
 crt=d.get("created_at")
 if isinstance(crt, str) and crt:
-  d["created_at"]=crt[:10]
+  s=crt.replace("T"," ").strip()
+  if s.endswith("Z"):
+    s=s[:-1]
+  if len(s)>=16 and s[4:5]=="-" and s[7:8]=="-" and s[10:11]==" " and s[13:14]==":":
+    d["created_at"]=s[:16]
+  elif len(s)>=10 and s[4:5]=="-" and s[7:8]=="-":
+    d["created_at"]=s[:10]+" 00:00"
+  else:
+    d["created_at"]=s
 print(json.dumps(d, ensure_ascii=False, indent=2))
 PY
   fi

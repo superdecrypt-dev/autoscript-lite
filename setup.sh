@@ -2793,8 +2793,7 @@ def enforce_user(path):
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    if active_sessions(username) > ip_limit:
-      status["ip_limit_locked"] = True
+    status["ip_limit_locked"] = active_sessions(username) > ip_limit
   else:
     status["ip_limit_locked"] = False
 
@@ -3892,7 +3891,7 @@ def safe_int(v, default=0):
     return default
 
 def now_iso():
-  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
@@ -4290,7 +4289,7 @@ QUOTA_ROOT = "/opt/quota"
 PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 
 def now_iso():
-  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
@@ -4536,7 +4535,7 @@ GB_DECIMAL = 1000 ** 3
 GB_BINARY = 1024 ** 3
 
 def now_iso():
-  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
@@ -5157,7 +5156,7 @@ MARK_MAX = 59999
 
 
 def now_iso():
-  return datetime.now(timezone.utc).isoformat()
+  return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
 def run(cmd, check=True):
@@ -5937,7 +5936,7 @@ emit_alert_if_needed() {
     fi
   fi
 
-  printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "${msg}" >> "${ALERT_LOG}"
+  printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M')" "${msg}" >> "${ALERT_LOG}"
   if [[ -n "${sum}" ]]; then
     printf '%s\n' "${sum}" > "${LAST_ALERT_HASH_FILE}"
     chmod 600 "${LAST_ALERT_HASH_FILE}" || true
@@ -5967,7 +5966,7 @@ run_checks() {
   ISSUES=()
   CRITICAL_COUNT=0
   WARN_COUNT=0
-  CHECKED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  CHECKED_AT_UTC="$(date -u +'%Y-%m-%d %H:%M')"
   DOMAIN_VALUE="$(detect_domain)"
   [[ -n "${DOMAIN_VALUE}" ]] || DOMAIN_VALUE="-"
   VPS_IP_VALUE="$(detect_vps_ip)"
@@ -6549,7 +6548,7 @@ acme_sh_path_get() {
 
 append_log() {
   mkdir -p "$(dirname "${LOG_FILE}")"
-  printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >> "${LOG_FILE}"
+  printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M')" "$*" >> "${LOG_FILE}"
   chmod 600 "${LOG_FILE}" || true
 }
 

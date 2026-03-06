@@ -95,7 +95,7 @@ total_used_bytes = sum(int(e["used_bytes"]) for e in entries)
 total_quota_bytes = sum(int(e["quota_bytes"]) for e in entries)
 
 payload = {
-  "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+  "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
   "quota_root": quota_root,
   "total_users": total_users,
   "total_used_bytes": total_used_bytes,
@@ -1568,7 +1568,7 @@ if unit not in ("binary", "decimal"):
 
 created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 
@@ -1701,7 +1701,7 @@ if unit not in ("binary", "decimal"):
 
 created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 
@@ -1786,7 +1786,7 @@ ssh_account_info_write() {
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   [[ -n "${domain}" ]] || domain="-"
   [[ -n "${ip}" ]] || ip="-"
-  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d %H:%M')"
   [[ -n "${expired_at}" ]] || expired_at="-"
 
   quota_limit_disp="$(python3 - <<'PY' "${quota_bytes}"
@@ -2062,20 +2062,164 @@ ssh_add_user_rollback() {
   return 1
 }
 
-ssh_add_user_menu() {
-  title
-  echo "3) SSH Management > Add SSH User"
-  hr
+ssh_managed_users_lines() {
+  ssh_state_dirs_prepare
+  need_python3
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" 2>/dev/null || true
+import json
+import os
+import re
+import sys
+from datetime import datetime
 
-  local username qf acc_file
-  if ! read -r -p "Username SSH (atau kembali): " username; then
-    echo
+root = sys.argv[1]
+
+def norm_created(v):
+  s = str(v or "").strip()
+  if not s or s == "-":
+    return "-"
+  s = s.replace("T", " ")
+  if s.endswith("Z"):
+    s = s[:-1]
+  s = s.strip()
+  if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+    return s + " 00:00"
+  if len(s) >= 16 and re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}", s):
+    return s[:16]
+  candidates = [s]
+  if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
+    candidates.append(s + ":00")
+  for c in candidates:
+    try:
+      dt = datetime.fromisoformat(c)
+      return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+      pass
+  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  if m:
+    return m.group(0) + " 00:00"
+  return "-"
+
+def norm_expired(v):
+  s = str(v or "").strip()
+  if not s or s == "-":
+    return "-"
+  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  return m.group(0) if m else "-"
+
+rows = []
+if os.path.isdir(root):
+  for name in os.listdir(root):
+    if not name.endswith(".json"):
+      continue
+    base = name[:-5]
+    username = base[:-4] if base.endswith("@ssh") else base
+    username = username.strip()
+    if not username:
+      continue
+    path = os.path.join(root, name)
+    created = "-"
+    expired = "-"
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+      if isinstance(data, dict):
+        meta_user = str(data.get("username") or "").strip()
+        if meta_user.endswith("@ssh"):
+          meta_user = meta_user[:-4]
+        if meta_user:
+          username = meta_user
+        created = norm_created(data.get("created_at"))
+        expired = norm_expired(data.get("expired_at"))
+    except Exception:
+      pass
+    rows.append((username.lower(), username, created, expired))
+
+rows.sort(key=lambda x: x[0])
+for _, username, created, expired in rows:
+  print(f"{username}|{created}|{expired}")
+PY
+}
+
+ssh_add_user_header_render() {
+  local -n _page_ref="$1"
+  local page_size=5
+  local -a rows=()
+  local row
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    rows+=("${row}")
+  done < <(ssh_managed_users_lines)
+
+  local total="${#rows[@]}"
+  echo "Daftar akun SSH terdaftar (maks 5 baris):"
+  if (( total == 0 )); then
+    echo "  (Belum ada akun SSH terkelola)"
+    echo "  Input username baru untuk lanjut."
     return 0
   fi
-  if is_back_choice "${username}"; then
-    return 0
+
+  local pages=$(( (total + page_size - 1) / page_size ))
+  local page="${_page_ref:-0}"
+  if (( page < 0 )); then
+    page=0
   fi
-  username="${username,,}"
+  if (( page >= pages )); then
+    page=$((pages - 1))
+  fi
+  _page_ref="${page}"
+
+  local start=$((page * page_size))
+  local end=$((start + page_size))
+  if (( end > total )); then
+    end="${total}"
+  fi
+
+  printf "%-4s %-20s %-16s %-10s\n" "No" "Username" "Created" "Expired"
+  printf "%-4s %-20s %-16s %-10s\n" "----" "--------------------" "----------------" "----------"
+
+  local i username created expired
+  for ((i=start; i<end; i++)); do
+    IFS='|' read -r username created expired <<<"${rows[$i]}"
+    printf "%-4s %-20s %-16s %-10s\n" "$((i + 1))" "${username}" "${created}" "${expired}"
+  done
+
+  echo "Halaman: $((page + 1))/${pages} | Total: ${total}"
+  if (( pages > 1 )); then
+    echo "Navigasi: ketik next/previous sebelum input username."
+  fi
+}
+
+ssh_add_user_menu() {
+  local username qf acc_file header_page=0
+  while true; do
+    title
+    echo "3) SSH Management > Add SSH User"
+    hr
+    ssh_add_user_header_render header_page
+    hr
+
+    if ! read -r -p "Username SSH (atau next/previous/kembali): " username; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${username}"; then
+      return 0
+    fi
+    case "${username,,}" in
+      next|n)
+        header_page=$((header_page + 1))
+        continue
+        ;;
+      previous|prev|p)
+        header_page=$((header_page - 1))
+        continue
+        ;;
+    esac
+    username="${username,,}"
+    break
+  done
+
   if ! ssh_username_valid "${username}"; then
     warn "Username tidak valid. Gunakan format Linux user (huruf kecil/angka/_/-)."
     pause
@@ -2096,7 +2240,7 @@ ssh_add_user_menu() {
   fi
 
   local active_days
-  if ! read -r -p "Masa aktif SSH (hari) (atau kembali): " active_days; then
+  if ! read -r -p "Masa aktif (hari) (atau kembali): " active_days; then
     echo
     return 0
   fi
@@ -2104,13 +2248,13 @@ ssh_add_user_menu() {
     return 0
   fi
   if [[ -z "${active_days}" || ! "${active_days}" =~ ^[0-9]+$ || "${active_days}" -le 0 ]]; then
-    warn "Masa aktif SSH harus angka hari > 0."
+    warn "Masa aktif harus angka hari > 0."
     pause
     return 0
   fi
 
   local quota_input quota_gb quota_bytes
-  if ! read -r -p "Quota (GB) (0=unlimited) (atau kembali): " quota_input; then
+  if ! read -r -p "Quota (GB) (atau kembali): " quota_input; then
     echo
     return 0
   fi
@@ -2126,7 +2270,8 @@ ssh_add_user_menu() {
   quota_bytes="$(bytes_from_gb "${quota_gb}")"
 
   local ip_toggle ip_enabled="false" ip_limit="0"
-  if ! read -r -p "Limit IP (on/off) (atau kembali): " ip_toggle; then
+  echo "Limit IP? (on/off)"
+  if ! read -r -p "IP Limit (on/off) (atau kembali): " ip_toggle; then
     echo
     return 0
   fi
@@ -2159,7 +2304,8 @@ ssh_add_user_menu() {
   esac
 
   local speed_toggle speed_enabled="false" speed_down="0" speed_up="0"
-  if ! read -r -p "Limit speed per user SSH (on/off) (atau kembali): " speed_toggle; then
+  echo "Limit speed per user? (on/off)"
+  if ! read -r -p "Speed Limit (on/off) (atau kembali): " speed_toggle; then
     echo
     return 0
   fi
@@ -2170,7 +2316,7 @@ ssh_add_user_menu() {
   case "${speed_toggle}" in
     on)
       speed_enabled="true"
-      if ! read -r -p "Speed Download (Mbps) (contoh: 20 atau 20mbit) (atau kembali): " speed_down; then
+      if ! read -r -p "Speed Download Mbps (contoh: 20 atau 20mbit) (atau kembali): " speed_down; then
         echo
         return 0
       fi
@@ -2184,7 +2330,7 @@ ssh_add_user_menu() {
         return 0
       fi
 
-      if ! read -r -p "Speed Upload (Mbps) (contoh: 10 atau 10mbit) (atau kembali): " speed_up; then
+      if ! read -r -p "Speed Upload Mbps (contoh: 10 atau 10mbit) (atau kembali): " speed_up; then
         echo
         return 0
       fi
@@ -2217,7 +2363,7 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
-  created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  created_at="$(date -u '+%Y-%m-%d %H:%M')"
 
   if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
     warn "Gagal membuat user Linux '${username}'."
@@ -2439,7 +2585,7 @@ ssh_extend_expiry_menu() {
   local created_at
   created_at="$(ssh_user_state_created_at_get "${username}")"
   if [[ -z "${created_at}" ]]; then
-    created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    created_at="$(date -u '+%Y-%m-%d %H:%M')"
   fi
   if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
     warn "Metadata SSH gagal diperbarui untuk '${username}'."
@@ -2521,26 +2667,55 @@ ssh_list_users_menu() {
     title
     echo "3) SSH Management > List Managed SSH Users"
     hr
-    printf "%-4s %-20s %-22s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
+    printf "%-4s %-20s %-12s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
     local i username qf fields meta_user created expired sys_user
     for i in "${!users[@]}"; do
       username="${users[$i]}"
       qf="$(ssh_user_state_file "${username}")"
       fields="$(python3 - <<'PY' "${qf}" 2>/dev/null || true
 import json
+import re
 import sys
+from datetime import datetime
 
 path = sys.argv[1]
 username = ""
 created = "-"
 expired = "-"
+
+def norm_created(v):
+  s = str(v or "").strip()
+  if not s or s == "-":
+    return "-"
+  s = s.replace("T", " ").strip()
+  if s.endswith("Z"):
+    s = s[:-1]
+  if len(s) >= 10 and re.match(r"^\d{4}-\d{2}-\d{2}$", s[:10]):
+    return s[:10]
+  try:
+    dt = datetime.fromisoformat(s)
+    return dt.strftime("%Y-%m-%d")
+  except Exception:
+    pass
+  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  if m:
+    return m.group(0)
+  return "-"
+
+def norm_expired(v):
+  s = str(v or "").strip()
+  if not s or s == "-":
+    return "-"
+  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  return m.group(0) if m else "-"
+
 try:
   with open(path, "r", encoding="utf-8") as f:
     d = json.load(f)
   if isinstance(d, dict):
     username = str(d.get("username") or "").strip()
-    created = str(d.get("created_at") or "-")
-    expired = str(d.get("expired_at") or "-")
+    created = norm_created(d.get("created_at"))
+    expired = norm_expired(d.get("expired_at"))
 except Exception:
   pass
 print("|".join([username, created, expired]))
@@ -2555,7 +2730,7 @@ PY
       if ! id "${username}" >/dev/null 2>&1; then
         sys_user="missing"
       fi
-      printf "%-4s %-20s %-22s %-12s %-12s\n" "$((i + 1))" "${username}" "${created}" "${expired}" "${sys_user}"
+      printf "%-4s %-20s %-12s %-12s %-12s\n" "$((i + 1))" "${username}" "${created}" "${expired}" "${sys_user}"
     done
     hr
     echo "Ketik NO untuk lihat detail SSH ACCOUNT INFO."
@@ -2901,8 +3076,7 @@ for path in paths:
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    if active_sessions(username) > ip_limit:
-      status["ip_limit_locked"] = True
+    status["ip_limit_locked"] = active_sessions(username) > ip_limit
   else:
     status["ip_limit_locked"] = False
 
@@ -3763,8 +3937,8 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
     printf "%-${label_w}s : %s\n" "Quota Used" "${qu_disp}"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
-    printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
-    printf "%-${label_w}s : %s\n" "IP/Login Max" "${ip_lim}"
+    printf "%-${label_w}s : %s\n" "IP Limit" "${ip_state}"
+    printf "%-${label_w}s : %s\n" "IP Limit Max" "${ip_lim}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
     printf "%-${label_w}s : %s\n" "Active Sessions" "${active_sessions}"
@@ -3777,9 +3951,9 @@ ssh_qac_edit_flow() {
     echo "  2) Set Quota Limit (GB)"
     echo "  3) Reset Quota Used (set 0)"
     echo "  4) Manual Block/Unblock (toggle)"
-    echo "  5) IP/Login Limit Enable/Disable (toggle)"
-    echo "  6) Set IP/Login Limit (angka)"
-    echo "  7) Unlock IP/Login Lock"
+    echo "  5) IP Limit Enable/Disable (toggle)"
+    echo "  6) Set IP Limit (angka)"
+    echo "  7) Unlock IP Lock"
     echo "  8) Set Speed Download (Mbps)"
     echo "  9) Set Speed Upload (Mbps)"
     echo " 10) Speed Limit Enable/Disable (toggle)"
@@ -3868,27 +4042,27 @@ ssh_qac_edit_flow() {
         ip_on="$(ssh_qac_get_status_bool "${qf}" "ip_limit_enabled")"
         if [[ "${ip_on}" == "true" ]]; then
           if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
-            warn "Gagal menonaktifkan IP/Login limit SSH."
+            warn "Gagal menonaktifkan IP limit SSH."
             pause
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
-          log "IP/Login limit SSH: OFF"
+          log "IP limit SSH: OFF"
         else
           if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
-            warn "Gagal mengaktifkan IP/Login limit SSH."
+            warn "Gagal mengaktifkan IP limit SSH."
             pause
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
-          log "IP/Login limit SSH: ON"
+          log "IP limit SSH: ON"
         fi
         pause
         ;;
       6)
-        if ! read -r -p "IP/Login limit (angka) (atau kembali): " lim; then
+        if ! read -r -p "IP limit (angka) (atau kembali): " lim; then
           echo
           return 0
         fi
@@ -3901,24 +4075,24 @@ ssh_qac_edit_flow() {
           continue
         fi
         if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"; then
-          warn "Gagal set IP/Login limit SSH."
+          warn "Gagal set IP limit SSH."
           pause
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
-        log "IP/Login limit SSH diubah: ${lim}"
+        log "IP limit SSH diubah: ${lim}"
         pause
         ;;
       7)
         if ! ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked; then
-          warn "Gagal unlock IP/Login lock SSH."
+          warn "Gagal unlock IP lock SSH."
           pause
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
-        log "IP/Login lock SSH di-unlock"
+        log "IP lock SSH di-unlock"
         pause
         ;;
       8)
