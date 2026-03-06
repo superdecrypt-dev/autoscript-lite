@@ -12,52 +12,35 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-03-02)
+## Status Operasional Terkini (2026-03-06)
 - Commit terbaru di `main`:
+  - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
+  - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws to legacy mode`
   - `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
   - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
-  - `b86e6d8` — `feat(bot-telegram): polish panel flows and add user speed-limit fields`
-  - `8bcf1d4` — `fix(xray): cleanup legacy transport paths in setup/manage/bot links`
 - Perubahan penting terbaru:
-  - Hardening auth bot Discord:
-    - gateway fail-closed jika ACL admin kosong (`DISCORD_ADMIN_ROLE_IDS` / `DISCORD_ADMIN_USER_IDS` wajib minimal salah satu)
-    - fallback izin `Administrator` saat ACL kosong dihapus
-    - parser role interaction diperkuat untuk member partial/API object (tanpa cast `as any`).
-  - Hardening flow installer bot Discord/Telegram:
-    - default `ENABLE_DANGEROUS_ACTIONS=false`
-    - `configure-env` kini gagal jika env belum valid
-    - `start/restart services` hard-block jika env belum valid
-    - Telegram installer fail-closed saat ACL admin kosong (kecuali override eksplisit `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true`).
-  - Hysteria2 sekarang terintegrasi di `setup.sh` (tanpa installer terpisah) dengan default `UDP 443`.
-  - `setup.sh` mengaktifkan `hysteria-server` + `xray-hy2-sync` untuk sync quota/ip-limit/expired.
-  - `manage.sh` `2) User Management` menambahkan bonus akun Hysteria2 saat add user `vless/vmess/trojan`.
-  - `XRAY ACCOUNT INFO` kini menampilkan `HY2 User`, `HY2 Pass`, `HY2 URI` untuk akun bonus.
-  - Dukungan protocol account sekarang mencakup `shadowsocks` dan `shadowsocks2022` (multi-user) di CLI + bot.
-  - Method default SS:
-    - `shadowsocks`: `aes-128-gcm`
-    - `shadowsocks2022`: `2022-blake3-aes-128-gcm`
-  - Telegram installer distabilkan:
-    - checksum archive default diperbarui
-    - default backend Telegram ke `127.0.0.1:8081`
-    - unit backend Telegram memakai `${BACKEND_HOST}`/`${BACKEND_PORT}` (tidak hardcoded).
-  - Bot Telegram sekarang punya full parity WARP di menu `4) Network Controls` (status/restart/global/per-user/per-inbound/per-domain/tier/reconnect).
-  - Hardening Telegram aktif:
-    - backend health butuh secret header
-    - ACL default-deny (admin IDs wajib, kecuali override eksplisit)
-    - cooldown action/cleanup
-    - masking output sensitif.
-  - UX bot Telegram dipoles (flow panel, picker user delete, cleanup, Add User speed limit).
-  - Transport legacy non-default dibersihkan dari template `setup.sh`, generator `manage.sh`, dan backend bot Discord/Telegram.
-  - Menu CLI saat ini: `9) Traffic Analytics`, `10) Install BOT Discord`, `11) Install BOT Telegram`.
+  - SSHWS mode runtime sekarang legacy-compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload style lama.
+  - SSHWS handshake kini fail-close:
+    - backend internal down -> `502 Bad Gateway`
+    - backend internal ready -> `101 Switching Protocols`
+  - Normalisasi request-target SSHWS mendukung:
+    - `/`
+    - `/?ed=...`
+    - `wss://host/path?...`
+  - `manage.sh` module loader di-hardening:
+    - source modul dipilih hanya jika `trusted + lengkap` (semua modul wajib tersedia)
+    - urutan source: `/opt/manage` -> `/opt/autoscript/opt/manage` -> local repo `opt/manage`
+  - `SSH Management > Add SSH User` kini:
+    - mewajibkan input masa aktif (hari)
+    - menerima `0` sebagai `back` pada prompt masa aktif
+  - Hardening bot + parity Telegram/WARP + dukungan SS multi-user dari rilis 2026-03-02 tetap berlaku.
 - Validasi runtime terakhir:
-  - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
-  - `nginx -t` -> valid
-  - `systemctl is-active xray nginx` -> `active`
-  - `systemctl is-active xray-discord-backend xray-discord-gateway` -> `active active`
-  - `systemctl is-active xray-telegram-backend xray-telegram-gateway` -> `active active`
-  - `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health` -> `200`
-  - `curl -s -o /dev/null -w '%{http_code}' -H "X-Internal-Shared-Secret: <secret>" http://127.0.0.1:8081/health` -> `200`
-  - `set -a; . /etc/xray-telegram-bot/bot.env; set +a; /opt/bot-telegram/scripts/smoke-test.sh` -> PASS
+  - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
+  - `python3 -m py_compile` untuk heredoc `sshws-proxy` -> PASS
+  - `printf "0\n" | timeout 20 bash manage.sh` -> PASS
+  - runtime SSHWS:
+    - backend down -> `HTTP/1.1 502 Bad Gateway`
+    - backend up -> `HTTP/1.1 101 Switching Protocols`
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
@@ -70,7 +53,7 @@ Agent AI baru wajib memulai dari konteks di atas.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan utama SS multi-user + stabilisasi E2E bot sudah commit + push ke `main` (`5d0a08c`).
+- Perubahan SSHWS legacy + runtime hardening loader module sudah commit + push ke `main` (`87b43fb`, `edd9852`).
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.

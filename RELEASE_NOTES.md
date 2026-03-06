@@ -1,5 +1,53 @@
 # Release Notes
 
+## Rilis 2026-03-06 (SSHWS Legacy Mode + Runtime Guard)
+
+### Ringkasan
+Update ini menyelaraskan perilaku SSHWS ke mode legacy ala `nanotechid/supreme`, lalu menambah guard runtime agar tidak menghasilkan false-positive koneksi saat backend internal tidak siap.
+
+### Perubahan Utama
+1. SSHWS full legacy mode (tanpa `Sec-WebSocket-*` wajib)
+- Proxy SSHWS kini menerima payload legacy minimal (`Upgrade: websocket`) tanpa framing WebSocket RFC6455.
+- Respons handshake memakai pola legacy:
+  - `HTTP/1.1 101 Switching Protocols`
+  - `Content-Length: 104857600000`
+- Normalisasi target request diperluas agar kompatibel untuk:
+  - `/`
+  - `/?ed=...`
+  - `wss://host/path?...`
+
+2. Runtime guard SSHWS (hindari false-positive 101)
+- Proxy sekarang membuka koneksi backend (`sshws-stunnel`) terlebih dahulu.
+- Jika backend gagal diakses, proxy mengembalikan `502 Bad Gateway` (bukan `101`).
+- Tujuan: memperjelas troubleshooting saat backend internal down/restart.
+
+3. Hardening loader modul `manage.sh`
+- Pemilihan source modul kini berbasis `ready` check:
+  - direktori trusted
+  - seluruh modul wajib tersedia
+  - file modul trusted
+- Prioritas source:
+  - `/opt/manage`
+  - `/opt/autoscript/opt/manage`
+  - local repo `opt/manage`
+- `MANAGE_MODULES_DIR` override sekarang juga wajib lolos validasi ready.
+
+4. UX SSH Management
+- Flow `Add SSH User` kini meminta `Masa aktif SSH (hari)` secara eksplisit.
+- Input `0` pada prompt masa aktif kini konsisten berfungsi sebagai `back`.
+
+### Commit
+- `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws to legacy mode`
+- `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
+
+### Hasil Validasi
+- `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
+- `python3 -m py_compile` untuk script `sshws-proxy` hasil heredoc -> PASS
+- Runtime check SSHWS:
+  - backend down -> `HTTP/1.1 502 Bad Gateway`
+  - backend up -> `HTTP/1.1 101 Switching Protocols`
+- Smoke `manage.sh` (`0` keluar menu) -> PASS
+
 ## Rilis 2026-03-06 (SSH WebSocket Share Port 80/443)
 
 ### Ringkasan

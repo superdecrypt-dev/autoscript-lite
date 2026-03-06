@@ -96,25 +96,27 @@ Kriteria lulus:
 Khusus SSH WebSocket (staging):
 
 ```bash
-# Handshake check non-TLS (port 80, path /)
+# Handshake check non-TLS (legacy payload, port 80)
 curl -i -N --max-time 5 \
-  -H "Connection: Upgrade" \
   -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" \
-  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  "http://<domain>/"
+  "http://<domain>/?ed=2048"
 
-# Handshake check TLS (port 443, path /)
+# Handshake check TLS (legacy payload, port 443)
 curl -k -i -N --max-time 5 \
-  -H "Connection: Upgrade" \
   -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" \
-  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  "https://<domain>/?ed=2048"
+
+# Negative check: backend internal down harus fail-close 502
+systemctl stop sshws-stunnel
+curl -k -i -N --max-time 5 \
+  -H "Upgrade: websocket" \
   "https://<domain>/"
+systemctl start sshws-stunnel
 ```
 
 Kriteria lulus:
 - Kedua endpoint mengembalikan `101 Switching Protocols`.
+- Saat `sshws-stunnel` dimatikan, endpoint SSHWS mengembalikan `502 Bad Gateway`.
 - Request non-upgrade ke `/` ditolak (`4xx`), path Xray lain tetap berfungsi.
 
 Khusus runtime bot Telegram:

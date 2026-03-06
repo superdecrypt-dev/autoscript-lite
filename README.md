@@ -31,7 +31,7 @@ Untuk automasi chatops, tersedia bot standalone Discord (`bot-discord/`) dan Tel
 - Installer bot Telegram terpisah (`install-telegram-bot.sh`) dengan mode menu + quick setup all-in-one.
 - Deploy source bot memakai verifikasi checksum archive sebelum extract (lebih aman dari archive corrupt/tampered).
 - Transport legacy non-default sudah dibersihkan dari stack default demi kompatibilitas domain fronting.
-- SSH WebSocket aktif di port share `80/443` via `dropbear` + `stunnel4` + custom Python proxy (`path: /`).
+- SSH WebSocket aktif di port share `80/443` via `dropbear` + `stunnel4` + custom Python proxy (`path: /`, mode legacy payload).
 
 ## Quick Install (Root)
 ```bash
@@ -199,6 +199,8 @@ Catatan:
 - Jalur transport non-default sudah dibersihkan dari template `setup.sh`, `manage.sh`, dan generator link bot.
 - Tujuan perubahan: mencegah masalah koneksi pada skenario domain fronting.
 - SSH WebSocket diproksikan lewat nginx `location = /` ke service lokal `sshws-proxy`.
+- SSHWS saat ini memakai mode legacy payload (tanpa `Sec-WebSocket-*` wajib).
+- Jika backend internal `sshws-stunnel` down/tidak siap, endpoint SSHWS merespons `502 Bad Gateway` (bukan `101`).
 
 ## Protokol Akun Yang Didukung
 Stack provisioning/runtime saat ini mendukung protokol akun berikut:
@@ -272,6 +274,7 @@ Atau:
 | TLS issue gagal (dns_cf) | Pastikan token Cloudflare valid, scope DNS edit + zone read |
 | Speed limit tidak terasa | Cek service `xray-speed` dan status apply policy |
 | SSH WS tidak tersambung | Cek `systemctl status sshws-dropbear sshws-stunnel sshws-proxy nginx --no-pager` |
+| SSH WS dapat `502 Bad Gateway` | Cek `sshws-stunnel` dan `sshws-proxy` aktif; restart stack SSH WS dari menu `manage` jika perlu |
 | User tidak auto-lock/unlock | Cek service `xray-quota` + `xray-limit-ip` |
 | `Target Tier` unknown | Jalankan switch tier (Free/Plus) sekali agar target tersimpan |
 
