@@ -2238,7 +2238,7 @@ EOF
 }
 
 install_sshws_stack() {
-  ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy)..."
+  ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy, backend direct ke dropbear)..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
   [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
 
@@ -2328,9 +2328,26 @@ EOF
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import fcntl
+import glob
+import json
+import os
+import pwd
+import re
 import signal
-import ssl
+import subprocess
+import tempfile
+import time
+from collections import defaultdict, deque
+from pathlib import Path
 from urllib.parse import urlsplit
+
+HANDSHAKE_TIMEOUT_DEFAULT = 10.0
+QAC_STATE_ROOT = Path("/opt/quota/ssh")
+QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
+QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
+POLICY_REFRESH_SEC = 2.0
+
 
 class HandshakeError(Exception):
   def __init__(self, code, reason):
@@ -2338,7 +2355,426 @@ class HandshakeError(Exception):
     self.code = code
     self.reason = reason
 
-HANDSHAKE_TIMEOUT_DEFAULT = 10.0
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+
+def to_float(v, default=0.0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return float(int(v))
+    if isinstance(v, (int, float)):
+      return float(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return float(s)
+  except Exception:
+    return default
+
+
+def to_bool(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  s = str(v or "").strip().lower()
+  return s in ("1", "true", "yes", "on", "y")
+
+
+def norm_user(v):
+  s = str(v or "").strip()
+  if s.endswith("@ssh"):
+    s = s[:-4]
+  if "@" in s:
+    s = s.split("@", 1)[0]
+  return s
+
+
+def _parse_port(addr):
+  s = str(addr or "").strip()
+  if not s:
+    return -1
+  if s.startswith("[") and "]:" in s:
+    s = s.rsplit("]:", 1)[-1]
+  elif ":" in s:
+    s = s.rsplit(":", 1)[-1]
+  try:
+    return int(s)
+  except Exception:
+    return -1
+
+
+def _build_proc_tables():
+  info = {}
+  children = defaultdict(list)
+  for st in glob.glob("/proc/[0-9]*/status"):
+    try:
+      pid = int(st.split("/")[2])
+      ppid = 0
+      uid = 0
+      with open(st, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+          if line.startswith("PPid:"):
+            ppid = int(line.split()[1])
+          elif line.startswith("Uid:"):
+            uid = int(line.split()[1])
+      info[pid] = (ppid, uid)
+      children[ppid].append(pid)
+    except Exception:
+      continue
+  return info, children
+
+
+def _username_from_pid(pid, proc_info, children):
+  q = deque([int(pid)])
+  seen = set()
+  while q:
+    cur = q.popleft()
+    if cur in seen:
+      continue
+    seen.add(cur)
+    meta = proc_info.get(cur)
+    if not meta:
+      continue
+    uid = int(meta[1])
+    if uid > 0:
+      try:
+        return pwd.getpwuid(uid).pw_name
+      except KeyError:
+        return ""
+    for c in children.get(cur, ()):
+      q.append(c)
+  return ""
+
+
+def scan_dropbear_sessions(dropbear_port):
+  try:
+    p = subprocess.run(
+      ["ss", "-tnpH"],
+      check=False,
+      capture_output=True,
+      text=True,
+      timeout=2,
+    )
+  except Exception:
+    return {}
+
+  if p.returncode != 0:
+    return {}
+
+  proc_info, children = _build_proc_tables()
+  out = {}
+  for raw in (p.stdout or "").splitlines():
+    line = raw.strip()
+    if not line or "dropbear" not in line:
+      continue
+    cols = line.split()
+    if len(cols) < 6:
+      continue
+    lport = _parse_port(cols[3])
+    rport = _parse_port(cols[4])
+    if lport != int(dropbear_port) or rport <= 0:
+      continue
+    m = re.search(r"pid=(\d+)", line)
+    if not m:
+      continue
+    user = _username_from_pid(int(m.group(1)), proc_info, children)
+    if user:
+      out[rport] = user
+  return out
+
+
+class SharedRateLimiter:
+  def __init__(self):
+    self._lock = asyncio.Lock()
+    self._next_ts = {}
+
+  async def throttle(self, user, direction, amount_bytes, rate_bps):
+    if not user or amount_bytes <= 0 or rate_bps <= 0:
+      return
+    key = "{}|{}".format(user, direction)
+    now = time.monotonic()
+    async with self._lock:
+      nxt = float(self._next_ts.get(key, now))
+      start = nxt if nxt > now else now
+      wait_s = max(0.0, start - now)
+      dur_s = float(amount_bytes) / float(rate_bps)
+      self._next_ts[key] = start + dur_s
+    if wait_s > 0:
+      await asyncio.sleep(wait_s)
+
+
+class QuotaManager:
+  def __init__(self, state_root, lock_file, enforcer_bin):
+    self.state_root = Path(state_root)
+    self.lock_file = Path(lock_file)
+    self.enforcer_bin = Path(enforcer_bin)
+    self._pending = defaultdict(int)
+    self._cache = {}
+    self._cache_lock = asyncio.Lock()
+
+  def _qf(self, username):
+    u = norm_user(username)
+    return self.state_root / "{}@ssh.json".format(u)
+
+  def _load_json(self, path):
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+      if isinstance(data, dict):
+        return data
+    except Exception:
+      pass
+    return {}
+
+  def _write_json_atomic(self, path, payload):
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
+    try:
+      with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+      os.replace(tmp, str(path))
+    finally:
+      try:
+        if os.path.exists(tmp):
+          os.remove(tmp)
+      except Exception:
+        pass
+    try:
+      os.chmod(str(path), 0o600)
+    except Exception:
+      pass
+
+  def _parse_policy(self, username, payload):
+    st_raw = payload.get("status")
+    st = st_raw if isinstance(st_raw, dict) else {}
+    speed_enabled = to_bool(st.get("speed_limit_enabled"))
+    speed_down = max(0.0, to_float(st.get("speed_down_mbit"), 0.0))
+    speed_up = max(0.0, to_float(st.get("speed_up_mbit"), 0.0))
+    if not speed_enabled or speed_down <= 0 or speed_up <= 0:
+      speed_enabled = False
+      speed_down = 0.0
+      speed_up = 0.0
+
+    lock_reason = str(st.get("lock_reason") or "").strip().lower()
+    blocked = (
+      to_bool(st.get("manual_block")) or
+      to_bool(st.get("quota_exhausted")) or
+      to_bool(st.get("ip_limit_locked")) or
+      to_bool(st.get("account_locked")) or
+      lock_reason in ("manual", "quota", "ip_limit")
+    )
+
+    return {
+      "username": username,
+      "blocked": blocked,
+      "speed_enabled": speed_enabled,
+      "speed_down_bps": int(speed_down * 125000.0) if speed_enabled else 0,
+      "speed_up_bps": int(speed_up * 125000.0) if speed_enabled else 0,
+    }
+
+  async def get_policy(self, username):
+    user = norm_user(username)
+    if not user:
+      return None
+    qf = self._qf(user)
+    try:
+      st = os.stat(str(qf))
+      mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
+    except Exception:
+      return None
+
+    async with self._cache_lock:
+      cached = self._cache.get(user)
+      if cached and cached.get("mtime_ns") == mtime_ns:
+        return cached.get("policy")
+
+    payload = self._load_json(qf)
+    policy = self._parse_policy(user, payload)
+    async with self._cache_lock:
+      self._cache[user] = {"mtime_ns": mtime_ns, "policy": policy}
+    return policy
+
+  async def record(self, username, up_bytes=0, down_bytes=0):
+    user = norm_user(username)
+    if not user:
+      return
+    total = max(0, int(up_bytes)) + max(0, int(down_bytes))
+    if total <= 0:
+      return
+    self._pending[user] += total
+
+  async def flush_once(self):
+    if not self._pending:
+      return False
+    deltas = dict(self._pending)
+    self._pending.clear()
+
+    changed = []
+    try:
+      self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+      pass
+
+    lockh = open(str(self.lock_file), "a+", encoding="utf-8")
+    try:
+      fcntl.flock(lockh.fileno(), fcntl.LOCK_EX)
+      for user, delta in deltas.items():
+        if int(delta) <= 0:
+          continue
+        qf = self._qf(user)
+        if not qf.is_file():
+          continue
+        payload = self._load_json(qf)
+        old_used = max(0, to_int(payload.get("quota_used"), 0))
+        new_used = old_used + int(delta)
+        if new_used == old_used:
+          continue
+        payload["quota_used"] = new_used
+        self._write_json_atomic(qf, payload)
+        changed.append(user)
+    finally:
+      try:
+        fcntl.flock(lockh.fileno(), fcntl.LOCK_UN)
+      except Exception:
+        pass
+      lockh.close()
+
+    if changed:
+      async with self._cache_lock:
+        for user in changed:
+          self._cache.pop(user, None)
+      if self.enforcer_bin.is_file() and os.access(str(self.enforcer_bin), os.X_OK):
+        try:
+          subprocess.run(
+            [str(self.enforcer_bin), "--once"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+          )
+        except Exception:
+          pass
+    return bool(changed)
+
+
+class ConnectionContext:
+  def __init__(self, backend_local_port, quota_manager):
+    self.backend_local_port = int(backend_local_port)
+    self._quota = quota_manager
+    self._lock = asyncio.Lock()
+    self._username = ""
+    self._pending_up = 0
+    self._pending_down = 0
+    self._policy_cached = None
+    self._policy_cached_at = 0.0
+
+  async def assign_username(self, username):
+    user = norm_user(username)
+    if not user:
+      return
+    flush_up = 0
+    flush_down = 0
+    async with self._lock:
+      if self._username:
+        return
+      self._username = user
+      flush_up = self._pending_up
+      flush_down = self._pending_down
+      self._pending_up = 0
+      self._pending_down = 0
+      self._policy_cached = None
+      self._policy_cached_at = 0.0
+    if flush_up or flush_down:
+      await self._quota.record(user, flush_up, flush_down)
+
+  async def username(self):
+    async with self._lock:
+      return self._username
+
+  async def record_up(self, size):
+    n = max(0, int(size))
+    if n <= 0:
+      return
+    async with self._lock:
+      user = self._username
+      if not user:
+        self._pending_up += n
+        return
+    await self._quota.record(user, up_bytes=n, down_bytes=0)
+
+  async def record_down(self, size):
+    n = max(0, int(size))
+    if n <= 0:
+      return
+    async with self._lock:
+      user = self._username
+      if not user:
+        self._pending_down += n
+        return
+    await self._quota.record(user, up_bytes=0, down_bytes=n)
+
+  async def policy(self):
+    user = await self.username()
+    if not user:
+      return None
+    now = time.monotonic()
+    async with self._lock:
+      if self._policy_cached and (now - self._policy_cached_at) < POLICY_REFRESH_SEC:
+        return self._policy_cached
+    p = await self._quota.get_policy(user)
+    async with self._lock:
+      self._policy_cached = p
+      self._policy_cached_at = now
+    return p
+
+
+class ConnectionRegistry:
+  def __init__(self):
+    self._lock = asyncio.Lock()
+    self._by_port = {}
+
+  async def register(self, ctx):
+    if ctx.backend_local_port <= 0:
+      return
+    async with self._lock:
+      self._by_port[ctx.backend_local_port] = ctx
+
+  async def unregister(self, ctx):
+    if ctx.backend_local_port <= 0:
+      return
+    async with self._lock:
+      cur = self._by_port.get(ctx.backend_local_port)
+      if cur is ctx:
+        self._by_port.pop(ctx.backend_local_port, None)
+
+  async def assign_by_port_map(self, port_user_map):
+    targets = []
+    async with self._lock:
+      for port, user in port_user_map.items():
+        ctx = self._by_port.get(int(port))
+        if ctx and user:
+          targets.append((ctx, user))
+    for ctx, user in targets:
+      await ctx.assign_username(user)
 
 
 async def _send_http_error(writer, code, reason):
@@ -2377,8 +2813,6 @@ async def _read_handshake(reader, expected_path, timeout_sec):
   method = req[0]
   target = req[1]
 
-  # Payload autoscript-stream bisa memakai origin-form ("/"), query ("/?ed=..."),
-  # atau absolute-form ("wss://host/path"). Normalisasi ke path HTTP.
   if "://" in target:
     try:
       parsed = urlsplit(target)
@@ -2411,15 +2845,11 @@ async def _read_handshake(reader, expected_path, timeout_sec):
     key, value = line.split(":", 1)
     headers[key.strip().lower()] = value.strip()
 
-  upgrade = headers.get("upgrade", "").lower()
-  if upgrade != "websocket":
+  if headers.get("upgrade", "").lower() != "websocket":
     raise HandshakeError(400, "Bad Request")
-  return
 
 
 async def _send_handshake_ok(writer):
-  # Mode autoscript-stream:
-  # cukup respons 101, lalu stream raw TCP.
   resp = (
     "HTTP/1.1 101 Switching Protocols\r\n"
     "Content-Length: 104857600000\r\n"
@@ -2429,11 +2859,17 @@ async def _send_handshake_ok(writer):
   await writer.drain()
 
 
-async def _client_to_backend(client_reader, backend_writer):
+async def _client_to_backend(client_reader, backend_writer, ctx, limiter):
   while True:
     data = await client_reader.read(16384)
     if not data:
       break
+    policy = await ctx.policy()
+    if policy and policy.get("blocked"):
+      break
+    if policy and policy.get("speed_enabled"):
+      await limiter.throttle(policy.get("username"), "up", len(data), int(policy.get("speed_up_bps") or 0))
+    await ctx.record_up(len(data))
     backend_writer.write(data)
     await backend_writer.drain()
 
@@ -2444,16 +2880,22 @@ async def _client_to_backend(client_reader, backend_writer):
     pass
 
 
-async def _backend_to_client(backend_reader, client_writer):
+async def _backend_to_client(backend_reader, client_writer, ctx, limiter):
   while True:
     data = await backend_reader.read(16384)
     if not data:
       break
+    policy = await ctx.policy()
+    if policy and policy.get("blocked"):
+      break
+    if policy and policy.get("speed_enabled"):
+      await limiter.throttle(policy.get("username"), "down", len(data), int(policy.get("speed_down_bps") or 0))
+    await ctx.record_down(len(data))
     client_writer.write(data)
     await client_writer.drain()
 
 
-async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
+async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limiter):
   try:
     await _read_handshake(ws_reader, args.path, args.handshake_timeout)
   except HandshakeError as exc:
@@ -2468,15 +2910,17 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
     return
 
   backend_writer = None
+  ctx = None
   try:
     backend_reader, backend_writer = await asyncio.open_connection(
       args.backend_host,
       args.backend_port,
-      ssl=backend_ssl,
-      server_hostname=None,
     )
+    sockname = backend_writer.get_extra_info("sockname")
+    backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
+    ctx = ConnectionContext(backend_local_port, quota_mgr)
+    await registry.register(ctx)
   except Exception:
-    # Hindari false-positive connected: jika backend gagal, jangan kirim 101.
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
     except Exception:
@@ -2490,18 +2934,20 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
 
   try:
     await _send_handshake_ok(ws_writer)
-    pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer))
-    pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer))
+    pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter))
+    pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-      task.cancel()
+    for t in pending:
+      t.cancel()
     if pending:
       await asyncio.gather(*pending, return_exceptions=True)
-    for task in done:
-      task.exception()
+    for t in done:
+      t.exception()
   except Exception:
     pass
   finally:
+    if ctx is not None:
+      await registry.unregister(ctx)
     if backend_writer is not None:
       try:
         backend_writer.close()
@@ -2515,29 +2961,72 @@ async def _handle_client(ws_reader, ws_writer, args, backend_ssl):
       pass
 
 
+async def _session_map_loop(args, stop_evt, registry):
+  interval = max(0.5, float(args.session_scan_interval))
+  while not stop_evt.is_set():
+    try:
+      pmap = await asyncio.to_thread(scan_dropbear_sessions, int(args.backend_port))
+      await registry.assign_by_port_map(pmap)
+    except Exception:
+      pass
+    try:
+      await asyncio.wait_for(stop_evt.wait(), timeout=interval)
+    except asyncio.TimeoutError:
+      pass
+
+
+async def _quota_flush_loop(args, stop_evt, quota_mgr):
+  interval = max(1.0, float(args.quota_flush_interval))
+  while not stop_evt.is_set():
+    try:
+      await asyncio.wait_for(stop_evt.wait(), timeout=interval)
+      if stop_evt.is_set():
+        break
+    except asyncio.TimeoutError:
+      pass
+    try:
+      await quota_mgr.flush_once()
+    except Exception:
+      pass
+
+
 async def _run(args):
-  backend_ssl = ssl.create_default_context()
-  backend_ssl.check_hostname = False
-  backend_ssl.verify_mode = ssl.CERT_NONE
+  quota_mgr = QuotaManager(args.qac_state_root, args.qac_lock_file, args.qac_enforcer_bin)
+  limiter = SharedRateLimiter()
+  registry = ConnectionRegistry()
 
   server = await asyncio.start_server(
-    lambda reader, writer: _handle_client(reader, writer, args, backend_ssl),
+    lambda reader, writer: _handle_client(reader, writer, args, registry, quota_mgr, limiter),
     host=args.listen_host,
     port=args.listen_port,
     backlog=512,
   )
 
   loop = asyncio.get_running_loop()
-  stop = asyncio.Event()
+  stop_evt = asyncio.Event()
   for sig in (signal.SIGINT, signal.SIGTERM):
     try:
-      loop.add_signal_handler(sig, stop.set)
+      loop.add_signal_handler(sig, stop_evt.set)
     except NotImplementedError:
       pass
 
-  await stop.wait()
+  bg_tasks = [
+    asyncio.create_task(_session_map_loop(args, stop_evt, registry)),
+    asyncio.create_task(_quota_flush_loop(args, stop_evt, quota_mgr)),
+  ]
+
+  await stop_evt.wait()
   server.close()
   await server.wait_closed()
+
+  for t in bg_tasks:
+    t.cancel()
+  if bg_tasks:
+    await asyncio.gather(*bg_tasks, return_exceptions=True)
+  try:
+    await quota_mgr.flush_once()
+  except Exception:
+    pass
 
 
 def _parse_args():
@@ -2545,9 +3034,14 @@ def _parse_args():
   parser.add_argument("--listen-host", default="127.0.0.1")
   parser.add_argument("--listen-port", type=int, default=10015)
   parser.add_argument("--backend-host", default="127.0.0.1")
-  parser.add_argument("--backend-port", type=int, default=22443)
+  parser.add_argument("--backend-port", type=int, default=22022)
   parser.add_argument("--path", default="/")
   parser.add_argument("--handshake-timeout", type=float, default=HANDSHAKE_TIMEOUT_DEFAULT)
+  parser.add_argument("--qac-state-root", default=str(QAC_STATE_ROOT))
+  parser.add_argument("--qac-lock-file", default=str(QAC_LOCK_FILE))
+  parser.add_argument("--qac-enforcer-bin", default=str(QAC_ENFORCER_BIN))
+  parser.add_argument("--session-scan-interval", type=float, default=1.0)
+  parser.add_argument("--quota-flush-interval", type=float, default=5.0)
   return parser.parse_args()
 
 
@@ -2566,13 +3060,13 @@ PY
   cat > /etc/systemd/system/sshws-proxy.service <<EOF
 [Unit]
 Description=SSH websocket proxy service
-After=network-online.target sshws-stunnel.service
-Requires=sshws-stunnel.service
+After=network-online.target sshws-dropbear.service
+Requires=sshws-dropbear.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port ${SSHWS_PROXY_PORT} --backend-host 127.0.0.1 --backend-port ${SSHWS_STUNNEL_PORT} --path / --handshake-timeout 10
+ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port ${SSHWS_PROXY_PORT} --backend-host 127.0.0.1 --backend-port ${SSHWS_DROPBEAR_PORT} --path / --handshake-timeout 10
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
@@ -2597,7 +3091,7 @@ EOF
   else
     warn "Dropbear distro dipertahankan untuk mencegah lockout SSH (OpenSSH tidak aktif)."
   fi
-  ok "SSH WebSocket stack aktif (dropbear/stunnel/proxy)."
+  ok "SSH WebSocket stack aktif (proxy -> dropbear direct, stunnel standby)."
 }
 
 install_sshws_qac_enforcer() {
