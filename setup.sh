@@ -27,6 +27,7 @@ NC='\033[0m'
 
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 XRAY_CONFDIR="/usr/local/etc/xray/conf.d"
+XRAY_DOMAIN_FILE="/etc/xray/domain"
 NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
@@ -391,12 +392,35 @@ detect_domain() {
   local dom=""
   if [[ -n "${DOMAIN:-}" ]]; then
     dom="${DOMAIN}"
-  elif [[ -s "/etc/xray/domain" ]]; then
-    dom="$(head -n1 /etc/xray/domain 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  elif [[ -s "${XRAY_DOMAIN_FILE}" ]]; then
+    dom="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
   elif [[ -f "${NGINX_CONF}" ]]; then
     dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
   fi
   echo "${dom}"
+}
+
+sync_xray_domain_file() {
+  local domain="${1:-}"
+  local normalized tmp
+  if [[ -z "${domain}" ]]; then
+    domain="$(detect_domain)"
+  fi
+  normalized="$(printf '%s' "${domain}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  [[ -n "${normalized}" ]] || return 1
+
+  install -d -m 755 "$(dirname "${XRAY_DOMAIN_FILE}")" >/dev/null 2>&1 || return 1
+  tmp="$(mktemp)" || return 1
+  if ! printf '%s\n' "${normalized}" > "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! install -m 644 "${tmp}" "${XRAY_DOMAIN_FILE}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
 }
 
 cf_api() {
@@ -2372,7 +2396,10 @@ HANDSHAKE_TIMEOUT_DEFAULT = 10.0
 QAC_STATE_ROOT = Path("/opt/quota/ssh")
 QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
+QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
+UNASSIGNED_DOWNSTREAM_BURST_BYTES = 65536
+UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.15
 
 
 class HandshakeError(Exception):
@@ -2430,6 +2457,51 @@ def norm_user(v):
   if "@" in s:
     s = s.split("@", 1)[0]
   return s
+
+
+def write_json_atomic_file(path, payload, mode=0o600):
+  path = Path(path)
+  try:
+    path.parent.mkdir(parents=True, exist_ok=True)
+  except Exception:
+    pass
+  text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      f.write(text)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, str(path))
+    try:
+      os.chmod(str(path), int(mode))
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+
+def cleanup_runtime_session_root(root):
+  root_path = Path(root)
+  try:
+    root_path.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(root_path), 0o700)
+  except Exception:
+    pass
+  try:
+    for path in root_path.glob("*.json"):
+      try:
+        path.unlink()
+      except FileNotFoundError:
+        pass
+      except Exception:
+        pass
+  except Exception:
+    pass
 
 
 def _parse_port(addr):
@@ -2576,24 +2648,7 @@ class QuotaManager:
     return {}
 
   def _write_json_atomic(self, path, payload):
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
-    try:
-      with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-      os.replace(tmp, str(path))
-    finally:
-      try:
-        if os.path.exists(tmp):
-          os.remove(tmp)
-      except Exception:
-        pass
-    try:
-      os.chmod(str(path), 0o600)
-    except Exception:
-      pass
+    write_json_atomic_file(path, payload, 0o600)
 
   def _parse_policy(self, username, payload):
     st_raw = payload.get("status")
@@ -2709,15 +2764,38 @@ class QuotaManager:
 
 
 class ConnectionContext:
-  def __init__(self, backend_local_port, quota_manager):
+  def __init__(self, backend_local_port, quota_manager, session_root):
     self.backend_local_port = int(backend_local_port)
     self._quota = quota_manager
+    self._session_root = Path(session_root)
+    self._session_path = self._session_root / "{}.json".format(self.backend_local_port) if self.backend_local_port > 0 else None
     self._lock = asyncio.Lock()
     self._username = ""
     self._pending_up = 0
     self._pending_down = 0
     self._policy_cached = None
     self._policy_cached_at = 0.0
+
+  def _write_runtime_session(self, username):
+    if self._session_path is None or not username:
+      return
+    payload = {
+      "username": username,
+      "backend_local_port": int(self.backend_local_port),
+      "proxy_pid": int(os.getpid()),
+      "updated_at": int(time.time()),
+    }
+    write_json_atomic_file(self._session_path, payload, 0o600)
+
+  def clear_runtime_session(self):
+    if self._session_path is None:
+      return
+    try:
+      self._session_path.unlink()
+    except FileNotFoundError:
+      pass
+    except Exception:
+      pass
 
   async def assign_username(self, username):
     user = norm_user(username)
@@ -2735,6 +2813,10 @@ class ConnectionContext:
       self._pending_down = 0
       self._policy_cached = None
       self._policy_cached_at = 0.0
+    try:
+      self._write_runtime_session(user)
+    except Exception:
+      pass
     if flush_up or flush_down:
       await self._quota.record(user, flush_up, flush_down)
 
@@ -2931,16 +3013,28 @@ async def _client_to_backend(client_reader, backend_writer, ctx, limiter):
     pass
 
 
-async def _backend_to_client(backend_reader, client_writer, ctx, limiter):
+async def _backend_to_client(backend_reader, client_writer, ctx, limiter, args, registry):
+  unresolved_down_bytes = 0
+  last_resolve_ts = 0.0
   while True:
     data = await backend_reader.read(16384)
     if not data:
       break
+    if not await ctx.username():
+      unresolved_down_bytes += len(data)
+      now = time.monotonic()
+      if unresolved_down_bytes > UNASSIGNED_DOWNSTREAM_BURST_BYTES and (now - last_resolve_ts) >= UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC:
+        last_resolve_ts = now
+        try:
+          await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=2, delay_sec=0.02, scan_timeout_sec=0.2)
+        except Exception:
+          pass
     policy = await ctx.policy()
     if policy and policy.get("blocked"):
       break
     if policy and policy.get("speed_enabled"):
       await limiter.throttle(policy.get("username"), "down", len(data), int(policy.get("speed_down_bps") or 0))
+      unresolved_down_bytes = 0
     await ctx.record_down(len(data))
     client_writer.write(data)
     await client_writer.drain()
@@ -2970,7 +3064,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     )
     sockname = backend_writer.get_extra_info("sockname")
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
-    ctx = ConnectionContext(backend_local_port, quota_mgr)
+    ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root)
     await registry.register(ctx)
   except Exception:
     try:
@@ -2991,7 +3085,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
       _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.0, scan_timeout_sec=0.2)
     )
     pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter))
-    pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter))
+    pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter, args, registry))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
       t.cancel()
@@ -3018,6 +3112,10 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
         pass
       try:
         await quota_mgr.flush_once()
+      except Exception:
+        pass
+      try:
+        ctx.clear_runtime_session()
       except Exception:
         pass
       await registry.unregister(ctx)
@@ -3064,6 +3162,7 @@ async def _quota_flush_loop(args, stop_evt, quota_mgr):
 
 
 async def _run(args):
+  cleanup_runtime_session_root(args.qac_session_root)
   quota_mgr = QuotaManager(args.qac_state_root, args.qac_lock_file, args.qac_enforcer_bin)
   limiter = SharedRateLimiter()
   registry = ConnectionRegistry()
@@ -3113,6 +3212,7 @@ def _parse_args():
   parser.add_argument("--qac-state-root", default=str(QAC_STATE_ROOT))
   parser.add_argument("--qac-lock-file", default=str(QAC_LOCK_FILE))
   parser.add_argument("--qac-enforcer-bin", default=str(QAC_ENFORCER_BIN))
+  parser.add_argument("--qac-session-root", default=str(QAC_SESSION_ROOT))
   parser.add_argument("--session-scan-interval", type=float, default=0.25)
   parser.add_argument("--quota-flush-interval", type=float, default=1.0)
   return parser.parse_args()
@@ -3189,11 +3289,19 @@ import fcntl
 import json
 import os
 import pathlib
+import pwd
 import subprocess
 import tempfile
 
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
+SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
+LOCK_SHELL_CANDIDATES = (
+  "/usr/sbin/nologin",
+  "/usr/bin/nologin",
+  "/sbin/nologin",
+  "/bin/false",
+)
 
 def to_int(v, default=0):
   try:
@@ -3250,9 +3358,53 @@ def cmd_ok(cmd):
 def user_exists(username):
   return cmd_ok(["id", username])
 
+def get_user_shell(username):
+  try:
+    return str(pwd.getpwnam(username).pw_shell or "").strip()
+  except KeyError:
+    return ""
+
+def detect_lock_shell():
+  for path in LOCK_SHELL_CANDIDATES:
+    if os.path.exists(path):
+      return path
+  return LOCK_SHELL_CANDIDATES[0]
+
+def is_lock_shell(shell):
+  return str(shell or "").strip() in LOCK_SHELL_CANDIDATES
+
+def set_user_shell(username, shell_path):
+  shell = str(shell_path or "").strip()
+  if not username or not shell:
+    return False
+  return cmd_ok(["usermod", "-s", shell, username])
+
+def active_sessions_from_runtime(username):
+  user = norm_user(username)
+  if not user or not SESSION_ROOT.is_dir():
+    return None
+  total = 0
+  try:
+    for path in SESSION_ROOT.glob("*.json"):
+      try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+      except Exception:
+        continue
+      if not isinstance(payload, dict):
+        continue
+      session_user = norm_user(payload.get("username") or path.stem)
+      if session_user == user:
+        total += 1
+  except Exception:
+    return None
+  return total
+
 def active_sessions(username):
   if not username or not user_exists(username):
     return 0
+  runtime_count = active_sessions_from_runtime(username)
+  if runtime_count is not None:
+    return int(runtime_count)
   try:
     res = subprocess.run(["pgrep", "-u", username, "-x", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
   except FileNotFoundError:
@@ -3267,19 +3419,37 @@ def active_sessions(username):
   lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
   return len(lines)
 
-def lock_user(username):
+def lock_user(username, status=None):
   if not user_exists(username):
     return False
-  if cmd_ok(["passwd", "-l", username]):
-    return True
-  return cmd_ok(["usermod", "-L", username])
+  st = status if isinstance(status, dict) else {}
+  ok = False
+  if cmd_ok(["passwd", "-l", username]) or cmd_ok(["usermod", "-L", username]):
+    ok = True
+  current_shell = get_user_shell(username)
+  lock_shell = detect_lock_shell()
+  if is_lock_shell(current_shell):
+    ok = True
+  elif current_shell and lock_shell:
+    if not str(st.get("lock_shell_restore") or "").strip():
+      st["lock_shell_restore"] = current_shell
+    if set_user_shell(username, lock_shell):
+      ok = True
+  return ok
 
-def unlock_user(username):
+def unlock_user(username, status=None):
   if not user_exists(username):
     return False
-  if cmd_ok(["passwd", "-u", username]):
-    return True
-  return cmd_ok(["usermod", "-U", username])
+  st = status if isinstance(status, dict) else {}
+  ok = False
+  if cmd_ok(["passwd", "-u", username]) or cmd_ok(["usermod", "-U", username]):
+    ok = True
+  restore_shell = str(st.get("lock_shell_restore") or "").strip()
+  current_shell = get_user_shell(username)
+  if restore_shell and current_shell and is_lock_shell(current_shell) and current_shell != restore_shell:
+    if set_user_shell(username, restore_shell):
+      ok = True
+  return ok
 
 def write_json_atomic(path, payload):
   text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -3354,6 +3524,7 @@ def normalize_payload(path):
     "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
     "account_locked": to_bool(status.get("account_locked")),
     "lock_owner": str(status.get("lock_owner") or "").strip(),
+    "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
   }
   return payload
 
@@ -3392,7 +3563,7 @@ def enforce_user(path):
 
   exists = user_exists(username)
   if reason:
-    if exists and lock_user(username):
+    if exists and lock_user(username, status):
       account_locked = True
       lock_owner = "ssh_qac"
     elif not exists:
@@ -3400,11 +3571,13 @@ def enforce_user(path):
       lock_owner = ""
   else:
     if exists and account_locked and lock_owner == "ssh_qac":
-      if unlock_user(username):
+      if unlock_user(username, status):
         account_locked = False
         lock_owner = ""
+        status["lock_shell_restore"] = ""
     elif not account_locked and lock_owner == "ssh_qac":
       lock_owner = ""
+      status["lock_shell_restore"] = ""
 
   status["account_locked"] = bool(account_locked)
   status["lock_owner"] = lock_owner
@@ -7524,6 +7697,11 @@ main() {
   write_xray_modular_configs
   configure_xray_service_confdir
   write_nginx_config
+  if sync_xray_domain_file "${DOMAIN}"; then
+    ok "Compat domain file tersimpan: ${XRAY_DOMAIN_FILE}"
+  else
+    warn "Gagal menulis compat domain file: ${XRAY_DOMAIN_FILE}"
+  fi
   install_sshws_stack
   install_sshws_qac_enforcer
   install_management_scripts

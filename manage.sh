@@ -25,6 +25,7 @@ XRAY_ROUTING_CONF="${XRAY_CONFDIR}/30-routing.json"
 XRAY_POLICY_CONF="${XRAY_CONFDIR}/40-policy.json"
 XRAY_STATS_CONF="${XRAY_CONFDIR}/50-stats.json"
 XRAY_OBSERVATORY_CONF="${XRAY_CONFDIR}/60-observatory.json"
+XRAY_DOMAIN_FILE="/etc/xray/domain"
 NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
@@ -696,16 +697,42 @@ is_back_word_choice() {
 }
 
 detect_domain() {
-  # Try nginx conf server_name first, then hostname -f
+  # Try nginx conf server_name first, then compatibility file, then hostname -f.
   local dom=""
   if [[ -f "${NGINX_CONF}" ]]; then
     dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' || true)"
     dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
   fi
   if [[ -z "${dom}" ]]; then
+    dom="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  fi
+  if [[ -z "${dom}" ]]; then
     dom="$(hostname -f 2>/dev/null || hostname)"
   fi
   echo "${dom}"
+}
+
+sync_xray_domain_file() {
+  local domain="${1:-}"
+  local normalized tmp
+  if [[ -z "${domain}" ]]; then
+    domain="$(detect_domain)"
+  fi
+  normalized="$(printf '%s' "${domain}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  [[ -n "${normalized}" ]] || return 1
+
+  mkdir -p "$(dirname "${XRAY_DOMAIN_FILE}")" 2>/dev/null || return 1
+  tmp="$(mktemp "${WORK_DIR}/xray-domain.XXXXXX")" || return 1
+  if ! printf '%s\n' "${normalized}" > "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! install -m 644 "${tmp}" "${XRAY_DOMAIN_FILE}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
 }
 
 detect_public_ip() {
@@ -1806,6 +1833,10 @@ domain_control_apply_nginx_domain() {
     cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
     systemctl restart nginx >/dev/null 2>&1 || true
     die "Gagal restart nginx setelah ubah domain."
+  fi
+
+  if ! sync_xray_domain_file "${applied_domain}"; then
+    warn "Compat domain file belum berhasil disinkronkan ke ${XRAY_DOMAIN_FILE}."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"

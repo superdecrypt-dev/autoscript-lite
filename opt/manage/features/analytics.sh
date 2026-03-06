@@ -1890,6 +1890,7 @@ payload["status"] = {
   "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
   "account_locked": to_bool(status.get("account_locked")),
   "lock_owner": str(status.get("lock_owner") or "").strip(),
+  "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
 
 print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -2023,6 +2024,7 @@ payload["status"] = {
   "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
   "account_locked": to_bool(status.get("account_locked")),
   "lock_owner": str(status.get("lock_owner") or "").strip(),
+  "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
 
 print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -3538,6 +3540,7 @@ SSHWS_SESSION_VIEW_INDEXES=()
 SSHWS_SESSION_PAGE_SIZE=10
 SSHWS_SESSION_PAGE=0
 SSHWS_SESSION_QUERY=""
+SSHWS_RUNTIME_SESSION_DIR="/run/autoscript/sshws-sessions"
 
 ssh_active_sessions_count() {
   local username="${1:-}"
@@ -3547,6 +3550,37 @@ ssh_active_sessions_count() {
   }
   if ! id "${username}" >/dev/null 2>&1; then
     echo "0"
+    return 0
+  fi
+
+  if [[ -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
+    local runtime_count
+    runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" <<'PY' 2>/dev/null || true
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+target = str(sys.argv[2] or "").strip()
+count = 0
+if root.is_dir() and target:
+  for path in root.glob("*.json"):
+    try:
+      payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+    if not isinstance(payload, dict):
+      continue
+    username = str(payload.get("username") or "").strip()
+    if username.endswith("@ssh"):
+      username = username[:-4]
+    if "@" in username:
+      username = username.split("@", 1)[0]
+    if username == target:
+      count += 1
+print(count)
+PY
+)"
+    runtime_count="${runtime_count:-0}"
+    [[ "${runtime_count}" =~ ^[0-9]+$ ]] || runtime_count="0"
+    echo "${runtime_count}"
     return 0
   fi
 
@@ -4225,6 +4259,7 @@ payload["status"] = {
   "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
   "account_locked": to_bool(status.get("account_locked")),
   "lock_owner": str(status.get("lock_owner") or "").strip(),
+  "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
 
 st = payload["status"]

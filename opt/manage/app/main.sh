@@ -1,6 +1,7 @@
 main() {
   need_root
   init_runtime_dirs
+  sync_xray_domain_file "$(detect_domain)" >/dev/null 2>&1 || true
   ensure_account_quota_dirs
   quota_migrate_dates_to_dateonly
   account_info_compat_refresh_if_needed || true
