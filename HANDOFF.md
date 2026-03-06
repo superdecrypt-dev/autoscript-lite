@@ -20,6 +20,7 @@ Agent AI baru wajib memulai dari konteks di atas.
   - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
 - Perubahan penting terbaru:
   - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
+  - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
   - SSHWS handshake kini fail-close:
     - backend internal down -> `502 Bad Gateway`
     - backend internal ready -> `101 Switching Protocols`

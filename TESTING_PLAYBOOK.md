@@ -95,6 +95,7 @@ Kriteria lulus:
 
 Khusus SSH WebSocket (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
+- Saat audit/review, konsep ini dianggap baseline tetap; referensi konsep perilaku: `https://github.com/nanotechid/supreme`.
 
 ```bash
 # Handshake check non-TLS (autoscript-stream payload, port 80)

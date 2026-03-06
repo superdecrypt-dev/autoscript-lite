@@ -202,6 +202,7 @@ Catatan:
 - Konsep SSHWS yang dipakai adalah pola autoscript-stream (stream raw TCP setelah `101`, bukan mode hybrid).
 - SSHWS saat ini memakai mode autoscript-stream payload (tanpa `Sec-WebSocket-*` wajib).
 - Jika backend internal `sshws-stunnel` down/tidak siap, endpoint SSHWS merespons `502 Bad Gateway` (bukan `101`).
+- Catatan audit: baseline konsep perilaku SSHWS mengacu ke referensi `https://github.com/nanotechid/supreme`, sementara penamaan/struktur tetap mengikuti standar internal autoscript.
 
 ## Protokol Akun Yang Didukung
 Stack provisioning/runtime saat ini mendukung protokol akun berikut:
