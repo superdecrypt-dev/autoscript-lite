@@ -1840,7 +1840,7 @@ PY
     speed_disp="OFF"
   fi
 
-  cat > "${acc_file}" <<EOF
+  if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
 Domain      : ${domain}
 IP          : ${ip}
@@ -1860,7 +1860,11 @@ Payload WSS:
 Payload WS:
     GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]
 EOF
+  then
+    return 1
+  fi
   chmod 600 "${acc_file}" >/dev/null 2>&1 || true
+  return 0
 }
 
 ssh_account_info_refresh_from_state() {
@@ -2250,7 +2254,13 @@ ssh_add_user_menu() {
   fi
 
   ssh_qac_enforce_now_warn "${username}" || true
-  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+  if ! ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    rm -f "${qf}" "$(ssh_account_info_file "${username}")" >/dev/null 2>&1 || true
+    warn "Gagal menulis SSH account info."
+    pause
+    return 0
+  fi
 
   local acc_file
   acc_file="$(ssh_account_info_file "${username}")"
