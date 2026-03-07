@@ -8,6 +8,14 @@ import httpx
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
+    "7:setup_domain_custom": 420.0,
+    "7:setup_domain_cloudflare": 420.0,
+    "8:run": 190.0,
+    "6:warp_restart": 90.0,
+    "6:warp_tier_switch_free": 420.0,
+    "6:warp_tier_switch_plus": 420.0,
+    "6:warp_tier_reconnect": 420.0,
+    # Backward compatibility for older menu numbering.
     "5:setup_domain_custom": 420.0,
     "5:setup_domain_cloudflare": 420.0,
     "6:run": 190.0,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import io
 import logging
+import re
 import socket
 import time
 from dataclasses import dataclass
@@ -40,6 +41,9 @@ from .render import (
 
 
 LOGGER = logging.getLogger("xray-telegram-gateway")
+TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
+DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
+BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
 CALLBACK_SEP = "|"
 ACTIONS_PER_PAGE = 6
 BUTTONS_PER_ROW = 2
@@ -53,7 +57,12 @@ DELETE_PICK_PAGE_SIZE = 12
 FORM_CHOICE_PAGE_SIZE = 12
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 USER_PROTOCOLS = XRAY_PROTOCOLS + ("ssh",)
-DELETE_PICK_PROTOCOLS = USER_PROTOCOLS
+XRAY_USER_MENU_ID = "2"
+SSH_USER_MENU_ID = "3"
+XRAY_QAC_MENU_ID = "4"
+SSH_QAC_MENU_ID = "5"
+BACKUP_MENU_ID = "12"
+DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -75,22 +84,6 @@ FORM_CHOICE_USERNAME_ACTIONS = {
     "set_speed_upload",
     "speed_limit",
     "set_warp_user_mode",
-}
-SSH_ENABLED_PROTOCOL_ACTIONS = {
-    "add_user",
-    "delete_user",
-    "extend_expiry",
-    "account_info",
-    "detail",
-    "set_quota_limit",
-    "reset_quota_used",
-    "manual_block",
-    "ip_limit_enable",
-    "set_ip_limit",
-    "unlock_ip_lock",
-    "set_speed_download",
-    "set_speed_upload",
-    "speed_limit",
 }
 SSH_ONLY_PROTOCOL_ACTIONS = {
     "reset_password",
@@ -121,6 +114,66 @@ class Runtime:
     catalog: CommandCatalog
     backend: BackendClient
     hostname: str
+
+
+def _mask_secret(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    if len(raw) <= 8:
+        return "********"
+    return f"{raw[:4]}****{raw[-4:]}"
+
+
+def _sanitize_log_text(value: str) -> str:
+    text = str(value or "")
+    text = TELEGRAM_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
+    text = DISCORD_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
+    text = BEARER_RE.sub(lambda match: f"Bearer {_mask_secret(match.group(1))}", text)
+    return text
+
+
+def _sanitize_log_value(value):
+    if isinstance(value, str):
+        return _sanitize_log_text(value)
+    if isinstance(value, tuple):
+        return tuple(_sanitize_log_value(item) for item in value)
+    if isinstance(value, list):
+        return [_sanitize_log_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_log_value(item) for key, item in value.items()}
+    return value
+
+
+class SecretMaskingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = _sanitize_log_text(record.msg)
+            record.args = _sanitize_log_value(record.args)
+            if isinstance(record.exc_text, str):
+                record.exc_text = _sanitize_log_text(record.exc_text)
+            if isinstance(record.stack_info, str):
+                record.stack_info = _sanitize_log_text(record.stack_info)
+        except Exception:
+            pass
+        return True
+
+
+def _configure_logging() -> None:
+    logging.basicConfig(
+        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+        level=logging.INFO,
+    )
+
+    root_logger = logging.getLogger()
+    masking_filter = SecretMaskingFilter()
+    for handler in root_logger.handlers:
+        handler.addFilter(masking_filter)
+
+    # Suppress low-value request logs that include full Telegram URLs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
@@ -355,22 +408,39 @@ def _safe_int(raw: str, default: int = 0) -> int:
         return default
 
 
+def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
+    if menu_id in {XRAY_USER_MENU_ID, XRAY_QAC_MENU_ID}:
+        return XRAY_PROTOCOLS
+    if menu_id in {SSH_USER_MENU_ID, SSH_QAC_MENU_ID}:
+        return ("ssh",)
+    return USER_PROTOCOLS
+
+
+def _delete_picker_title(menu_id: str) -> str:
+    if menu_id == XRAY_USER_MENU_ID:
+        return "Xray Management"
+    if menu_id == SSH_USER_MENU_ID:
+        return "SSH Management"
+    return "User Management"
+
+
 def _delete_pick_proto_keyboard(menu_id: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     proto_buttons = [
-        InlineKeyboardButton(proto.upper(), callback_data=f"dup_proto{CALLBACK_SEP}{proto}")
-        for proto in DELETE_PICK_PROTOCOLS
+        InlineKeyboardButton(proto.upper(), callback_data=f"dup_proto{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{proto}")
+        for proto in _menu_protocol_scope(menu_id)
     ]
     rows.extend(_rows_from_buttons(proto_buttons))
     rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
     return InlineKeyboardMarkup(rows)
 
 
-def _protocol_choices_for_action(action_id: str) -> tuple[str, ...]:
+def _protocol_choices_for_action(menu_id: str, action_id: str) -> tuple[str, ...]:
+    scoped = _menu_protocol_scope(menu_id)
+    if scoped != USER_PROTOCOLS:
+        return scoped
     if action_id in SSH_ONLY_PROTOCOL_ACTIONS:
         return ("ssh",)
-    if action_id in SSH_ENABLED_PROTOCOL_ACTIONS:
-        return USER_PROTOCOLS
     return XRAY_PROTOCOLS
 
 
@@ -404,17 +474,17 @@ def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str]) -> In
     return InlineKeyboardMarkup(rows)
 
 
-def _delete_pick_text_proto() -> str:
+def _delete_pick_text_proto(menu_id: str) -> str:
     return (
-        "<b>User Management · Delete User</b>\n"
+        f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
         "Pilih protocol dulu, lalu pilih username dari daftar."
     )
 
 
-def _delete_pick_text_users(proto: str, page: int, users: list[str]) -> str:
+def _delete_pick_text_users(menu_id: str, proto: str, page: int, users: list[str]) -> str:
     total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
     return (
-        "<b>User Management · Delete User</b>\n"
+        f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
         f"Protocol: <code>{html.escape(proto.upper())}</code>\n"
         f"Total user: <code>{len(users)}</code>\n"
         f"Halaman: <code>{page + 1}/{total_pages}</code>\n"
@@ -430,11 +500,23 @@ async def _show_delete_user_proto_picker(
     menu_id: str,
 ) -> None:
     context.user_data.pop(KEY_PENDING_DELETE_PICK, None)
+    protocols = _menu_protocol_scope(menu_id)
+    if len(protocols) == 1:
+        await _show_delete_user_list_picker(
+            runtime=_get_runtime(context),
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu_id=menu_id,
+            proto=protocols[0],
+            page=0,
+        )
+        return
     await _send_or_edit(
         query=query,
         chat_id=chat_id,
         context=context,
-        text=_delete_pick_text_proto(),
+        text=_delete_pick_text_proto(menu_id),
         reply_markup=_delete_pick_proto_keyboard(menu_id),
     )
 
@@ -473,7 +555,7 @@ async def _show_delete_user_list_picker(
             chat_id=chat_id,
             context=context,
             text=(
-                "<b>User Management · Delete User</b>\n"
+                f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
                 f"Protocol <code>{html.escape(proto.upper())}</code> belum punya user."
             ),
             reply_markup=InlineKeyboardMarkup(
@@ -494,7 +576,7 @@ async def _show_delete_user_list_picker(
         query=query,
         chat_id=chat_id,
         context=context,
-        text=_delete_pick_text_users(proto, page, usernames),
+        text=_delete_pick_text_users(menu_id, proto, page, usernames),
         reply_markup=_delete_pick_users_keyboard(menu_id, page, usernames),
     )
 
@@ -576,11 +658,12 @@ def _choice_keyboard(menu_id: str, choice_options: list[dict[str, str]], page: i
 
 
 async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id: str) -> list[tuple[str, str]]:
+    menu_id = str(pending.get("menu_id") or "").strip()
     action_id = str(pending.get("action_id") or "").strip()
     params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
 
     if field_id == "proto":
-        return [(proto.upper(), proto) for proto in _protocol_choices_for_action(action_id)]
+        return [(proto.upper(), proto) for proto in _protocol_choices_for_action(menu_id, action_id)]
 
     if field_id in {"enabled", "proxied", "allow_existing_same_ip", "speed_limit_enabled"}:
         return [("ON", "on"), ("OFF", "off")]
@@ -641,7 +724,11 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
 
     if field_id == "username" and action_id in FORM_CHOICE_USERNAME_ACTIONS:
         proto = str(params.get("proto") or "").strip().lower()
-        if proto not in _protocol_choices_for_action(action_id):
+        if not proto:
+            scoped_protocols = _menu_protocol_scope(menu_id)
+            if len(scoped_protocols) == 1:
+                proto = scoped_protocols[0]
+        if proto not in _protocol_choices_for_action(menu_id, action_id):
             return []
         try:
             options: list[BackendUserOption] = await runtime.backend.list_user_options(proto=proto)
@@ -1166,7 +1253,7 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text("Gagal mengunduh file dari Telegram. Coba kirim ulang.")
         return
 
-    menu_id = str(pending_upload.get("menu_id") or "10")
+    menu_id = str(pending_upload.get("menu_id") or BACKUP_MENU_ID)
     action_id = str(pending_upload.get("action_id") or "restore_from_upload")
     menu = runtime.catalog.get_menu(menu_id)
     action = runtime.catalog.get_action(menu_id, action_id)
@@ -1345,11 +1432,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith(f"dup_proto{CALLBACK_SEP}"):
         parts = data.split(CALLBACK_SEP)
-        if len(parts) != 2:
+        if len(parts) != 3:
             await query.answer("Protocol tidak valid.", show_alert=True)
             return
-        proto = parts[1].strip().lower()
-        if proto not in DELETE_PICK_PROTOCOLS:
+        menu_id = str(parts[1]).strip()
+        proto = parts[2].strip().lower()
+        if menu_id not in DELETE_PICK_MENU_IDS or proto not in _menu_protocol_scope(menu_id):
             await query.answer("Protocol tidak valid.", show_alert=True)
             return
         await _show_delete_user_list_picker(
@@ -1357,7 +1445,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             context=context,
             chat_id=chat_id,
             query=query,
-            menu_id="2",
+            menu_id=menu_id,
             proto=proto,
             page=0,
         )
@@ -1371,7 +1459,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         proto = str(state.get("proto") or "").strip().lower()
         menu_id = str(state.get("menu_id") or "2")
         users = state.get("users") if isinstance(state.get("users"), list) else []
-        if proto not in DELETE_PICK_PROTOCOLS or not users:
+        if proto not in _menu_protocol_scope(menu_id) or not users:
             await query.answer("Sesi pemilihan user tidak valid.", show_alert=True)
             return
         parts = data.split(CALLBACK_SEP)
@@ -1384,7 +1472,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
             chat_id=chat_id,
             context=context,
-            text=_delete_pick_text_users(proto, page, users),
+            text=_delete_pick_text_users(menu_id, proto, page, users),
             reply_markup=_delete_pick_users_keyboard(menu_id, page, users),
         )
         return
@@ -1397,7 +1485,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         proto = str(state.get("proto") or "").strip().lower()
         menu_id = str(state.get("menu_id") or "2")
         users = state.get("users") if isinstance(state.get("users"), list) else []
-        if proto not in DELETE_PICK_PROTOCOLS or not users:
+        if proto not in _menu_protocol_scope(menu_id) or not users:
             await query.answer("Sesi pemilihan user tidak valid.", show_alert=True)
             return
         parts = data.split(CALLBACK_SEP)
@@ -1521,7 +1609,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         _clear_pending(context)
 
-        if menu_id == "2" and action_id == "delete_user":
+        if menu_id in DELETE_PICK_MENU_IDS and action_id == "delete_user":
             await _show_delete_user_proto_picker(
                 context=context,
                 chat_id=chat_id,
@@ -1530,7 +1618,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
-        if menu_id == "10" and action_id == "restore_from_upload":
+        if menu_id == BACKUP_MENU_ID and action_id == "restore_from_upload":
             context.user_data[KEY_PENDING_UPLOAD_RESTORE] = {
                 "menu_id": menu_id,
                 "action_id": action_id,
@@ -1635,10 +1723,7 @@ async def post_init(application: Application) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-        level=logging.INFO,
-    )
+    _configure_logging()
 
     config = load_config()
     catalog = CommandCatalog.load(config.commands_file)

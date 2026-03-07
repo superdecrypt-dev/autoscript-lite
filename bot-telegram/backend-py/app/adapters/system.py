@@ -2,6 +2,8 @@ import base64
 import json
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 from collections import Counter
 from datetime import date, datetime, timezone
@@ -55,6 +57,13 @@ ALLOWED_SERVICES = (
     "sshws-proxy",
     "sshws-qac-enforcer.timer",
 )
+ALLOWED_RESTART_SERVICES = set(ALLOWED_SERVICES) | {"fail2ban"}
+XRAY_DAEMONS = ("xray-expired", "xray-quota", "xray-limit-ip", "xray-speed")
+SSHWS_SERVICES = ("sshws-dropbear", "sshws-stunnel", "sshws-proxy")
+SSHWS_DROPBEAR_UNIT = Path("/etc/systemd/system/sshws-dropbear.service")
+SSHWS_STUNNEL_CONF = Path("/etc/stunnel/sshws.conf")
+SSHWS_PROXY_UNIT = Path("/etc/systemd/system/sshws-proxy.service")
+MESSAGE_SOFT_LIMIT = 3500
 
 
 def run_cmd(argv: List[str], timeout: int = 20) -> Tuple[bool, str]:
@@ -190,6 +199,264 @@ def _human_bytes(value: int) -> str:
     if n >= 1024:
         return f"{n / 1024:.2f} KiB"
     return f"{n} B"
+
+
+def _trim_message(text: str, limit: int = MESSAGE_SOFT_LIMIT) -> str:
+    raw = str(text or "")
+    if len(raw) <= limit:
+        return raw
+    if limit < 4:
+        return raw[:limit]
+    return raw[: limit - 3] + "..."
+
+
+def _journal_tail(unit: str, lines: int = 40) -> str:
+    safe_lines = max(1, min(int(lines), 120))
+    ok, out = run_cmd(["journalctl", "-u", unit, "--no-pager", "-n", str(safe_lines)], timeout=20)
+    if ok:
+        return _trim_message(out)
+    return _trim_message(f"Gagal membaca log {unit}:\n{out}")
+
+
+def _unit_status_line(name: str, *, unit_type: str = "service") -> str:
+    if name.endswith(f".{unit_type}"):
+        unit = name
+        raw_name = name[: -len(f".{unit_type}")]
+    else:
+        unit = f"{name}.{unit_type}"
+        raw_name = name
+
+    if not service_exists(raw_name, unit_type=unit_type):
+        return f"- {unit}: not installed"
+
+    active = service_state(unit)
+    enabled = systemctl_enabled_state(unit)
+    return f"- {unit}: {active} / {enabled}"
+
+
+def _detect_port_from_file(path: Path, pattern: str, fallback: int) -> int:
+    if path.exists():
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        match = re.search(pattern, text, re.MULTILINE)
+        if match:
+            try:
+                value = int(match.group(1))
+            except Exception:
+                value = 0
+            if 1 <= value <= 65535:
+                return value
+    return fallback
+
+
+def _sshws_dropbear_port() -> int:
+    return _detect_port_from_file(SSHWS_DROPBEAR_UNIT, r"-p\s+127\.0\.0\.1:(\d+)", 22022)
+
+
+def _sshws_stunnel_port() -> int:
+    return _detect_port_from_file(SSHWS_STUNNEL_CONF, r"^\s*accept\s*=\s*127\.0\.0\.1:(\d+)", 22443)
+
+
+def _sshws_proxy_port() -> int:
+    return _detect_port_from_file(SSHWS_PROXY_UNIT, r"--listen-port\s+(\d+)", 10015)
+
+
+def _listener_present(port: int) -> bool:
+    if not shutil.which("ss"):
+        return False
+    ok, out = run_cmd(["ss", "-lntp"], timeout=8)
+    if not ok:
+        return False
+    return bool(re.search(rf":{int(port)}(?:\s|$)", out))
+
+
+def _probe_tcp_endpoint(host: str, port: int, *, tls_mode: bool = False) -> str:
+    raw_sock = None
+    sock = None
+    try:
+        raw_sock = socket.create_connection((host, int(port)), timeout=2.5)
+        raw_sock.settimeout(2.5)
+        if tls_mode:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            sock = ctx.wrap_socket(raw_sock, server_hostname=host or "localhost")
+        else:
+            sock = raw_sock
+        return "CONNECTED"
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        return f"FAIL ({detail})"
+    finally:
+        try:
+            if sock is not None:
+                sock.close()
+        except Exception:
+            pass
+        try:
+            if raw_sock is not None and raw_sock is not sock:
+                raw_sock.close()
+        except Exception:
+            pass
+
+
+def _probe_ws_endpoint(
+    host: str,
+    port: int,
+    *,
+    path: str = "/",
+    host_header: str = "",
+    tls_mode: bool = False,
+    sni: str = "",
+) -> str:
+    raw_sock = None
+    sock = None
+    try:
+        raw_sock = socket.create_connection((host, int(port)), timeout=3.0)
+        raw_sock.settimeout(3.0)
+        if tls_mode:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            sock = ctx.wrap_socket(raw_sock, server_hostname=sni or host or "localhost")
+        else:
+            sock = raw_sock
+
+        request = (
+            f"GET {path or '/'} HTTP/1.1\r\n"
+            f"Host: {host_header or host}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "User-Agent: xray-telegram-bot/sshws-diagnostics\r\n"
+            "\r\n"
+        ).encode("ascii", "ignore")
+        sock.sendall(request)
+
+        buf = b""
+        while b"\r\n\r\n" not in buf and len(buf) < 16384:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        if not buf:
+            return "FAIL (empty-response)"
+
+        line = buf.split(b"\r\n", 1)[0].decode("latin1", "replace").strip()
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[1].isdigit():
+            code = parts[1]
+            reason = parts[2] if len(parts) >= 3 else ""
+            return f"HTTP {code}" + (f" {reason}" if reason else "")
+        return f"FAIL ({line or 'bad-response'})"
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        return f"FAIL ({detail})"
+    finally:
+        try:
+            if sock is not None:
+                sock.close()
+        except Exception:
+            pass
+        try:
+            if raw_sock is not None and raw_sock is not sock:
+                raw_sock.close()
+        except Exception:
+            pass
+
+
+def _service_group_restart(services: tuple[str, ...] | list[str], title: str) -> tuple[bool, str, str]:
+    lines: list[str] = []
+    attempted = 0
+    had_failure = False
+    for service in services:
+        if not service_exists(service):
+            lines.append(f"- {service}: skip (unit tidak ditemukan)")
+            continue
+        attempted += 1
+        ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
+        state = service_state(service)
+        if ok:
+            lines.append(f"- {service}: restarted ({state})")
+        else:
+            had_failure = True
+            brief = out.splitlines()[-1].strip() if out else "unknown error"
+            lines.append(f"- {service}: gagal ({state}) - {brief}")
+    if attempted == 0:
+        return False, title, "Tidak ada unit yang ditemukan."
+    return (not had_failure), title, "\n".join(lines)
+
+
+def _fail2ban_client_available() -> bool:
+    return shutil.which("fail2ban-client") is not None
+
+
+def _fail2ban_jails_list() -> list[str]:
+    if not _fail2ban_client_available():
+        return []
+    ok, out = run_cmd(["fail2ban-client", "status"], timeout=20)
+    if not ok or not out.strip():
+        return []
+    jail_line = ""
+    for raw in out.splitlines():
+        match = re.search(r"[Jj]ail list\s*:\s*(.+)", raw)
+        if match:
+            jail_line = match.group(1).strip()
+            break
+    if not jail_line:
+        return []
+    items: list[str] = []
+    for item in jail_line.replace("\r", "").split(","):
+        jail = item.strip()
+        if jail and jail not in items:
+            items.append(jail)
+    return items
+
+
+def _fail2ban_jail_counts(jail: str) -> tuple[int, int]:
+    if not _fail2ban_client_available():
+        return 0, 0
+    ok, out = run_cmd(["fail2ban-client", "status", jail], timeout=20)
+    if not ok:
+        return 0, 0
+    cur = 0
+    total = 0
+    for raw in out.splitlines():
+        match_cur = re.search(r"Currently banned:\s*([0-9]+)", raw)
+        if match_cur:
+            cur = int(match_cur.group(1))
+        match_total = re.search(r"Total banned:\s*([0-9]+)", raw)
+        if match_total:
+            total = int(match_total.group(1))
+    return cur, total
+
+
+def _fail2ban_total_banned() -> int:
+    return sum(_fail2ban_jail_counts(jail)[0] for jail in _fail2ban_jails_list())
+
+
+def _fail2ban_jail_active(jail: str) -> bool:
+    if not _fail2ban_client_available():
+        return False
+    ok, _ = run_cmd(["fail2ban-client", "status", jail], timeout=20)
+    return ok
+
+
+def _tls_expiry_days_left() -> int | None:
+    if not CERT_FULLCHAIN.exists():
+        return None
+    ok, out = run_cmd(["openssl", "x509", "-in", str(CERT_FULLCHAIN), "-noout", "-enddate"], timeout=10)
+    if not ok:
+        return None
+    raw = out.splitlines()[-1].strip().replace("notAfter=", "", 1).strip()
+    for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y GMT"):
+        try:
+            expiry = datetime.strptime(raw, fmt)
+            return (expiry.date() - date.today()).days
+        except Exception:
+            continue
+    return None
 
 
 def op_status_overview() -> tuple[str, str]:
@@ -471,9 +738,21 @@ def op_domain_guard_renew_if_needed(force: bool = False) -> tuple[bool, str, str
     return False, title, msg
 
 
-def list_accounts() -> list[tuple[str, str]]:
+def _normalize_protocol_filter(protocols: tuple[str, ...] | list[str] | set[str] | None) -> tuple[str, ...]:
+    if protocols is None:
+        return USER_PROTOCOLS
+    selected: list[str] = []
+    for proto in protocols:
+        proto_n = str(proto).strip().lower()
+        if proto_n in USER_PROTOCOLS and proto_n not in selected:
+            selected.append(proto_n)
+    return tuple(selected)
+
+
+def list_accounts(protocols: tuple[str, ...] | list[str] | set[str] | None = None) -> list[tuple[str, str]]:
+    protocol_list = _normalize_protocol_filter(protocols)
     records: list[tuple[str, str]] = []
-    for proto in USER_PROTOCOLS:
+    for proto in protocol_list:
         d = ACCOUNT_ROOT / proto
         if not d.exists():
             continue
@@ -499,34 +778,48 @@ def list_accounts() -> list[tuple[str, str]]:
     return records
 
 
-def op_user_list() -> tuple[str, str]:
-    records = list_accounts()
-    if not records:
-        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022,ssh}}"
+def _protocols_text(protocols: tuple[str, ...]) -> str:
+    return ",".join(protocols)
 
-    counts = {p: 0 for p in USER_PROTOCOLS}
+
+def op_user_list(
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "User Management - List",
+) -> tuple[str, str]:
+    protocol_list = _normalize_protocol_filter(protocols)
+    records = list_accounts(protocol_list)
+    if not records:
+        return title, f"Tidak ada data di {ACCOUNT_ROOT}/{{{_protocols_text(protocol_list)}}}"
+
+    counts = {p: 0 for p in protocol_list}
     for proto, _ in records:
         counts[proto] += 1
 
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(records[:250])]
-    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in USER_PROTOCOLS])
+    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in protocol_list])
     body = (
         f"Total user: {len(records)}\n"
         f"{protocol_lines}\n\n"
         "Daftar (maks 250):\n"
         + "\n".join(lines)
     )
-    return "User Management - List", body
+    return title, body
 
 
-def op_user_search(query: str) -> tuple[str, str]:
+def op_user_search(
+    query: str,
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "User Management - Search",
+) -> tuple[str, str]:
     q = query.lower().strip()
-    records = list_accounts()
+    records = list_accounts(protocols)
     hits = [(proto, user) for proto, user in records if q in user.lower()]
     if not hits:
-        return "User Management - Search", f"Tidak ada user cocok dengan query: {query}"
+        return title, f"Tidak ada user cocok dengan query: {query}"
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(hits[:250])]
-    return "User Management - Search", f"Hasil: {len(hits)}\n\n" + "\n".join(lines)
+    return title, f"Hasil: {len(hits)}\n\n" + "\n".join(lines)
 
 
 def _quota_candidates(proto: str, username: str) -> list[Path]:
@@ -774,10 +1067,15 @@ def _pick_field(data: dict, keys: list[str], default: str = "-") -> str:
     return default
 
 
-def op_quota_summary() -> tuple[str, str]:
+def op_quota_summary(
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "Quota & Access Control - Summary",
+) -> tuple[str, str]:
+    protocol_list = _normalize_protocol_filter(protocols)
     lines: list[str] = []
     count = 0
-    for proto in USER_PROTOCOLS:
+    for proto in protocol_list:
         for username, path in _iter_proto_quota_files(proto):
             ok, payload = read_json(path)
             if not ok:
@@ -803,10 +1101,8 @@ def op_quota_summary() -> tuple[str, str]:
             break
 
     if not lines:
-        return "Quota & Access Control - Summary", (
-            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022,ssh}}"
-        )
-    return "Quota & Access Control - Summary", "Maks 200 entri:\n" + "\n".join(lines)
+        return title, f"Tidak ada file quota di {QUOTA_ROOT}/{{{_protocols_text(protocol_list)}}}"
+    return title, "Maks 200 entri:\n" + "\n".join(lines)
 
 
 def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
@@ -1651,12 +1947,106 @@ def op_speedtest_version() -> tuple[bool, str, str]:
 
 
 def op_fail2ban_status() -> tuple[str, str]:
-    if not shutil.which("fail2ban-client"):
-        return "Security - fail2ban", "fail2ban-client tidak tersedia."
+    title = "Security - Fail2ban Overview"
+    if not _fail2ban_client_available():
+        return title, "fail2ban-client tidak tersedia."
+
+    jail_count = len(_fail2ban_jails_list())
+    lines = [
+        f"Service       : {service_state('fail2ban')}",
+        f"Enabled       : {systemctl_enabled_state('fail2ban')}",
+        f"Jail Count    : {jail_count}",
+        f"Banned IP Now : {_fail2ban_total_banned()}",
+    ]
     ok, out = run_cmd(["fail2ban-client", "status"], timeout=20)
     if ok:
-        return "Security - fail2ban", out
-    return "Security - fail2ban", f"Gagal membaca status fail2ban:\n{out}"
+        lines.extend(["", out])
+    else:
+        lines.extend(["", f"Gagal membaca status fail2ban:\n{out}"])
+    return title, _trim_message("\n".join(lines))
+
+
+def op_fail2ban_jail_status() -> tuple[str, str]:
+    title = "Security - Fail2ban Jail Status"
+    if not _fail2ban_client_available():
+        return title, "fail2ban-client tidak tersedia."
+
+    jails = _fail2ban_jails_list()
+    if not jails:
+        return title, "Tidak ada jail fail2ban yang terdeteksi."
+
+    lines = [
+        f"Service : {service_state('fail2ban')}",
+        "",
+        f"{'JAIL':<28} {'CURRENT':>7} {'TOTAL':>7}",
+        f"{'-'*28:<28} {'-'*7:>7} {'-'*7:>7}",
+    ]
+    for jail in jails:
+        current, total = _fail2ban_jail_counts(jail)
+        lines.append(f"{jail:<28} {current:>7} {total:>7}")
+    return title, _trim_message("\n".join(lines))
+
+
+def op_fail2ban_banned_ips() -> tuple[str, str]:
+    title = "Security - Fail2ban Banned IP"
+    if not _fail2ban_client_available():
+        return title, "fail2ban-client tidak tersedia."
+
+    jails = _fail2ban_jails_list()
+    if not jails:
+        return title, "Tidak ada jail fail2ban yang terdeteksi."
+
+    lines: list[str] = []
+    for jail in jails:
+        ok, out = run_cmd(["fail2ban-client", "get", jail, "banip"], timeout=20)
+        lines.append(f"[{jail}]")
+        if ok and out.strip():
+            for ip in out.split():
+                lines.append(f"- {ip}")
+        else:
+            lines.append("(kosong)")
+        lines.append("")
+    return title, _trim_message("\n".join(lines).strip())
+
+
+def op_fail2ban_unban_ip(ip: str, jail: str = "") -> tuple[bool, str, str]:
+    title = "Security - Fail2ban Unban IP"
+    ip_text = str(ip or "").strip()
+    jail_text = str(jail or "").strip()
+    if not ip_text:
+        return False, title, "IP wajib diisi."
+    if not _fail2ban_client_available():
+        return False, title, "fail2ban-client tidak tersedia."
+
+    try:
+        normalized_ip = str(ipaddress.ip_address(ip_text))
+    except ValueError:
+        return False, title, f"IP tidak valid: {ip_text}"
+
+    targets = [jail_text] if jail_text else _fail2ban_jails_list()
+    if not targets:
+        return False, title, "Tidak ada jail fail2ban yang terdeteksi."
+
+    success: list[str] = []
+    failed: list[str] = []
+    for target in targets:
+        ok, out = run_cmd(["fail2ban-client", "set", target, "unbanip", normalized_ip], timeout=20)
+        if ok:
+            success.append(target)
+        else:
+            brief = out.splitlines()[-1].strip() if out else "unknown error"
+            failed.append(f"{target}: {brief}")
+
+    if success:
+        lines = [
+            f"IP       : {normalized_ip}",
+            "Unbanned : " + ", ".join(success),
+        ]
+        if failed:
+            lines.extend(["", "Gagal:", *[f"- {line}" for line in failed]])
+        return True, title, "\n".join(lines)
+
+    return False, title, "Unban gagal.\n" + "\n".join(f"- {line}" for line in failed)
 
 
 def _read_sysctl(key: str) -> str:
@@ -1678,13 +2068,126 @@ def op_sysctl_summary() -> tuple[str, str]:
     return "Security - Kernel/Network Summary", "\n".join(lines)
 
 
+def op_hardening_bbr() -> tuple[str, str]:
+    title = "Security - Hardening - Check BBR"
+    cc = _read_sysctl("net.ipv4.tcp_congestion_control")
+    qdisc = _read_sysctl("net.core.default_qdisc")
+    enabled = "Enabled" if cc == "bbr" else "Disabled"
+    lines = [
+        f"tcp_congestion_control : {cc or '-'}",
+        f"default_qdisc          : {qdisc or '-'}",
+        "",
+        f"BBR : {enabled}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_hardening_swap() -> tuple[str, str]:
+    title = "Security - Hardening - Check Swap"
+    if not shutil.which("free"):
+        return title, "Binary `free` tidak tersedia."
+    ok, out = run_cmd(["free", "-h"], timeout=8)
+    if not ok:
+        return title, f"Gagal membaca swap:\n{out}"
+    bytes_raw = "0"
+    ok_b, out_b = run_cmd(["free", "-b"], timeout=8)
+    if ok_b:
+        match = re.search(r"^Swap:\s+([0-9]+)", out_b, re.MULTILINE)
+        if match:
+            bytes_raw = match.group(1)
+    total_swap = int(bytes_raw) if str(bytes_raw).isdigit() else 0
+    status = "Disabled" if total_swap <= 0 else f"{max(1, round(total_swap / (1024**3)))}GB Active"
+    return title, "\n".join([out, "", f"Swap : {status}"])
+
+
+def op_hardening_ulimit() -> tuple[str, str]:
+    title = "Security - Hardening - Check Ulimit"
+    ok_shell, shell_limit = run_cmd(["bash", "-lc", "ulimit -n"], timeout=8)
+    xray_limit = systemctl_enabled_state("xray")
+    ok_unit, xray_nofile = run_cmd(["systemctl", "show", "-p", "LimitNOFILE", "--value", "xray"], timeout=8)
+    lines = [
+        f"Shell ulimit -n : {shell_limit.strip() if ok_shell else '-'}",
+        f"xray active     : {service_state('xray')}",
+        f"xray enabled    : {xray_limit}",
+        f"xray LimitNOFILE: {xray_nofile.strip() if ok_unit else '-'}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_hardening_chrony() -> tuple[str, str]:
+    title = "Security - Hardening - Check Chrony"
+    unit = ""
+    if service_exists("chrony"):
+        unit = "chrony"
+    elif service_exists("chronyd"):
+        unit = "chronyd"
+    if not unit:
+        return title, "chrony/chronyd service tidak terdeteksi."
+
+    ok, out = run_cmd(["systemctl", "status", unit, "--no-pager"], timeout=20)
+    lines = [
+        f"Service : {unit}",
+        f"State   : {service_state(unit)}",
+        f"Enabled : {systemctl_enabled_state(unit)}",
+    ]
+    if ok:
+        lines.extend(["", out])
+    return title, _trim_message("\n".join(lines))
+
+
+def op_tls_expiry() -> tuple[str, str]:
+    title = "Security - TLS Expiry"
+    expiry = detect_tls_expiry()
+    days = _tls_expiry_days_left()
+    if days is None:
+        return title, f"TLS expiry : {expiry}"
+    status = "Expired" if days < 0 else f"{days} days"
+    return title, f"TLS expiry : {expiry}\nDays left  : {status}"
+
+
+def op_security_overview() -> tuple[str, str]:
+    title = "Security - Overview"
+    tls_days = _tls_expiry_days_left()
+    if tls_days is None:
+        tls_line = "-"
+    else:
+        tls_line = "Expired" if tls_days < 0 else f"{tls_days} days"
+
+    lines = [
+        f"TLS Expiry        : {tls_line}",
+        f"Fail2ban          : {'Active' if service_state('fail2ban') == 'active' else 'Inactive'}",
+        f"Banned IP         : {_fail2ban_total_banned() if _fail2ban_client_available() else 0}",
+        f"SSH Protection    : {'Active' if _fail2ban_jail_active('sshd') else 'Inactive'}",
+        (
+            "Nginx Protection  : Active"
+            if _fail2ban_jail_active("nginx-bad-request-access") or _fail2ban_jail_active("nginx-bad-request-error")
+            else "Nginx Protection  : Inactive"
+        ),
+        f"Recidive          : {'Active' if _fail2ban_jail_active('recidive') else 'Inactive'}",
+        f"BBR               : {'Enabled' if _read_sysctl('net.ipv4.tcp_congestion_control') == 'bbr' else 'Disabled'}",
+    ]
+
+    if shutil.which("free"):
+        ok, out = run_cmd(["free", "-b"], timeout=8)
+        if ok:
+            match = re.search(r"^Swap:\s+([0-9]+)", out, re.MULTILINE)
+            total_swap = int(match.group(1)) if match else 0
+            lines.append(f"Swap              : {'Disabled' if total_swap <= 0 else f'{max(1, round(total_swap / (1024**3)))}GB Active'}")
+        else:
+            lines.append("Swap              : Unknown")
+    else:
+        lines.append("Swap              : Unknown")
+
+    return title, "\n".join(lines)
+
+
 def op_maintenance_status() -> tuple[str, str]:
     lines = [f"- {svc}: {service_state(svc)}" for svc in ALLOWED_SERVICES]
     return "Maintenance - Service Status", "\n".join(lines)
 
 
 def op_restart_service(service: str) -> tuple[bool, str, str]:
-    if service not in ALLOWED_SERVICES:
+    if service not in ALLOWED_RESTART_SERVICES:
         return False, "Maintenance - Restart", f"Service tidak diizinkan: {service}"
     ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
     state = service_state(service)
@@ -1694,31 +2197,189 @@ def op_restart_service(service: str) -> tuple[bool, str, str]:
 
 
 def op_restart_sshws_stack() -> tuple[bool, str, str]:
-    title = "Maintenance - Restart SSHWS Stack"
-    services = ["sshws-dropbear", "sshws-stunnel", "sshws-proxy"]
-    lines: list[str] = []
-    had_failure = False
-    attempted = 0
+    return _service_group_restart(SSHWS_SERVICES, "Maintenance - Restart SSHWS Stack")
 
-    for service in services:
+
+def op_restart_all_core() -> tuple[bool, str, str]:
+    return _service_group_restart(("xray", "nginx"), "Maintenance - Restart All")
+
+
+def op_restart_xray_daemons() -> tuple[bool, str, str]:
+    return _service_group_restart(XRAY_DAEMONS, "Maintenance - Restart Xray Daemons")
+
+
+def op_service_log_tail(service: str, lines: int = 40) -> tuple[str, str]:
+    title = f"Maintenance - Logs - {service}"
+    if service not in ALLOWED_RESTART_SERVICES:
+        return title, f"Service log tidak diizinkan: {service}"
+    unit_type = "timer" if service.endswith(".timer") else "service"
+    raw_name = service[: -len(".timer")] if unit_type == "timer" else service
+    if not service_exists(raw_name, unit_type=unit_type):
+        return title, f"Unit tidak ditemukan: {service}"
+    return title, _journal_tail(service, lines=lines)
+
+
+def op_wireproxy_status() -> tuple[str, str]:
+    title = "Maintenance - Wireproxy (WARP) Status"
+    if not service_exists("wireproxy"):
+        return title, "wireproxy.service tidak ditemukan. Pastikan setup.sh terbaru sudah dijalankan."
+
+    lines = [
+        _unit_status_line("wireproxy"),
+    ]
+
+    ok_pid, pid = run_cmd(["systemctl", "show", "-p", "MainPID", "--value", "wireproxy"], timeout=8)
+    pid_text = pid.strip() if ok_pid else ""
+    if pid_text and pid_text != "0":
+        lines.append(f"PID           : {pid_text}")
+        ok_uptime, uptime = run_cmd(["ps", "-o", "etime=", "-p", pid_text], timeout=8)
+        if ok_uptime and uptime.strip():
+            lines.append(f"Uptime        : {uptime.strip()}")
+
+    bind_addr = _wireproxy_socks_bind_address()
+    lines.extend(
+        [
+            f"SOCKS5 bind   : {bind_addr}",
+            f"SOCKS5 listen : {'LISTENING' if _listener_present(int(bind_addr.rsplit(':', 1)[-1])) else 'NOT listening'}",
+        ]
+    )
+
+    if shutil.which("curl"):
+        ok_ip, warp_ip = run_cmd(
+            ["curl", "-fsSL", "--socks5", bind_addr, "--max-time", "5", "https://api.ipify.org"],
+            timeout=12,
+        )
+        lines.append(f"WARP IP       : {warp_ip.strip() if ok_ip and warp_ip.strip() else 'gagal'}")
+    else:
+        lines.append("WARP IP       : curl tidak tersedia")
+
+    lines.append(f"Config        : {WIREPROXY_CONF}")
+    return title, "\n".join(lines)
+
+
+def op_daemon_status() -> tuple[str, str]:
+    title = "Maintenance - Daemon Status"
+    lines = ["Core Services:"]
+    for service in ("xray", "nginx", "wireproxy"):
+        lines.append(_unit_status_line(service))
+    lines.extend(["", "Xray Daemons:"])
+    for service in XRAY_DAEMONS:
+        lines.append(_unit_status_line(service))
+    lines.extend(["", "SSHWS Runtime:"])
+    for service in SSHWS_SERVICES:
+        lines.append(_unit_status_line(service))
+    lines.append(_unit_status_line("sshws-qac-enforcer", unit_type="timer"))
+    return title, "\n".join(lines)
+
+
+def op_xray_daemon_logs() -> tuple[str, str]:
+    title = "Maintenance - Xray Daemon Logs"
+    chunks: list[str] = []
+    for service in XRAY_DAEMONS:
         if not service_exists(service):
-            lines.append(f"- {service}: skip (unit tidak ditemukan)")
             continue
-        attempted += 1
-        ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
-        state = service_state(service)
-        if ok:
-            lines.append(f"- {service}: restarted ({state})")
-        else:
-            had_failure = True
-            brief = out.splitlines()[-1].strip() if out else "unknown error"
-            lines.append(f"- {service}: gagal ({state}) - {brief}")
+        chunks.append(f"[{service}]")
+        chunks.append(_journal_tail(service, lines=12))
+        chunks.append("")
+    if not chunks:
+        return title, "Tidak ada daemon Xray yang terpasang."
+    return title, _trim_message("\n".join(chunks).strip())
 
-    if attempted == 0:
-        return False, title, "Tidak ada unit SSHWS yang ditemukan."
-    if had_failure:
-        return False, title, "\n".join(lines)
-    return True, title, "\n".join(lines)
+
+def op_sshws_status() -> tuple[str, str]:
+    title = "SSH Management - SSH WS Service Status"
+    lines = ["Services:"]
+    for service in SSHWS_SERVICES:
+        if service == "sshws-stunnel" and not service_exists(service):
+            lines.append(f"- {service}.service: optional / not installed")
+        else:
+            lines.append(_unit_status_line(service))
+
+    lines.extend(
+        [
+            "",
+            "Public Ports:",
+            f"- 80  : {'LISTENING' if _listener_present(80) else 'NOT listening'}",
+            f"- 443 : {'LISTENING' if _listener_present(443) else 'NOT listening'}",
+            "",
+            "Internal Ports:",
+            f"- dropbear : 127.0.0.1:{_sshws_dropbear_port()}",
+            f"- stunnel  : 127.0.0.1:{_sshws_stunnel_port()}",
+            f"- ws proxy : 127.0.0.1:{_sshws_proxy_port()}",
+        ]
+    )
+    return title, "\n".join(lines)
+
+
+def op_sshws_diagnostics() -> tuple[str, str]:
+    title = "Maintenance - SSH WS Diagnostics"
+    domain = detect_domain()
+    dropbear_port = _sshws_dropbear_port()
+    stunnel_port = _sshws_stunnel_port()
+    proxy_port = _sshws_proxy_port()
+
+    lines = ["Services:"]
+    for service in SSHWS_SERVICES:
+        if service == "sshws-stunnel" and not service_exists(service):
+            lines.append(f"- {service}.service: optional / not installed")
+        else:
+            lines.append(_unit_status_line(service))
+
+    lines.extend(
+        [
+            "",
+            "Internal Ports:",
+            f"- dropbear : 127.0.0.1:{dropbear_port}",
+            f"- stunnel  : 127.0.0.1:{stunnel_port}",
+            f"- ws proxy : 127.0.0.1:{proxy_port}",
+            f"- domain   : {domain}",
+            "",
+            "Local Probes:",
+            f"- dropbear tcp : {_probe_tcp_endpoint('127.0.0.1', dropbear_port)}",
+            f"- proxy ws     : {_probe_ws_endpoint('127.0.0.1', proxy_port, host_header=f'127.0.0.1:{proxy_port}')}",
+        ]
+    )
+    if service_exists("sshws-stunnel"):
+        lines.append(f"- stunnel tls  : {_probe_tcp_endpoint('127.0.0.1', stunnel_port, tls_mode=True)}")
+    else:
+        lines.append("- stunnel tls  : SKIP (optional)")
+
+    lines.extend(["", "Public Path Probes:"])
+    if _listener_present(80):
+        lines.append(f"- nginx :80  : {_probe_ws_endpoint('127.0.0.1', 80, host_header=domain or '127.0.0.1')}")
+    else:
+        lines.append("- nginx :80  : SKIP (not listening)")
+    if domain and domain != "-" and _listener_present(443):
+        lines.append(
+            f"- nginx :443 : {_probe_ws_endpoint('127.0.0.1', 443, host_header=domain, tls_mode=True, sni=domain)}"
+        )
+    else:
+        lines.append("- nginx :443 : SKIP (domain/443 unavailable)")
+
+    lines.extend(
+        [
+            "",
+            "Notes:",
+            "- HTTP 101 menandakan chain SSHWS sehat.",
+            "- HTTP 502 biasanya berarti backend internal belum siap.",
+            "- HTTP 301/308 pada port 80 normal jika force-HTTPS aktif.",
+        ]
+    )
+    return title, _trim_message("\n".join(lines))
+
+
+def op_sshws_combined_logs() -> tuple[str, str]:
+    title = "Maintenance - SSHWS Combined Logs"
+    chunks: list[str] = []
+    for service in SSHWS_SERVICES:
+        if not service_exists(service):
+            continue
+        chunks.append(f"[{service}]")
+        chunks.append(_journal_tail(service, lines=12))
+        chunks.append("")
+    if not chunks:
+        return title, "Tidak ada unit SSHWS yang terpasang."
+    return title, _trim_message("\n".join(chunks).strip())
 
 
 def op_sshws_active_sessions() -> tuple[str, str]:
