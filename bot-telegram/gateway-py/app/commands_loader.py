@@ -25,6 +25,7 @@ class ActionSpec:
     label: str
     mode: str
     confirm: bool
+    dangerous: bool
     modal: ModalSpec | None
 
 
@@ -83,6 +84,7 @@ class CommandCatalog:
                         label=str(raw_action.get("label") or action_id),
                         mode=str(raw_action.get("mode") or "direct").strip().lower(),
                         confirm=bool(raw_action.get("confirm", False)),
+                        dangerous=bool(raw_action.get("dangerous", False)),
                         modal=modal,
                     )
                 )

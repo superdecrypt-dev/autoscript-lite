@@ -113,7 +113,8 @@
                 "placeholder": "contoh: 10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "delete_user",
@@ -139,7 +140,8 @@
                 "placeholder": "contoh: alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "extend_expiry",
@@ -178,7 +180,8 @@
                 "placeholder": "7 atau 2026-12-31"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "list_users",
@@ -301,7 +304,8 @@
                 "placeholder": "contoh: 10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "delete_user",
@@ -320,7 +324,8 @@
                 "placeholder": "contoh: alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "extend_expiry",
@@ -352,7 +357,8 @@
                 "placeholder": "7 atau 2026-12-31"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "reset_password",
@@ -377,7 +383,8 @@
                 "placeholder": "password SSH baru"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "list_users",
@@ -396,7 +403,8 @@
           "label": "Restart SSH WS Stack",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "active_sshws_sessions",
@@ -508,7 +516,8 @@
                 "placeholder": "100"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "reset_quota_used",
@@ -534,7 +543,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "manual_block",
@@ -566,7 +576,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "ip_limit_enable",
@@ -598,7 +609,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_ip_limit",
@@ -630,7 +642,8 @@
                 "placeholder": "2"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "unlock_ip_lock",
@@ -655,7 +668,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_download",
@@ -687,7 +701,8 @@
                 "placeholder": "20"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_upload",
@@ -719,7 +734,8 @@
                 "placeholder": "10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "speed_limit",
@@ -751,7 +767,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         }
       ]
     },
@@ -807,7 +824,8 @@
                 "placeholder": "100"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "reset_quota_used",
@@ -826,7 +844,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "manual_block",
@@ -851,7 +870,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "ip_limit_enable",
@@ -876,7 +896,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_ip_limit",
@@ -901,7 +922,8 @@
                 "placeholder": "2"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "unlock_ip_lock",
@@ -919,7 +941,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_download",
@@ -944,7 +967,8 @@
                 "placeholder": "20"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_upload",
@@ -969,7 +993,8 @@
                 "placeholder": "10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "speed_limit",
@@ -994,7 +1019,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         }
       ]
     },
@@ -1025,7 +1051,8 @@
                 "placeholder": "direct / warp / balancer"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_balancer_strategy",
@@ -1043,13 +1070,15 @@
                 "placeholder": "random / roundRobin / leastPing / leastLoad"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_balancer_selector_auto",
           "label": "Auto Balance Sel",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         },
         {
           "id": "set_balancer_selector",
@@ -1067,7 +1096,8 @@
                 "placeholder": "auto atau direct,warp"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "warp_status",
@@ -1080,7 +1110,8 @@
           "label": "Restart WARP",
           "mode": "direct",
           "style": "secondary",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "set_warp_global_mode",
@@ -1098,7 +1129,8 @@
                 "placeholder": "direct / warp"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_warp_user_mode",
@@ -1130,7 +1162,8 @@
                 "placeholder": "direct / warp / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_warp_inbound_mode",
@@ -1155,7 +1188,8 @@
                 "placeholder": "direct / warp / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_warp_domain_mode",
@@ -1180,7 +1214,8 @@
                 "placeholder": "contoh: domain:openai.com"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "warp_tier_status",
@@ -1193,7 +1228,8 @@
           "label": "Switch Tier Free",
           "mode": "direct",
           "style": "secondary",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "warp_tier_switch_plus",
@@ -1212,14 +1248,16 @@
                 "placeholder": "kosongkan untuk pakai key tersimpan"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "warp_tier_reconnect",
           "label": "Reconnect WARP",
           "mode": "direct",
           "style": "secondary",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "dns_summary",
@@ -1243,7 +1281,8 @@
                 "placeholder": "contoh: 1.1.1.1"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_dns_secondary",
@@ -1261,7 +1300,8 @@
                 "placeholder": "contoh: 8.8.8.8"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_dns_query_strategy",
@@ -1279,13 +1319,15 @@
                 "placeholder": "UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "toggle_dns_cache",
           "label": "Toggle DNS Cache",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         },
         {
           "id": "state_file",
@@ -1317,7 +1359,8 @@
                 "placeholder": "vpn.example.com"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "setup_domain_cloudflare",
@@ -1364,7 +1407,8 @@
                 "placeholder": "on / off (default: off)"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "domain_info",
@@ -1389,7 +1433,8 @@
           "label": "Run Guard Renew",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "nginx_server_name",
@@ -1401,7 +1446,8 @@
           "id": "refresh_account_info",
           "label": "Refresh Accounts",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         }
       ]
     },
@@ -1483,14 +1529,16 @@
                 "placeholder": "kosongkan untuk semua jail"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "restart_fail2ban",
           "label": "Restart Fail2ban",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "sysctl_summary",
@@ -1546,21 +1594,24 @@
           "label": "Restart Xray",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "restart_nginx",
           "label": "Restart Nginx",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "restart_all",
           "label": "Restart All",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "xray_logs",
@@ -1585,7 +1636,8 @@
           "label": "Restart Wireproxy",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "daemon_status",
@@ -1598,7 +1650,8 @@
           "label": "Restart Xray Daemons",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "xray_daemon_logs",
@@ -1617,7 +1670,8 @@
           "label": "Restart SSHWS Stack",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "sshws_diagnostics",
@@ -1698,7 +1752,8 @@
           "label": "Create Backup",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "list_backups",
@@ -1711,13 +1766,15 @@
           "label": "Restore Latest",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "restore_from_upload",
           "label": "Restore Upload",
           "mode": "direct",
-          "style": "danger"
+          "style": "danger",
+          "dangerous": true
         }
       ]
     }

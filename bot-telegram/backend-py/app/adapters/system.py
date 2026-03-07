@@ -1398,6 +1398,25 @@ def _wireproxy_socks_bind_address() -> str:
     return "127.0.0.1:40000"
 
 
+def _normalize_bind_address(raw: str) -> tuple[str, int | None]:
+    text = str(raw or "").strip()
+    if not text:
+        return "", None
+    text = text.split("#", 1)[0].split(";", 1)[0].strip()
+    if not text:
+        return "", None
+    match = re.search(r":([0-9]{1,5})$", text)
+    if not match:
+        return text, None
+    try:
+        port = int(match.group(1))
+    except Exception:
+        return text, None
+    if not (1 <= port <= 65535):
+        return text, None
+    return text, port
+
+
 def _warp_live_tier() -> str:
     if shutil.which("curl") is None:
         return "unknown"
@@ -2236,20 +2255,28 @@ def op_wireproxy_status() -> tuple[str, str]:
         if ok_uptime and uptime.strip():
             lines.append(f"Uptime        : {uptime.strip()}")
 
-    bind_addr = _wireproxy_socks_bind_address()
+    bind_addr_raw = _wireproxy_socks_bind_address()
+    bind_addr, bind_port = _normalize_bind_address(bind_addr_raw)
+    if not bind_addr:
+        bind_addr = bind_addr_raw
+    listen_text = "UNKNOWN (invalid bind address)"
+    if bind_port is not None:
+        listen_text = "LISTENING" if _listener_present(bind_port) else "NOT listening"
     lines.extend(
         [
             f"SOCKS5 bind   : {bind_addr}",
-            f"SOCKS5 listen : {'LISTENING' if _listener_present(int(bind_addr.rsplit(':', 1)[-1])) else 'NOT listening'}",
+            f"SOCKS5 listen : {listen_text}",
         ]
     )
 
-    if shutil.which("curl"):
+    if shutil.which("curl") and bind_port is not None:
         ok_ip, warp_ip = run_cmd(
             ["curl", "-fsSL", "--socks5", bind_addr, "--max-time", "5", "https://api.ipify.org"],
             timeout=12,
         )
         lines.append(f"WARP IP       : {warp_ip.strip() if ok_ip and warp_ip.strip() else 'gagal'}")
+    elif bind_port is None:
+        lines.append("WARP IP       : skip (bind address tidak valid)")
     else:
         lines.append("WARP IP       : curl tidak tersedia")
 

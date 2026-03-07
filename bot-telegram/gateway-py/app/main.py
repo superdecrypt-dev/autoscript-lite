@@ -325,6 +325,8 @@ def _rows_from_buttons(buttons: list[InlineKeyboardButton], per_row: int = BUTTO
 def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
     for menu in runtime.catalog.menus:
+        if not _visible_actions(runtime, menu):
+            continue
         label = f"{menu.id}) {menu.label}"
         buttons.append(InlineKeyboardButton(_short_button_label(label), callback_data=f"m{CALLBACK_SEP}{menu.id}"))
 
@@ -333,19 +335,30 @@ def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _menu_pages(menu: MenuSpec) -> int:
-    total = len(menu.actions)
+def _action_visible(runtime: Runtime, action: ActionSpec) -> bool:
+    if action.dangerous and not runtime.config.enable_dangerous_actions:
+        return False
+    return True
+
+
+def _visible_actions(runtime: Runtime, menu: MenuSpec) -> list[ActionSpec]:
+    return [action for action in menu.actions if _action_visible(runtime, action)]
+
+
+def _menu_pages(runtime: Runtime, menu: MenuSpec) -> int:
+    total = len(_visible_actions(runtime, menu))
     if total <= 0:
         return 1
     return ((total - 1) // ACTIONS_PER_PAGE) + 1
 
 
-def _menu_keyboard(menu: MenuSpec, page: int) -> InlineKeyboardMarkup:
-    total_pages = _menu_pages(menu)
+def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboardMarkup:
+    visible_actions = _visible_actions(runtime, menu)
+    total_pages = _menu_pages(runtime, menu)
     page = max(0, min(page, total_pages - 1))
 
     start = page * ACTIONS_PER_PAGE
-    chunk = menu.actions[start : start + ACTIONS_PER_PAGE]
+    chunk = visible_actions[start : start + ACTIONS_PER_PAGE]
 
     buttons: list[InlineKeyboardButton] = []
     for action in chunk:
@@ -1364,8 +1377,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
             chat_id=chat_id,
             context=context,
-            text=menu_text(menu, 0, _menu_pages(menu)),
-            reply_markup=_menu_keyboard(menu, 0),
+            text=menu_text(menu, 0, _menu_pages(runtime, menu)),
+            reply_markup=_menu_keyboard(runtime, menu, 0),
         )
         return
 
@@ -1570,12 +1583,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if menu is None:
             await query.answer("Menu tidak ditemukan.", show_alert=True)
             return
+        if not _visible_actions(runtime, menu):
+            await query.answer("Tidak ada action yang aktif di menu ini.", show_alert=True)
+            return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
             context=context,
-            text=menu_text(menu, 0, _menu_pages(menu)),
-            reply_markup=_menu_keyboard(menu, 0),
+            text=menu_text(menu, 0, _menu_pages(runtime, menu)),
+            reply_markup=_menu_keyboard(runtime, menu, 0),
         )
         return
 
@@ -1584,17 +1600,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if menu is None:
             await query.answer("Menu tidak ditemukan.", show_alert=True)
             return
+        if not _visible_actions(runtime, menu):
+            await query.answer("Tidak ada action yang aktif di menu ini.", show_alert=True)
+            return
         try:
             page = int(parts[2])
         except ValueError:
             page = 0
-        page = max(0, min(page, _menu_pages(menu) - 1))
+        page = max(0, min(page, _menu_pages(runtime, menu) - 1))
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
             context=context,
-            text=menu_text(menu, page, _menu_pages(menu)),
-            reply_markup=_menu_keyboard(menu, page),
+            text=menu_text(menu, page, _menu_pages(runtime, menu)),
+            reply_markup=_menu_keyboard(runtime, menu, page),
         )
         return
 
@@ -1605,6 +1624,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         action = runtime.catalog.get_action(menu_id, action_id)
         if menu is None or action is None:
             await query.answer("Action tidak ditemukan.", show_alert=True)
+            return
+        if not _action_visible(runtime, action):
+            await query.answer("Action ini sedang nonaktif.", show_alert=True)
             return
 
         _clear_pending(context)
