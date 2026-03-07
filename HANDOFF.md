@@ -12,12 +12,14 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-03-06)
+## Status Operasional Terkini (2026-03-07)
 - Commit terbaru di `main`:
+  - `b7a6522` — `fix(telegram): hide disabled dangerous actions`
+  - `e116d2d` — `feat(telegram): expand bot parity and refresh archive`
+  - `40c2825` — `feat(telegram): sync ssh menu parity and refresh archive`
+  - `aa199df` — `fix sshws qac enforcement and domain sync`
   - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
   - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
-  - `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
-  - `af6aabe` — `feat(telegram): full warp parity and hardening baseline`
 - Perubahan penting terbaru:
   - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
   - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
@@ -38,7 +40,17 @@ Agent AI baru wajib memulai dari konteks di atas.
     - `quota_used`, quota traffic, IP/login limit, dan speed limit saat ini berlaku pada jalur SSHWS
     - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
     - masa aktif dan manual block tetap berlaku pada akun SSH native
-  - Hardening bot + parity Telegram/WARP + dukungan SS multi-user dari rilis 2026-03-02 tetap berlaku.
+  - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:
+    - `Xray Management`
+    - `SSH Management`
+    - `Xray Quota & Access Control`
+    - `SSH Quota & Access Control`
+    - `Security`
+    - `Maintenance`
+  - Action dangerous pada bot Telegram sekarang disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`; callback stale tetap ditolak aman.
+  - Logging gateway Telegram sudah di-hardening agar URL Bot API yang memuat token tidak lagi tercatat di journal baru.
+  - `Wireproxy Status` bot Telegram sudah lebih defensif terhadap `BindAddress` yang diberi komentar atau format manual yang tidak rapi.
+  - Full E2E `run.sh` live sudah pernah lolos dengan domain random pada `vyxara2.web.id`, dan `/etc/xray/domain` kini disinkronkan konsisten oleh `setup.sh` + `manage.sh`.
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile` untuk heredoc `sshws-proxy` -> PASS
@@ -55,10 +67,13 @@ Agent AI baru wajib memulai dari konteks di atas.
 5. Penambahan installer Telegram (`install-telegram-bot.sh`) sebagai pelengkap menu CLI.
 6. Penghapusan jalur transport terdepresiasi untuk menstabilkan skenario domain fronting.
 7. Full parity WARP + hardening baseline bot Telegram.
+8. Split menu bot Telegram antara Xray vs SSH untuk user management dan quota/access control.
+9. Ekspansi parity bot Telegram untuk `SSH`, `Security`, dan `Maintenance`.
+10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSHWS autoscript-stream + runtime hardening loader module sudah commit + push ke `main` (`87b43fb`, `edd9852`).
+- Perubahan SSHWS autoscript-stream, SSHWS QAC enforcement, dan parity/hardening bot Telegram sudah commit + push ke `main` (`87b43fb`, `edd9852`, `aa199df`, `40c2825`, `e116d2d`, `b7a6522`).
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.

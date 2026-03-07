@@ -6,6 +6,7 @@ Bot Telegram ini adalah pelengkap CLI `manage.sh`, berjalan standalone di `/opt/
 - Panel Telegram untuk action yang setara menu operasional `manage.sh`.
 - Tidak menjalankan `manage.sh` secara langsung dari bot.
 - Menggunakan backend API lokal (`backend-py`) + gateway Telegram (`gateway-py`).
+- Fokus parity saat ini mencakup area `Xray`, `SSH`, `Quota & Access Control`, `Security`, dan `Maintenance`.
 
 ## Struktur
 - `backend-py/`: FastAPI service action menu operasional Telegram (status, user, quota, network, domain, speedtest, security, maintenance, traffic analytics, backup/restore).
@@ -26,6 +27,26 @@ Dikelola di `/etc/xray-telegram-bot/bot.env`:
 - `TELEGRAM_MAX_INPUT_LENGTH` (default `128`)
 - `BACKEND_BASE_URL`
 - `COMMANDS_FILE`
+
+## Ringkasan Menu
+Menu bot Telegram saat ini mengikuti struktur operasional CLI pada area inti:
+- `2) Xray Management`
+- `3) SSH Management`
+- `4) Xray Quota & Access Control`
+- `5) SSH Quota & Access Control`
+- `6) Network Controls`
+- `7) Domain Control`
+- `8) Speedtest`
+- `9) Security`
+- `10) Maintenance`
+- `11) Traffic Analytics`
+- `12) Backup/Restore`
+
+Catatan perilaku:
+- Action berstatus dangerous disembunyikan otomatis saat `ENABLE_DANGEROUS_ACTIONS=false`.
+- Callback stale untuk action dangerous tetap ditolak aman oleh gateway.
+- Menu `3) SSH Management` sudah mencakup `SSH WS Service Status`, `Restart SSH WS Stack`, dan `Active SSHWS Sessions`.
+- Menu `9) Security` dan `10) Maintenance` kini lebih dekat ke CLI untuk fail2ban, hardening, daemon, `wireproxy`, log, dan `SSHWS diagnostics`.
 
 ## Backup/Restore (Menu 10)
 Fitur `10) Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`.
@@ -56,3 +77,7 @@ Catatan penting:
 - Installer menu: `sudo /usr/local/bin/install-telegram-bot menu`
 - Status: `sudo /usr/local/bin/install-telegram-bot status`
 - Smoke: `sudo /opt/bot-telegram/scripts/smoke-test.sh`
+
+## Hardening Tambahan
+- Gateway menyensor token sensitif pada log startup/runtime agar URL Bot API tidak tercatat mentah di journal baru.
+- `Wireproxy Status` dibuat lebih defensif terhadap `BindAddress` yang diberi komentar atau format tidak rapi, sehingga action read-only tidak mudah berubah menjadi error backend.
