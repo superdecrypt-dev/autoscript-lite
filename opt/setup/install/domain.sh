@@ -25,6 +25,15 @@ snapshot_conflicting_services_active() {
   done
 }
 
+rand_email() {
+  local user part
+  user="$(rand_str 10)"
+  part="$(rand_str 6)"
+  local domains=("gmail.com" "outlook.com" "proton.me" "icloud.com" "yahoo.com")
+  local idx=$(( RANDOM % ${#domains[@]} ))
+  echo "${user}.${part}@${domains[$idx]}"
+}
+
 get_public_ipv4() {
   local ip=""
   ip="$(curl -4fsSL https://api.ipify.org 2>/dev/null || true)"
@@ -444,6 +453,7 @@ domain_menu_v2() {
 }
 
 install_acme_and_issue_cert() {
+  local email=""
   if [[ "${ACME_CERT_MODE}" != "dns_cf_wildcard" ]]; then
     snapshot_conflicting_services_active
     _ACME_RESTORE_NEEDED=1
@@ -458,6 +468,8 @@ install_acme_and_issue_cert() {
     ok "acme.sh sudah ada."
   else
     ok "Install acme.sh..."
+    email="$(rand_email)"
+    ok "Email acme.sh (acak): ${email}"
     local acme_tarball acme_tmpdir acme_dns_hook
     acme_tarball="$(mktemp)"
     acme_tmpdir="$(mktemp -d)"
@@ -471,7 +483,7 @@ install_acme_and_issue_cert() {
     export HOME=/root
     (
       cd "${acme_tmpdir}" || exit 1
-      sh ./acme.sh --install --home /root/.acme.sh
+      sh ./acme.sh --install --home /root/.acme.sh --accountemail "${email}"
     ) >/dev/null || {
       rm -f "${acme_tarball}" "${acme_dns_hook}" >/dev/null 2>&1 || true
       rm -rf "${acme_tmpdir}" >/dev/null 2>&1 || true
@@ -482,6 +494,7 @@ install_acme_and_issue_cert() {
   fi
 
   export PATH="/root/.acme.sh:$PATH"
+  /root/.acme.sh/acme.sh --set-default-ca --server "${ACME_DEFAULT_CA}" >/dev/null 2>&1 || true
 
   if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
     ok "Issue wildcard certificate untuk $DOMAIN via dns_cf ..."
