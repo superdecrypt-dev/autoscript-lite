@@ -2173,7 +2173,7 @@ server {
   ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
 
   # --- SSH WebSocket ---
-  location = / {
+  location ~ "^/[A-Fa-f0-9]{32,64}$" {
     if (\$http_upgrade !~* websocket) { return 404; }
 
     proxy_redirect off;
@@ -2405,6 +2405,7 @@ UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
 ATTRIBUTION_WARMUP_ATTEMPTS = 6
 ATTRIBUTION_WARMUP_DELAY_SEC = 0.05
 ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC = 0.1
+SSHWS_TOKEN_RE = re.compile(r"^[a-f0-9]{32,64}$")
 
 
 class HandshakeError(Exception):
@@ -2462,6 +2463,31 @@ def norm_user(v):
   if "@" in s:
     s = s.split("@", 1)[0]
   return s
+
+
+def normalize_token(v):
+  s = str(v or "").strip().lower()
+  if SSHWS_TOKEN_RE.fullmatch(s):
+    return s
+  return ""
+
+
+def extract_token_from_path(path, expected_prefix):
+  raw_path = str(path or "/").split("?", 1)[0].split("#", 1)[0] or "/"
+  prefix = str(expected_prefix or "/").split("?", 1)[0].split("#", 1)[0] or "/"
+  prefix = prefix.rstrip("/") or "/"
+  if prefix == "/":
+    suffix = raw_path.lstrip("/")
+    if not suffix or "/" in suffix:
+      return ""
+    return normalize_token(suffix)
+  wanted = prefix + "/"
+  if not raw_path.startswith(wanted):
+    return ""
+  suffix = raw_path[len(wanted):].strip("/")
+  if not suffix or "/" in suffix:
+    return ""
+  return normalize_token(suffix)
 
 
 def normalize_ip(v):
@@ -2726,6 +2752,23 @@ class QuotaManager:
       "speed_down_bps": int(speed_down * 125000.0) if speed_enabled else 0,
       "speed_up_bps": int(speed_up * 125000.0) if speed_enabled else 0,
     }
+
+  async def resolve_token(self, token):
+    tok = normalize_token(token)
+    if not tok or not self.state_root.is_dir():
+      return ""
+    try:
+      entries = sorted(self.state_root.glob("*@ssh.json"), key=lambda p: p.name.lower())
+    except Exception:
+      return ""
+    for qf in entries:
+      payload = self._load_json(qf)
+      if normalize_token(payload.get("sshws_token")) != tok:
+        continue
+      user = norm_user(payload.get("username") or qf.stem)
+      if user:
+        return user
+    return ""
 
   async def get_policy(self, username):
     user = norm_user(username)
@@ -3034,7 +3077,7 @@ async def _read_handshake(reader, expected_path, timeout_sec):
 
   if headers.get("upgrade", "").lower() != "websocket":
     raise HandshakeError(400, "Bad Request")
-  return headers
+  return headers, path_only
 
 
 async def _send_handshake_ok(writer):
@@ -3109,7 +3152,7 @@ async def _backend_to_client(backend_reader, client_writer, ctx, limiter, args, 
 
 async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limiter):
   try:
-    headers = await _read_handshake(ws_reader, args.path, args.handshake_timeout)
+    headers, path_only = await _read_handshake(ws_reader, args.path, args.handshake_timeout)
   except HandshakeError as exc:
     await _send_http_error(ws_writer, exc.code, exc.reason)
     ws_writer.close()
@@ -3119,6 +3162,56 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     await _send_http_error(ws_writer, 400, "Bad Request")
     ws_writer.close()
     await ws_writer.wait_closed()
+    return
+
+  token = extract_token_from_path(path_only, args.path)
+  if not token:
+    try:
+      await _send_http_error(ws_writer, 401, "Unauthorized")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+    return
+
+  username = await quota_mgr.resolve_token(token)
+  if not username:
+    try:
+      await _send_http_error(ws_writer, 403, "Forbidden")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+    return
+
+  policy = await quota_mgr.get_policy(username)
+  if not policy:
+    try:
+      await _send_http_error(ws_writer, 403, "Forbidden")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+    return
+  if policy.get("blocked"):
+    try:
+      await _send_http_error(ws_writer, 403, "Account Locked")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
     return
 
   backend_writer = None
@@ -3135,7 +3228,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root, client_ip)
     await registry.register(ctx)
     try:
-      ctx.write_runtime_session()
+      await ctx.assign_username(username)
     except Exception:
       pass
   except Exception:
@@ -3152,23 +3245,23 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
 
   try:
     await _send_handshake_ok(ws_writer)
-    # Warm-up attribution singkat setelah 101:
-    # target utamanya agar policy speed bisa aktif sejak awal sesi, termasuk pada klien fronted/proxy.
-    try:
-      await _resolve_ctx_username_with_retry(
-        args,
-        registry,
-        ctx,
-        attempts=ATTRIBUTION_WARMUP_ATTEMPTS,
-        delay_sec=ATTRIBUTION_WARMUP_DELAY_SEC,
-        scan_timeout_sec=ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC,
+    if not await ctx.username():
+      # Fallback ini hanya untuk kompatibilitas jika ada sesi tanpa token teratribusi,
+      # tetapi jalur normal SSHWS sekarang sudah menetapkan username dari token sejak awal.
+      try:
+        await _resolve_ctx_username_with_retry(
+          args,
+          registry,
+          ctx,
+          attempts=ATTRIBUTION_WARMUP_ATTEMPTS,
+          delay_sec=ATTRIBUTION_WARMUP_DELAY_SEC,
+          scan_timeout_sec=ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC,
+        )
+      except Exception:
+        pass
+      resolver_task = asyncio.create_task(
+        _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05, scan_timeout_sec=0.2)
       )
-    except Exception:
-      pass
-    # Resolver lanjutan tetap dijalankan async sebagai fallback untuk sesi yang login/auth-nya lebih lambat.
-    resolver_task = asyncio.create_task(
-      _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05, scan_timeout_sec=0.2)
-    )
     pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter, args, registry))
     pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter, args, registry))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
@@ -3376,6 +3469,8 @@ import json
 import os
 import pathlib
 import pwd
+import re
+import secrets
 import subprocess
 import tempfile
 
@@ -3595,6 +3690,9 @@ def normalize_payload(path):
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
+  token = str(payload.get("sshws_token") or "").strip().lower()
+  if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+    token = secrets.token_hex(16)
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
   if quota_limit < 0:
@@ -3622,6 +3720,7 @@ def normalize_payload(path):
   payload["username"] = username
   payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
   payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+  payload["sshws_token"] = token
   payload["quota_limit"] = quota_limit
   payload["quota_unit"] = unit
   payload["quota_used"] = quota_used

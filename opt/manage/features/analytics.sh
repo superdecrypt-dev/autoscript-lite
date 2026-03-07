@@ -1478,6 +1478,7 @@ sshws_probe_result_disp() {
       case "${part1:-0}" in
         101) echo "OK (HTTP 101 ${part2:-})" ;;
         301|302|307|308) echo "WARN (HTTP ${part1} ${part2:-redirect})" ;;
+        401|403) echo "WARN (HTTP ${part1} ${part2:-token-required})" ;;
         *) echo "FAIL (HTTP ${part1:-0} ${part2:-})" ;;
       esac
       ;;
@@ -1522,12 +1523,13 @@ sshws_diagnostics_menu() {
     echo "10) Maintenance > SSH WS Diagnostics"
     hr
 
-    local dropbear_port stunnel_port proxy_port domain
+    local dropbear_port stunnel_port proxy_port domain probe_path
     local proxy_probe tls443_probe http80_probe dropbear_probe stunnel_probe
     dropbear_port="$(sshws_detect_dropbear_port)"
     stunnel_port="$(sshws_detect_stunnel_port)"
     proxy_port="$(sshws_detect_proxy_port)"
     domain="$(detect_domain)"
+    probe_path="$(sshws_probe_path_pick)"
 
     echo "Services:"
     if svc_exists "${SSHWS_DROPBEAR_SERVICE}"; then
@@ -1552,13 +1554,14 @@ sshws_diagnostics_menu() {
     printf "  %-16s : 127.0.0.1:%s\n" "stunnel" "${stunnel_port}"
     printf "  %-16s : 127.0.0.1:%s\n" "ws proxy" "${proxy_port}"
     printf "  %-16s : %s\n" "domain" "${domain:-"-"}"
+    printf "  %-16s : %s\n" "probe path" "${probe_path}"
 
     hr
     echo "Local Probes:"
     dropbear_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${dropbear_port}" "tcp")"
     printf "  %-16s : %s\n" "dropbear tcp" "$(sshws_probe_result_disp "${dropbear_probe}")"
 
-    proxy_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "${proxy_port}" "/" "127.0.0.1:${proxy_port}" "off" "")"
+    proxy_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "${proxy_port}" "${probe_path}" "127.0.0.1:${proxy_port}" "off" "")"
     printf "  %-16s : %s\n" "proxy ws" "$(sshws_probe_result_disp "${proxy_probe}")"
 
     if svc_exists "${SSHWS_STUNNEL_SERVICE}"; then
@@ -1571,13 +1574,13 @@ sshws_diagnostics_menu() {
     hr
     echo "Public Path Probes:"
     if have_cmd ss && ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
-      http80_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "80" "/" "${domain:-127.0.0.1}" "off" "")"
+      http80_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "80" "${probe_path}" "${domain:-127.0.0.1}" "off" "")"
       printf "  %-16s : %s\n" "nginx :80" "$(sshws_probe_result_disp "${http80_probe}")"
     else
       printf "  %-16s : %s\n" "nginx :80" "SKIP (not listening)"
     fi
     if [[ -n "${domain}" ]] && have_cmd ss && ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
-      tls443_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "443" "/" "${domain}" "on" "${domain}")"
+      tls443_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "443" "${probe_path}" "${domain}" "on" "${domain}")"
       printf "  %-16s : %s\n" "nginx :443" "$(sshws_probe_result_disp "${tls443_probe}")"
     else
       printf "  %-16s : %s\n" "nginx :443" "SKIP (domain/443 unavailable)"
@@ -1588,6 +1591,7 @@ sshws_diagnostics_menu() {
     echo "  - HTTP 101 menandakan chain SSHWS sehat."
     echo "  - HTTP 502 biasanya berarti backend internal belum siap."
     echo "  - HTTP 301/308 pada port 80 normal jika force-HTTPS aktif."
+    echo "  - HTTP 401/403 biasanya berarti path/token SSHWS belum cocok."
     hr
     echo "  1) Refresh"
     echo "  2) Combined SSHWS Logs"
@@ -1741,6 +1745,207 @@ ssh_account_info_file() {
   printf '%s/%s@ssh.txt\n' "${SSH_ACCOUNT_DIR}" "${username}"
 }
 
+sshws_path_prefix() {
+  printf '\n'
+}
+
+sshws_token_valid() {
+  local token="${1:-}"
+  [[ "${token}" =~ ^[A-Fa-f0-9]{32,64}$ ]]
+}
+
+sshws_path_from_token() {
+  local token="${1:-}"
+  if ! sshws_token_valid "${token}"; then
+    return 1
+  fi
+  local prefix
+  prefix="$(sshws_path_prefix)"
+  if [[ -n "${prefix}" ]]; then
+    printf '%s/%s\n' "${prefix}" "${token}"
+  else
+    printf '/%s\n' "${token}"
+  fi
+}
+
+ssh_user_state_token_get() {
+  local username="${1:-}"
+  local state_file
+  ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_file "${username}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json
+import re
+import sys
+
+path = sys.argv[1]
+token = ""
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+  if isinstance(data, dict):
+    token = str(data.get("sshws_token") or "").strip()
+except Exception:
+  token = ""
+
+if re.fullmatch(r"[A-Fa-f0-9]{32,64}", token):
+  print(token.lower())
+else:
+  print("")
+PY
+}
+
+ssh_user_state_ensure_token() {
+  local username="${1:-}"
+  local state_file tmp lock_file
+  ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_file "${username}")"
+  [[ -f "${state_file}" ]] || return 1
+  ssh_qac_lock_prepare
+  lock_file="$(ssh_qac_lock_file)"
+  need_python3
+
+  if have_cmd flock; then
+    (
+      flock -x 200
+      python3 - <<'PY' "${state_file}"
+import json
+import os
+import re
+import secrets
+import sys
+import tempfile
+
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+  if not isinstance(payload, dict):
+    payload = {}
+except Exception:
+  payload = {}
+
+token = str(payload.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+  token = secrets.token_hex(16)
+  payload["sshws_token"] = token
+  dirn = os.path.dirname(path) or "."
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(payload, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+print(token)
+PY
+    ) 200>"${lock_file}"
+    return $?
+  fi
+
+  python3 - <<'PY' "${state_file}"
+import json
+import os
+import re
+import secrets
+import sys
+import tempfile
+
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+  if not isinstance(payload, dict):
+    payload = {}
+except Exception:
+  payload = {}
+
+token = str(payload.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+  token = secrets.token_hex(16)
+  payload["sshws_token"] = token
+  dirn = os.path.dirname(path) or "."
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(payload, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+print(token)
+PY
+}
+
+sshws_probe_path_pick() {
+  ssh_state_dirs_prepare
+  need_python3
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" 2>/dev/null || true
+import json
+import os
+import re
+import sys
+
+root = sys.argv[1]
+prefix = ""
+token = ""
+if os.path.isdir(root):
+  for name in sorted(os.listdir(root), key=str.lower):
+    if not name.endswith(".json"):
+      continue
+    path = os.path.join(root, name)
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+      if not isinstance(payload, dict):
+        continue
+    except Exception:
+      continue
+    candidate = str(payload.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{32,64}", candidate):
+      token = candidate
+      break
+if token:
+  if prefix:
+    print(f"{prefix}/{token}")
+  else:
+    print(f"/{token}")
+else:
+  if prefix:
+    print(f"{prefix}/diagnostic-probe")
+  else:
+    print("/diagnostic-probe")
+PY
+}
+
 ssh_user_state_created_at_get() {
   local username="${1:-}"
   local state_file
@@ -1781,6 +1986,8 @@ ssh_user_state_write() {
 import datetime
 import json
 import os
+import re
+import secrets
 import sys
 
 state_file, username, created_at, expired_at = sys.argv[1:5]
@@ -1869,12 +2076,16 @@ if not created:
   created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
+token = str(payload.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+  token = secrets.token_hex(16)
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
 payload["protocol"] = "ssh"
 payload["created_at"] = created
 payload["expired_at"] = expired
+payload["sshws_token"] = token
 payload["quota_limit"] = quota_limit
 payload["quota_unit"] = unit
 payload["quota_used"] = quota_used
@@ -1915,6 +2126,8 @@ PY
 import datetime
 import json
 import os
+import re
+import secrets
 import sys
 
 state_file, username, created_at, expired_at = sys.argv[1:5]
@@ -2003,12 +2216,16 @@ if not created:
   created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
+token = str(payload.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+  token = secrets.token_hex(16)
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
 payload["protocol"] = "ssh"
 payload["created_at"] = created
 payload["expired_at"] = expired
+payload["sshws_token"] = token
 payload["quota_limit"] = quota_limit
 payload["quota_unit"] = unit
 payload["quota_used"] = quota_used
@@ -2092,7 +2309,7 @@ ssh_qac_print_scope_notice() {
 }
 
 ssh_account_info_write() {
-  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up
+  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token
   local username="${1:-}"
   local password_raw="${2:-}"
   local password_mode password_out
@@ -2104,6 +2321,7 @@ ssh_account_info_write() {
   local speed_enabled="${8:-false}"
   local speed_down="${9:-0}"
   local speed_up="${10:-0}"
+  local sshws_token="${11:-}"
 
   ssh_state_dirs_prepare
   password_mode="$(ssh_account_info_password_mode)"
@@ -2114,7 +2332,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note
+  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_token_disp
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -2177,6 +2395,14 @@ PY
 
   traffic_scope_disp="$(ssh_qac_traffic_scope_label)"
   traffic_scope_note="$(ssh_qac_traffic_scope_line)"
+  if sshws_token_valid "${sshws_token}"; then
+    sshws_token="${sshws_token,,}"
+    sshws_token_disp="${sshws_token}"
+    sshws_path="$(sshws_path_from_token "${sshws_token}")"
+  else
+    sshws_token_disp="-"
+    sshws_path="-"
+  fi
 
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
@@ -2190,15 +2416,23 @@ Valid Until : ${valid_until}
 Created     : ${created_at}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
+SSHWS Token : ${sshws_token_disp}
+SSHWS Path  : ${sshws_path}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}
 
 Standard Payload:
 Payload WSS:
-    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]
+    GET ${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
 
 Payload WS:
-    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]
+    GET ${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
+
+Payload SNI+WS+Proxy:
+    GET wss://[host]${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+
+Catatan:
+    Path SSHWS wajib memakai token per-user di root path. Payload lama ke path / tanpa token tidak dipakai lagi.
 EOF
   then
     return 1
@@ -2215,7 +2449,7 @@ ssh_account_info_refresh_from_state() {
   qf="$(ssh_user_state_file "${username}")"
   [[ -f "${qf}" ]] || return 1
 
-  local fields quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up password
+  local fields quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token password
   need_python3
   fields="$(python3 - <<'PY' "${qf}"
 import json
@@ -2276,17 +2510,22 @@ print("|".join([
   tb(s.get("speed_limit_enabled")),
   fm(max(0.0, tf(s.get("speed_down_mbit"), 0.0))),
   fm(max(0.0, tf(s.get("speed_up_mbit"), 0.0))),
+  str(d.get("sshws_token") or "").strip().lower(),
 ]))
 PY
 )"
-  IFS='|' read -r quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up <<<"${fields}"
+  IFS='|' read -r quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token <<<"${fields}"
 
   password="${password_override}"
   if [[ -z "${password}" ]]; then
     password="$(ssh_account_info_password_get "${username}")"
   fi
 
-  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+  if ! sshws_token_valid "${sshws_token}"; then
+    sshws_token="$(ssh_user_state_ensure_token "${username}" 2>/dev/null || true)"
+  fi
+
+  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "${sshws_token}"
 }
 
 ssh_account_info_refresh_warn() {
@@ -2775,7 +3014,7 @@ ssh_add_user_menu() {
   fi
 
   ssh_qac_enforce_now_warn "${username}" || true
-  if ! ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"; then
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
     ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info."
     pause
     return 0
@@ -4134,6 +4373,8 @@ import fcntl
 import json
 import os
 import pathlib
+import re
+import secrets
 import sys
 import tempfile
 
@@ -4277,12 +4518,16 @@ if ip_limit < 0:
 unit = str(payload.get("quota_unit") or "binary").strip().lower()
 if unit not in ("binary", "decimal"):
   unit = "binary"
+token = str(payload.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[a-f0-9]{32,64}", token):
+  token = secrets.token_hex(16)
 
 payload["managed_by"] = "autoscript-manage"
 payload["protocol"] = "ssh"
 payload["username"] = norm_user(payload.get("username") or username_fallback) or username_fallback
 payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
 payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+payload["sshws_token"] = token
 payload["quota_limit"] = quota_limit
 payload["quota_unit"] = unit
 payload["quota_used"] = quota_used
