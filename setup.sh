@@ -2402,6 +2402,9 @@ QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
 UNASSIGNED_RESOLVE_BURST_BYTES = 4096
 UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
+ATTRIBUTION_WARMUP_ATTEMPTS = 6
+ATTRIBUTION_WARMUP_DELAY_SEC = 0.05
+ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC = 0.1
 
 
 class HandshakeError(Exception):
@@ -3149,7 +3152,20 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
 
   try:
     await _send_handshake_ok(ws_writer)
-    # Resolve username dijalankan async agar handshake ke klien tidak tertahan scan sesi.
+    # Warm-up attribution singkat setelah 101:
+    # target utamanya agar policy speed bisa aktif sejak awal sesi, termasuk pada klien fronted/proxy.
+    try:
+      await _resolve_ctx_username_with_retry(
+        args,
+        registry,
+        ctx,
+        attempts=ATTRIBUTION_WARMUP_ATTEMPTS,
+        delay_sec=ATTRIBUTION_WARMUP_DELAY_SEC,
+        scan_timeout_sec=ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC,
+      )
+    except Exception:
+      pass
+    # Resolver lanjutan tetap dijalankan async sebagai fallback untuk sesi yang login/auth-nya lebih lambat.
     resolver_task = asyncio.create_task(
       _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05, scan_timeout_sec=0.2)
     )
