@@ -830,13 +830,10 @@ ssh_account_info_compat_needs_refresh() {
     if [[ ! -f "${acc_file}" ]]; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Token[[:space:]]*:[[:space:]]*[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSHWS[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]+\(token:[[:space:]]*[A-Fa-f0-9]{10}\)[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/([^[:space:]]+/)?[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
-      return 0
-    fi
-    if ! grep -Eq '^SSHWS Alt Path[[:space:]]*:[[:space:]]*/[^[:space:]]+/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSHWS Alt[[:space:]]*:[[:space:]]*/[^[:space:]]+/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)

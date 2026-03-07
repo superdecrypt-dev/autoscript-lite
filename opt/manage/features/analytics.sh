@@ -1678,12 +1678,12 @@ ssh_qac_lock_prepare() {
 }
 
 ssh_account_info_password_mode() {
-  case "${SSH_ACCOUNT_INFO_STORE_PASSWORD:-0}" in
-    1|true|yes|on|y)
-      echo "store"
+  case "${SSH_ACCOUNT_INFO_STORE_PASSWORD:-1}" in
+    0|false|no|off|n)
+      echo "mask"
       ;;
     *)
-      echo "mask"
+      echo "store"
       ;;
   esac
 }
@@ -2477,7 +2477,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_token_disp
+  local acc_file domain ip quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_token_disp sshws_main_disp
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -2499,6 +2499,27 @@ except Exception:
 if b < 0:
   b = 0
 print(f"{fmt(b/(1024**3))} GB")
+PY
+)"
+
+  created_disp="$(python3 - <<'PY' "${created_at}"
+import sys
+from datetime import datetime
+v = (sys.argv[1] or "").strip()
+if not v:
+  print(datetime.utcnow().strftime("%Y-%m-%d"))
+  raise SystemExit(0)
+for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+  try:
+    dt = datetime.strptime(v[:len(fmt)], fmt)
+    print(dt.strftime("%Y-%m-%d"))
+    raise SystemExit(0)
+  except Exception:
+    pass
+if len(v) >= 10 and v[4:5] == "-" and v[7:8] == "-":
+  print(v[:10])
+else:
+  print(v)
 PY
 )"
 
@@ -2545,10 +2566,12 @@ PY
     sshws_token_disp="${sshws_token}"
     sshws_path="$(sshws_path_from_token "${sshws_token}")"
     sshws_alt_path="$(sshws_alt_path_from_token "${sshws_token}" 2>/dev/null || true)"
+    sshws_main_disp="${sshws_path} (token: ${sshws_token_disp})"
   else
     sshws_token_disp="-"
     sshws_path="-"
     sshws_alt_path="-"
+    sshws_main_disp="-"
   fi
 
   if ! cat > "${acc_file}" <<EOF
@@ -2560,12 +2583,11 @@ Password    : ${password_out}
 Quota Limit : ${quota_limit_disp}
 Expired     : ${expired_disp}
 Valid Until : ${valid_until}
-Created     : ${created_at}
+Created     : ${created_disp}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
-SSHWS Token : ${sshws_token_disp}
-SSHWS Path  : ${sshws_path}
-SSHWS Alt Path : ${sshws_alt_path}
+SSHWS       : ${sshws_main_disp}
+SSHWS Alt   : ${sshws_alt_path}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}
 

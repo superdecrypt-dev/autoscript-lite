@@ -35,7 +35,7 @@ SSHWS_PROXY_BIN = Path("/usr/local/bin/sshws-proxy")
 SSHWS_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
 SSHWS_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
-SSH_ACCOUNT_INFO_STORE_PASSWORD = os.getenv("SSH_ACCOUNT_INFO_STORE_PASSWORD", "0").strip().lower() in {
+SSH_ACCOUNT_INFO_STORE_PASSWORD = os.getenv("SSH_ACCOUNT_INFO_STORE_PASSWORD", "1").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -843,6 +843,7 @@ def _ssh_write_account_info(
     status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
     account_file = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
     created_at = str(quota_payload.get("created_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    created_disp = created_at[:10] if len(created_at) >= 10 else datetime.utcnow().strftime("%Y-%m-%d")
     expired_at = str(quota_payload.get("expired_at") or "-").strip()[:10] or "-"
     quota_limit = max(0, _to_int(quota_payload.get("quota_limit"), 0))
     ip_enabled = bool(status.get("ip_limit_enabled"))
@@ -850,6 +851,15 @@ def _ssh_write_account_info(
     speed_enabled = bool(status.get("speed_limit_enabled"))
     speed_down = max(0.0, _to_float(status.get("speed_down_mbit"), 0.0))
     speed_up = max(0.0, _to_float(status.get("speed_up_mbit"), 0.0))
+    sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
+        sshws_path = f"/{sshws_token}"
+        sshws_alt_path = f"/bebas/{sshws_token}"
+        sshws_main = f"{sshws_path} (token: {sshws_token})"
+    else:
+        sshws_path = "-"
+        sshws_alt_path = "-"
+        sshws_main = "-"
     domain = _detect_domain() or "-"
     ip = _detect_public_ipv4() or "-"
 
@@ -863,18 +873,29 @@ def _ssh_write_account_info(
             f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
             f"Expired     : {_ssh_expired_display(expired_at)}",
             f"Valid Until : {expired_at}",
-            f"Created     : {created_at}",
+            f"Created     : {created_disp}",
             f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
             f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
+            f"SSHWS       : {sshws_main}",
+            f"SSHWS Alt   : {sshws_alt_path}",
             f"Traffic Scope : {_ssh_traffic_scope_label()}",
             f"Traffic Note  : {_ssh_traffic_scope_note()}",
             "",
             "Standard Payload:",
             "Payload WSS:",
-            "    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]",
+            f"    GET {sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]",
             "",
             "Payload WS:",
-            "    GET / HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Version: 13[crlf]Sec-WebSocket-Key: [sec_key_base64][crlf][crlf]",
+            f"    GET {sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]",
+            "",
+            "Payload WS (Prefixed):",
+            f"    GET {sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
+            "",
+            "Payload SNI+WS+Proxy:",
+            f"    GET wss://[host]{sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
+            "",
+            "Payload SNI+WS+Proxy (Prefixed):",
+            f"    GET wss://[host]{sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
             "",
         ]
     )
