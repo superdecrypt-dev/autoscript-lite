@@ -40,6 +40,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - Operasional akun Xray dan SSH dari satu menu
 - QAC untuk Xray dan SSHWS
 - SSH WebSocket di `80/443`
+- SSHWS token path per-user: `/<token>` atau `/<bebas>/<token>`
+- SSHWS QAC memakai runtime session tracking aktif untuk quota, speed, dan IP/Login limit
 - Bot Discord dan Telegram standalone
 
 ## Bot

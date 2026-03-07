@@ -12,8 +12,9 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-03-07)
+## Status Operasional Terkini (2026-03-08)
 - Commit terbaru di `main`:
+  - `9542703` — `fix(sshws): harden admission and session tracking`
   - `b7a6522` — `fix(telegram): hide disabled dangerous actions`
   - `e116d2d` — `feat(telegram): expand bot parity and refresh archive`
   - `40c2825` — `feat(telegram): sync ssh menu parity and refresh archive`
@@ -23,13 +24,20 @@ Agent AI baru wajib memulai dari konteks di atas.
 - Perubahan penting terbaru:
   - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
   - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
+  - SSHWS kini memakai token path per-user 10 hex chars:
+    - `/<token>`
+    - `/<bebas>/<token>`
+    - path tanpa token tidak dipakai lagi
   - SSHWS handshake kini fail-close:
+    - path tanpa token -> `401 Unauthorized`
+    - token tidak dikenal -> `403 Forbidden`
     - backend internal down -> `502 Bad Gateway`
-    - backend internal ready -> `101 Switching Protocols`
-  - Normalisasi request-target SSHWS mendukung:
-    - `/`
-    - `/?ed=...`
-    - `wss://host/path?...`
+    - token valid + backend ready -> `101 Switching Protocols`
+  - QAC SSHWS terbaru:
+    - quota dan speed limit menempel ke user dari awal lewat token path
+    - `IP/Login limit` sekarang dicek sebelum `101`, bukan hanya menunggu timer enforcer
+    - active session SSHWS dihitung dari runtime session files
+    - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
   - `manage.sh` module loader di-hardening:
     - source modul dipilih hanya jika `trusted + lengkap` (semua modul wajib tersedia)
     - urutan source: `/opt/manage` -> `/opt/autoscript/opt/manage` -> local repo `opt/manage`
@@ -53,11 +61,13 @@ Agent AI baru wajib memulai dari konteks di atas.
   - Full E2E `run.sh` live sudah pernah lolos dengan domain random pada `vyxara2.web.id`, dan `/etc/xray/domain` kini disinkronkan konsisten oleh `setup.sh` + `manage.sh`.
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-  - `python3 -m py_compile` untuk heredoc `sshws-proxy` -> PASS
+  - `python3 -m py_compile` untuk heredoc `sshws-proxy` dan `sshws-qac-enforcer` -> PASS
   - `printf "0\n" | timeout 20 bash manage.sh` -> PASS
   - runtime SSHWS:
+    - path tanpa token -> `HTTP/1.1 401 Unauthorized`
+    - token tidak valid -> `HTTP/1.1 403 Forbidden`
     - backend down -> `HTTP/1.1 502 Bad Gateway`
-    - backend up -> `HTTP/1.1 101 Switching Protocols`
+    - token valid + backend up -> `HTTP/1.1 101 Switching Protocols`
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
@@ -70,10 +80,11 @@ Agent AI baru wajib memulai dari konteks di atas.
 8. Split menu bot Telegram antara Xray vs SSH untuk user management dan quota/access control.
 9. Ekspansi parity bot Telegram untuk `SSH`, `Security`, dan `Maintenance`.
 10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
+11. SSHWS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSHWS autoscript-stream, SSHWS QAC enforcement, dan parity/hardening bot Telegram sudah commit + push ke `main` (`87b43fb`, `edd9852`, `aa199df`, `40c2825`, `e116d2d`, `b7a6522`).
+- Perubahan SSHWS autoscript-stream, token-path SSHWS, SSHWS QAC enforcement, dan parity/hardening bot Telegram sudah commit + push ke `main` (`87b43fb`, `edd9852`, `aa199df`, `40c2825`, `e116d2d`, `b7a6522`, `9542703`).
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.

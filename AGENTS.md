@@ -55,33 +55,51 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Bot Telegram juga dijaga standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh alur CLI.
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
-- SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib) dengan fail-close `502` jika backend internal tidak siap.
+- SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib).
+- Jalur SSHWS resmi sekarang wajib token path per-user:
+  - `/<token>`
+  - `/<bebas>/<token>`
+- Fail-close SSHWS yang harus dipertahankan:
+  - tanpa token -> `401`
+  - token tidak dikenal -> `403`
+  - backend internal tidak siap -> `502`
+  - token valid + backend siap -> `101`
 - Baseline audit SSHWS: pertahankan konsep ini sebagai desain resmi; referensi konsep perilaku: `https://github.com/nanotechid/supreme` (tanpa wajib meniru penamaan/struktur repo referensi).
 - Scope enforcement SSH saat ini harus dianggap by design:
   - `quota_used`, quota traffic, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS.
   - Login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC.
   - Masa aktif akun dan manual block tetap berlaku pada SSH native.
+- QAC SSHWS terbaru yang perlu dipertahankan:
+  - identitas user ditentukan dari token path, bukan infer sesi login
+  - `IP/Login limit` dicek sebelum `101`
+  - active session dibaca dari runtime session files SSHWS
+  - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.
 
-## Aktivitas Terkini (Update 2026-03-06)
-- Fokus sprint terbaru: stabilisasi runtime SSHWS + hardening module loader `manage.sh` + sinkronisasi dokumentasi.
+## Aktivitas Terkini (Update 2026-03-08)
+- Fokus sprint terbaru: hardening admission/session tracking SSHWS + sinkronisasi dokumentasi + parity bot Telegram.
 - Perubahan besar yang sudah dilalui:
   - SSHWS berpindah ke mode autoscript-stream penuh untuk kompatibilitas payload klien.
-  - Guard runtime SSHWS: backend down -> `502 Bad Gateway`, backend up -> `101 Switching Protocols`.
+  - SSHWS sekarang memakai token path per-user `/<token>` dan `/<bebas>/<token>`.
+  - Guard runtime SSHWS: tanpa token -> `401`, token tidak valid -> `403`, backend down -> `502`, token valid -> `101`.
   - `Add SSH User` kini wajib input masa aktif (hari) dan mendukung `0` sebagai `back`.
   - Resolver source modul `manage.sh` di-hardening dengan validasi `trusted + lengkap`.
-  - Path normalisasi handshake SSHWS kini kompatibel untuk `/`, `/?ed=...`, dan `wss://host/path?...`.
+  - QAC SSHWS sekarang lebih ketat:
+    - user resolve dari token path
+    - `IP/Login limit` dicek sebelum handshake sukses
+    - active session memakai runtime session files dengan heartbeat/freshness cleanup
 - Commit terbaru yang sudah di-push:
+  - `9542703` (`fix(sshws): harden admission and session tracking`)
   - `87b43fb` (`fix(ssh): enforce SSH active-days and switch sshws mode`)
   - `edd9852` (`fix(runtime): harden sshws handshake and manage module loading`)
   - `71a21a4` (`docs: sync markdown with latest sshws runtime behavior`)
 - Validasi runtime terbaru:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-  - `python3 -m py_compile` heredoc `sshws-proxy` -> PASS
+  - `python3 -m py_compile` heredoc `sshws-proxy` dan `sshws-qac-enforcer` -> PASS
   - smoke `manage.sh` -> PASS
-  - uji SSHWS down/up -> PASS (`502` / `101`)
+  - uji SSHWS tokenless/invalid/down/up -> PASS (`401` / `403` / `502` / `101`)
 - Catatan workspace saat handoff ini ditulis:
   - Perubahan utama runtime + docs sudah tercatat commit dan push.
   - Selalu cek `git status --short` sebelum mulai perubahan baru.
