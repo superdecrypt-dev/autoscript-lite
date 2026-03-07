@@ -1,0 +1,12 @@
+[Unit]
+Description=Run xray-domain-guard periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=12h
+AccuracySec=1min
+Unit=xray-domain-guard.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

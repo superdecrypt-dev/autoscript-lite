@@ -22,6 +22,10 @@ Agent AI baru wajib memulai dari konteks di atas.
   - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
   - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
 - Perubahan penting terbaru:
+  - Refactor modular installer sedang aktif di workspace:
+    - `setup.sh` kini menjadi orchestrator tipis
+    - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
+    - status ini belum commit/push saat handoff markdown ini diperbarui
   - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
   - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
   - SSHWS kini memakai token path per-user 10 hex chars:
@@ -59,6 +63,11 @@ Agent AI baru wajib memulai dari konteks di atas.
   - Logging gateway Telegram sudah di-hardening agar URL Bot API yang memuat token tidak lagi tercatat di journal baru.
   - `Wireproxy Status` bot Telegram sudah lebih defensif terhadap `BindAddress` yang diberi komentar atau format manual yang tidak rapi.
   - Full E2E `run.sh` live sudah pernah lolos dengan domain random pada `vyxara2.web.id`, dan `/etc/xray/domain` kini disinkronkan konsisten oleh `setup.sh` + `manage.sh`.
+  - Full E2E terbaru untuk refactor modular installer juga lolos live:
+    - domain final: `dlj8u.vyxara2.web.id`
+    - `run.sh` dijalankan dengan `RUN_USE_LOCAL_SOURCE=1 KEEP_REPO_AFTER_INSTALL=1`
+    - `xray`, `nginx`, `sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`, `xray-speed`, `xray-observe.timer`, dan `xray-domain-guard.timer` aktif
+    - `/<token>` dan `/<bebas>/<token>` sama-sama lolos `101`
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile` untuk heredoc `sshws-proxy` dan `sshws-qac-enforcer` -> PASS
@@ -68,6 +77,10 @@ Agent AI baru wajib memulai dari konteks di atas.
     - token tidak valid -> `HTTP/1.1 403 Forbidden`
     - backend down -> `HTTP/1.1 502 Bad Gateway`
     - token valid + backend up -> `HTTP/1.1 101 Switching Protocols`
+  - Validasi modular installer terbaru:
+    - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
+    - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
+    - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
@@ -85,11 +98,15 @@ Agent AI baru wajib memulai dari konteks di atas.
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
 - Perubahan SSHWS autoscript-stream, token-path SSHWS, SSHWS QAC enforcement, dan parity/hardening bot Telegram sudah commit + push ke `main` (`87b43fb`, `edd9852`, `aa199df`, `40c2825`, `e116d2d`, `b7a6522`, `9542703`).
+- Jika handoff terjadi sebelum commit refactor modular installer, expect:
+  - `M setup.sh`
+  - `?? opt/setup/`
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.
 - Bot Discord dan Telegram harus tetap standalone (tidak mengeksekusi `manage.sh` langsung).
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh.
+- Pertahankan `setup.sh` sebagai orchestrator tipis; jangan satukan kembali implementasi besar ke satu file.
 
 ## Checklist Mulai Agent Baru
 1. Baca `AGENTS.md`, `RELEASE_NOTES.md`, `TESTING_PLAYBOOK.md`, dan file ini.

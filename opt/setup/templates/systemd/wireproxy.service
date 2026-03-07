@@ -1,0 +1,14 @@
+[Unit]
+Description=Wireproxy (WARP) SOCKS5 Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wireproxy -c /etc/wireproxy/config.conf
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG_FILE="/etc/xray-domain-guard/config.env"
+CERT_FILE="/opt/cert/fullchain.pem"
+KEY_FILE="/opt/cert/privkey.pem"
+NGINX_CONF="/etc/nginx/conf.d/xray.conf"
+LOG_FILE="/var/log/xray-observe/domain-guard.log"
+
+CERT_WARN_DAYS=14
+RENEW_BELOW_DAYS=7
+AUTO_RENEW=0
+ALLOW_CLOUDFLARE_PROXY_MISMATCH=1
+
+declare -a ISSUES=()
+CHECK_RESULT=0
+DOMAIN_VALUE="-"
+VPS_IP_VALUE="0.0.0.0"
+CERT_DAYS_VALUE="unknown"
+
+bool_is_true() {
+  local v="${1:-}"
+  v="$(echo "${v}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${v}" == "1" || "${v}" == "true" || "${v}" == "yes" || "${v}" == "on" || "${v}" == "y" ]]
+}
+
+safe_int() {
+  local raw="${1:-}" fallback="${2:-0}"
+  if [[ "${raw}" =~ ^-?[0-9]+$ ]]; then
+    echo "${raw}"
+  else
+    echo "${fallback}"
+  fi
+}
+
+is_private_ipv4() {
+  local ip="${1:-}"
+  [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  case "${ip}" in
+    10.*|127.*|169.254.*|192.168.*|172.16.*|172.17.*|172.18.*|172.19.*|172.2[0-9].*|172.30.*|172.31.*|0.*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_public_ipv4() {
+  local ip="${1:-}"
+  [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  if is_private_ipv4 "${ip}"; then
+    return 1
+  fi
+  return 0
+}
+
+is_cloudflare_ipv4() {
+  local ip="${1:-}"
+  [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "${ip}" <<'PY' >/dev/null 2>&1
+import ipaddress
+import sys
+
+ip = sys.argv[1]
+cf_ranges = (
+  "173.245.48.0/20",
+  "103.21.244.0/22",
+  "103.22.200.0/22",
+  "103.31.4.0/22",
+  "141.101.64.0/18",
+  "108.162.192.0/18",
+  "190.93.240.0/20",
+  "188.114.96.0/20",
+  "197.234.240.0/22",
+  "198.41.128.0/17",
+  "162.158.0.0/15",
+  "104.16.0.0/13",
+  "104.24.0.0/14",
+  "172.64.0.0/13",
+  "131.0.72.0/22",
+)
+
+try:
+  addr = ipaddress.ip_address(ip)
+except Exception:
+  raise SystemExit(1)
+
+for cidr in cf_ranges:
+  if addr in ipaddress.ip_network(cidr):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+all_dns_ips_are_cloudflare() {
+  [[ "$#" -gt 0 ]] || return 1
+  local ip
+  for ip in "$@"; do
+    if ! is_cloudflare_ipv4 "${ip}"; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+load_config() {
+  if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    . "${CONFIG_FILE}"
+  fi
+  CERT_WARN_DAYS="$(safe_int "${CERT_WARN_DAYS:-14}" 14)"
+  RENEW_BELOW_DAYS="$(safe_int "${RENEW_BELOW_DAYS:-7}" 7)"
+  AUTO_RENEW="$(safe_int "${AUTO_RENEW:-0}" 0)"
+  if bool_is_true "${ALLOW_CLOUDFLARE_PROXY_MISMATCH:-1}"; then
+    ALLOW_CLOUDFLARE_PROXY_MISMATCH=1
+  else
+    ALLOW_CLOUDFLARE_PROXY_MISMATCH=0
+  fi
+  if (( CERT_WARN_DAYS < 1 )); then
+    CERT_WARN_DAYS=14
+  fi
+  if (( RENEW_BELOW_DAYS < 1 )); then
+    RENEW_BELOW_DAYS=7
+  fi
+}
+
+detect_domain() {
+  local dom=""
+  if [[ -s "/etc/xray/domain" ]]; then
+    dom="$(head -n1 /etc/xray/domain 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  fi
+  if [[ -z "${dom}" && -f "${NGINX_CONF}" ]]; then
+    dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
+  fi
+  echo "${dom}"
+}
+
+detect_vps_ip() {
+  local ip=""
+  if command -v curl >/dev/null 2>&1; then
+    ip="$(curl -4fsSL --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    [[ -n "${ip}" ]] || ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+  fi
+  if [[ -z "${ip}" ]]; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  if [[ ! "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ip="0.0.0.0"
+  fi
+  echo "${ip:-0.0.0.0}"
+}
+
+cert_days_left() {
+  if [[ ! -s "${CERT_FILE}" ]]; then
+    echo ""
+    return 0
+  fi
+  local end end_ts now_ts
+  end="$(openssl x509 -in "${CERT_FILE}" -noout -enddate 2>/dev/null | sed -e 's/^notAfter=//' || true)"
+  [[ -n "${end}" ]] || { echo ""; return 0; }
+  end_ts="$(date -d "${end}" +%s 2>/dev/null || true)"
+  now_ts="$(date +%s 2>/dev/null || true)"
+  [[ -n "${end_ts}" && -n "${now_ts}" ]] || { echo ""; return 0; }
+  echo $(( (end_ts - now_ts) / 86400 ))
+}
+
+acme_sh_path_get() {
+  if [[ -x "/root/.acme.sh/acme.sh" ]]; then
+    echo "/root/.acme.sh/acme.sh"
+    return 0
+  fi
+  if command -v acme.sh >/dev/null 2>&1; then
+    command -v acme.sh
+    return 0
+  fi
+  echo ""
+}
+
+append_log() {
+  mkdir -p "$(dirname "${LOG_FILE}")"
+  printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M')" "$*" >> "${LOG_FILE}"
+  chmod 600 "${LOG_FILE}" || true
+}
+
+add_issue() {
+  local msg="$1"
+  local sev="${2:-warn}"
+  ISSUES+=("${sev^^}: ${msg}")
+  if [[ "${sev}" == "critical" ]]; then
+    CHECK_RESULT=2
+  elif (( CHECK_RESULT < 1 )); then
+    CHECK_RESULT=1
+  fi
+}
+
+cert_matches_domain() {
+  local domain="$1"
+  [[ -n "${domain}" && -s "${CERT_FILE}" ]] || return 1
+  local san
+  san="$(openssl x509 -in "${CERT_FILE}" -noout -ext subjectAltName 2>/dev/null || true)"
+  [[ -n "${san}" ]] || return 1
+  if echo "${san}" | grep -Fq "DNS:${domain}"; then
+    return 0
+  fi
+  if echo "${san}" | grep -Fq "DNS:*.${domain}"; then
+    return 0
+  fi
+  local wildcard=""
+  if [[ "${domain}" == *.* ]]; then
+    wildcard="*.${domain#*.}"
+    if echo "${san}" | grep -Fq "DNS:${wildcard}"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+run_check() {
+  CHECK_RESULT=0
+  ISSUES=()
+  DOMAIN_VALUE="$(detect_domain)"
+  [[ -n "${DOMAIN_VALUE}" ]] || DOMAIN_VALUE="-"
+  VPS_IP_VALUE="$(detect_vps_ip)"
+  [[ -n "${VPS_IP_VALUE}" ]] || VPS_IP_VALUE="0.0.0.0"
+
+  if [[ ! -s "${CERT_FILE}" || ! -s "${KEY_FILE}" ]]; then
+    add_issue "File cert/key TLS belum lengkap di /opt/cert" "critical"
+  fi
+
+  local cert_days
+  cert_days="$(cert_days_left)"
+  CERT_DAYS_VALUE="${cert_days:-unknown}"
+  if [[ -z "${cert_days}" ]]; then
+    add_issue "Gagal membaca masa berlaku cert TLS" "critical"
+  elif (( cert_days < 0 )); then
+    add_issue "Cert TLS sudah expired (${cert_days} hari)" "critical"
+  elif (( cert_days <= CERT_WARN_DAYS )); then
+    add_issue "Cert TLS mendekati expired (${cert_days} hari)" "warn"
+  fi
+
+  if [[ "${DOMAIN_VALUE}" == "-" || "${DOMAIN_VALUE}" != *.* ]]; then
+    add_issue "Domain aktif belum valid (${DOMAIN_VALUE})" "warn"
+  else
+    if ! cert_matches_domain "${DOMAIN_VALUE}"; then
+      add_issue "SAN cert tidak memuat domain aktif ${DOMAIN_VALUE}" "warn"
+    fi
+    local -a dns_ips=()
+    if command -v getent >/dev/null 2>&1; then
+      mapfile -t dns_ips < <(getent ahostsv4 "${DOMAIN_VALUE}" 2>/dev/null | awk '{print $1}' | sort -u || true)
+    fi
+    if (( ${#dns_ips[@]} == 0 )); then
+      add_issue "DNS A ${DOMAIN_VALUE} tidak ter-resolve" "warn"
+    elif is_public_ipv4 "${VPS_IP_VALUE}"; then
+      local matched="0" dip
+      for dip in "${dns_ips[@]}"; do
+        if [[ "${dip}" == "${VPS_IP_VALUE}" ]]; then
+          matched="1"
+          break
+        fi
+      done
+      if [[ "${matched}" != "1" ]]; then
+        if (( ALLOW_CLOUDFLARE_PROXY_MISMATCH == 1 )) && all_dns_ips_are_cloudflare "${dns_ips[@]}"; then
+          :
+        else
+          add_issue "DNS A ${DOMAIN_VALUE} tidak match IP VPS ${VPS_IP_VALUE} (mungkin proxied/CDN)" "warn"
+        fi
+      fi
+    fi
+  fi
+
+  if ! systemctl is-active --quiet nginx >/dev/null 2>&1; then
+    add_issue "nginx service tidak active" "critical"
+  fi
+
+  append_log "check domain=${DOMAIN_VALUE} ip=${VPS_IP_VALUE} cert_days=${CERT_DAYS_VALUE} result=${CHECK_RESULT}"
+}
+
+renew_if_needed() {
+  local force_mode="${1:-0}"
+  local cert_days
+  cert_days="$(cert_days_left)"
+  if [[ -z "${cert_days}" ]]; then
+    cert_days=0
+  fi
+
+  if (( force_mode != 1 && cert_days > RENEW_BELOW_DAYS )); then
+    append_log "renew skipped cert_days=${cert_days} threshold=${RENEW_BELOW_DAYS}"
+    return 0
+  fi
+
+  if (( AUTO_RENEW != 1 && force_mode != 1 )); then
+    append_log "renew skipped AUTO_RENEW=0"
+    return 0
+  fi
+
+  local domain acme
+  domain="$(detect_domain)"
+  if [[ -z "${domain}" ]]; then
+    append_log "renew failed domain empty"
+    return 1
+  fi
+
+  acme="$(acme_sh_path_get)"
+  if [[ -z "${acme}" ]]; then
+    append_log "renew failed acme.sh missing"
+    return 1
+  fi
+
+  export PATH="/root/.acme.sh:${PATH}"
+  local ok="0"
+  if "${acme}" --renew -d "${domain}" --force >/dev/null 2>&1; then
+    ok="1"
+  elif "${acme}" --cron --force >/dev/null 2>&1; then
+    ok="1"
+  fi
+
+  if [[ "${ok}" != "1" ]]; then
+    append_log "renew command failed domain=${domain}"
+    return 1
+  fi
+
+  if ! "${acme}" --install-cert -d "${domain}" \
+    --key-file "${KEY_FILE}" \
+    --fullchain-file "${CERT_FILE}" \
+    --reloadcmd "systemctl restart nginx || true" >/dev/null 2>&1; then
+    append_log "install-cert failed domain=${domain}"
+    return 1
+  fi
+
+  append_log "renew success domain=${domain}"
+  return 0
+}
+
+print_summary() {
+  echo "xray-domain-guard"
+  echo "  domain     : ${DOMAIN_VALUE}"
+  echo "  vps_ip     : ${VPS_IP_VALUE}"
+  echo "  cert_days  : ${CERT_DAYS_VALUE}"
+  echo "  result     : ${CHECK_RESULT}"
+  if (( ${#ISSUES[@]} > 0 )); then
+    local it
+    for it in "${ISSUES[@]}"; do
+      echo "  - ${it}"
+    done
+  fi
+}
+
+show_status() {
+  if [[ -s "${LOG_FILE}" ]]; then
+    tail -n 40 "${LOG_FILE}" || true
+  else
+    echo "Belum ada log domain guard."
+  fi
+}
+
+main() {
+  load_config
+  local cmd="${1:-check}"
+  case "${cmd}" in
+    check)
+      run_check
+      print_summary
+      return "${CHECK_RESULT}"
+      ;;
+    renew-if-needed)
+      local force_mode=0
+      if [[ "${2:-}" == "--force" ]]; then
+        force_mode=1
+      fi
+      renew_if_needed "${force_mode}" || true
+      run_check
+      print_summary
+      return "${CHECK_RESULT}"
+      ;;
+    status)
+      show_status
+      return 0
+      ;;
+    *)
+      echo "Usage: xray-domain-guard [check|renew-if-needed [--force]|status]" >&2
+      return 2
+      ;;
+  esac
+}
+
+main "$@"

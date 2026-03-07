@@ -1,0 +1,9 @@
+[Unit]
+Description=Xray domain and cert guard
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xray-domain-guard renew-if-needed
+SuccessExitStatus=0 1 2

@@ -3,6 +3,7 @@
 > Installer dan panel operasional harian untuk Xray-core di VPS Linux.
 
 `setup.sh` dipakai sekali untuk provisioning.
+Implementasi installer sekarang dimodularisasi di `opt/setup/`.
 `manage.sh` dipakai untuk operasi harian.
 Bot standalone tersedia di `bot-discord/` dan `bot-telegram/`.
 
@@ -13,7 +14,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 
 ## Komponen
 - `run.sh`: bootstrap installer
-- `setup.sh`: provisioning awal
+- `setup.sh`: orchestrator provisioning awal
+- `opt/setup/`: modul installer, template, dan asset runtime setup
 - `manage.sh`: panel operasional
 - `install-discord-bot.sh`: installer bot Discord
 - `install-telegram-bot.sh`: installer bot Telegram
@@ -37,6 +39,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 
 ## Fitur Inti
 - Xray, Nginx, TLS, WARP, dan daemon runtime
+- Installer modular via `opt/setup/*`
 - Operasional akun Xray dan SSH dari satu menu
 - QAC untuk Xray dan SSHWS
 - SSH WebSocket di `80/443`
@@ -57,6 +60,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 
 ## Command Cepat
 ```bash
+bash run.sh
 manage
 install-discord-bot
 install-telegram-bot

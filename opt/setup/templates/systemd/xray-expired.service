@@ -1,0 +1,14 @@
+[Unit]
+Description=Xray expired cleaner (real-time)
+After=network-online.target xray.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xray-expired --inbounds /usr/local/etc/xray/conf.d/10-inbounds.json --routing /usr/local/etc/xray/conf.d/30-routing.json --interval 2
+Restart=always
+RestartSec=2
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

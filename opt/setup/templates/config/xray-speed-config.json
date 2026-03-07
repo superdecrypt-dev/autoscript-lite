@@ -1,0 +1,7 @@
+{
+  "iface": "",
+  "ifb_iface": "ifb1",
+  "policy_root": "__SPEED_POLICY_ROOT__",
+  "state_file": "__SPEED_STATE_FILE__",
+  "default_rate_mbit": 10000
+}

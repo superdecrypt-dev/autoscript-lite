@@ -9,12 +9,19 @@
 
 ## Struktur Proyek & Organisasi Modul
 Repositori ini memiliki area root untuk skrip operasional server: `setup.sh` (provisioning awal), `manage.sh` (menu harian), `run.sh` (bootstrap installer), `install-discord-bot.sh`, dan `install-telegram-bot.sh`. Source modular `manage.sh` berada di `opt/manage/` (sinkron ke `/opt/manage` di VPS).  
+Source modular `setup.sh` sekarang berada di `opt/setup/`:
+- `opt/setup/core/` untuk helper umum
+- `opt/setup/install/` untuk langkah provisioning per domain tanggung jawab
+- `opt/setup/bin/` untuk asset runtime/script yang di-install saat setup
+- `opt/setup/templates/` untuk template config dan unit systemd  
 Area `bot-discord/` adalah stack bot Discord standalone (`gateway-ts/`, `backend-py/`, `shared/`, `systemd/`, `scripts/`).  
 Area `bot-telegram/` adalah stack bot Telegram standalone (`gateway-py/`, `backend-py/`, `shared/`, `systemd/`, `scripts/`).
 
 ## Build, Test, dan Command Pengembangan
 - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh`: validasi syntax skrip shell.
+- `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`: validasi syntax modular installer.
 - `shellcheck *.sh`: lint shell di root.
+- `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`: lint modular installer.
 - `sudo bash run.sh`: instalasi cepat (pasang `manage` + `install-discord-bot` ke `/usr/local/bin` lalu jalankan setup).
 - `sudo manage`: buka menu operasional utama.
 - `sudo /usr/local/bin/install-discord-bot menu`: buka installer bot Discord.
@@ -56,6 +63,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh alur CLI.
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
 - SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib).
+- `setup.sh` harus dipertahankan sebagai orchestrator tipis; implementasi installer baru ditempatkan di `opt/setup/*`.
 - Jalur SSHWS resmi sekarang wajib token path per-user:
   - `/<token>`
   - `/<bebas>/<token>`
@@ -75,17 +83,27 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
   - active session dibaca dari runtime session files SSHWS
   - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
+- Full E2E modular installer (`run.sh` dengan source lokal repo) sudah lolos live pada `2026-03-08`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.
 
 ## Aktivitas Terkini (Update 2026-03-08)
 - Fokus sprint terbaru: hardening admission/session tracking SSHWS + sinkronisasi dokumentasi + parity bot Telegram.
+- Refactor modular installer aktif:
+  - `setup.sh` turun menjadi orchestrator tipis
+  - modul installer aktif di `opt/setup/*`
+  - full E2E live untuk jalur modular terbaru sudah PASS
 - Perubahan besar yang sudah dilalui:
   - SSHWS berpindah ke mode autoscript-stream penuh untuk kompatibilitas payload klien.
   - SSHWS sekarang memakai token path per-user `/<token>` dan `/<bebas>/<token>`.
   - Guard runtime SSHWS: tanpa token -> `401`, token tidak valid -> `403`, backend down -> `502`, token valid -> `101`.
   - `Add SSH User` kini wajib input masa aktif (hari) dan mendukung `0` sebagai `back`.
   - Resolver source modul `manage.sh` di-hardening dengan validasi `trusted + lengkap`.
+  - Struktur modular `setup.sh` kini aktif dipakai:
+    - `opt/setup/core`
+    - `opt/setup/install`
+    - `opt/setup/bin`
+    - `opt/setup/templates`
   - QAC SSHWS sekarang lebih ketat:
     - user resolve dari token path
     - `IP/Login limit` dicek sebelum handshake sukses
@@ -109,6 +127,8 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 2. Baca `HANDOFF.md` bagian "Status Operasional Terkini".
 3. Validasi cepat runtime shell:
    - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh`
+   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
+   - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
    - `printf "0\n" | timeout 20 bash manage.sh`
 4. Validasi cepat bot:
    - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')`
