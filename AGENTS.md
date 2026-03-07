@@ -142,6 +142,6 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
    - lanjut E2E manual `/panel` sesuai `TESTING_PLAYBOOK.md`.
 6. Jika tugasnya audit/review, ikuti urutan dan format temuan di `AUDIT_PLAYBOOK.md`.
 
-## Kalimat Anchor Owner (Wajib Lanjutkan Dari Sini)
-- Kalimat referensi wajib: "oke saat ini kamu mengingatnya bahwa menggunakan repo superdecrypt-dev/autoscript".
+## Baseline Konteks Owner (Wajib Lanjutkan Dari Sini)
+- Baseline konteks wajib: gunakan repo `superdecrypt-dev/autoscript` sebagai source of truth proyek ini.
 - Semua agent baru harus menganggap kalimat di atas sebagai baseline konteks proyek.

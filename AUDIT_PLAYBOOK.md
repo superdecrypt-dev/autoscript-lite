@@ -1,6 +1,6 @@
 # Audit Playbook
 
-Dokumen ini adalah SOP audit untuk proyek `autoscript` (anchor: "oke saat ini kamu mengingatnya bahwa menggunakan repo superdecrypt-dev/autoscript").
+Dokumen ini adalah SOP audit untuk proyek `autoscript` (baseline konteks: gunakan repo `superdecrypt-dev/autoscript` sebagai source of truth).
 
 `TESTING_PLAYBOOK.md` dipakai untuk pengujian.
 `AUDIT_PLAYBOOK.md` dipakai untuk review bug, risk, regression, drift, dan gap desain.
@@ -113,6 +113,9 @@ bash -n run.sh setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh
 shellcheck -x -S warning run.sh setup.sh manage.sh
 bash -n opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
+bash -n opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
+shellcheck -x -S warning opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
+shellcheck -x -S warning opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard
 python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
 ```
 
@@ -161,6 +164,14 @@ rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|upd
 rg -n "detect_domain|sync_xray_domain_file|account_refresh_all_info_files|ssh_account_info" manage.sh opt/manage
 ```
 
+### 6.5 Cek bot Telegram/Discord
+```bash
+rg -n "ENABLE_DANGEROUS_ACTIONS|dangerous|unknown_action|api\\.telegram\\.org/bot|commands\\.json|checksum|bot_telegram\\.zip|bot_discord\\.zip" \
+  install-telegram-bot.sh install-discord-bot.sh bot-telegram bot-discord
+python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
+python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
+```
+
 ## 7. Audit Runtime (Opsional, Host Live)
 
 ```bash
@@ -173,8 +184,8 @@ ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b
 Khusus SSHWS:
 
 ```bash
-curl -i --http1.1 -H 'Upgrade: websocket' -H 'Connection: Upgrade' http://<domain>/<token>
-curl -k -i --http1.1 -H 'Upgrade: websocket' -H 'Connection: Upgrade' https://<domain>/<bebas>/<token>
+curl -i -N --http1.1 --max-time 5 -H 'Upgrade: websocket' -H 'Connection: Upgrade' http://<domain>/<token>
+curl -k -i -N --http1.1 --max-time 5 -H 'Upgrade: websocket' -H 'Connection: Upgrade' https://<domain>/<bebas>/<token>
 ```
 
 Ekspektasi:
@@ -193,6 +204,9 @@ Findings
 2. Medium ...
 
 Open Questions / Assumptions
+1. ...
+
+Residual Risks / Testing Gaps
 1. ...
 
 Audit Notes

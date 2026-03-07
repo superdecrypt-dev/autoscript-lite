@@ -1,6 +1,6 @@
 # Testing Playbook
 
-Dokumen ini adalah SOP pengujian untuk proyek `autoscript` (anchor: "oke saat ini kamu mengingatnya bahwa menggunakan repo superdecrypt-dev/autoscript").
+Dokumen ini adalah SOP pengujian untuk proyek `autoscript` (baseline konteks: gunakan repo `superdecrypt-dev/autoscript` sebagai source of truth).
 
 ## 1. Prinsip Utama
 - Wajib uji di `staging` terlebih dulu, baru `production`.
@@ -12,14 +12,19 @@ Jalankan sebelum semua paket uji:
 
 ```bash
 AUTO_SCRIPT_ROOT="${AUTO_SCRIPT_ROOT:-/opt/autoscript}"
-if [[ ! -d "${AUTO_SCRIPT_ROOT}" && -d /root/xray-core_discord ]]; then
-  AUTO_SCRIPT_ROOT="/root/xray-core_discord"
-fi
 cd "${AUTO_SCRIPT_ROOT}"
 
 git status --short
 bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh
-shellcheck *.sh
+shellcheck *.sh \
+  opt/setup/core/*.sh \
+  opt/setup/install/*.sh \
+  opt/manage/app/*.sh \
+  opt/manage/core/*.sh \
+  opt/manage/features/*.sh \
+  opt/manage/menus/*.sh \
+  opt/setup/bin/xray-observe \
+  opt/setup/bin/xray-domain-guard
 python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
 (cd bot-discord/gateway-ts && npm run build)
@@ -96,42 +101,67 @@ Kriteria lulus:
 Khusus SSH WebSocket (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
 - Saat audit/review, konsep ini dianggap baseline tetap; referensi konsep perilaku: `https://github.com/nanotechid/supreme`.
+- Jalur resmi SSHWS sekarang berbasis token path per-user:
+  - `/<token>`
+  - `/<bebas>/<token>`
+- Siapkan satu akun SSH terkelola lebih dulu, lalu ambil `sshws_token` dari metadata/account info.
 
 ```bash
-# Handshake check non-TLS (autoscript-stream payload, port 80)
-curl -i -N --max-time 5 \
+# Handshake check non-TLS root path (curl akan timeout setelah 101 karena tunnel tetap terbuka)
+curl -i -N --http1.1 --max-time 5 \
   -H "Upgrade: websocket" \
-  "http://<domain>/?ed=2048"
+  -H "Connection: Upgrade" \
+  "http://<domain>/<token>"
 
-# Handshake check TLS (autoscript-stream payload, port 443)
-curl -k -i -N --max-time 5 \
+# Handshake check TLS prefixed path
+curl -k -i -N --http1.1 --max-time 5 \
   -H "Upgrade: websocket" \
-  "https://<domain>/?ed=2048"
+  -H "Connection: Upgrade" \
+  "https://<domain>/<bebas>/<token>"
+
+# Negative check: path tanpa token harus 401
+curl -k -i --http1.1 --max-time 5 \
+  -H "Upgrade: websocket" \
+  -H "Connection: Upgrade" \
+  "https://<domain>/"
+
+# Negative check: token tidak valid harus 403
+curl -k -i --http1.1 --max-time 5 \
+  -H "Upgrade: websocket" \
+  -H "Connection: Upgrade" \
+  "https://<domain>/deadbeef00"
 
 # Negative check: backend internal down harus fail-close 502
-systemctl stop sshws-stunnel
-curl -k -i -N --max-time 5 \
+systemctl stop sshws-dropbear
+curl -k -i --http1.1 --max-time 5 \
   -H "Upgrade: websocket" \
-  "https://<domain>/"
-systemctl start sshws-stunnel
+  -H "Connection: Upgrade" \
+  "https://<domain>/<token>"
+systemctl start sshws-dropbear
 ```
 
 Kriteria lulus:
-- Kedua endpoint mengembalikan `101 Switching Protocols`.
-- Saat `sshws-stunnel` dimatikan, endpoint SSHWS mengembalikan `502 Bad Gateway`.
-- Request non-upgrade ke `/` ditolak (`4xx`), path Xray lain tetap berfungsi.
+- Path token valid `/<token>` dan `/<bebas>/<token>` mengembalikan `101 Switching Protocols`.
+- Path tanpa token mengembalikan `401 Unauthorized`.
+- Token tidak valid mengembalikan `403 Forbidden`.
+- Saat `sshws-dropbear` dimatikan, endpoint SSHWS token-valid mengembalikan `502 Bad Gateway`.
+- Path Xray lain tetap berfungsi dan tidak bentrok dengan route SSHWS token-path.
 
-Khusus runtime bot Telegram:
+Khusus runtime bot Telegram (smoke cepat; detail lengkap lihat Bagian 6):
 
 ```bash
 set -a; . /etc/xray-telegram-bot/bot.env; set +a
 systemctl is-active xray-telegram-backend xray-telegram-gateway
 /opt/bot-telegram/scripts/smoke-test.sh
+curl -fsS --max-time 8 \
+  -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
+  "http://127.0.0.1:8080/api/main-menu" >/dev/null
 ```
 
 Kriteria lulus:
 - Service Telegram backend/gateway aktif.
 - Smoke test Telegram PASS.
+- Endpoint main menu backend tetap bisa diakses dengan header secret internal.
 
 ## 4. Pengujian Bot Discord
 
@@ -219,8 +249,11 @@ Sebelum promote ke production:
 3. Gate bot Discord sesuai target PASS.
 4. Gate bot Telegram (`bash bot-telegram/scripts/gate-all.sh`) PASS.
 5. Smoke runtime Telegram (`/opt/bot-telegram/scripts/smoke-test.sh`) PASS.
-6. Bukti uji tersimpan (log/screenshot ringkas).
-7. Snapshot rollback tersedia.
+6. Manual `/panel` Telegram minimal untuk menu `2`, `3`, `4`, `5`, `9`, `10` PASS.
+7. Action dangerous tersembunyi saat `ENABLE_DANGEROUS_ACTIONS=false`.
+8. Journal baru tidak membocorkan token bot.
+9. Bukti uji tersimpan (log/screenshot ringkas).
+10. Snapshot rollback tersedia.
 
 ## 6. Pengujian Bot Telegram
 
@@ -230,27 +263,121 @@ Gunakan harness resmi:
 bash bot-telegram/scripts/gate-all.sh
 ```
 
+Tambahkan smoke runtime:
+
+```bash
+set -a; . /etc/xray-telegram-bot/bot.env; set +a
+systemctl is-active xray-telegram-backend xray-telegram-gateway xray-telegram-monitor.timer
+/opt/bot-telegram/scripts/smoke-test.sh
+curl -fsS --max-time 8 \
+  -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
+  "http://127.0.0.1:8080/api/main-menu" >/dev/null
+```
+
 Catatan:
-- Endpoint `/health` backend Telegram sekarang wajib header secret internal.
-- Action menu `4) Network Controls` wajib diuji untuk regresi WARP parity.
+- Endpoint `/health` backend Telegram wajib header secret internal.
+- Default aman proyek ini adalah `ENABLE_DANGEROUS_ACTIONS=false`.
+- Action menu `6) Network Controls` tetap perlu diuji untuk regresi WARP parity.
 
-### 6.1 E2E Manual Telegram (staging)
+### 6.1 Gate Wajib
+1. Jalankan `bash bot-telegram/scripts/gate-all.sh`.
+2. Jalankan smoke runtime lokal:
+   - backend/gateway/timer aktif
+   - `/opt/bot-telegram/scripts/smoke-test.sh`
+   - `curl` ke `/api/main-menu` dengan header secret internal
+3. Verifikasi env aman:
+   - `TELEGRAM_ADMIN_USER_IDS` atau `TELEGRAM_ADMIN_CHAT_IDS` terisi sesuai target
+   - `ENABLE_DANGEROUS_ACTIONS` sesuai mode uji
+4. Verifikasi ACL perilaku:
+   - kirim `/panel` dari akun admin -> harus diterima
+   - kirim `/panel` dari akun/chat yang tidak di-whitelist -> harus ditolak
+5. Verifikasi log baru gateway tidak membocorkan token:
+
+```bash
+journalctl -u xray-telegram-gateway --since "10 minutes ago" --no-pager | \
+  rg -n 'api\\.telegram\\.org/bot[0-9]+:'
+```
+
+Ekspektasi:
+- command di atas tidak mengembalikan match.
+- akun/chat non-whitelist tidak bisa masuk panel.
+
+### 6.2 E2E Manual Telegram (staging)
 1. Jalankan `/panel`.
-2. Masuk `4) Network Controls`.
-3. Uji action WARP:
-   - `View WARP Status`
-   - `Set WARP Global`
-   - `Set WARP per User`
-   - `Set WARP Inbound`
-   - `Set WARP Domain`
-   - `View WARP Tier`
-4. Jalankan `/cleanup`.
-5. Pastikan output tidak membocorkan token/secret/license dalam plain text.
+2. Pastikan keyboard menu utama tampil penuh dan tidak ada button yang mati/error.
+3. Uji menu read-only aman berikut:
+   - `1) Status & Diagnostics`
+   - `2) Xray Management`
+   - `3) SSH Management`
+   - `4) Xray Quota & Access Control`
+   - `5) SSH Quota & Access Control`
+   - `6) Network Controls`
+   - `7) Domain Control`
+   - `9) Security`
+   - `10) Maintenance`
+4. Jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan button dangerous memang tidak muncul.
+5. Jika mode staging mengizinkan dangerous actions, uji satu action aman-berubah per area yang relevan, lalu rollback hasilnya.
+6. Jalankan `/cleanup`.
+7. Pastikan output tidak membocorkan token, shared secret, atau license/plain secret lain.
 
-### 6.2 Kriteria Lulus Telegram
+### 6.3 Checklist Manual /panel (Rekomendasi Terbaru)
+Gunakan checklist ini saat regresi menu Telegram:
+
+1. Menu `1) Status & Diagnostics`
+- `Overview`
+- `Run Xray Test`
+- `View TLS Info`
+
+2. Menu `2) Xray Management`
+- `List Managed Users`
+- `Search User`
+- `View Account Info`
+
+3. Menu `3) SSH Management`
+- `List Managed SSH Users`
+- `View Account Info`
+- `Active SSHWS Sessions`
+- `SSH WS Service Status`
+
+4. Menu `4) Xray Quota & Access Control`
+- `Summary`
+- `Detail` untuk satu user
+
+5. Menu `5) SSH Quota & Access Control`
+- `Summary`
+- `Detail` untuk satu user
+
+6. Menu `6) Network Controls`
+- `View WARP Status`
+- `View WARP Tier`
+- jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan action setter/toggle tidak muncul
+
+7. Menu `7) Domain Control`
+- `View Domain Info`
+- `View Nginx Name`
+
+8. Menu `9) Security`
+- `Security Overview`
+- `TLS Certificate Info`
+- `Fail2ban Overview`
+
+9. Menu `10) Maintenance`
+- `SSHWS Diagnostics`
+- `SSH WS Status`
+- `Daemon Status`
+
+10. Menu `12) Backup/Restore`
+- `List Backups`
+- jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan create/restore tidak muncul
+
+### 6.4 Kriteria Lulus Telegram
 - Semua action mengembalikan schema `ok/code/title/message`.
+- Tidak ada `unknown_action`.
 - Tidak ada crash service `xray-telegram-backend` dan `xray-telegram-gateway`.
 - ACL admin berjalan sesuai env (`TELEGRAM_ADMIN_*`).
+- Akun/chat non-whitelist ditolak konsisten.
+- Action dangerous benar-benar tersembunyi saat `ENABLE_DANGEROUS_ACTIONS=false`.
+- Journal baru gateway tidak lagi menulis URL Telegram yang mengandung token.
 
 ## 7. Format Laporan Singkat
 Gunakan format ini setelah pengujian:
@@ -277,7 +404,10 @@ Bot Discord:
 Bot Telegram:
 - Gate all: PASS/FAIL
 - Smoke runtime: PASS/FAIL
-- E2E menu 4 WARP: PASS/FAIL
+- ACL whitelist/non-whitelist: PASS/FAIL
+- Manual `/panel` menu 2/3/4/5/9/10: PASS/FAIL
+- Hidden dangerous actions: PASS/FAIL
+- Log hygiene: PASS/FAIL
 
 Catatan risiko:
 Keputusan lanjut:

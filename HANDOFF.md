@@ -1,9 +1,9 @@
 # Handoff Proyek
 
-## Anchor Konteks (Wajib)
-"oke saat ini kamu mengingatnya bahwa menggunakan repo superdecrypt-dev/autoscript"
+## Baseline Konteks (Wajib)
+Gunakan repo `superdecrypt-dev/autoscript` sebagai source of truth proyek ini.
 
-Agent AI baru wajib memulai dari konteks di atas.
+Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Baseline Saat Ini
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
