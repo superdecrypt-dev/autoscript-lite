@@ -833,10 +833,13 @@ ssh_account_info_compat_needs_refresh() {
     if ! grep -Eq '^SSHWS Token[[:space:]]*:[[:space:]]*[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/([^[:space:]]+/)?[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*@ssh.json' -print0 2>/dev/null | sort -z)
+    if ! grep -Eq '^SSHWS Alt Path[[:space:]]*:[[:space:]]*/[^[:space:]]+/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 
   return 1
 }
@@ -867,7 +870,7 @@ ssh_account_info_refresh_all_from_state() {
     else
       failed=$((failed + 1))
     fi
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*@ssh.json' -print0 2>/dev/null | sort -z)
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 
   printf '%s|%s\n' "${updated}" "${failed}"
   (( failed == 0 ))

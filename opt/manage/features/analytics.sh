@@ -1740,6 +1740,25 @@ ssh_user_state_file() {
   printf '%s/%s@ssh.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
 }
 
+ssh_user_state_compat_file() {
+  local username="${1:-}"
+  printf '%s/%s.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+}
+
+ssh_user_state_resolve_file() {
+  local username="${1:-}"
+  local primary compat
+  primary="$(ssh_user_state_file "${username}")"
+  compat="$(ssh_user_state_compat_file "${username}")"
+  if [[ -f "${primary}" ]]; then
+    printf '%s\n' "${primary}"
+  elif [[ -f "${compat}" ]]; then
+    printf '%s\n' "${compat}"
+  else
+    printf '%s\n' "${primary}"
+  fi
+}
+
 ssh_account_info_file() {
   local username="${1:-}"
   printf '%s/%s@ssh.txt\n' "${SSH_ACCOUNT_DIR}" "${username}"
@@ -1768,11 +1787,19 @@ sshws_path_from_token() {
   fi
 }
 
+sshws_alt_path_from_token() {
+  local token="${1:-}"
+  if ! sshws_token_valid "${token}"; then
+    return 1
+  fi
+  printf '/bebas/%s\n' "${token,,}"
+}
+
 ssh_user_state_token_get() {
   local username="${1:-}"
   local state_file
   ssh_state_dirs_prepare
-  state_file="$(ssh_user_state_file "${username}")"
+  state_file="$(ssh_user_state_resolve_file "${username}")"
   [[ -s "${state_file}" ]] || {
     echo ""
     return 0
@@ -1804,7 +1831,7 @@ ssh_user_state_ensure_token() {
   local username="${1:-}"
   local state_file tmp lock_file
   ssh_state_dirs_prepare
-  state_file="$(ssh_user_state_file "${username}")"
+  state_file="$(ssh_user_state_resolve_file "${username}")"
   [[ -f "${state_file}" ]] || return 1
   ssh_qac_lock_prepare
   lock_file="$(ssh_qac_lock_file)"
@@ -1830,9 +1857,39 @@ try:
 except Exception:
   payload = {}
 
-token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{10}", token):
-  token = secrets.token_hex(5)
+def pick_unique_token(root_dir, current_path, current_token):
+  seen = set()
+  current_real = os.path.realpath(current_path)
+  try:
+    names = sorted(os.listdir(root_dir), key=str.lower)
+  except Exception:
+    names = []
+  for name in names:
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    entry = os.path.join(root_dir, name)
+    if os.path.realpath(entry) == current_real:
+      continue
+    try:
+      loaded = json.load(open(entry, "r", encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", tok):
+      seen.add(tok)
+  tok = str(current_token or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise RuntimeError("failed to allocate unique sshws token")
+
+token = pick_unique_token(os.path.dirname(path) or ".", path, payload.get("sshws_token"))
+if token != str(payload.get("sshws_token") or "").strip().lower():
   payload["sshws_token"] = token
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
@@ -1877,9 +1934,39 @@ try:
 except Exception:
   payload = {}
 
-token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{10}", token):
-  token = secrets.token_hex(5)
+def pick_unique_token(root_dir, current_path, current_token):
+  seen = set()
+  current_real = os.path.realpath(current_path)
+  try:
+    names = sorted(os.listdir(root_dir), key=str.lower)
+  except Exception:
+    names = []
+  for name in names:
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    entry = os.path.join(root_dir, name)
+    if os.path.realpath(entry) == current_real:
+      continue
+    try:
+      loaded = json.load(open(entry, "r", encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", tok):
+      seen.add(tok)
+  tok = str(current_token or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise RuntimeError("failed to allocate unique sshws token")
+
+token = pick_unique_token(os.path.dirname(path) or ".", path, payload.get("sshws_token"))
+if token != str(payload.get("sshws_token") or "").strip().lower():
   payload["sshws_token"] = token
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
@@ -1950,7 +2037,7 @@ ssh_user_state_created_at_get() {
   local username="${1:-}"
   local state_file
   ssh_state_dirs_prepare
-  state_file="$(ssh_user_state_file "${username}")"
+  state_file="$(ssh_user_state_resolve_file "${username}")"
   [[ -s "${state_file}" ]] || {
     echo ""
     return 0
@@ -1971,8 +2058,8 @@ PY
 ssh_user_state_write() {
   local username="${1:-}" created_at="${2:-}" expired_at="${3:-}"
   local state_file tmp
-  state_file="$(ssh_user_state_file "${username}")"
   ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_resolve_file "${username}")"
   ssh_qac_lock_prepare
   local lock_file
   lock_file="$(ssh_qac_lock_file)"
@@ -2036,6 +2123,37 @@ def norm_date(v):
     return ""
   return s[:10]
 
+def pick_unique_token(root_dir, current_path, current_token):
+  seen = set()
+  current_real = os.path.realpath(current_path)
+  try:
+    names = sorted(os.listdir(root_dir), key=str.lower)
+  except Exception:
+    names = []
+  for name in names:
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    entry = os.path.join(root_dir, name)
+    if os.path.realpath(entry) == current_real:
+      continue
+    try:
+      loaded = json.load(open(entry, "r", encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", tok):
+      seen.add(tok)
+  tok = str(current_token or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise RuntimeError("failed to allocate unique sshws token")
+
 payload = {}
 if os.path.isfile(state_file):
   try:
@@ -2076,9 +2194,7 @@ if not created:
   created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
-token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{10}", token):
-  token = secrets.token_hex(5)
+token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
@@ -2176,6 +2292,37 @@ def norm_date(v):
     return ""
   return s[:10]
 
+def pick_unique_token(root_dir, current_path, current_token):
+  seen = set()
+  current_real = os.path.realpath(current_path)
+  try:
+    names = sorted(os.listdir(root_dir), key=str.lower)
+  except Exception:
+    names = []
+  for name in names:
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    entry = os.path.join(root_dir, name)
+    if os.path.realpath(entry) == current_real:
+      continue
+    try:
+      loaded = json.load(open(entry, "r", encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", tok):
+      seen.add(tok)
+  tok = str(current_token or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise RuntimeError("failed to allocate unique sshws token")
+
 payload = {}
 if os.path.isfile(state_file):
   try:
@@ -2216,9 +2363,7 @@ if not created:
   created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
-token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{10}", token):
-  token = secrets.token_hex(5)
+token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
@@ -2332,7 +2477,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_token_disp
+  local acc_file domain ip quota_limit_disp expired_disp valid_until ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_token_disp
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -2399,9 +2544,11 @@ PY
     sshws_token="${sshws_token,,}"
     sshws_token_disp="${sshws_token}"
     sshws_path="$(sshws_path_from_token "${sshws_token}")"
+    sshws_alt_path="$(sshws_alt_path_from_token "${sshws_token}" 2>/dev/null || true)"
   else
     sshws_token_disp="-"
     sshws_path="-"
+    sshws_alt_path="-"
   fi
 
   if ! cat > "${acc_file}" <<EOF
@@ -2418,6 +2565,7 @@ IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
 SSHWS Token : ${sshws_token_disp}
 SSHWS Path  : ${sshws_path}
+SSHWS Alt Path : ${sshws_alt_path}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}
 
@@ -2428,8 +2576,14 @@ Payload WSS:
 Payload WS:
     GET ${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
 
+Payload WS (Prefixed):
+    GET ${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+
 Payload SNI+WS+Proxy:
     GET wss://[host]${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
+
+Payload SNI+WS+Proxy (Prefixed):
+    GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 
 Catatan:
     Path SSHWS wajib memakai token per-user. Format yang didukung: /<token> atau /<bebas>/<token>. Payload lama ke path / tanpa token tidak dipakai lagi.
@@ -2446,7 +2600,7 @@ ssh_account_info_refresh_from_state() {
   local username="${1:-}"
   local password_override="${2:-}"
   local qf
-  qf="$(ssh_user_state_file "${username}")"
+  qf="$(ssh_user_state_resolve_file "${username}")"
   [[ -f "${qf}" ]] || return 1
 
   local fields quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token password
@@ -3384,6 +3538,7 @@ import pwd
 import re
 import subprocess
 import sys
+import time
 from collections import defaultdict, deque
 
 state_root = sys.argv[1]
@@ -3431,6 +3586,37 @@ def normalize_ip(v):
     return str(ipaddress.ip_address(s))
   except Exception:
     return ""
+
+def _pid_alive(pid):
+  try:
+    value = int(pid)
+  except Exception:
+    return False
+  if value <= 0:
+    return False
+  try:
+    os.kill(value, 0)
+    return True
+  except ProcessLookupError:
+    return False
+  except PermissionError:
+    return True
+  except Exception:
+    return False
+
+def _runtime_payload_valid(payload):
+  if not isinstance(payload, dict):
+    return False
+  if not _pid_alive(payload.get("proxy_pid")):
+    return False
+  try:
+    updated_at = int(float(payload.get("updated_at") or 0))
+  except Exception:
+    return False
+  now = int(time.time())
+  if updated_at <= 0 or now <= 0:
+    return False
+  return (now - updated_at) <= 90
 
 def _build_proc_tables():
   info = {}
@@ -3507,7 +3693,7 @@ if session_root and os.path.isdir(session_root):
     try:
       with open(path, "r", encoding="utf-8") as f:
         payload = json.load(f)
-      if not isinstance(payload, dict):
+      if not _runtime_payload_valid(payload):
         continue
     except Exception:
       continue
@@ -3519,55 +3705,68 @@ if session_root and os.path.isdir(session_root):
       "client_ip": normalize_ip(payload.get("client_ip")) or "-",
     }
 
-if dropbear_port <= 0:
-  raise SystemExit(0)
-
-try:
-  res = subprocess.run(
-    ["ss", "-tnpH"],
-    check=False,
-    capture_output=True,
-    text=True,
-    timeout=1.5,
-  )
-except Exception:
-  raise SystemExit(0)
-
-if res.returncode != 0:
-  raise SystemExit(0)
-
-proc_info, children = _build_proc_tables()
 rows = []
-for raw in (res.stdout or "").splitlines():
-  line = raw.strip()
-  if not line or "dropbear" not in line:
+runtime_ports_seen = set()
+proc_info = {}
+children = {}
+if dropbear_port > 0:
+  try:
+    res = subprocess.run(
+      ["ss", "-tnpH"],
+      check=False,
+      capture_output=True,
+      text=True,
+      timeout=1.5,
+    )
+  except Exception:
+    res = None
+
+  if res is not None and res.returncode == 0:
+    proc_info, children = _build_proc_tables()
+    for raw in (res.stdout or "").splitlines():
+      line = raw.strip()
+      if not line or "dropbear" not in line:
+        continue
+      cols = line.split()
+      if len(cols) < 6:
+        continue
+      lport = _parse_port(cols[3])
+      if lport != dropbear_port:
+        continue
+      peer = cols[4]
+      m = re.search(r"pid=(\d+)", line)
+      if not m:
+        continue
+      pid = int(m.group(1))
+      peer_port = _parse_port(peer)
+      runtime_meta = runtime_by_port.get(peer_port, {}) if peer_port > 0 else {}
+      username = _username_from_pid(pid, proc_info, children) or runtime_meta.get("username") or "unknown"
+      if peer_port > 0:
+        runtime_ports_seen.add(peer_port)
+      rows.append({
+        "username": username,
+        "peer": peer,
+        "pid": str(pid),
+        "client_ip": runtime_meta.get("client_ip") or "-",
+        "_sort_pid": pid,
+      })
+
+for port, runtime_meta in sorted(runtime_by_port.items()):
+  if port in runtime_ports_seen:
     continue
-  cols = line.split()
-  if len(cols) < 6:
-    continue
-  lport = _parse_port(cols[3])
-  if lport != dropbear_port:
-    continue
-  peer = cols[4]
-  m = re.search(r"pid=(\d+)", line)
-  if not m:
-    continue
-  pid = int(m.group(1))
-  peer_port = _parse_port(peer)
-  runtime_meta = runtime_by_port.get(peer_port, {}) if peer_port > 0 else {}
-  username = _username_from_pid(pid, proc_info, children) or runtime_meta.get("username") or "unknown"
   rows.append({
-    "username": username,
-    "peer": peer,
-    "pid": pid,
+    "username": runtime_meta.get("username") or "unknown",
+    "peer": "runtime-port:{}".format(port),
+    "pid": "-",
     "client_ip": runtime_meta.get("client_ip") or "-",
+    "_sort_pid": 0,
   })
 
 counts = defaultdict(int)
 for row in rows:
   counts[row["username"]] += 1
 
-rows.sort(key=lambda item: (item["username"].lower(), item["pid"], item["peer"]))
+rows.sort(key=lambda item: (item["username"].lower(), int(item.get("_sort_pid") or 0), item["peer"]))
 for row in rows:
   meta = meta_map.get(row["username"], {})
   print("|".join([
@@ -3616,7 +3815,7 @@ sshws_active_sessions_print_page() {
   if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
     echo "Filter: '${SSHWS_SESSION_QUERY}'"
   fi
-  echo "Peer = loopback mapping proxy -> dropbear. Client IP diambil dari header terpercaya saat tersedia."
+  echo "Peer biasanya loopback mapping proxy -> dropbear. Jika korelasi socket gagal, runtime-port akan ditampilkan."
   echo
 
   if (( total == 0 )); then
@@ -3834,10 +4033,29 @@ ssh_active_sessions_count() {
   if [[ -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
     local runtime_count
     runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" <<'PY' 2>/dev/null || true
-import json, pathlib, sys
+import json, pathlib, sys, time
+import os
 root = pathlib.Path(sys.argv[1])
 target = str(sys.argv[2] or "").strip()
 count = 0
+
+def pid_alive(pid):
+  try:
+    value = int(pid)
+  except Exception:
+    return False
+  if value <= 0:
+    return False
+  try:
+    os.kill(value, 0)
+    return True
+  except ProcessLookupError:
+    return False
+  except PermissionError:
+    return True
+  except Exception:
+    return False
+
 if root.is_dir() and target:
   for path in root.glob("*.json"):
     try:
@@ -3845,6 +4063,15 @@ if root.is_dir() and target:
     except Exception:
       continue
     if not isinstance(payload, dict):
+      continue
+    if not pid_alive(payload.get("proxy_pid")):
+      continue
+    try:
+      updated_at = int(float(payload.get("updated_at") or 0))
+    except Exception:
+      continue
+    now = int(time.time())
+    if updated_at <= 0 or now <= 0 or (now - updated_at) > 90:
       continue
     username = str(payload.get("username") or "").strip()
     if username.endswith("@ssh"):
@@ -4455,6 +4682,37 @@ def parse_float(v, key, minv=None):
     raise SystemExit(f"{key} minimal {minv}")
   return n
 
+def pick_unique_token(root_dir, current_path, current_token):
+  seen = set()
+  current_real = os.path.realpath(current_path)
+  try:
+    names = sorted(os.listdir(root_dir), key=str.lower)
+  except Exception:
+    names = []
+  for name in names:
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    entry = os.path.join(root_dir, name)
+    if os.path.realpath(entry) == current_real:
+      continue
+    try:
+      loaded = json.load(open(entry, "r", encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", tok):
+      seen.add(tok)
+  tok = str(current_token or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise SystemExit("failed to allocate unique sshws token")
+
 lock_handle = None
 
 def release_lock():
@@ -4518,9 +4776,7 @@ if ip_limit < 0:
 unit = str(payload.get("quota_unit") or "binary").strip().lower()
 if unit not in ("binary", "decimal"):
   unit = "binary"
-token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{10}", token):
-  token = secrets.token_hex(5)
+token = pick_unique_token(os.path.dirname(qf) or ".", qf, payload.get("sshws_token"))
 
 payload["managed_by"] = "autoscript-manage"
 payload["protocol"] = "ssh"

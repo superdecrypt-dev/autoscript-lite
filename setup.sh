@@ -2400,6 +2400,8 @@ QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
+RUNTIME_SESSION_HEARTBEAT_SEC = 15.0
+RUNTIME_SESSION_STALE_SEC = 90
 UNASSIGNED_RESOLVE_BURST_BYTES = 4096
 UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
 ATTRIBUTION_WARMUP_ATTEMPTS = 6
@@ -2591,6 +2593,77 @@ def cleanup_runtime_session_root(root):
   except Exception:
     pass
 
+def pid_alive(pid):
+  try:
+    value = int(pid)
+  except Exception:
+    return False
+  if value <= 0:
+    return False
+  try:
+    os.kill(value, 0)
+    return True
+  except ProcessLookupError:
+    return False
+  except PermissionError:
+    return True
+  except Exception:
+    return False
+
+def runtime_session_payload_valid(payload):
+  if not isinstance(payload, dict):
+    return False
+  if not pid_alive(payload.get("proxy_pid")):
+    return False
+  updated_at = to_int(payload.get("updated_at"), 0)
+  now = int(time.time())
+  if updated_at <= 0 or now <= 0:
+    return False
+  return (now - updated_at) <= int(RUNTIME_SESSION_STALE_SEC)
+
+def iter_runtime_sessions(root, prune_stale=False):
+  root_path = Path(root)
+  if not root_path.is_dir():
+    return
+  for path in root_path.glob("*.json"):
+    try:
+      payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+    if runtime_session_payload_valid(payload):
+      yield path, payload
+      continue
+    if prune_stale:
+      try:
+        path.unlink()
+      except FileNotFoundError:
+        pass
+      except Exception:
+        pass
+
+def runtime_session_stats(root, username, extra_client_ip=""):
+  root_path = Path(root)
+  user = norm_user(username)
+  if not user or not root_path.is_dir():
+    return 0, 0
+  total = 0
+  ips = set()
+  try:
+    for path, payload in iter_runtime_sessions(root_path, prune_stale=True):
+      session_user = norm_user(payload.get("username") or path.stem)
+      if session_user != user:
+        continue
+      total += 1
+      ip = normalize_ip(payload.get("client_ip"))
+      if ip:
+        ips.add(ip)
+  except Exception:
+    return 0, 0
+  extra_ip = normalize_ip(extra_client_ip)
+  if extra_ip:
+    ips.add(extra_ip)
+  return total, len(ips)
+
 
 def _parse_port(addr):
   s = str(addr or "").strip()
@@ -2713,10 +2786,11 @@ class SharedRateLimiter:
 
 
 class QuotaManager:
-  def __init__(self, state_root, lock_file, enforcer_bin):
+  def __init__(self, state_root, lock_file, enforcer_bin, session_root):
     self.state_root = Path(state_root)
     self.lock_file = Path(lock_file)
     self.enforcer_bin = Path(enforcer_bin)
+    self.session_root = Path(session_root)
     self._pending = defaultdict(int)
     self._cache = {}
     self._cache_lock = asyncio.Lock()
@@ -2724,6 +2798,37 @@ class QuotaManager:
   def _qf(self, username):
     u = norm_user(username)
     return self.state_root / "{}@ssh.json".format(u)
+
+  def _legacy_qf(self, username):
+    u = norm_user(username)
+    return self.state_root / "{}.json".format(u)
+
+  def _resolve_qf(self, username):
+    primary = self._qf(username)
+    if primary.is_file():
+      return primary
+    legacy = self._legacy_qf(username)
+    if legacy.is_file():
+      return legacy
+    return primary
+
+  def _state_entries(self):
+    try:
+      entries = sorted(self.state_root.iterdir(), key=lambda p: p.name.lower())
+    except Exception:
+      return []
+    out = []
+    for entry in entries:
+      try:
+        if not entry.is_file():
+          continue
+      except Exception:
+        continue
+      name = entry.name
+      if name.startswith(".") or not name.endswith(".json"):
+        continue
+      out.append(entry)
+    return out
 
   def _load_json(self, path):
     try:
@@ -2737,6 +2842,31 @@ class QuotaManager:
 
   def _write_json_atomic(self, path, payload):
     write_json_atomic_file(path, payload, 0o600)
+
+  def _invalidate_cache(self, users):
+    if not users:
+      return
+    for user in users:
+      self._cache.pop(norm_user(user), None)
+
+  def _trigger_enforcer_sync(self, target_user=""):
+    if not self.enforcer_bin.is_file() or not os.access(str(self.enforcer_bin), os.X_OK):
+      return False
+    cmd = [str(self.enforcer_bin), "--once"]
+    user = norm_user(target_user)
+    if user:
+      cmd.extend(["--user", user])
+    try:
+      subprocess.run(
+        cmd,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+      )
+      return True
+    except Exception:
+      return False
 
   def _parse_policy(self, username, payload):
     st_raw = payload.get("status")
@@ -2775,11 +2905,7 @@ class QuotaManager:
     tok = normalize_token(token)
     if not tok or not self.state_root.is_dir():
       return ""
-    try:
-      entries = sorted(self.state_root.glob("*@ssh.json"), key=lambda p: p.name.lower())
-    except Exception:
-      return ""
-    for qf in entries:
+    for qf in self._state_entries():
       payload = self._load_json(qf)
       if normalize_token(payload.get("sshws_token")) != tok:
         continue
@@ -2792,7 +2918,7 @@ class QuotaManager:
     user = norm_user(username)
     if not user:
       return None
-    qf = self._qf(user)
+    qf = self._resolve_qf(user)
     try:
       st = os.stat(str(qf))
       mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
@@ -2809,6 +2935,48 @@ class QuotaManager:
     async with self._cache_lock:
       self._cache[user] = {"mtime_ns": mtime_ns, "policy": policy}
     return policy
+
+  async def get_admission(self, username, client_ip=""):
+    user = norm_user(username)
+    if not user:
+      return {"allowed": False, "reason": "Forbidden", "policy": None}
+    qf = self._resolve_qf(user)
+    if not qf.is_file():
+      return {"allowed": False, "reason": "Forbidden", "policy": None}
+    payload = self._load_json(qf)
+    if not isinstance(payload, dict):
+      return {"allowed": False, "reason": "Forbidden", "policy": None}
+
+    policy = self._parse_policy(user, payload)
+    st_raw = payload.get("status")
+    st = st_raw if isinstance(st_raw, dict) else {}
+    lock_reason = str(st.get("lock_reason") or "").strip().lower()
+
+    if to_bool(st.get("manual_block")) or lock_reason == "manual":
+      return {"allowed": False, "reason": "Account Locked", "policy": policy}
+
+    quota_limit = max(0, to_int(payload.get("quota_limit"), 0))
+    quota_used = max(0, to_int(payload.get("quota_used"), 0))
+    if to_bool(st.get("quota_exhausted")) or lock_reason == "quota" or (quota_limit > 0 and quota_used >= quota_limit):
+      return {"allowed": False, "reason": "Account Locked", "policy": policy}
+
+    if to_bool(st.get("account_locked")) and lock_reason not in ("", "ip_limit"):
+      return {"allowed": False, "reason": "Account Locked", "policy": policy}
+
+    ip_enabled = to_bool(st.get("ip_limit_enabled"))
+    ip_limit = max(0, to_int(st.get("ip_limit"), 0))
+    if ip_enabled and ip_limit > 0:
+      active_total, active_ip_count = runtime_session_stats(self.session_root, user, client_ip)
+      prospective_total = int(active_total) + 1
+      prospective_metric = max(prospective_total, int(active_ip_count or 0))
+      if prospective_metric > ip_limit:
+        return {"allowed": False, "reason": "IP/Login Limit Reached", "policy": policy}
+
+    return {"allowed": True, "reason": "", "policy": policy}
+
+  async def enforce_now(self, target_user=""):
+    user = norm_user(target_user)
+    await asyncio.to_thread(self._trigger_enforcer_sync, user)
 
   async def record(self, username, up_bytes=0, down_bytes=0):
     user = norm_user(username)
@@ -2837,7 +3005,7 @@ class QuotaManager:
       for user, delta in deltas.items():
         if int(delta) <= 0:
           continue
-        qf = self._qf(user)
+        qf = self._resolve_qf(user)
         if not qf.is_file():
           continue
         payload = self._load_json(qf)
@@ -2857,19 +3025,8 @@ class QuotaManager:
 
     if changed:
       async with self._cache_lock:
-        for user in changed:
-          self._cache.pop(user, None)
-      if self.enforcer_bin.is_file() and os.access(str(self.enforcer_bin), os.X_OK):
-        try:
-          subprocess.run(
-            [str(self.enforcer_bin), "--once"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-          )
-        except Exception:
-          pass
+        self._invalidate_cache(changed)
+      await asyncio.to_thread(self._trigger_enforcer_sync, "")
     return bool(changed)
 
 
@@ -2886,6 +3043,7 @@ class ConnectionContext:
     self._pending_down = 0
     self._policy_cached = None
     self._policy_cached_at = 0.0
+    self._session_written_at = 0.0
 
   def write_runtime_session(self, username=""):
     if self._session_path is None:
@@ -2901,6 +3059,7 @@ class ConnectionContext:
     if self._client_ip:
       payload["client_ip"] = self._client_ip
     write_json_atomic_file(self._session_path, payload, 0o600)
+    self._session_written_at = time.monotonic()
 
   def clear_runtime_session(self):
     if self._session_path is None:
@@ -2909,6 +3068,23 @@ class ConnectionContext:
       self._session_path.unlink()
     except FileNotFoundError:
       pass
+    except Exception:
+      pass
+    self._session_written_at = 0.0
+
+  async def touch_runtime_session(self, force=False):
+    if self._session_path is None:
+      return
+    async with self._lock:
+      user = self._username
+      last_written = float(self._session_written_at or 0.0)
+    if not user:
+      return
+    now = time.monotonic()
+    if not force and last_written > 0 and (now - last_written) < float(RUNTIME_SESSION_HEARTBEAT_SEC):
+      return
+    try:
+      self.write_runtime_session(user)
     except Exception:
       pass
 
@@ -2980,6 +3156,18 @@ class ConnectionRegistry:
   def __init__(self):
     self._lock = asyncio.Lock()
     self._by_port = {}
+
+  async def admit_and_register(self, ctx, username, client_ip, quota_mgr):
+    admission = {"allowed": False, "reason": "Forbidden", "policy": None}
+    user = norm_user(username)
+    async with self._lock:
+      admission = await quota_mgr.get_admission(user, client_ip)
+      if not admission.get("policy") or not admission.get("allowed"):
+        return admission
+      await ctx.assign_username(user)
+      if ctx.backend_local_port > 0:
+        self._by_port[ctx.backend_local_port] = ctx
+    return admission
 
   async def register(self, ctx):
     if ctx.backend_local_port <= 0:
@@ -3168,6 +3356,20 @@ async def _backend_to_client(backend_reader, client_writer, ctx, limiter, args, 
     await client_writer.drain()
 
 
+async def _runtime_session_heartbeat(stop_evt, ctx):
+  interval = max(5.0, float(RUNTIME_SESSION_HEARTBEAT_SEC))
+  while not stop_evt.is_set():
+    try:
+      await asyncio.wait_for(stop_evt.wait(), timeout=interval)
+      break
+    except asyncio.TimeoutError:
+      pass
+    try:
+      await ctx.touch_runtime_session(force=True)
+    except Exception:
+      pass
+
+
 async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limiter):
   try:
     headers, path_only = await _read_handshake(ws_reader, args.path, args.handshake_timeout)
@@ -3208,6 +3410,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
       pass
     return
 
+  client_ip = extract_client_ip(headers, ws_writer.get_extra_info("peername"))
   policy = await quota_mgr.get_policy(username)
   if not policy:
     try:
@@ -3220,21 +3423,12 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     except Exception:
       pass
     return
-  if policy.get("blocked"):
-    try:
-      await _send_http_error(ws_writer, 403, "Account Locked")
-    except Exception:
-      pass
-    try:
-      ws_writer.close()
-      await ws_writer.wait_closed()
-    except Exception:
-      pass
-    return
 
   backend_writer = None
   ctx = None
   resolver_task = None
+  heartbeat_stop = None
+  heartbeat_task = None
   try:
     backend_reader, backend_writer = await asyncio.open_connection(
       args.backend_host,
@@ -3242,13 +3436,46 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     )
     sockname = backend_writer.get_extra_info("sockname")
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
-    client_ip = extract_client_ip(headers, ws_writer.get_extra_info("peername"))
     ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root, client_ip)
-    await registry.register(ctx)
+    admission = await registry.admit_and_register(ctx, username, client_ip, quota_mgr)
+    if not admission.get("policy"):
+      try:
+        backend_writer.close()
+        await backend_writer.wait_closed()
+      except Exception:
+        pass
+      try:
+        await _send_http_error(ws_writer, 403, "Forbidden")
+      except Exception:
+        pass
+      try:
+        ws_writer.close()
+        await ws_writer.wait_closed()
+      except Exception:
+        pass
+      return
+    if not admission.get("allowed"):
+      try:
+        backend_writer.close()
+        await backend_writer.wait_closed()
+      except Exception:
+        pass
+      try:
+        await _send_http_error(ws_writer, 403, admission.get("reason") or "Account Locked")
+      except Exception:
+        pass
+      try:
+        ws_writer.close()
+        await ws_writer.wait_closed()
+      except Exception:
+        pass
+      return
     try:
-      await ctx.assign_username(username)
+      await quota_mgr.enforce_now(username)
     except Exception:
       pass
+    heartbeat_stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(_runtime_session_heartbeat(heartbeat_stop, ctx))
   except Exception:
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
@@ -3292,6 +3519,14 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
   except Exception:
     pass
   finally:
+    if heartbeat_stop is not None:
+      heartbeat_stop.set()
+    if heartbeat_task is not None and not heartbeat_task.done():
+      heartbeat_task.cancel()
+      try:
+        await heartbeat_task
+      except BaseException:
+        pass
     if resolver_task is not None and not resolver_task.done():
       resolver_task.cancel()
       try:
@@ -3301,11 +3536,16 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     if ctx is not None:
       # Best-effort resolve terakhir sebelum context dilepas:
       # mengurangi kemungkinan quota/speed tidak teratribusi pada koneksi pendek.
+      current_user = ""
       try:
         if not await ctx.username():
           await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=2, delay_sec=0.02, scan_timeout_sec=0.2)
       except Exception:
         pass
+      try:
+        current_user = await ctx.username()
+      except Exception:
+        current_user = ""
       try:
         await quota_mgr.flush_once()
       except Exception:
@@ -3315,6 +3555,11 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
       except Exception:
         pass
       await registry.unregister(ctx)
+      if current_user:
+        try:
+          await quota_mgr.enforce_now(current_user)
+        except Exception:
+          pass
     if backend_writer is not None:
       try:
         backend_writer.close()
@@ -3359,7 +3604,7 @@ async def _quota_flush_loop(args, stop_evt, quota_mgr):
 
 async def _run(args):
   cleanup_runtime_session_root(args.qac_session_root)
-  quota_mgr = QuotaManager(args.qac_state_root, args.qac_lock_file, args.qac_enforcer_bin)
+  quota_mgr = QuotaManager(args.qac_state_root, args.qac_lock_file, args.qac_enforcer_bin, args.qac_session_root)
   limiter = SharedRateLimiter()
   registry = ConnectionRegistry()
 
@@ -3491,10 +3736,12 @@ import re
 import secrets
 import subprocess
 import tempfile
+import time
 
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
+RUNTIME_SESSION_STALE_SEC = 90
 LOCK_SHELL_CANDIDATES = (
   "/usr/sbin/nologin",
   "/usr/bin/nologin",
@@ -3559,6 +3806,51 @@ def normalize_ip(v):
   except Exception:
     return ""
 
+def pid_alive(pid):
+  value = to_int(pid, 0)
+  if value <= 0:
+    return False
+  try:
+    os.kill(value, 0)
+    return True
+  except ProcessLookupError:
+    return False
+  except PermissionError:
+    return True
+  except Exception:
+    return False
+
+def runtime_session_payload_valid(payload):
+  if not isinstance(payload, dict):
+    return False
+  if not pid_alive(payload.get("proxy_pid")):
+    return False
+  updated_at = to_int(payload.get("updated_at"), 0)
+  now = to_int(time.time(), 0)
+  if updated_at <= 0 or now <= 0:
+    return False
+  return (now - updated_at) <= int(RUNTIME_SESSION_STALE_SEC)
+
+def iter_runtime_sessions(root, prune_stale=False):
+  root_path = pathlib.Path(root)
+  if not root_path.is_dir():
+    return
+  for path in root_path.glob("*.json"):
+    try:
+      payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+    if runtime_session_payload_valid(payload):
+      yield path, payload
+      continue
+    if prune_stale:
+      try:
+        path.unlink()
+      except FileNotFoundError:
+        pass
+      except Exception:
+        pass
+
 def cmd_ok(cmd):
   try:
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -3596,13 +3888,7 @@ def runtime_session_stats(username):
   total = 0
   ips = set()
   try:
-    for path in SESSION_ROOT.glob("*.json"):
-      try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-      except Exception:
-        continue
-      if not isinstance(payload, dict):
-        continue
+    for path, payload in iter_runtime_sessions(SESSION_ROOT, prune_stale=True):
       session_user = norm_user(payload.get("username") or path.stem)
       if session_user == user:
         total += 1
@@ -3694,6 +3980,56 @@ def write_json_atomic(path, payload):
     except Exception:
       pass
 
+def iter_ssh_state_files(root):
+  root_path = Path(root)
+  try:
+    entries = sorted(root_path.iterdir(), key=lambda p: p.name.lower())
+  except Exception:
+    return []
+  out = []
+  for entry in entries:
+    try:
+      if not entry.is_file():
+        continue
+    except Exception:
+      continue
+    name = entry.name
+    if name.startswith(".") or not name.endswith(".json"):
+      continue
+    out.append(entry)
+  return out
+
+def pick_unique_sshws_token(root, current_path, current_token):
+  seen = set()
+  try:
+    current_real = str(Path(current_path).resolve())
+  except Exception:
+    current_real = str(current_path)
+  for entry in iter_ssh_state_files(root):
+    try:
+      if str(entry.resolve()) == current_real:
+        continue
+    except Exception:
+      if str(entry) == str(current_path):
+        continue
+    try:
+      loaded = json.loads(entry.read_text(encoding="utf-8"))
+      if not isinstance(loaded, dict):
+        continue
+    except Exception:
+      continue
+    tok = normalize_token(loaded.get("sshws_token"))
+    if tok:
+      seen.add(tok)
+  tok = normalize_token(current_token)
+  if tok and tok not in seen:
+    return tok
+  for _ in range(256):
+    tok = secrets.token_hex(5)
+    if tok not in seen:
+      return tok
+  raise RuntimeError("failed to allocate unique sshws token")
+
 def normalize_payload(path):
   payload = {}
   if path.is_file():
@@ -3708,9 +4044,7 @@ def normalize_payload(path):
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
-  token = str(payload.get("sshws_token") or "").strip().lower()
-  if not re.fullmatch(r"[a-f0-9]{10}", token):
-    token = secrets.token_hex(5)
+  token = pick_unique_sshws_token(path.parent, path, payload.get("sshws_token"))
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
   if quota_limit < 0:
