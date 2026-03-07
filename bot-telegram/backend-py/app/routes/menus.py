@@ -44,7 +44,7 @@ def get_main_menu_overview() -> dict:
 @router.get("/api/users/options", dependencies=[Depends(verify_shared_secret)])
 def get_user_options(proto: str | None = None) -> dict:
     proto_norm = (proto or "").strip().lower()
-    if proto_norm and proto_norm not in {"vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"}:
+    if proto_norm and proto_norm not in set(system.USER_PROTOCOLS):
         return {"users": []}
 
     records = system.list_accounts()

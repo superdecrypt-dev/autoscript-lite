@@ -50,9 +50,10 @@ CLEANUP_MAX_LIMIT = 200
 CLEANUP_KEEP_MESSAGES = 1
 CLEANUP_MAX_SCAN_IDS = 2000
 DELETE_PICK_PAGE_SIZE = 12
-DELETE_PICK_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 FORM_CHOICE_PAGE_SIZE = 12
-FORM_CHOICE_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+USER_PROTOCOLS = XRAY_PROTOCOLS + ("ssh",)
+DELETE_PICK_PROTOCOLS = USER_PROTOCOLS
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -60,6 +61,24 @@ ROOT_DOMAIN_FALLBACK_OPTIONS = (
 FORM_CHOICE_MANUAL_VALUE = "__manual_input__"
 FORM_CHOICE_SKIP_VALUE = "__skip_optional__"
 FORM_CHOICE_USERNAME_ACTIONS = {
+    "extend_expiry",
+    "account_info",
+    "reset_password",
+    "detail",
+    "set_quota_limit",
+    "reset_quota_used",
+    "manual_block",
+    "ip_limit_enable",
+    "set_ip_limit",
+    "unlock_ip_lock",
+    "set_speed_download",
+    "set_speed_upload",
+    "speed_limit",
+    "set_warp_user_mode",
+}
+SSH_ENABLED_PROTOCOL_ACTIONS = {
+    "add_user",
+    "delete_user",
     "extend_expiry",
     "account_info",
     "detail",
@@ -72,7 +91,9 @@ FORM_CHOICE_USERNAME_ACTIONS = {
     "set_speed_download",
     "set_speed_upload",
     "speed_limit",
-    "set_warp_user_mode",
+}
+SSH_ONLY_PROTOCOL_ACTIONS = {
+    "reset_password",
 }
 KEY_PENDING_FORM = "pending_form"
 KEY_PENDING_CONFIRM = "pending_confirm"
@@ -345,6 +366,14 @@ def _delete_pick_proto_keyboard(menu_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _protocol_choices_for_action(action_id: str) -> tuple[str, ...]:
+    if action_id in SSH_ONLY_PROTOCOL_ACTIONS:
+        return ("ssh",)
+    if action_id in SSH_ENABLED_PROTOCOL_ACTIONS:
+        return USER_PROTOCOLS
+    return XRAY_PROTOCOLS
+
+
 def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     start = page * DELETE_PICK_PAGE_SIZE
@@ -551,7 +580,7 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
     params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
 
     if field_id == "proto":
-        return [(proto.upper(), proto) for proto in FORM_CHOICE_PROTOCOLS]
+        return [(proto.upper(), proto) for proto in _protocol_choices_for_action(action_id)]
 
     if field_id in {"enabled", "proxied", "allow_existing_same_ip", "speed_limit_enabled"}:
         return [("ON", "on"), ("OFF", "off")]
@@ -612,7 +641,7 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
 
     if field_id == "username" and action_id in FORM_CHOICE_USERNAME_ACTIONS:
         proto = str(params.get("proto") or "").strip().lower()
-        if proto not in FORM_CHOICE_PROTOCOLS:
+        if proto not in _protocol_choices_for_action(action_id):
             return []
         try:
             options: list[BackendUserOption] = await runtime.backend.list_user_options(proto=proto)

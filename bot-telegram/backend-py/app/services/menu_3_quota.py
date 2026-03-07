@@ -2,12 +2,13 @@ from ..adapters import system, system_mutations
 from ..utils.response import error_response, ok_response
 from ..utils.validators import (
     require_bool_param,
-    require_param,
     require_positive_float_param,
     require_positive_int_param,
     require_protocol,
     require_username,
 )
+
+USER_PROTOCOLS = set(system.USER_PROTOCOLS)
 
 
 def handle(action: str, params: dict, settings) -> dict:
@@ -16,10 +17,10 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "detail":
-        ok_p, proto_or_err = require_param(params, "proto", "Quota Detail")
+        ok_p, proto_or_err = require_protocol(params, "Quota Detail", allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
-        ok_u, user_or_err = require_param(params, "username", "Quota Detail")
+        ok_u, user_or_err = require_username(params, "Quota Detail")
         if not ok_u:
             return user_or_err
         title, msg = system.op_quota_detail(proto_or_err.lower(), user_or_err)
@@ -29,7 +30,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Set Limit"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -47,7 +48,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Reset Used"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -62,7 +63,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Manual Block"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -80,7 +81,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - IP Limit"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -98,7 +99,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Set IP Limit"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -116,7 +117,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Unlock IP Lock"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -131,7 +132,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Speed Download"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -149,7 +150,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Speed Upload"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -167,7 +168,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Quota & Access Control", "Dangerous actions dinonaktifkan via env.")
         title = "Quota - Speed Limit"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)

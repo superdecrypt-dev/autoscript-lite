@@ -3,12 +3,14 @@ import json
 import re
 import shutil
 import subprocess
+from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, List, Tuple
 
 ACCOUNT_ROOT = Path("/opt/account")
 QUOTA_ROOT = Path("/opt/quota")
+SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
 XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 CERT_FULLCHAIN = Path("/opt/cert/fullchain.pem")
@@ -32,9 +34,13 @@ READONLY_GEOSITE_DOMAINS = (
     "geosite:netflix",
     "geosite:reddit",
 )
-PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+SSH_PROTOCOL = "ssh"
+USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
+PROTOCOLS = XRAY_PROTOCOLS
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 ALLOWED_SERVICES = (
     "xray",
@@ -44,6 +50,10 @@ ALLOWED_SERVICES = (
     "xray-quota",
     "xray-limit-ip",
     "xray-speed",
+    "sshws-dropbear",
+    "sshws-stunnel",
+    "sshws-proxy",
+    "sshws-qac-enforcer.timer",
 )
 
 
@@ -131,6 +141,14 @@ def service_state(name: str) -> str:
     if ok:
         return out.splitlines()[-1].strip()
     return out.splitlines()[-1].strip() if out.strip() else "unknown"
+
+
+def service_exists(name: str, unit_type: str = "service") -> bool:
+    unit = f"{name}.{unit_type}"
+    ok, out = run_cmd(["systemctl", "list-unit-files", unit], timeout=8)
+    if not ok:
+        return False
+    return unit in out
 
 
 def systemctl_enabled_state(name: str) -> str:
@@ -455,7 +473,7 @@ def op_domain_guard_renew_if_needed(force: bool = False) -> tuple[bool, str, str
 
 def list_accounts() -> list[tuple[str, str]]:
     records: list[tuple[str, str]] = []
-    for proto in PROTOCOLS:
+    for proto in USER_PROTOCOLS:
         d = ACCOUNT_ROOT / proto
         if not d.exists():
             continue
@@ -484,14 +502,14 @@ def list_accounts() -> list[tuple[str, str]]:
 def op_user_list() -> tuple[str, str]:
     records = list_accounts()
     if not records:
-        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
+        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022,ssh}}"
 
-    counts = {p: 0 for p in PROTOCOLS}
+    counts = {p: 0 for p in USER_PROTOCOLS}
     for proto, _ in records:
         counts[proto] += 1
 
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(records[:250])]
-    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in PROTOCOLS])
+    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in USER_PROTOCOLS])
     body = (
         f"Total user: {len(records)}\n"
         f"{protocol_lines}\n\n"
@@ -527,6 +545,14 @@ def _account_candidates(proto: str, username: str) -> list[Path]:
 
 def _is_valid_username(username: str) -> bool:
     return bool(USERNAME_RE.match(username))
+
+
+def _is_valid_ssh_username(username: str) -> bool:
+    return bool(SSH_USERNAME_RE.match(username))
+
+
+def _account_info_label(proto: str) -> str:
+    return "SSH ACCOUNT INFO" if proto == SSH_PROTOCOL else "XRAY ACCOUNT INFO"
 
 
 def _to_int(v: object, default: int = 0) -> int:
@@ -751,7 +777,7 @@ def _pick_field(data: dict, keys: list[str], default: str = "-") -> str:
 def op_quota_summary() -> tuple[str, str]:
     lines: list[str] = []
     count = 0
-    for proto in PROTOCOLS:
+    for proto in USER_PROTOCOLS:
         for username, path in _iter_proto_quota_files(proto):
             ok, payload = read_json(path)
             if not ok:
@@ -778,15 +804,18 @@ def op_quota_summary() -> tuple[str, str]:
 
     if not lines:
         return "Quota & Access Control - Summary", (
-            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
+            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022,ssh}}"
         )
     return "Quota & Access Control - Summary", "Maks 200 entri:\n" + "\n".join(lines)
 
 
 def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return "Quota & Access Control - Detail", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return "Quota & Access Control - Detail", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(username):
         return "Quota & Access Control - Detail", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
     for candidate in _quota_candidates(proto, username):
         if not candidate.exists():
@@ -797,6 +826,7 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
         parts = [f"Quota File: {candidate}", "", json.dumps(payload, indent=2, ensure_ascii=False)]
 
         account_file = next((p for p in _account_candidates(proto, username) if p.exists()), None)
+        account_label = _account_info_label(proto)
         if account_file is not None:
             try:
                 account_text = account_file.read_text(encoding="utf-8", errors="ignore").strip()
@@ -805,13 +835,13 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
             parts.extend(
                 [
                     "",
-                    f"XRAY ACCOUNT INFO File: {account_file}",
+                    f"{account_label} File: {account_file}",
                     "",
                     account_text or "(kosong)",
                 ]
             )
         else:
-            parts.extend(["", "XRAY ACCOUNT INFO: file tidak ditemukan di /opt/account"])
+            parts.extend(["", f"{account_label}: file tidak ditemukan di /opt/account"])
 
         return "Quota & Access Control - Detail", "\n".join(parts)
     return "Quota & Access Control - Detail", f"File quota tidak ditemukan untuk {username} [{proto}]"
@@ -820,9 +850,12 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
 def op_account_info(proto: str, username: str) -> tuple[str, str]:
     proto_n = proto.lower().strip()
     user_n = username.strip()
-    if proto_n not in PROTOCOLS:
+    if proto_n not in USER_PROTOCOLS:
         return "User Management - Account Info", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(user_n):
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return "User Management - Account Info", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
         return "User Management - Account Info", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _account_candidates(proto_n, user_n):
@@ -841,9 +874,12 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
 def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
     proto_n = proto.lower().strip()
     user_n = username.strip()
-    if proto_n not in PROTOCOLS:
+    if proto_n not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
-    if not _is_valid_username(user_n):
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
         return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _quota_candidates(proto_n, user_n):
@@ -870,7 +906,7 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
         if not fields:
             continue
         protocol = str(fields.get("Protocol") or proto_n).strip().lower()
-        if protocol not in PROTOCOLS:
+        if protocol not in USER_PROTOCOLS:
             protocol = proto_n
         return True, {
             "username": str(fields.get("Username") or user_n).strip() or user_n,
@@ -1655,3 +1691,90 @@ def op_restart_service(service: str) -> tuple[bool, str, str]:
     if ok:
         return True, "Maintenance - Restart", f"Restart {service} berhasil.\nState: {state}"
     return False, "Maintenance - Restart", f"Restart {service} gagal.\n{out}\nState: {state}"
+
+
+def op_restart_sshws_stack() -> tuple[bool, str, str]:
+    title = "Maintenance - Restart SSHWS Stack"
+    services = ["sshws-dropbear", "sshws-stunnel", "sshws-proxy"]
+    lines: list[str] = []
+    had_failure = False
+    attempted = 0
+
+    for service in services:
+        if not service_exists(service):
+            lines.append(f"- {service}: skip (unit tidak ditemukan)")
+            continue
+        attempted += 1
+        ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
+        state = service_state(service)
+        if ok:
+            lines.append(f"- {service}: restarted ({state})")
+        else:
+            had_failure = True
+            brief = out.splitlines()[-1].strip() if out else "unknown error"
+            lines.append(f"- {service}: gagal ({state}) - {brief}")
+
+    if attempted == 0:
+        return False, title, "Tidak ada unit SSHWS yang ditemukan."
+    if had_failure:
+        return False, title, "\n".join(lines)
+    return True, title, "\n".join(lines)
+
+
+def op_sshws_active_sessions() -> tuple[str, str]:
+    title = "User Management - Active SSHWS Sessions"
+    if not SSHWS_RUNTIME_SESSION_DIR.exists():
+        return title, f"Runtime session dir tidak ditemukan: {SSHWS_RUNTIME_SESSION_DIR}"
+
+    sessions: list[dict[str, str]] = []
+    counts: Counter[str] = Counter()
+    for path in sorted(SSHWS_RUNTIME_SESSION_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        username = str(payload.get("username") or "").strip()
+        if not username:
+            continue
+        backend_port = str(payload.get("backend_local_port") or "-").strip() or "-"
+        proxy_pid = str(payload.get("proxy_pid") or "-").strip() or "-"
+        updated_raw = payload.get("updated_at")
+        updated_text = "-"
+        try:
+            updated_text = datetime.fromtimestamp(int(updated_raw), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            pass
+        counts[username] += 1
+        sessions.append(
+            {
+                "username": username,
+                "backend_port": backend_port,
+                "proxy_pid": proxy_pid,
+                "updated_at": updated_text,
+                "session_file": path.name,
+            }
+        )
+
+    if not sessions:
+        return title, "Belum ada sesi aktif SSHWS."
+
+    summary_lines = [f"- {user}: {counts[user]} sesi" for user in sorted(counts.keys())]
+    detail_lines = [
+        f"{idx+1:03d}. {item['username']} | port={item['backend_port']} | pid={item['proxy_pid']} | updated={item['updated_at']} | file={item['session_file']}"
+        for idx, item in enumerate(sessions[:200])
+    ]
+    msg = "\n".join(
+        [
+            f"Total sesi aktif : {len(sessions)}",
+            f"Total user aktif : {len(counts)}",
+            "",
+            "Ringkasan per user:",
+            *summary_lines,
+            "",
+            "Detail sesi (maks 200):",
+            *detail_lines,
+        ]
+    )
+    return title, msg

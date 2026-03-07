@@ -9,6 +9,9 @@ from ..utils.validators import (
     require_username,
 )
 
+USER_PROTOCOLS = set(system.USER_PROTOCOLS)
+SSH_ONLY_PROTOCOLS = {system.SSH_PROTOCOL}
+
 
 def _fmt_number(value: float) -> str:
     if value <= 0:
@@ -34,7 +37,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "User Management", "Dangerous actions dinonaktifkan via env.")
         title = "User Management - Add User"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title, max_length=64)
@@ -75,6 +78,13 @@ def handle(action: str, params: dict, settings) -> dict:
             speed_down = float(sd_or_err)
             speed_up = float(su_or_err)
 
+        password_value = ""
+        if proto_or_err == system.SSH_PROTOCOL:
+            ok_pw, pw_or_err = require_param(params, "password", title)
+            if not ok_pw:
+                return pw_or_err
+            password_value = str(pw_or_err)
+
         ok_add, title_add, msg_add = system_mutations.op_user_add(
             proto=proto_or_err,
             username=user_or_err,
@@ -85,6 +95,7 @@ def handle(action: str, params: dict, settings) -> dict:
             speed_enabled=speed_enabled,
             speed_down_mbit=speed_down,
             speed_up_mbit=speed_up,
+            password=password_value,
         )
         if ok_add:
             ip_limit_text = "OFF"
@@ -101,9 +112,11 @@ def handle(action: str, params: dict, settings) -> dict:
                 f"Protokol    : {proto_or_err}",
                 f"Masa Aktif  : {int(days_or_err)} hari",
                 f"Quota       : {_fmt_number(float(quota_or_err))} GB",
-                f"IP Limit    : {ip_limit_text}",
+                f"IP/Login Limit : {ip_limit_text}",
                 f"Speed Limit : {speed_limit_text}",
             ]
+            if proto_or_err == system.SSH_PROTOCOL:
+                lines.append(f"Password    : {password_value}")
 
             data: dict[str, object] = {}
             data["add_user_summary"] = {
@@ -130,7 +143,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "User Management", "Dangerous actions dinonaktifkan via env.")
         title = "User Management - Delete User"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -145,7 +158,7 @@ def handle(action: str, params: dict, settings) -> dict:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "User Management", "Dangerous actions dinonaktifkan via env.")
         title = "User Management - Extend Expiry"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title)
@@ -167,9 +180,35 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title_ext, msg_ext)
         return error_response("user_extend_failed", title_ext, msg_ext)
 
+    if action == "reset_password":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "User Management", "Dangerous actions dinonaktifkan via env.")
+        title = "User Management - Reset Password"
+        ok_p, proto_or_err = require_protocol(params, title, allowed=SSH_ONLY_PROTOCOLS)
+        if not ok_p:
+            return proto_or_err
+        ok_u, user_or_err = require_username(params, title)
+        if not ok_u:
+            return user_or_err
+        ok_pw, pw_or_err = require_param(params, "password", title)
+        if not ok_pw:
+            return pw_or_err
+        ok_reset, title_reset, msg_reset = system_mutations.op_ssh_reset_password(user_or_err, str(pw_or_err))
+        if ok_reset:
+            lines = [
+                msg_reset,
+                f"Password baru : {pw_or_err}",
+            ]
+            return ok_response(title_reset, "\n".join(lines))
+        return error_response("user_reset_password_failed", title_reset, msg_reset)
+
+    if action == "active_sshws_sessions":
+        title, msg = system.op_sshws_active_sessions()
+        return ok_response(title, msg)
+
     if action == "account_info":
         title = "User Management - Account Info"
-        ok_p, proto_or_err = require_protocol(params, title)
+        ok_p, proto_or_err = require_protocol(params, title, allowed=USER_PROTOCOLS)
         if not ok_p:
             return proto_or_err
         ok_u, user_or_err = require_username(params, title, max_length=64)

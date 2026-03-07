@@ -16,4 +16,12 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("restart_service_failed", title, msg)
 
+    if action == "restart_sshws_stack":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
+        ok, title, msg = system.op_restart_sshws_stack()
+        if ok:
+            return ok_response(title, msg)
+        return error_response("restart_service_failed", title, msg)
+
     return error_response("unknown_action", "Maintenance", f"Action tidak dikenal: {action}")
