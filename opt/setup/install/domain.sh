@@ -444,9 +444,14 @@ domain_menu_v2() {
 }
 
 install_acme_and_issue_cert() {
-  snapshot_conflicting_services_active
-  _ACME_RESTORE_NEEDED=1
-  stop_conflicting_services
+  if [[ "${ACME_CERT_MODE}" != "dns_cf_wildcard" ]]; then
+    snapshot_conflicting_services_active
+    _ACME_RESTORE_NEEDED=1
+    stop_conflicting_services
+  else
+    _ACME_RESTORE_SERVICES=()
+    _ACME_RESTORE_NEEDED=0
+  fi
   mkdir -p "$CERT_DIR"
 
   if [[ -x /root/.acme.sh/acme.sh ]]; then
@@ -494,7 +499,8 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "${DOMAIN}" \
       --key-file "${CERT_PRIVKEY}" \
       --fullchain-file "${CERT_FULLCHAIN}" \
-      --reloadcmd "systemctl restart nginx || true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null \
+      || die "Gagal install sertifikat wildcard ke ${CERT_DIR}."
   else
     ok "Issue sertifikat untuk ${DOMAIN} via acme.sh (standalone port 80)..."
     /root/.acme.sh/acme.sh --issue --force --standalone -d "${DOMAIN}" --httpport 80 \
@@ -503,8 +509,12 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "${DOMAIN}" \
       --key-file "${CERT_PRIVKEY}" \
       --fullchain-file "${CERT_FULLCHAIN}" \
-      --reloadcmd "systemctl restart nginx || true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null \
+      || die "Gagal install sertifikat ke ${CERT_DIR}."
   fi
+
+  nginx -t >/dev/null 2>&1 || die "Konfigurasi nginx tidak valid setelah install-cert."
+  systemctl restart nginx >/dev/null 2>&1 || die "Gagal restart nginx setelah install-cert."
 
   chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
   _ACME_RESTORE_NEEDED=0

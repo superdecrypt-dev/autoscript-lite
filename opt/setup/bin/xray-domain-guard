@@ -327,8 +327,17 @@ renew_if_needed() {
   if ! "${acme}" --install-cert -d "${domain}" \
     --key-file "${KEY_FILE}" \
     --fullchain-file "${CERT_FILE}" \
-    --reloadcmd "systemctl restart nginx || true" >/dev/null 2>&1; then
+    --reloadcmd "/bin/true" >/dev/null 2>&1; then
     append_log "install-cert failed domain=${domain}"
+    return 1
+  fi
+
+  if ! nginx -t >/dev/null 2>&1; then
+    append_log "nginx config invalid after install-cert domain=${domain}"
+    return 1
+  fi
+  if ! systemctl restart nginx >/dev/null 2>&1; then
+    append_log "nginx restart failed after install-cert domain=${domain}"
     return 1
   fi
 
