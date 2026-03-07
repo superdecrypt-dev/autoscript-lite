@@ -453,25 +453,26 @@ install_acme_and_issue_cert() {
     ok "acme.sh sudah ada."
   else
     ok "Install acme.sh..."
-    local acme_script acme_tarball acme_tmpdir acme_dns_hook
-    acme_script="$(mktemp)"
+    local acme_tarball acme_tmpdir acme_dns_hook
     acme_tarball="$(mktemp)"
     acme_tmpdir="$(mktemp -d)"
     acme_dns_hook="$(mktemp)"
-    download_file_or_die "${ACME_SH_SCRIPT_URL}" "${acme_script}" "${ACME_SH_SCRIPT_SHA256}" "acme.sh installer script"
     download_file_or_die "${ACME_SH_TARBALL_URL}" "${acme_tarball}" "${ACME_SH_TARBALL_SHA256}" "acme.sh tarball"
     download_file_or_die "${ACME_SH_DNS_CF_HOOK_URL}" "${acme_dns_hook}" "${ACME_SH_DNS_CF_HOOK_SHA256}" "acme.sh dns_cf hook"
     tar -xzf "${acme_tarball}" -C "${acme_tmpdir}" --strip-components=1 || die "Gagal ekstrak acme.sh tarball."
+    [[ -f "${acme_tmpdir}/acme.sh" ]] || die "Tarball acme.sh tidak berisi entry acme.sh."
     install -m 644 "${acme_dns_hook}" "${acme_tmpdir}/dnsapi/dns_cf.sh"
-    chmod +x "${acme_script}"
+    chmod +x "${acme_tmpdir}/acme.sh"
     export HOME=/root
-    export ACME_SH_SOURCE_DIR="${acme_tmpdir}"
-    sh "${acme_script}" --install --home /root/.acme.sh >/dev/null || {
-      rm -f "${acme_script}" "${acme_tarball}" "${acme_dns_hook}" >/dev/null 2>&1 || true
+    (
+      cd "${acme_tmpdir}" || exit 1
+      sh ./acme.sh --install --home /root/.acme.sh
+    ) >/dev/null || {
+      rm -f "${acme_tarball}" "${acme_dns_hook}" >/dev/null 2>&1 || true
       rm -rf "${acme_tmpdir}" >/dev/null 2>&1 || true
       die "Gagal install acme.sh"
     }
-    rm -f "${acme_script}" "${acme_tarball}" "${acme_dns_hook}" >/dev/null 2>&1 || true
+    rm -f "${acme_tarball}" "${acme_dns_hook}" >/dev/null 2>&1 || true
     rm -rf "${acme_tmpdir}" >/dev/null 2>&1 || true
   fi
 
