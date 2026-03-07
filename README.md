@@ -59,8 +59,3 @@ manage
 install-discord-bot
 install-telegram-bot
 ```
-
-## Dokumen Lanjutan
-- `HANDOFF.md`
-- `TESTING_PLAYBOOK.md`
-- `bot-telegram/README.md`
