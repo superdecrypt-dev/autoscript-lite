@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 # Domain and certificate module for setup runtime.
 
+declare -ag _ACME_RESTORE_SERVICES=()
+declare -gi _ACME_RESTORE_NEEDED=0
+
+acme_restore_conflicting_services_on_failure() {
+  local svc
+  [[ "${_ACME_RESTORE_NEEDED:-0}" == "1" ]] || return 0
+  for svc in "${_ACME_RESTORE_SERVICES[@]}"; do
+    if systemctl list-unit-files "${svc}.service" >/dev/null 2>&1; then
+      systemctl start "${svc}" >/dev/null 2>&1 || true
+    fi
+  done
+}
+register_exit_cleanup acme_restore_conflicting_services_on_failure
+
+snapshot_conflicting_services_active() {
+  local svc
+  _ACME_RESTORE_SERVICES=()
+  for svc in nginx apache2 caddy lighttpd; do
+    if systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
+      _ACME_RESTORE_SERVICES+=("${svc}")
+    fi
+  done
+}
+
 get_public_ipv4() {
   local ip=""
   ip="$(curl -4fsSL https://api.ipify.org 2>/dev/null || true)"
@@ -420,6 +444,8 @@ domain_menu_v2() {
 }
 
 install_acme_and_issue_cert() {
+  snapshot_conflicting_services_active
+  _ACME_RESTORE_NEEDED=1
   stop_conflicting_services
   mkdir -p "$CERT_DIR"
 
@@ -480,6 +506,7 @@ install_acme_and_issue_cert() {
   fi
 
   chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
+  _ACME_RESTORE_NEEDED=0
 
   ok "Sertifikat tersimpan:"
   ok "  - ${CERT_FULLCHAIN}"

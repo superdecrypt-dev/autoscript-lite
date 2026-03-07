@@ -115,6 +115,43 @@ install_setup_bin_or_die() {
   chown root:root "${dst}" 2>/dev/null || true
 }
 
+sync_tree_atomic() {
+  local src="$1"
+  local dst="$2"
+  local label="${3:-data}"
+  local parent base stage backup=""
+
+  [[ -d "${src}" ]] || die "Source ${label} tidak ditemukan: ${src}"
+  parent="$(dirname "${dst}")"
+  base="$(basename "${dst}")"
+  mkdir -p "${parent}"
+  stage="$(mktemp -d "${parent}/.${base}.stage.XXXXXX")" || die "Gagal menyiapkan staging ${label}: ${dst}"
+  cp -a "${src}/." "${stage}/" || {
+    rm -rf "${stage}" >/dev/null 2>&1 || true
+    die "Gagal menyalin ${label} ke staging: ${src}"
+  }
+
+  if [[ -e "${dst}" ]]; then
+    backup="${parent}/.${base}.backup.$(date +%Y%m%d%H%M%S)"
+    mv "${dst}" "${backup}" || {
+      rm -rf "${stage}" >/dev/null 2>&1 || true
+      die "Gagal memindahkan ${label} lama ke backup: ${dst}"
+    }
+  fi
+
+  if ! mv "${stage}" "${dst}"; then
+    rm -rf "${stage}" >/dev/null 2>&1 || true
+    if [[ -n "${backup}" && -e "${backup}" ]]; then
+      mv "${backup}" "${dst}" >/dev/null 2>&1 || true
+    fi
+    die "Gagal mengaktifkan ${label} baru: ${dst}"
+  fi
+
+  if [[ -n "${backup}" && -e "${backup}" ]]; then
+    rm -rf "${backup}" >/dev/null 2>&1 || true
+  fi
+}
+
 render_setup_template_or_die() {
   local rel="$1"
   local dst="$2"

@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # Main menu
 # -------------------------
+# Catatan maintainability:
+# Beberapa target action di bawah ini masih diimplementasikan di manage.sh selama
+# fase modularisasi transisi. Jangan menghapus handler lama sebelum logic benar-benar
+# dipindah dan smoke test menu terkait lulus.
 main_menu() {
   while true; do
     title

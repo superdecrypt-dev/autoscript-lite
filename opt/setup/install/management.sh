@@ -1589,7 +1589,7 @@ EOF
 }
 
 sync_manage_modules_layout() {
-  local tmpdir="" bundle_file="" downloaded="0" bundle_expected_sha=""
+  local tmpdir="" bundle_file="" downloaded="0" bundle_expected_sha="" extracted_modules_dir="" extracted_manage_bin=""
   bundle_expected_sha="${MANAGE_BUNDLE_SHA256:-}"
   local fallback_modules_dir="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 
@@ -1609,8 +1609,7 @@ sync_manage_modules_layout() {
   sync_manage_target_dir() {
     local src_dir="$1"
     local dst_dir="$2"
-    mkdir -p "${dst_dir}"
-    cp -a "${src_dir}/." "${dst_dir}/"
+    sync_tree_atomic "${src_dir}" "${dst_dir}" "modul manage ${dst_dir}"
     find "${dst_dir}" -type d -exec chmod 755 {} + 2>/dev/null || true
     find "${dst_dir}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
     chown -R root:root "${dst_dir}" 2>/dev/null || true
@@ -1618,16 +1617,18 @@ sync_manage_modules_layout() {
 
   sync_manage_from_local_source() {
     [[ -d "${MANAGE_MODULES_SRC_DIR}" ]] || return 1
+    [[ -f "${SCRIPT_DIR}/manage.sh" ]] || {
+      warn "Source lokal modular manage ditemukan, tetapi manage.sh tidak ada di ${SCRIPT_DIR}."
+      return 1
+    }
 
     sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_MODULES_DST_DIR}"
     sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${fallback_modules_dir}"
 
-    if [[ -f "${SCRIPT_DIR}/manage.sh" ]]; then
-      mkdir -p "$(dirname "${MANAGE_BIN}")"
-      install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
-      chown root:root "${MANAGE_BIN}" 2>/dev/null || true
-      ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
-    fi
+    mkdir -p "$(dirname "${MANAGE_BIN}")"
+    install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
+    chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+    ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
     ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
@@ -1660,7 +1661,9 @@ sync_manage_modules_layout() {
   fi
 
   if [[ "${downloaded}" == "1" ]]; then
-    if python3 - "${bundle_file}" "${MANAGE_MODULES_DST_DIR}" "${MANAGE_BIN}" "${SCRIPT_DIR}" <<'PY'
+    extracted_modules_dir="${tmpdir}/manage-modules"
+    extracted_manage_bin="${tmpdir}/manage.sh"
+    if python3 - "${bundle_file}" "${extracted_modules_dir}" "${extracted_manage_bin}" "${SCRIPT_DIR}" <<'PY'
 import os
 import sys
 import zipfile
@@ -1712,6 +1715,9 @@ with zipfile.ZipFile(zip_path, "r") as zf:
   if missing:
     print("missing module files in zip: " + ", ".join(sorted(missing)), file=sys.stderr)
     raise SystemExit(3)
+  if "manage.sh" not in base_map:
+    print("missing manage.sh in zip bundle", file=sys.stderr)
+    raise SystemExit(3)
 
   payload = {}
   for src_name, dst_rel in mapping.items():
@@ -1719,16 +1725,14 @@ with zipfile.ZipFile(zip_path, "r") as zf:
     data = zf.read(src_member)
     payload[src_name] = data
 
-  manage_data = None
-  if "manage.sh" in base_map:
-    manage_data = zf.read(base_map["manage.sh"])
+  manage_data = zf.read(base_map["manage.sh"])
 
   # Guard anti bundle stale: jika setup dijalankan dari repo yang punya source lokal,
   # pastikan isi bundle identik. Jika tidak, paksa fallback ke source lokal.
   local_manage = os.path.join(local_root, "manage.sh")
   local_modules_root = os.path.join(local_root, "opt", "manage")
   mismatch = []
-  if os.path.isfile(local_manage) and manage_data is not None:
+  if os.path.isfile(local_manage):
     if read_file(local_manage) != manage_data:
       mismatch.append("manage.sh")
   for src_name, dst_rel in mapping.items():
@@ -1746,13 +1750,12 @@ with zipfile.ZipFile(zip_path, "r") as zf:
       fh.write(payload[src_name])
     os.chmod(dst_path, 0o644)
 
-  if manage_data is not None:
-    manage_dir = os.path.dirname(manage_bin)
-    if manage_dir:
-      os.makedirs(manage_dir, exist_ok=True)
-    with open(manage_bin, "wb") as fh:
-      fh.write(manage_data)
-    os.chmod(manage_bin, 0o755)
+  manage_dir = os.path.dirname(manage_bin)
+  if manage_dir:
+    os.makedirs(manage_dir, exist_ok=True)
+  with open(manage_bin, "wb") as fh:
+    fh.write(manage_data)
+  os.chmod(manage_bin, 0o755)
 
 for sub in ("core", "features", "menus", "app"):
   path = os.path.join(dst_root, sub)
@@ -1761,9 +1764,12 @@ for sub in ("core", "features", "menus", "app"):
 os.chmod(dst_root, 0o755)
 PY
     then
-      chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
+      sync_manage_target_dir "${extracted_modules_dir}" "${MANAGE_MODULES_DST_DIR}"
+      sync_manage_target_dir "${extracted_modules_dir}" "${fallback_modules_dir}"
+      [[ -s "${extracted_manage_bin}" ]] || die "Binary manage hasil ekstraksi bundle kosong: ${extracted_manage_bin}"
+      mkdir -p "$(dirname "${MANAGE_BIN}")"
+      install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
-      sync_manage_target_dir "${MANAGE_MODULES_DST_DIR}" "${fallback_modules_dir}"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
