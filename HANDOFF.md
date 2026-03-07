@@ -110,6 +110,7 @@ Agent AI baru wajib memulai dari konteks di atas.
 
 ## Checklist Mulai Agent Baru
 1. Baca `AGENTS.md`, `RELEASE_NOTES.md`, `TESTING_PLAYBOOK.md`, dan file ini.
+   - Jika tugasnya audit, baca juga `AUDIT_PLAYBOOK.md`.
 2. Konfirmasi anchor konteks repo `superdecrypt-dev/autoscript`.
 3. Jalankan `git status --short` dan pastikan baseline jelas.
 4. Validasi minimum sebelum perubahan lanjutan:

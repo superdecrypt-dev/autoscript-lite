@@ -30,6 +30,27 @@ DISCORD_BOT_HOME="/opt/bot-discord"
 DISCORD_BOT_SRC_DIR="${REPO_DIR}/bot-discord"
 TELEGRAM_BOT_HOME="/opt/bot-telegram"
 TELEGRAM_BOT_SRC_DIR="${REPO_DIR}/bot-telegram"
+RUN_FALLBACK_REQUIRED_FILES=(
+  "setup.sh"
+  "manage.sh"
+  "install-discord-bot.sh"
+  "install-telegram-bot.sh"
+  "opt/setup/core/logging.sh"
+  "opt/setup/core/helpers.sh"
+  "opt/setup/install/bootstrap.sh"
+  "opt/setup/install/domain.sh"
+  "opt/setup/install/nginx.sh"
+  "opt/setup/install/network.sh"
+  "opt/setup/install/xray.sh"
+  "opt/setup/install/management.sh"
+  "opt/setup/install/sshws.sh"
+  "opt/setup/install/observability.sh"
+  "opt/manage/features/network.sh"
+  "opt/manage/features/analytics.sh"
+  "opt/manage/menus/maintenance_menu.sh"
+  "opt/manage/menus/main_menu.sh"
+  "opt/manage/app/main.sh"
+)
 
 # -------------------------
 # Warna output
@@ -59,6 +80,88 @@ repo_has_local_changes() {
     return 0
   fi
   return 1
+}
+
+repo_layout_missing_files() {
+  local root="$1"
+  shift || true
+  local -a patterns=("$@")
+  local -a missing=()
+  local rel=""
+
+  if [[ -d "${root}/.git" ]]; then
+    while IFS= read -r rel; do
+      [[ -n "${rel}" ]] || continue
+      [[ -e "${root}/${rel}" ]] || missing+=("${rel}")
+    done < <(git -C "${root}" ls-files -- "${patterns[@]}" 2>/dev/null || true)
+  fi
+
+  if (( ${#missing[@]} == 0 )); then
+    local fallback
+    for fallback in "${RUN_FALLBACK_REQUIRED_FILES[@]}"; do
+      [[ -e "${root}/${fallback}" ]] || missing+=("${fallback}")
+    done
+  fi
+
+  printf '%s\n' "${missing[@]}"
+}
+
+preflight_repo_layout() {
+  local root="$1"
+  local -a missing=()
+  local rel=""
+
+  [[ -d "${root}" ]] || die "Direktori source repo tidak ditemukan: ${root}"
+  [[ -d "${root}/opt/setup" ]] || die "Source modular setup tidak ditemukan: ${root}/opt/setup"
+  [[ -d "${root}/opt/manage" ]] || die "Source modular manage tidak ditemukan: ${root}/opt/manage"
+
+  while IFS= read -r rel; do
+    [[ -n "${rel}" ]] || continue
+    missing+=("${rel}")
+  done < <(repo_layout_missing_files "${root}" setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh opt/setup opt/manage)
+
+  if (( ${#missing[@]} > 0 )); then
+    warn "Layout repo tidak lengkap di: ${root}"
+    printf '  - %s\n' "${missing[@]}" >&2
+    die "Preflight repo gagal. Lengkapi source lokal/repo sebelum menjalankan run.sh."
+  fi
+}
+
+sync_tree_atomic() {
+  local src="$1"
+  local dst="$2"
+  local label="${3:-data}"
+  local parent base stage backup=""
+
+  [[ -d "${src}" ]] || die "Source ${label} tidak ditemukan: ${src}"
+  parent="$(dirname "${dst}")"
+  base="$(basename "${dst}")"
+  mkdir -p "${parent}"
+  stage="$(mktemp -d "${parent}/.${base}.stage.XXXXXX")" || die "Gagal menyiapkan staging ${label}: ${dst}"
+  cp -a "${src}/." "${stage}/" || {
+    rm -rf "${stage}" >/dev/null 2>&1 || true
+    die "Gagal menyalin ${label} ke staging: ${src}"
+  }
+
+  if [[ -e "${dst}" ]]; then
+    backup="${parent}/.${base}.backup.$(date +%Y%m%d%H%M%S)"
+    mv "${dst}" "${backup}" || {
+      rm -rf "${stage}" >/dev/null 2>&1 || true
+      die "Gagal memindahkan ${label} lama ke backup: ${dst}"
+    }
+  fi
+
+  if ! mv "${stage}" "${dst}"; then
+    rm -rf "${stage}" >/dev/null 2>&1 || true
+    if [[ -n "${backup}" && -e "${backup}" ]]; then
+      mv "${backup}" "${dst}" >/dev/null 2>&1 || true
+    fi
+    die "Gagal mengaktifkan ${label} baru: ${dst}"
+  fi
+
+  if [[ -n "${backup}" && -e "${backup}" ]]; then
+    rm -rf "${backup}" >/dev/null 2>&1 || true
+  fi
 }
 
 reclone_repo_with_backup() {
@@ -131,8 +234,7 @@ check_deps() {
 # -------------------------
 clone_repo() {
   if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
-    [[ -f "${REPO_DIR}/setup.sh" ]] || die "RUN_USE_LOCAL_SOURCE=1 tetapi setup.sh tidak ditemukan di ${REPO_DIR}"
-    [[ -f "${REPO_DIR}/manage.sh" ]] || die "RUN_USE_LOCAL_SOURCE=1 tetapi manage.sh tidak ditemukan di ${REPO_DIR}"
+    preflight_repo_layout "${REPO_DIR}"
     log "RUN_USE_LOCAL_SOURCE=1 -> gunakan source lokal: ${REPO_DIR}"
     return 0
   fi
@@ -157,6 +259,7 @@ clone_repo() {
       fi
       die "Gagal update repositori di ${REPO_DIR}. Penyebab bukan perubahan lokal; cek koneksi/remote lalu coba lagi."
     fi
+    preflight_repo_layout "${REPO_DIR}"
     ok "Repositori berhasil diperbarui."
     return 0
   fi
@@ -169,6 +272,7 @@ clone_repo() {
     fi
     die "Gagal mengkloning repositori: ${REPO_URL}\n  Pastikan server memiliki koneksi internet dan URL repo benar.\n  Detail git: ${clone_err}"
   fi
+  preflight_repo_layout "${REPO_DIR}"
   ok "Repositori berhasil diunduh."
 }
 
@@ -180,22 +284,18 @@ install_manage() {
   [[ -f "${src}" ]] || die "File manage.sh tidak ditemukan di repositori."
   [[ -f "${bot_installer_src}" ]] || die "File install-discord-bot.sh tidak ditemukan di repositori."
   [[ -f "${telegram_installer_src}" ]] || die "File install-telegram-bot.sh tidak ditemukan di repositori."
+  preflight_repo_layout "${REPO_DIR}"
+
+  log "Sinkronisasi modul manage ke ${MANAGE_MODULES_DST_DIR} ..."
+  sync_tree_atomic "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_MODULES_DST_DIR}" "modul manage"
+  find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+  chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
+  ok "Modul manage tersedia di: ${MANAGE_MODULES_DST_DIR}"
 
   log "Menginstal 'manage' ke ${MANAGE_BIN} ..."
   install -m 0755 "${src}" "${MANAGE_BIN}"
   ok "Perintah 'manage' tersedia di: ${MANAGE_BIN}"
-
-  if [[ -d "${MANAGE_MODULES_SRC_DIR}" ]]; then
-    log "Sinkronisasi modul manage ke ${MANAGE_MODULES_DST_DIR} ..."
-    mkdir -p "${MANAGE_MODULES_DST_DIR}"
-    cp -a "${MANAGE_MODULES_SRC_DIR}/." "${MANAGE_MODULES_DST_DIR}/"
-    find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
-    find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
-    chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
-    ok "Modul manage tersedia di: ${MANAGE_MODULES_DST_DIR}"
-  else
-    warn "Template modul manage tidak ditemukan di repo (${MANAGE_MODULES_SRC_DIR}); lewati sinkronisasi."
-  fi
 
   log "Menginstal installer bot Discord ke ${BOT_INSTALLER_BIN} ..."
   install -m 0755 "${bot_installer_src}" "${BOT_INSTALLER_BIN}"

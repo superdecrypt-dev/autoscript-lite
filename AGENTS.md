@@ -32,6 +32,7 @@ Area `bot-telegram/` adalah stack bot Telegram standalone (`gateway-py/`, `backe
 - `bash bot-discord/scripts/gate-all.sh local`: gate test bot Discord.
 - `bash bot-telegram/scripts/gate-all.sh`: gate test bot Telegram.
 - `TESTING_PLAYBOOK.md`: SOP pengujian lengkap untuk shell script + bot Discord/Telegram (preflight, smoke, negative, integration, gate).
+- `AUDIT_PLAYBOOK.md`: SOP audit untuk entrypoint, modular installer, SSHWS/QAC, template runtime, dan bot.
 
 ## Gaya Kode & Konvensi Penamaan
 Gunakan Bash strict mode (`set -euo pipefail`) dan pola defensif yang sudah ada (`ok`, `warn`, `die`). Indentasi utama 2 spasi untuk shell. Nama fungsi `snake_case`, konstanta/env `UPPER_SNAKE_CASE`, nama skrip `kebab-case.sh`. Untuk Python/TypeScript bot, gunakan nama modul yang deskriptif per domain menu (`menu_1_status`, `menu_8_maintenance`, dst).
@@ -86,6 +87,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Full E2E modular installer (`run.sh` dengan source lokal repo) sudah lolos live pada `2026-03-08`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.
+- SOP audit terpusat di `AUDIT_PLAYBOOK.md`.
 
 ## Aktivitas Terkini (Update 2026-03-08)
 - Fokus sprint terbaru: hardening admission/session tracking SSHWS + sinkronisasi dokumentasi + parity bot Telegram.
@@ -138,6 +140,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
    - `bot-discord/scripts/gate-all.sh local`
    - `bash bot-telegram/scripts/gate-all.sh`
    - lanjut E2E manual `/panel` sesuai `TESTING_PLAYBOOK.md`.
+6. Jika tugasnya audit/review, ikuti urutan dan format temuan di `AUDIT_PLAYBOOK.md`.
 
 ## Kalimat Anchor Owner (Wajib Lanjutkan Dari Sini)
 - Kalimat referensi wajib: "oke saat ini kamu mengingatnya bahwa menggunakan repo superdecrypt-dev/autoscript".

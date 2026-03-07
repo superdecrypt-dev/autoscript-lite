@@ -65,3 +65,7 @@ manage
 install-discord-bot
 install-telegram-bot
 ```
+
+## Dokumen Lanjutan
+- `TESTING_PLAYBOOK.md`: SOP pengujian
+- `AUDIT_PLAYBOOK.md`: SOP audit dan prioritas review
