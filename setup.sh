@@ -2400,8 +2400,8 @@ QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
-UNASSIGNED_RESOLVE_BURST_BYTES = 65536
-UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.15
+UNASSIGNED_RESOLVE_BURST_BYTES = 4096
+UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
 
 
 class HandshakeError(Exception):
@@ -2697,10 +2697,15 @@ class QuotaManager:
     speed_enabled = to_bool(st.get("speed_limit_enabled"))
     speed_down = max(0.0, to_float(st.get("speed_down_mbit"), 0.0))
     speed_up = max(0.0, to_float(st.get("speed_up_mbit"), 0.0))
-    if not speed_enabled or speed_down <= 0 or speed_up <= 0:
-      speed_enabled = False
+    if not speed_enabled:
       speed_down = 0.0
       speed_up = 0.0
+    else:
+      if speed_down <= 0:
+        speed_down = 0.0
+      if speed_up <= 0:
+        speed_up = 0.0
+      speed_enabled = bool(speed_down > 0 or speed_up > 0)
 
     lock_reason = str(st.get("lock_reason") or "").strip().lower()
     blocked = (
@@ -3277,7 +3282,7 @@ def _parse_args():
   parser.add_argument("--qac-lock-file", default=str(QAC_LOCK_FILE))
   parser.add_argument("--qac-enforcer-bin", default=str(QAC_ENFORCER_BIN))
   parser.add_argument("--qac-session-root", default=str(QAC_SESSION_ROOT))
-  parser.add_argument("--session-scan-interval", type=float, default=0.25)
+  parser.add_argument("--session-scan-interval", type=float, default=0.1)
   parser.add_argument("--quota-flush-interval", type=float, default=1.0)
   return parser.parse_args()
 
