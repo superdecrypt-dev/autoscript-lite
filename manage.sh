@@ -830,10 +830,10 @@ ssh_account_info_compat_needs_refresh() {
     if [[ ! -f "${acc_file}" ]]; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Token[[:space:]]*:[[:space:]]*[A-Fa-f0-9]{32,64}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSHWS Token[[:space:]]*:[[:space:]]*[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{32,64}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*@ssh.json' -print0 2>/dev/null | sort -z)

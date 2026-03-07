@@ -1751,7 +1751,7 @@ sshws_path_prefix() {
 
 sshws_token_valid() {
   local token="${1:-}"
-  [[ "${token}" =~ ^[A-Fa-f0-9]{32,64}$ ]]
+  [[ "${token}" =~ ^[A-Fa-f0-9]{10}$ ]]
 }
 
 sshws_path_from_token() {
@@ -1793,7 +1793,7 @@ try:
 except Exception:
   token = ""
 
-if re.fullmatch(r"[A-Fa-f0-9]{32,64}", token):
+if re.fullmatch(r"[A-Fa-f0-9]{10}", token):
   print(token.lower())
 else:
   print("")
@@ -1831,8 +1831,8 @@ except Exception:
   payload = {}
 
 token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-  token = secrets.token_hex(16)
+if not re.fullmatch(r"[a-f0-9]{10}", token):
+  token = secrets.token_hex(5)
   payload["sshws_token"] = token
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
@@ -1878,8 +1878,8 @@ except Exception:
   payload = {}
 
 token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-  token = secrets.token_hex(16)
+if not re.fullmatch(r"[a-f0-9]{10}", token):
+  token = secrets.token_hex(5)
   payload["sshws_token"] = token
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
@@ -1930,7 +1930,7 @@ if os.path.isdir(root):
     except Exception:
       continue
     candidate = str(payload.get("sshws_token") or "").strip().lower()
-    if re.fullmatch(r"[a-f0-9]{32,64}", candidate):
+    if re.fullmatch(r"[a-f0-9]{10}", candidate):
       token = candidate
       break
 if token:
@@ -2077,8 +2077,8 @@ if not created:
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-  token = secrets.token_hex(16)
+if not re.fullmatch(r"[a-f0-9]{10}", token):
+  token = secrets.token_hex(5)
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
@@ -2217,8 +2217,8 @@ if not created:
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-  token = secrets.token_hex(16)
+if not re.fullmatch(r"[a-f0-9]{10}", token):
+  token = secrets.token_hex(5)
 
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
@@ -2432,7 +2432,7 @@ Payload SNI+WS+Proxy:
     GET wss://[host]${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 
 Catatan:
-    Path SSHWS wajib memakai token per-user di root path. Payload lama ke path / tanpa token tidak dipakai lagi.
+    Path SSHWS wajib memakai token per-user. Format yang didukung: /<token> atau /<bebas>/<token>. Payload lama ke path / tanpa token tidak dipakai lagi.
 EOF
   then
     return 1
@@ -4519,8 +4519,8 @@ unit = str(payload.get("quota_unit") or "binary").strip().lower()
 if unit not in ("binary", "decimal"):
   unit = "binary"
 token = str(payload.get("sshws_token") or "").strip().lower()
-if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-  token = secrets.token_hex(16)
+if not re.fullmatch(r"[a-f0-9]{10}", token):
+  token = secrets.token_hex(5)
 
 payload["managed_by"] = "autoscript-manage"
 payload["protocol"] = "ssh"

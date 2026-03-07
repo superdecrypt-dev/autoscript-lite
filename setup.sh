@@ -2173,7 +2173,7 @@ server {
   ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
 
   # --- SSH WebSocket ---
-  location ~ "^/[A-Fa-f0-9]{32,64}$" {
+  location ~ "^/(?:(?!(?:vless|vmess|trojan|shadowsocks|shadowsocks2022)-(?:ws|hup|grpc)/)[^/]+/)?[A-Fa-f0-9]{10}$" {
     if (\$http_upgrade !~* websocket) { return 404; }
 
     proxy_redirect off;
@@ -2405,7 +2405,7 @@ UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
 ATTRIBUTION_WARMUP_ATTEMPTS = 6
 ATTRIBUTION_WARMUP_DELAY_SEC = 0.05
 ATTRIBUTION_WARMUP_SCAN_TIMEOUT_SEC = 0.1
-SSHWS_TOKEN_RE = re.compile(r"^[a-f0-9]{32,64}$")
+SSHWS_TOKEN_RE = re.compile(r"^[a-f0-9]{10}$")
 
 
 class HandshakeError(Exception):
@@ -2477,10 +2477,28 @@ def extract_token_from_path(path, expected_prefix):
   prefix = str(expected_prefix or "/").split("?", 1)[0].split("#", 1)[0] or "/"
   prefix = prefix.rstrip("/") or "/"
   if prefix == "/":
-    suffix = raw_path.lstrip("/")
-    if not suffix or "/" in suffix:
+    parts = [part for part in raw_path.split("/") if part]
+    if not parts or len(parts) > 2:
       return ""
-    return normalize_token(suffix)
+    if len(parts) == 2 and parts[0] in {
+      "vless-ws",
+      "vmess-ws",
+      "trojan-ws",
+      "shadowsocks-ws",
+      "shadowsocks2022-ws",
+      "vless-hup",
+      "vmess-hup",
+      "trojan-hup",
+      "shadowsocks-hup",
+      "shadowsocks2022-hup",
+      "vless-grpc",
+      "vmess-grpc",
+      "trojan-grpc",
+      "shadowsocks-grpc",
+      "shadowsocks2022-grpc",
+    }:
+      return ""
+    return normalize_token(parts[-1])
   wanted = prefix + "/"
   if not raw_path.startswith(wanted):
     return ""
@@ -3691,8 +3709,8 @@ def normalize_payload(path):
   if unit not in ("binary", "decimal"):
     unit = "binary"
   token = str(payload.get("sshws_token") or "").strip().lower()
-  if not re.fullmatch(r"[a-f0-9]{32,64}", token):
-    token = secrets.token_hex(16)
+  if not re.fullmatch(r"[a-f0-9]{10}", token):
+    token = secrets.token_hex(5)
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
   if quota_limit < 0:
