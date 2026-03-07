@@ -2074,7 +2074,7 @@ ssh_qac_traffic_scope_label() {
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota/IP-login/speed berlaku pada jalur SSHWS; native SSH port 22 tidak dihitung atau di-throttle."
+    echo "Quota/IP-login/speed berlaku pada jalur SSHWS; IP/login dihitung dari sesi aktif dan client IP runtime bila tersedia; native SSH port 22 tidak dihitung atau di-throttle."
   else
     echo "SSHWS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
   fi
@@ -2083,6 +2083,7 @@ ssh_qac_traffic_scope_line() {
 ssh_qac_print_scope_notice() {
   if ssh_qac_traffic_enforcement_ready; then
     echo "Traffic scope : quota used, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS."
+    echo "IP/Login calc : memakai sesi aktif dan client IP runtime SSHWS bila tersedia."
     echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
   else
     echo "Traffic scope : SSHWS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
@@ -3135,8 +3136,9 @@ sshws_active_sessions_collect_rows() {
   while IFS= read -r row; do
     [[ -n "${row}" ]] || continue
     SSHWS_SESSION_ROWS+=("${row}")
-  done < <(python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${dropbear_port}" 2>/dev/null || true
+  done < <(python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${dropbear_port}" "${SSHWS_RUNTIME_SESSION_DIR:-/run/autoscript/sshws-sessions}" 2>/dev/null || true
 import glob
+import ipaddress
 import json
 import os
 import pwd
@@ -3150,6 +3152,7 @@ try:
   dropbear_port = int(sys.argv[2])
 except Exception:
   dropbear_port = 0
+session_root = sys.argv[3] if len(sys.argv) > 3 else ""
 
 def norm_user(v):
   s = str(v or "").strip()
@@ -3178,6 +3181,17 @@ def _parse_port(addr):
     return int(s)
   except Exception:
     return -1
+
+def normalize_ip(v):
+  s = str(v or "").strip()
+  if not s:
+    return ""
+  if s.startswith("[") and s.endswith("]"):
+    s = s[1:-1].strip()
+  try:
+    return str(ipaddress.ip_address(s))
+  except Exception:
+    return ""
 
 def _build_proc_tables():
   info = {}
@@ -3245,6 +3259,27 @@ if os.path.isdir(state_root):
     if username:
       meta_map[username] = {"reason": reason, "lock": lock_state}
 
+runtime_by_port = {}
+if session_root and os.path.isdir(session_root):
+  for name in os.listdir(session_root):
+    if not name.endswith(".json"):
+      continue
+    path = os.path.join(session_root, name)
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+      if not isinstance(payload, dict):
+        continue
+    except Exception:
+      continue
+    port = _parse_port(payload.get("backend_local_port") or name[:-5])
+    if port <= 0:
+      continue
+    runtime_by_port[port] = {
+      "username": norm_user(payload.get("username")),
+      "client_ip": normalize_ip(payload.get("client_ip")) or "-",
+    }
+
 if dropbear_port <= 0:
   raise SystemExit(0)
 
@@ -3279,11 +3314,14 @@ for raw in (res.stdout or "").splitlines():
   if not m:
     continue
   pid = int(m.group(1))
-  username = _username_from_pid(pid, proc_info, children) or "unknown"
+  peer_port = _parse_port(peer)
+  runtime_meta = runtime_by_port.get(peer_port, {}) if peer_port > 0 else {}
+  username = _username_from_pid(pid, proc_info, children) or runtime_meta.get("username") or "unknown"
   rows.append({
     "username": username,
     "peer": peer,
     "pid": pid,
+    "client_ip": runtime_meta.get("client_ip") or "-",
   })
 
 counts = defaultdict(int)
@@ -3295,6 +3333,7 @@ for row in rows:
   meta = meta_map.get(row["username"], {})
   print("|".join([
     row["username"],
+    row["client_ip"],
     row["peer"],
     str(row["pid"]),
     str(counts.get(row["username"], 1)),
@@ -3338,7 +3377,7 @@ sshws_active_sessions_print_page() {
   if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
     echo "Filter: '${SSHWS_SESSION_QUERY}'"
   fi
-  echo "Peer = loopback mapping proxy -> dropbear. Client IP asli belum diekspos runtime SSHWS saat ini."
+  echo "Peer = loopback mapping proxy -> dropbear. Client IP diambil dari header terpercaya saat tersedia."
   echo
 
   if (( total == 0 )); then
@@ -3346,10 +3385,10 @@ sshws_active_sessions_print_page() {
     return 0
   fi
 
-  printf "%-4s %-18s %-21s %-7s %-6s %-10s %-6s\n" "NO" "Username" "Peer" "PID" "Sess" "Reason" "Lock"
+  printf "%-4s %-18s %-16s %-21s %-7s %-6s %-10s %-6s\n" "NO" "Username" "Client IP" "Peer" "PID" "Sess" "Reason" "Lock"
   hr
 
-  local start end i list_pos real_idx row username peer pid sess reason lock
+  local start end i list_pos real_idx row username client_ip peer pid sess reason lock
   start=$((page * SSHWS_SESSION_PAGE_SIZE))
   end=$((start + SSHWS_SESSION_PAGE_SIZE))
   if (( end > total )); then
@@ -3359,8 +3398,8 @@ sshws_active_sessions_print_page() {
     list_pos="${i}"
     real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
     row="${SSHWS_SESSION_ROWS[$real_idx]}"
-    IFS='|' read -r username peer pid sess reason lock <<<"${row}"
-    printf "%-4s %-18s %-21s %-7s %-6s %-10s %-6s\n" "$((i - start + 1))" "${username}" "${peer}" "${pid}" "${sess}" "${reason}" "${lock}"
+    IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
+    printf "%-4s %-18s %-16s %-21s %-7s %-6s %-10s %-6s\n" "$((i - start + 1))" "${username}" "${client_ip}" "${peer}" "${pid}" "${sess}" "${reason}" "${lock}"
   done
 }
 
@@ -3391,22 +3430,22 @@ sshws_active_session_detail() {
     return 0
   fi
 
-  local list_pos real_idx row username peer pid sess reason lock
+  local list_pos real_idx row username client_ip peer pid sess reason lock
   list_pos=$((start + view_no - 1))
   real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
   row="${SSHWS_SESSION_ROWS[$real_idx]}"
-  IFS='|' read -r username peer pid sess reason lock <<<"${row}"
+  IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
 
   title
   echo "3) SSH Management > Active SSHWS Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
+  printf "%-16s : %s\n" "Client IP" "${client_ip}"
   printf "%-16s : %s\n" "Peer" "${peer}"
   printf "%-16s : %s\n" "Dropbear PID" "${pid}"
   printf "%-16s : %s\n" "Active Sessions" "${sess}"
   printf "%-16s : %s\n" "Block Reason" "${reason}"
   printf "%-16s : %s\n" "Account Lock" "${lock}"
-  printf "%-16s : %s\n" "Client IP" "Unavailable on current SSHWS runtime"
 
   local qf
   qf="$(ssh_user_state_file "${username}")"

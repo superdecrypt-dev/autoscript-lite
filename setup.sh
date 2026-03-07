@@ -2183,6 +2183,7 @@ server {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$connection_upgrade;
     proxy_set_header Host \$host;
+    proxy_set_header CF-Connecting-IP \$http_cf_connecting_ip;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
 
@@ -2380,6 +2381,7 @@ import argparse
 import asyncio
 import fcntl
 import glob
+import ipaddress
 import json
 import os
 import pwd
@@ -2398,7 +2400,7 @@ QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
-UNASSIGNED_DOWNSTREAM_BURST_BYTES = 65536
+UNASSIGNED_RESOLVE_BURST_BYTES = 65536
 UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.15
 
 
@@ -2457,6 +2459,45 @@ def norm_user(v):
   if "@" in s:
     s = s.split("@", 1)[0]
   return s
+
+
+def normalize_ip(v):
+  s = str(v or "").strip()
+  if not s:
+    return ""
+  if s.startswith("[") and s.endswith("]"):
+    s = s[1:-1].strip()
+  try:
+    return str(ipaddress.ip_address(s))
+  except Exception:
+    return ""
+
+
+def extract_client_ip(headers, peername=None):
+  hdrs = headers if isinstance(headers, dict) else {}
+  candidates = []
+  for key in ("cf-connecting-ip", "x-real-ip"):
+    value = normalize_ip(hdrs.get(key))
+    if value:
+      candidates.append(value)
+  forwarded = str(hdrs.get("x-forwarded-for") or "").strip()
+  if forwarded:
+    for token in forwarded.split(","):
+      value = normalize_ip(token.strip())
+      if value:
+        candidates.append(value)
+        break
+  if isinstance(peername, tuple) and peername:
+    value = normalize_ip(peername[0])
+    if value:
+      candidates.append(value)
+  for value in candidates:
+    if value and value not in ("127.0.0.1", "::1"):
+      return value
+  for value in candidates:
+    if value:
+      return value
+  return ""
 
 
 def write_json_atomic_file(path, payload, mode=0o600):
@@ -2764,11 +2805,12 @@ class QuotaManager:
 
 
 class ConnectionContext:
-  def __init__(self, backend_local_port, quota_manager, session_root):
+  def __init__(self, backend_local_port, quota_manager, session_root, client_ip=""):
     self.backend_local_port = int(backend_local_port)
     self._quota = quota_manager
     self._session_root = Path(session_root)
     self._session_path = self._session_root / "{}.json".format(self.backend_local_port) if self.backend_local_port > 0 else None
+    self._client_ip = normalize_ip(client_ip)
     self._lock = asyncio.Lock()
     self._username = ""
     self._pending_up = 0
@@ -2776,15 +2818,19 @@ class ConnectionContext:
     self._policy_cached = None
     self._policy_cached_at = 0.0
 
-  def _write_runtime_session(self, username):
-    if self._session_path is None or not username:
+  def write_runtime_session(self, username=""):
+    if self._session_path is None:
       return
     payload = {
-      "username": username,
       "backend_local_port": int(self.backend_local_port),
       "proxy_pid": int(os.getpid()),
       "updated_at": int(time.time()),
     }
+    user = norm_user(username or self._username)
+    if user:
+      payload["username"] = user
+    if self._client_ip:
+      payload["client_ip"] = self._client_ip
     write_json_atomic_file(self._session_path, payload, 0o600)
 
   def clear_runtime_session(self):
@@ -2814,7 +2860,7 @@ class ConnectionContext:
       self._policy_cached = None
       self._policy_cached_at = 0.0
     try:
-      self._write_runtime_session(user)
+      self.write_runtime_session(user)
     except Exception:
       pass
     if flush_up or flush_down:
@@ -2980,6 +3026,7 @@ async def _read_handshake(reader, expected_path, timeout_sec):
 
   if headers.get("upgrade", "").lower() != "websocket":
     raise HandshakeError(400, "Bad Request")
+  return headers
 
 
 async def _send_handshake_ok(writer):
@@ -2992,16 +3039,28 @@ async def _send_handshake_ok(writer):
   await writer.drain()
 
 
-async def _client_to_backend(client_reader, backend_writer, ctx, limiter):
+async def _client_to_backend(client_reader, backend_writer, ctx, limiter, args, registry):
+  unresolved_up_bytes = 0
+  last_resolve_ts = 0.0
   while True:
     data = await client_reader.read(16384)
     if not data:
       break
+    if not await ctx.username():
+      unresolved_up_bytes += len(data)
+      now = time.monotonic()
+      if unresolved_up_bytes > UNASSIGNED_RESOLVE_BURST_BYTES and (now - last_resolve_ts) >= UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC:
+        last_resolve_ts = now
+        try:
+          await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=2, delay_sec=0.02, scan_timeout_sec=0.2)
+        except Exception:
+          pass
     policy = await ctx.policy()
     if policy and policy.get("blocked"):
       break
     if policy and policy.get("speed_enabled"):
       await limiter.throttle(policy.get("username"), "up", len(data), int(policy.get("speed_up_bps") or 0))
+      unresolved_up_bytes = 0
     await ctx.record_up(len(data))
     backend_writer.write(data)
     await backend_writer.drain()
@@ -3023,7 +3082,7 @@ async def _backend_to_client(backend_reader, client_writer, ctx, limiter, args, 
     if not await ctx.username():
       unresolved_down_bytes += len(data)
       now = time.monotonic()
-      if unresolved_down_bytes > UNASSIGNED_DOWNSTREAM_BURST_BYTES and (now - last_resolve_ts) >= UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC:
+      if unresolved_down_bytes > UNASSIGNED_RESOLVE_BURST_BYTES and (now - last_resolve_ts) >= UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC:
         last_resolve_ts = now
         try:
           await _resolve_ctx_username_with_retry(args, registry, ctx, attempts=2, delay_sec=0.02, scan_timeout_sec=0.2)
@@ -3042,7 +3101,7 @@ async def _backend_to_client(backend_reader, client_writer, ctx, limiter, args, 
 
 async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limiter):
   try:
-    await _read_handshake(ws_reader, args.path, args.handshake_timeout)
+    headers = await _read_handshake(ws_reader, args.path, args.handshake_timeout)
   except HandshakeError as exc:
     await _send_http_error(ws_writer, exc.code, exc.reason)
     ws_writer.close()
@@ -3064,8 +3123,13 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     )
     sockname = backend_writer.get_extra_info("sockname")
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
-    ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root)
+    client_ip = extract_client_ip(headers, ws_writer.get_extra_info("peername"))
+    ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root, client_ip)
     await registry.register(ctx)
+    try:
+      ctx.write_runtime_session()
+    except Exception:
+      pass
   except Exception:
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
@@ -3082,9 +3146,9 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     await _send_handshake_ok(ws_writer)
     # Resolve username dijalankan async agar handshake ke klien tidak tertahan scan sesi.
     resolver_task = asyncio.create_task(
-      _resolve_ctx_username_with_retry(args, registry, ctx, attempts=1, delay_sec=0.0, scan_timeout_sec=0.2)
+      _resolve_ctx_username_with_retry(args, registry, ctx, attempts=4, delay_sec=0.05, scan_timeout_sec=0.2)
     )
-    pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter))
+    pump1 = asyncio.create_task(_client_to_backend(ws_reader, backend_writer, ctx, limiter, args, registry))
     pump2 = asyncio.create_task(_backend_to_client(backend_reader, ws_writer, ctx, limiter, args, registry))
     done, pending = await asyncio.wait({pump1, pump2}, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
@@ -3286,6 +3350,7 @@ install_sshws_qac_enforcer() {
 #!/usr/bin/env python3
 import argparse
 import fcntl
+import ipaddress
 import json
 import os
 import pathlib
@@ -3349,6 +3414,17 @@ def norm_user(v):
     s = s.split("@", 1)[0]
   return s
 
+def normalize_ip(v):
+  s = str(v or "").strip()
+  if not s:
+    return ""
+  if s.startswith("[") and s.endswith("]"):
+    s = s[1:-1].strip()
+  try:
+    return str(ipaddress.ip_address(s))
+  except Exception:
+    return ""
+
 def cmd_ok(cmd):
   try:
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -3379,11 +3455,12 @@ def set_user_shell(username, shell_path):
     return False
   return cmd_ok(["usermod", "-s", shell, username])
 
-def active_sessions_from_runtime(username):
+def runtime_session_stats(username):
   user = norm_user(username)
   if not user or not SESSION_ROOT.is_dir():
-    return None
+    return None, None
   total = 0
+  ips = set()
   try:
     for path in SESSION_ROOT.glob("*.json"):
       try:
@@ -3395,8 +3472,15 @@ def active_sessions_from_runtime(username):
       session_user = norm_user(payload.get("username") or path.stem)
       if session_user == user:
         total += 1
+        ip = normalize_ip(payload.get("client_ip"))
+        if ip:
+          ips.add(ip)
   except Exception:
-    return None
+    return None, None
+  return total, len(ips)
+
+def active_sessions_from_runtime(username):
+  total, _ = runtime_session_stats(username)
   return total
 
 def active_sessions(username):
@@ -3418,6 +3502,14 @@ def active_sessions(username):
     return 0
   lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
   return len(lines)
+
+def active_login_metric(username):
+  if not username or not user_exists(username):
+    return 0
+  runtime_count, runtime_ip_count = runtime_session_stats(username)
+  if runtime_count is not None:
+    return max(int(runtime_count), int(runtime_ip_count or 0))
+  return active_sessions(username)
 
 def lock_user(username, status=None):
   if not user_exists(username):
@@ -3541,7 +3633,7 @@ def enforce_user(path):
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    status["ip_limit_locked"] = active_sessions(username) > ip_limit
+    status["ip_limit_locked"] = active_login_metric(username) > ip_limit
   else:
     status["ip_limit_locked"] = False
 
