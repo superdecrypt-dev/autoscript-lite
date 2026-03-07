@@ -24,6 +24,7 @@ fi
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
+MANAGE_FALLBACK_MODULES_DST_DIR="/usr/local/lib/autoscript-manage/opt/manage"
 BOT_INSTALLER_BIN="/usr/local/bin/install-discord-bot"
 TELEGRAM_INSTALLER_BIN="/usr/local/bin/install-telegram-bot"
 DISCORD_BOT_HOME="/opt/bot-discord"
@@ -292,6 +293,13 @@ install_manage() {
   find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
   chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
   ok "Modul manage tersedia di: ${MANAGE_MODULES_DST_DIR}"
+
+  log "Sinkronisasi fallback modul manage ke ${MANAGE_FALLBACK_MODULES_DST_DIR} ..."
+  sync_tree_atomic "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_FALLBACK_MODULES_DST_DIR}" "fallback modul manage"
+  find "${MANAGE_FALLBACK_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "${MANAGE_FALLBACK_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+  chown -R root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}" 2>/dev/null || true
+  ok "Fallback modul manage tersedia di: ${MANAGE_FALLBACK_MODULES_DST_DIR}"
 
   log "Menginstal 'manage' ke ${MANAGE_BIN} ..."
   install -m 0755 "${src}" "${MANAGE_BIN}"

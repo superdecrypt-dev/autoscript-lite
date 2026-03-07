@@ -93,27 +93,93 @@ if [[ -z "${MANAGE_BUNDLE_SHA256:-}" ]] && [[ -f "${SCRIPT_DIR}/manage_bundle.zi
 fi
 MANAGE_BUNDLE_SHA256="${MANAGE_BUNDLE_SHA256:-${MANAGE_BUNDLE_LOCAL_SHA256}}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
+MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
+SETUP_MODULES_ROOT="${SCRIPT_DIR}/opt/setup"
+
+setup_bootstrap_die() {
+  echo -e "${RED}[ERROR]${NC} $*" >&2
+  exit 1
+}
+
+setup_module_dir_trusted() {
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 1
+
+  local root_real dir_real
+  root_real="$(readlink -f -- "${SETUP_MODULES_ROOT}" 2>/dev/null || true)"
+  dir_real="$(readlink -f -- "${dir}" 2>/dev/null || true)"
+  [[ -n "${root_real}" && -n "${dir_real}" ]] || return 1
+  [[ "${dir_real}" == "${root_real}" || "${dir_real}" == "${root_real}/"* ]] || return 1
+
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  [[ -L "${dir}" ]] && return 1
+
+  local owner mode
+  owner="$(stat -c '%u' "${dir_real}" 2>/dev/null || echo 1)"
+  mode="$(stat -c '%A' "${dir_real}" 2>/dev/null || echo '----------')"
+  [[ "${owner}" == "0" ]] || return 1
+  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  return 0
+}
+
+setup_module_file_trusted() {
+  local file="$1"
+  [[ -f "${file}" && -r "${file}" ]] || return 1
+
+  setup_module_dir_trusted "$(dirname "${file}")" || return 1
+
+  local root_real file_real
+  root_real="$(readlink -f -- "${SETUP_MODULES_ROOT}" 2>/dev/null || true)"
+  file_real="$(readlink -f -- "${file}" 2>/dev/null || true)"
+  [[ -n "${root_real}" && -n "${file_real}" ]] || return 1
+  [[ "${file_real}" == "${root_real}/"* ]] || return 1
+
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  [[ -L "${file}" ]] && return 1
+
+  local owner mode
+  owner="$(stat -c '%u' "${file_real}" 2>/dev/null || echo 1)"
+  mode="$(stat -c '%A' "${file_real}" 2>/dev/null || echo '----------')"
+  [[ "${owner}" == "0" ]] || return 1
+  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  return 0
+}
+
+source_setup_module() {
+  local rel="$1"
+  local file="${SCRIPT_DIR}/${rel}"
+  setup_module_file_trusted "${file}" \
+    || setup_bootstrap_die "Module setup tidak trusted/tidak valid: ${file}. Pastikan owner root dan tidak writable oleh group/other."
+  # shellcheck disable=SC1090
+  . "${file}"
+}
 
 # shellcheck source=opt/setup/core/logging.sh
-source "${SCRIPT_DIR}/opt/setup/core/logging.sh"
+source_setup_module "opt/setup/core/logging.sh"
 # shellcheck source=opt/setup/core/helpers.sh
-source "${SCRIPT_DIR}/opt/setup/core/helpers.sh"
+source_setup_module "opt/setup/core/helpers.sh"
 # shellcheck source=opt/setup/install/bootstrap.sh
-source "${SCRIPT_DIR}/opt/setup/install/bootstrap.sh"
+source_setup_module "opt/setup/install/bootstrap.sh"
 # shellcheck source=opt/setup/install/domain.sh
-source "${SCRIPT_DIR}/opt/setup/install/domain.sh"
+source_setup_module "opt/setup/install/domain.sh"
 # shellcheck source=opt/setup/install/nginx.sh
-source "${SCRIPT_DIR}/opt/setup/install/nginx.sh"
+source_setup_module "opt/setup/install/nginx.sh"
 # shellcheck source=opt/setup/install/network.sh
-source "${SCRIPT_DIR}/opt/setup/install/network.sh"
+source_setup_module "opt/setup/install/network.sh"
 # shellcheck source=opt/setup/install/xray.sh
-source "${SCRIPT_DIR}/opt/setup/install/xray.sh"
+source_setup_module "opt/setup/install/xray.sh"
 # shellcheck source=opt/setup/install/management.sh
-source "${SCRIPT_DIR}/opt/setup/install/management.sh"
+source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
-source "${SCRIPT_DIR}/opt/setup/install/sshws.sh"
+source_setup_module "opt/setup/install/sshws.sh"
 # shellcheck source=opt/setup/install/observability.sh
-source "${SCRIPT_DIR}/opt/setup/install/observability.sh"
+source_setup_module "opt/setup/install/observability.sh"
 
 trap run_exit_cleanups EXIT
 sanity_check() {

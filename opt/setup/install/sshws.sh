@@ -50,6 +50,23 @@ validate_sshws_ports_config() {
   fi
 }
 
+sshws_runtime_session_stale_sec_value() {
+  local value="${SSHWS_RUNTIME_SESSION_STALE_SEC:-90}"
+  [[ "${value}" =~ ^[0-9]+$ ]] || die "SSHWS_RUNTIME_SESSION_STALE_SEC harus angka positif (got: ${value})."
+  if (( value < 15 )); then
+    die "SSHWS_RUNTIME_SESSION_STALE_SEC minimal 15 detik (got: ${value})."
+  fi
+  printf '%s\n' "${value}"
+}
+
+write_sshws_runtime_env() {
+  render_setup_template_or_die \
+    "config/sshws-runtime.env" \
+    "/etc/default/sshws-runtime" \
+    0644 \
+    "SSHWS_RUNTIME_SESSION_STALE_SEC=$(sshws_runtime_session_stale_sec_value)"
+}
+
 install_sshws_stack() {
   ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy, backend direct ke dropbear)..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
@@ -114,6 +131,7 @@ install_sshws_stack() {
   fi
 
   install_setup_bin_or_die "sshws-proxy.py" "/usr/local/bin/sshws-proxy" 0755
+  write_sshws_runtime_env
 
   render_setup_template_or_die \
     "systemd/sshws-proxy.service" \
@@ -152,6 +170,7 @@ install_sshws_qac_enforcer() {
   ok "Setup SSH QAC enforcer (timer 1 menit)..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH QAC enforcer."
   install -d -m 755 /etc/systemd/system
+  write_sshws_runtime_env
 
   install_setup_bin_or_die "sshws-qac-enforcer.py" "/usr/local/bin/sshws-qac-enforcer" 0755
 

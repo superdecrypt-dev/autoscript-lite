@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/default/sshws-runtime
 ExecStart=/usr/local/bin/sshws-proxy --listen-host 127.0.0.1 --listen-port __SSHWS_PROXY_PORT__ --backend-host 127.0.0.1 --backend-port __SSHWS_DROPBEAR_PORT__ --path / --handshake-timeout 10
 Restart=always
 RestartSec=2

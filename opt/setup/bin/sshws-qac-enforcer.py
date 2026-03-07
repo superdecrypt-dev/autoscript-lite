@@ -15,13 +15,26 @@ import time
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
-RUNTIME_SESSION_STALE_SEC = 90
 LOCK_SHELL_CANDIDATES = (
   "/usr/sbin/nologin",
   "/usr/bin/nologin",
   "/sbin/nologin",
   "/bin/false",
 )
+
+def env_int(name, default):
+  try:
+    raw = os.environ.get(name)
+    if raw is None:
+      return int(default)
+    text = str(raw).strip()
+    if not text:
+      return int(default)
+    return int(float(text))
+  except Exception:
+    return int(default)
+
+RUNTIME_SESSION_STALE_SEC = max(15, env_int("SSHWS_RUNTIME_SESSION_STALE_SEC", 90))
 
 def to_int(v, default=0):
   try:
@@ -68,6 +81,12 @@ def norm_user(v):
   if "@" in s:
     s = s.split("@", 1)[0]
   return s
+
+def normalize_token(v):
+  s = str(v or "").strip().lower()
+  if re.fullmatch(r"[a-f0-9]{10}", s):
+    return s
+  return ""
 
 def normalize_ip(v):
   s = str(v or "").strip()
@@ -255,7 +274,7 @@ def write_json_atomic(path, payload):
       pass
 
 def iter_ssh_state_files(root):
-  root_path = Path(root)
+  root_path = pathlib.Path(root)
   try:
     entries = sorted(root_path.iterdir(), key=lambda p: p.name.lower())
   except Exception:
@@ -276,7 +295,7 @@ def iter_ssh_state_files(root):
 def pick_unique_sshws_token(root, current_path, current_token):
   seen = set()
   try:
-    current_real = str(Path(current_path).resolve())
+    current_real = str(pathlib.Path(current_path).resolve())
   except Exception:
     current_real = str(current_path)
   for entry in iter_ssh_state_files(root):

@@ -23,7 +23,6 @@ QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
 POLICY_REFRESH_SEC = 2.0
 RUNTIME_SESSION_HEARTBEAT_SEC = 15.0
-RUNTIME_SESSION_STALE_SEC = 90
 UNASSIGNED_RESOLVE_BURST_BYTES = 4096
 UNASSIGNED_RESOLVE_MIN_INTERVAL_SEC = 0.05
 ATTRIBUTION_WARMUP_ATTEMPTS = 6
@@ -37,6 +36,22 @@ class HandshakeError(Exception):
     super().__init__(reason)
     self.code = code
     self.reason = reason
+
+
+def env_int(name, default):
+  try:
+    raw = os.environ.get(name)
+    if raw is None:
+      return int(default)
+    text = str(raw).strip()
+    if not text:
+      return int(default)
+    return int(float(text))
+  except Exception:
+    return int(default)
+
+
+RUNTIME_SESSION_STALE_SEC = max(15, env_int("SSHWS_RUNTIME_SESSION_STALE_SEC", 90))
 
 
 def to_int(v, default=0):
@@ -147,17 +162,9 @@ def normalize_ip(v):
 def extract_client_ip(headers, peername=None):
   hdrs = headers if isinstance(headers, dict) else {}
   candidates = []
-  for key in ("cf-connecting-ip", "x-real-ip"):
-    value = normalize_ip(hdrs.get(key))
-    if value:
-      candidates.append(value)
-  forwarded = str(hdrs.get("x-forwarded-for") or "").strip()
-  if forwarded:
-    for token in forwarded.split(","):
-      value = normalize_ip(token.strip())
-      if value:
-        candidates.append(value)
-        break
+  value = normalize_ip(hdrs.get("cf-connecting-ip"))
+  if value:
+    candidates.append(value)
   if isinstance(peername, tuple) and peername:
     value = normalize_ip(peername[0])
     if value:
@@ -263,7 +270,7 @@ def iter_runtime_sessions(root, prune_stale=False):
       except Exception:
         pass
 
-def runtime_session_stats(root, username, extra_client_ip=""):
+def runtime_session_stats(root, username, extra_client_ips=None):
   root_path = Path(root)
   user = norm_user(username)
   if not user or not root_path.is_dir():
@@ -281,9 +288,11 @@ def runtime_session_stats(root, username, extra_client_ip=""):
         ips.add(ip)
   except Exception:
     return 0, 0
-  extra_ip = normalize_ip(extra_client_ip)
-  if extra_ip:
-    ips.add(extra_ip)
+  extra_values = extra_client_ips if isinstance(extra_client_ips, (list, tuple, set)) else (extra_client_ips,)
+  for value in extra_values:
+    extra_ip = normalize_ip(value)
+    if extra_ip:
+      ips.add(extra_ip)
   return total, len(ips)
 
 
@@ -558,7 +567,7 @@ class QuotaManager:
       self._cache[user] = {"mtime_ns": mtime_ns, "policy": policy}
     return policy
 
-  async def get_admission(self, username, client_ip=""):
+  async def get_admission(self, username, client_ip="", extra_total=0, extra_client_ips=None):
     user = norm_user(username)
     if not user:
       return {"allowed": False, "reason": "Forbidden", "policy": None}
@@ -588,8 +597,15 @@ class QuotaManager:
     ip_enabled = to_bool(st.get("ip_limit_enabled"))
     ip_limit = max(0, to_int(st.get("ip_limit"), 0))
     if ip_enabled and ip_limit > 0:
-      active_total, active_ip_count = runtime_session_stats(self.session_root, user, client_ip)
-      prospective_total = int(active_total) + 1
+      extra_ips = tuple(extra_client_ips or ())
+      if client_ip:
+        extra_ips = extra_ips + (client_ip,)
+      active_total, active_ip_count = runtime_session_stats(
+        self.session_root,
+        user,
+        extra_client_ips=extra_ips,
+      )
+      prospective_total = int(active_total) + 1 + max(0, int(extra_total))
       prospective_metric = max(prospective_total, int(active_ip_count or 0))
       if prospective_metric > ip_limit:
         return {"allowed": False, "reason": "IP/Login Limit Reached", "policy": policy}
@@ -778,18 +794,70 @@ class ConnectionRegistry:
   def __init__(self):
     self._lock = asyncio.Lock()
     self._by_port = {}
+    self._pending_totals = defaultdict(int)
+    self._pending_ips = defaultdict(lambda: defaultdict(int))
 
-  async def admit_and_register(self, ctx, username, client_ip, quota_mgr):
+  def _pending_snapshot_unlocked(self, username):
+    user = norm_user(username)
+    if not user:
+      return 0, ()
+    ip_map = self._pending_ips.get(user, {})
+    return int(self._pending_totals.get(user, 0)), tuple(sorted(ip_map.keys()))
+
+  def _reserve_pending_unlocked(self, username, client_ip):
+    user = norm_user(username)
+    ip = normalize_ip(client_ip)
+    if not user:
+      return None
+    self._pending_totals[user] += 1
+    if ip:
+      self._pending_ips[user][ip] += 1
+    return (user, ip)
+
+  def _release_pending_unlocked(self, reservation):
+    if not reservation:
+      return
+    user = norm_user(reservation[0] if len(reservation) > 0 else "")
+    ip = normalize_ip(reservation[1] if len(reservation) > 1 else "")
+    if not user:
+      return
+    current_total = int(self._pending_totals.get(user, 0))
+    if current_total > 1:
+      self._pending_totals[user] = current_total - 1
+    else:
+      self._pending_totals.pop(user, None)
+    if ip:
+      current_ip = int(self._pending_ips.get(user, {}).get(ip, 0))
+      if current_ip > 1:
+        self._pending_ips[user][ip] = current_ip - 1
+      else:
+        self._pending_ips.get(user, {}).pop(ip, None)
+      if not self._pending_ips.get(user):
+        self._pending_ips.pop(user, None)
+
+  async def reserve_admission(self, username, client_ip, quota_mgr):
     admission = {"allowed": False, "reason": "Forbidden", "policy": None}
     user = norm_user(username)
     async with self._lock:
-      admission = await quota_mgr.get_admission(user, client_ip)
+      pending_total, pending_ips = self._pending_snapshot_unlocked(user)
+      admission = await quota_mgr.get_admission(user, client_ip, extra_total=pending_total, extra_client_ips=pending_ips)
       if not admission.get("policy") or not admission.get("allowed"):
-        return admission
+        return admission, None
+      reservation = self._reserve_pending_unlocked(user, client_ip)
+      return admission, reservation
+
+  async def finalize_admission(self, reservation, ctx):
+    user = norm_user(reservation[0] if reservation else "")
+    async with self._lock:
+      self._release_pending_unlocked(reservation)
       await ctx.assign_username(user)
       if ctx.backend_local_port > 0:
         self._by_port[ctx.backend_local_port] = ctx
-    return admission
+    return True
+
+  async def cancel_reservation(self, reservation):
+    async with self._lock:
+      self._release_pending_unlocked(reservation)
 
   async def register(self, ctx):
     if ctx.backend_local_port <= 0:
@@ -1033,10 +1101,22 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     return
 
   client_ip = extract_client_ip(headers, ws_writer.get_extra_info("peername"))
-  policy = await quota_mgr.get_policy(username)
-  if not policy:
+  admission, reservation = await registry.reserve_admission(username, client_ip, quota_mgr)
+  reservation_active = bool(reservation)
+  if not admission.get("policy"):
     try:
       await _send_http_error(ws_writer, 403, "Forbidden")
+    except Exception:
+      pass
+    try:
+      ws_writer.close()
+      await ws_writer.wait_closed()
+    except Exception:
+      pass
+    return
+  if not admission.get("allowed"):
+    try:
+      await _send_http_error(ws_writer, 403, admission.get("reason") or "Account Locked")
     except Exception:
       pass
     try:
@@ -1059,39 +1139,8 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     sockname = backend_writer.get_extra_info("sockname")
     backend_local_port = int(sockname[1]) if isinstance(sockname, tuple) and len(sockname) > 1 else 0
     ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root, client_ip)
-    admission = await registry.admit_and_register(ctx, username, client_ip, quota_mgr)
-    if not admission.get("policy"):
-      try:
-        backend_writer.close()
-        await backend_writer.wait_closed()
-      except Exception:
-        pass
-      try:
-        await _send_http_error(ws_writer, 403, "Forbidden")
-      except Exception:
-        pass
-      try:
-        ws_writer.close()
-        await ws_writer.wait_closed()
-      except Exception:
-        pass
-      return
-    if not admission.get("allowed"):
-      try:
-        backend_writer.close()
-        await backend_writer.wait_closed()
-      except Exception:
-        pass
-      try:
-        await _send_http_error(ws_writer, 403, admission.get("reason") or "Account Locked")
-      except Exception:
-        pass
-      try:
-        ws_writer.close()
-        await ws_writer.wait_closed()
-      except Exception:
-        pass
-      return
+    await registry.finalize_admission(reservation, ctx)
+    reservation_active = False
     try:
       await quota_mgr.enforce_now(username)
     except Exception:
@@ -1099,6 +1148,17 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     heartbeat_stop = asyncio.Event()
     heartbeat_task = asyncio.create_task(_runtime_session_heartbeat(heartbeat_stop, ctx))
   except Exception:
+    if reservation_active:
+      try:
+        await registry.cancel_reservation(reservation)
+      except Exception:
+        pass
+    if backend_writer is not None:
+      try:
+        backend_writer.close()
+        await backend_writer.wait_closed()
+      except Exception:
+        pass
     try:
       await _send_http_error(ws_writer, 502, "Bad Gateway")
     except Exception:

@@ -3522,14 +3522,16 @@ PY
 sshws_active_sessions_collect_rows() {
   SSHWS_SESSION_ROWS=()
   local dropbear_port
+  local stale_sec
   dropbear_port="$(sshws_detect_dropbear_port)"
+  stale_sec="$(sshws_runtime_session_stale_sec)"
   need_python3
 
   local row
   while IFS= read -r row; do
     [[ -n "${row}" ]] || continue
     SSHWS_SESSION_ROWS+=("${row}")
-  done < <(python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${dropbear_port}" "${SSHWS_RUNTIME_SESSION_DIR:-/run/autoscript/sshws-sessions}" 2>/dev/null || true
+  done < <(python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${dropbear_port}" "${SSHWS_RUNTIME_SESSION_DIR:-/run/autoscript/sshws-sessions}" "${stale_sec}" 2>/dev/null || true
 import glob
 import ipaddress
 import json
@@ -3547,6 +3549,7 @@ try:
 except Exception:
   dropbear_port = 0
 session_root = sys.argv[3] if len(sys.argv) > 3 else ""
+stale_sec = int(float(sys.argv[4] or 90))
 
 def norm_user(v):
   s = str(v or "").strip()
@@ -3616,7 +3619,7 @@ def _runtime_payload_valid(payload):
   now = int(time.time())
   if updated_at <= 0 or now <= 0:
     return False
-  return (now - updated_at) <= 90
+  return (now - updated_at) <= stale_sec
 
 def _build_proc_tables():
   info = {}
@@ -4018,9 +4021,23 @@ SSHWS_SESSION_PAGE_SIZE=10
 SSHWS_SESSION_PAGE=0
 SSHWS_SESSION_QUERY=""
 SSHWS_RUNTIME_SESSION_DIR="/run/autoscript/sshws-sessions"
+SSHWS_RUNTIME_ENV_FILE="/etc/default/sshws-runtime"
+
+sshws_runtime_session_stale_sec() {
+  local value="90"
+  if [[ -r "${SSHWS_RUNTIME_ENV_FILE}" ]]; then
+    value="$(awk -F= '/^[[:space:]]*SSHWS_RUNTIME_SESSION_STALE_SEC=/{print $2; exit}' "${SSHWS_RUNTIME_ENV_FILE}" | tr -d '[:space:]')"
+  fi
+  [[ "${value}" =~ ^[0-9]+$ ]] || value="90"
+  if (( value < 15 )); then
+    value="90"
+  fi
+  printf '%s\n' "${value}"
+}
 
 ssh_active_sessions_count() {
   local username="${1:-}"
+  local stale_sec
   [[ -n "${username}" ]] || {
     echo "0"
     return 0
@@ -4032,11 +4049,13 @@ ssh_active_sessions_count() {
 
   if [[ -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
     local runtime_count
-    runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" <<'PY' 2>/dev/null || true
+    stale_sec="$(sshws_runtime_session_stale_sec)"
+    runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" "${stale_sec}" <<'PY' 2>/dev/null || true
 import json, pathlib, sys, time
 import os
 root = pathlib.Path(sys.argv[1])
 target = str(sys.argv[2] or "").strip()
+stale_sec = int(float(sys.argv[3] or 90))
 count = 0
 
 def pid_alive(pid):
@@ -4071,7 +4090,7 @@ if root.is_dir() and target:
     except Exception:
       continue
     now = int(time.time())
-    if updated_at <= 0 or now <= 0 or (now - updated_at) > 90:
+    if updated_at <= 0 or now <= 0 or (now - updated_at) > stale_sec:
       continue
     username = str(payload.get("username") or "").strip()
     if username.endswith("@ssh"):

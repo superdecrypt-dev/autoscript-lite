@@ -123,6 +123,11 @@ write_nginx_main_conf() {
     0644 \
     "NGINX_USER=${nginx_user}"
 
+  render_setup_template_or_die \
+    "nginx/cloudflare-realip.conf" \
+    "/etc/nginx/conf.d/00-cloudflare-realip.conf" \
+    0644
+
   nginx -t || die "Konfigurasi /etc/nginx/nginx.conf invalid."
   ok "Nginx main config ditulis: /etc/nginx/nginx.conf (optimized 1 vCPU / 1GB RAM)."
 }

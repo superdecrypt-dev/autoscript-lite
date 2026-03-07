@@ -1591,6 +1591,7 @@ EOF
 sync_manage_modules_layout() {
   local tmpdir="" bundle_file="" downloaded="0" bundle_expected_sha=""
   bundle_expected_sha="${MANAGE_BUNDLE_SHA256:-}"
+  local fallback_modules_dir="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 
   install_bot_installer_if_present() {
     # args: src_path dst_path label
@@ -1605,14 +1606,21 @@ sync_manage_modules_layout() {
     fi
   }
 
+  sync_manage_target_dir() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    mkdir -p "${dst_dir}"
+    cp -a "${src_dir}/." "${dst_dir}/"
+    find "${dst_dir}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${dst_dir}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+    chown -R root:root "${dst_dir}" 2>/dev/null || true
+  }
+
   sync_manage_from_local_source() {
     [[ -d "${MANAGE_MODULES_SRC_DIR}" ]] || return 1
 
-    mkdir -p "${MANAGE_MODULES_DST_DIR}"
-    cp -a "${MANAGE_MODULES_SRC_DIR}/." "${MANAGE_MODULES_DST_DIR}/"
-    find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
-    find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
-    chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
+    sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_MODULES_DST_DIR}"
+    sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${fallback_modules_dir}"
 
     if [[ -f "${SCRIPT_DIR}/manage.sh" ]]; then
       mkdir -p "$(dirname "${MANAGE_BIN}")"
@@ -1623,6 +1631,7 @@ sync_manage_modules_layout() {
     install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
     ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
+    ok "Fallback modular manage siap di: ${fallback_modules_dir} (source lokal)"
     return 0
   }
 
@@ -1754,9 +1763,11 @@ PY
     then
       chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+      sync_manage_target_dir "${MANAGE_MODULES_DST_DIR}" "${fallback_modules_dir}"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
+      ok "Fallback modular manage siap di: ${fallback_modules_dir}"
       ok "Binary manage disegarkan dari bundle: ${MANAGE_BIN}"
       [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
       return 0
@@ -1772,4 +1783,3 @@ PY
   [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
   die "Sinkronisasi modular manage gagal total: bundle gagal/invalid dan source lokal tidak ditemukan (${MANAGE_MODULES_SRC_DIR})."
 }
-

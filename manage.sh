@@ -7134,9 +7134,18 @@ manage_modules_dir_ready() {
 }
 
 resolve_manage_modules_dir() {
+  local installed_modules="/usr/local/lib/autoscript-manage/opt/manage"
   local local_modules="${MANAGE_SCRIPT_DIR}/opt/manage"
   if manage_modules_dir_ready "/opt/manage"; then
     printf '%s\n' "/opt/manage"
+    return 0
+  fi
+  if [[ "${MANAGE_SCRIPT_DIR}" != "/usr/local/bin" ]] && manage_modules_dir_ready "${local_modules}"; then
+    printf '%s\n' "${local_modules}"
+    return 0
+  fi
+  if manage_modules_dir_ready "${installed_modules}"; then
+    printf '%s\n' "${installed_modules}"
     return 0
   fi
   if manage_modules_dir_ready "/opt/autoscript/opt/manage"; then
@@ -7156,7 +7165,7 @@ if [[ -n "${MANAGE_MODULES_DIR:-}" ]]; then
   fi
 else
   MANAGE_MODULES_DIR="$(resolve_manage_modules_dir)" \
-    || die "Direktori module manage tidak ditemukan atau tidak trusted (cek /opt/manage atau ${MANAGE_SCRIPT_DIR}/opt/manage)."
+    || die "Direktori module manage tidak ditemukan atau tidak trusted (cek /opt/manage, /usr/local/lib/autoscript-manage/opt/manage, /opt/autoscript/opt/manage, atau ${MANAGE_SCRIPT_DIR}/opt/manage)."
 fi
 
 manage_source_required() {
