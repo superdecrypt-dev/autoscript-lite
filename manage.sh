@@ -793,7 +793,84 @@ account_info_probe_domain_from_any_account_file() {
       return 0
     fi
   done
+  dir="${SSH_ACCOUNT_DIR}"
+  if [[ -d "${dir}" ]]; then
+    f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
+    if [[ -n "${f}" ]]; then
+      dom="$(grep -E '^Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^Domain[[:space:]]*:[[:space:]]*//' || true)"
+      dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
+      if [[ -n "${dom}" ]]; then
+        echo "${dom}"
+        return 0
+      fi
+    fi
+  fi
   echo ""
+}
+
+ssh_account_info_compat_needs_refresh() {
+  local state_file username acc_file acc_compat
+  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
+    ssh_state_dirs_prepare >/dev/null 2>&1 || true
+  fi
+  [[ -d "${SSH_USERS_STATE_DIR}" ]] || return 1
+
+  while IFS= read -r -d '' state_file; do
+    username="$(basename "${state_file}")"
+    username="${username%@ssh.json}"
+    username="${username%.json}"
+    [[ -n "${username}" ]] || continue
+
+    acc_file="${SSH_ACCOUNT_DIR}/${username}@ssh.txt"
+    acc_compat="${SSH_ACCOUNT_DIR}/${username}.txt"
+    if [[ ! -f "${acc_file}" && -f "${acc_compat}" ]]; then
+      acc_file="${acc_compat}"
+    fi
+
+    if [[ ! -f "${acc_file}" ]]; then
+      return 0
+    fi
+    if ! grep -Eq '^SSHWS Token[[:space:]]*:[[:space:]]*[A-Fa-f0-9]{32,64}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^SSHWS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{32,64}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*@ssh.json' -print0 2>/dev/null | sort -z)
+
+  return 1
+}
+
+ssh_account_info_refresh_all_from_state() {
+  local state_file username updated=0 failed=0
+  if ! declare -F ssh_account_info_refresh_from_state >/dev/null 2>&1; then
+    printf '0|0\n'
+    return 0
+  fi
+  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
+    ssh_state_dirs_prepare >/dev/null 2>&1 || true
+  fi
+
+  [[ -d "${SSH_USERS_STATE_DIR}" ]] || {
+    printf '0|0\n'
+    return 0
+  }
+
+  while IFS= read -r -d '' state_file; do
+    username="$(basename "${state_file}")"
+    username="${username%@ssh.json}"
+    username="${username%.json}"
+    [[ -n "${username}" ]] || continue
+
+    if ssh_account_info_refresh_from_state "${username}"; then
+      updated=$((updated + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*@ssh.json' -print0 2>/dev/null | sort -z)
+
+  printf '%s|%s\n' "${updated}" "${failed}"
+  (( failed == 0 ))
 }
 
 account_info_sync_after_domain_change_if_needed() {
@@ -824,18 +901,18 @@ account_info_sync_after_domain_change_if_needed() {
   fi
 
   if [[ "${current_domain}" != *.* ]]; then
-    warn "Domain aktif tidak valid (${current_domain}), skip sinkronisasi XRAY ACCOUNT INFO."
+    warn "Domain aktif tidak valid (${current_domain}), skip sinkronisasi ACCOUNT INFO."
     account_info_domain_sync_state_write "${current_domain}"
     return 0
   fi
 
-  log "Perubahan domain terdeteksi (${previous_domain} -> ${current_domain}), sinkronisasi XRAY ACCOUNT INFO..."
+  log "Perubahan domain terdeteksi (${previous_domain} -> ${current_domain}), sinkronisasi ACCOUNT INFO..."
   ip="$(detect_public_ip_ipapi)"
   if account_refresh_all_info_files "${current_domain}" "${ip}"; then
-    log "XRAY ACCOUNT INFO berhasil disinkronkan otomatis."
+    log "ACCOUNT INFO berhasil disinkronkan otomatis."
     account_info_domain_sync_state_write "${current_domain}"
   else
-    warn "Sebagian XRAY ACCOUNT INFO gagal disinkronkan otomatis. Cek file di ${ACCOUNT_ROOT}."
+    warn "Sebagian ACCOUNT INFO gagal disinkronkan otomatis. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
     warn "State sinkronisasi dipertahankan (${previous_domain}) agar retry otomatis berjalan."
   fi
 }
@@ -848,6 +925,10 @@ account_info_compat_needs_refresh() {
   # - belum memiliki baris link gRPC
   ensure_account_quota_dirs
   account_collect_files
+
+  if ssh_account_info_compat_needs_refresh; then
+    return 0
+  fi
 
   if (( ${#ACCOUNT_FILES[@]} == 0 )); then
     return 1
@@ -887,15 +968,15 @@ account_info_compat_refresh_if_needed() {
   [[ -n "${domain}" ]] || domain="-"
   ip="$(detect_public_ip_ipapi)"
 
-  log "Format XRAY ACCOUNT INFO kompatibilitas terdeteksi, menjalankan sinkronisasi..."
+  log "Format ACCOUNT INFO kompatibilitas terdeteksi, menjalankan sinkronisasi..."
   if account_refresh_all_info_files "${domain}" "${ip}"; then
-    log "Sinkronisasi kompatibilitas XRAY ACCOUNT INFO selesai."
+    log "Sinkronisasi kompatibilitas ACCOUNT INFO selesai."
     account_info_domain_sync_state_write "${domain}"
     return 0
   fi
 
-  warn "Sebagian XRAY ACCOUNT INFO gagal disinkronkan saat migrasi kompatibilitas."
-  warn "Silakan cek file di ${ACCOUNT_ROOT}."
+  warn "Sebagian ACCOUNT INFO gagal disinkronkan saat migrasi kompatibilitas."
+  warn "Silakan cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
   return 1
 }
 
@@ -1875,10 +1956,10 @@ domain_control_set_domain_now() {
   MAIN_INFO_CACHE_TS=0
 
   if account_refresh_all_info_files "${DOMAIN}" "$(detect_public_ip_ipapi)"; then
-    log "XRAY ACCOUNT INFO berhasil disinkronkan ke domain baru."
+    log "ACCOUNT INFO berhasil disinkronkan ke domain baru."
     account_info_domain_sync_state_write "${DOMAIN}"
   else
-    warn "Sebagian XRAY ACCOUNT INFO gagal disinkronkan. Cek file di ${ACCOUNT_ROOT}."
+    warn "Sebagian ACCOUNT INFO gagal disinkronkan. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
     warn "State sinkronisasi domain tidak diubah agar auto-sync bisa retry."
   fi
 
@@ -4921,30 +5002,35 @@ account_refresh_all_info_files() {
   # args: [domain] [ip]
   local domain="${1:-}"
   local ip="${2:-}"
+  local ssh_stats ssh_updated=0 ssh_failed=0 ssh_rc=0
 
   ensure_account_quota_dirs
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip_ipapi)"
 
   account_collect_files
-  if (( ${#ACCOUNT_FILES[@]} == 0 )); then
-    return 0
+  local i proto username updated=0 failed=0
+  if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+    for i in "${!ACCOUNT_FILES[@]}"; do
+      proto="${ACCOUNT_FILE_PROTOS[$i]}"
+      username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+      [[ -n "${username}" ]] || continue
+      if account_info_refresh_for_user "${proto}" "${username}" "${domain}" "${ip}"; then
+        updated=$((updated + 1))
+      else
+        failed=$((failed + 1))
+      fi
+    done
   fi
 
-  local i proto username updated=0 failed=0
-  for i in "${!ACCOUNT_FILES[@]}"; do
-    proto="${ACCOUNT_FILE_PROTOS[$i]}"
-    username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
-    [[ -n "${username}" ]] || continue
-    if account_info_refresh_for_user "${proto}" "${username}" "${domain}" "${ip}"; then
-      updated=$((updated + 1))
-    else
-      failed=$((failed + 1))
-    fi
-  done
+  ssh_stats="$(ssh_account_info_refresh_all_from_state)"
+  ssh_rc=$?
+  IFS='|' read -r ssh_updated ssh_failed <<<"${ssh_stats}"
+  [[ "${ssh_updated}" =~ ^[0-9]+$ ]] || ssh_updated=0
+  [[ "${ssh_failed}" =~ ^[0-9]+$ ]] || ssh_failed=0
 
-  log "Refresh XRAY ACCOUNT INFO: updated=${updated}, failed=${failed}"
-  if (( failed > 0 )); then
+  log "Refresh ACCOUNT INFO: xray_updated=${updated}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_failed=${ssh_failed}"
+  if (( failed > 0 || ssh_failed > 0 || ssh_rc != 0 )); then
     return 1
   fi
   return 0
