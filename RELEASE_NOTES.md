@@ -1,5 +1,120 @@
 # Release Notes
 
+## Rilis 2026-03-08 (Modular Installer + Playbook & Preflight Hardening)
+
+### Ringkasan
+Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit, lalu merapikan guard operasional di `run.sh`, `TESTING_PLAYBOOK.md`, dan `AUDIT_PLAYBOOK.md` agar sesuai dengan arsitektur repo terbaru.
+
+### Perubahan Utama
+1. Modularisasi installer `setup.sh`
+- `setup.sh` sekarang menjadi orchestrator tipis.
+- Implementasi installer dipindah ke:
+  - `opt/setup/core`
+  - `opt/setup/install`
+  - `opt/setup/bin`
+  - `opt/setup/templates`
+- Asset runtime besar yang sebelumnya inline kini dipisah, termasuk:
+  - `sshws-proxy.py`
+  - `sshws-qac-enforcer.py`
+  - `xray-speed.py`
+  - `xray-observe`
+  - `xray-domain-guard`
+  - template `nginx`, `systemd`, dan config pendukung
+
+2. Hardening `run.sh`
+- Preflight source lokal/repo sekarang lebih ketat sebelum host disentuh.
+- Jalur `RUN_USE_LOCAL_SOURCE=1` kini memverifikasi layout repo modular, bukan hanya `setup.sh` dan `manage.sh`.
+- Sinkronisasi `/opt/manage` dibuat staged/atomic untuk mengurangi skew antara binary `manage` dan modulnya saat install/upgrade gagal di tengah.
+
+3. Sinkronisasi playbook operasional
+- `TESTING_PLAYBOOK.md` kini sinkron dengan:
+  - SSHWS token path `/<token>` dan `/<bebas>/<token>`
+  - smoke Telegram runtime
+  - ACL whitelist/non-whitelist
+  - hidden dangerous actions
+  - log hygiene gateway Telegram
+- `AUDIT_PLAYBOOK.md` kini sinkron dengan:
+  - repo modular `opt/setup/*` dan `opt/manage/*`
+  - quick audit bot
+  - format audit dengan `Residual Risks / Testing Gaps`
+
+### Commit
+- `b8e82a6` — `refactor(setup): modularize installer and tune sshws restart`
+- `921a03e` — `chore: drop generated python cache files`
+- `f4fa613` — `fix(run): harden local source preflight and add audit playbook`
+- `812cf06` — `docs: refine audit and testing playbooks`
+
+### Hasil Validasi
+- `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
+- `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
+- `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
+- Full E2E modular installer `run.sh -> setup.sh -> manage.sh` live -> PASS
+
+## Rilis 2026-03-07 (SSHWS Token Path + QAC Hardening + Telegram Parity)
+
+### Ringkasan
+Rilis ini mengubah baseline SSHWS menjadi token path per-user yang fail-close, memperketat QAC SSHWS di runtime nyata, dan mendekatkan parity bot Telegram ke CLI sambil menutup beberapa gap operasional.
+
+### Perubahan Utama
+1. SSHWS token path per-user
+- Jalur resmi SSHWS sekarang:
+  - `/<token>`
+  - `/<bebas>/<token>`
+- Token dibuat per-user dan dipakai untuk mengidentifikasi user sejak awal koneksi.
+- Respons fail-close kini menjadi baseline:
+  - tanpa token -> `401 Unauthorized`
+  - token tidak valid -> `403 Forbidden`
+  - backend internal down -> `502 Bad Gateway`
+  - token valid + backend siap -> `101 Switching Protocols`
+
+2. QAC SSHWS runtime lebih ketat
+- `quota` dan `speed limit` menempel ke user dari awal lewat token path.
+- `IP/Login limit` dipindahkan lebih dekat ke admission runtime, bukan hanya menunggu timer.
+- Runtime session SSHWS kini melacak:
+  - `client_ip`
+  - `updated_at`
+  - heartbeat sesi
+- Session stale dibersihkan agar `Active SSHWS Sessions` dan QAC tidak menghitung ghost session.
+- `manage.sh` dan `analytics.sh` ikut disinkronkan untuk refresh account info, alt path, dan viewer sesi aktif.
+
+3. Bot Telegram parity + hardening
+- Menu Telegram makin dekat ke CLI untuk area:
+  - `Xray Management`
+  - `SSH Management`
+  - `Xray Quota & Access Control`
+  - `SSH Quota & Access Control`
+  - `Security`
+  - `Maintenance`
+- Action dangerous sekarang otomatis disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`.
+- Logging gateway Telegram di-hardening agar URL Bot API yang memuat token tidak lagi masuk ke journal baru.
+- Archive `bot_telegram.zip` dan checksum installer disegarkan agar deploy konsisten.
+
+### Commit
+- `18df265` — `fix(sshws): track client ip for qac enforcement`
+- `771a5d5` — `fix(sshws): apply speed limits per direction`
+- `c4f829e` — `fix(sshws): warm up user attribution for speed limits`
+- `56a41b6` — `feat(sshws): require per-user token paths`
+- `7595127` — `fix(manage): sync ssh account info refresh flows`
+- `3a800bc` — `feat(sshws): support short token prefixes`
+- `9542703` — `fix(sshws): harden admission and session tracking`
+- `40c2825` — `feat(telegram): sync ssh menu parity and refresh archive`
+- `e116d2d` — `feat(telegram): expand bot parity and refresh archive`
+- `b7a6522` — `fix(telegram): hide disabled dangerous actions`
+- `350fe32` — `docs: sync sshws runtime notes`
+
+### Hasil Validasi
+- `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
+- `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
+- Runtime SSHWS:
+  - path tanpa token -> `401`
+  - token invalid -> `403`
+  - backend down -> `502`
+  - token valid -> `101`
+- Bot Telegram:
+  - backend/gateway active
+  - archive terbaru terdeploy
+  - smoke runtime PASS
+
 ## Rilis 2026-03-06 (SSHWS Autoscript-Stream Mode + Runtime Guard)
 
 ### Ringkasan

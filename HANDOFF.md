@@ -7,13 +7,18 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Baseline Saat Ini
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
-- Workspace aktif (Codex): `/project/autoscript`
+- Workspace aktif (Codex): `/root/project/autoscript`
 - Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas historis: `/root/xray-core_discord`)
 - Deploy bot Discord: `/opt/bot-discord`
 - Deploy bot Telegram: `/opt/bot-telegram`
 
 ## Status Operasional Terkini (2026-03-08)
 - Commit terbaru di `main`:
+  - `812cf06` — `docs: refine audit and testing playbooks`
+  - `f4fa613` — `fix(run): harden local source preflight and add audit playbook`
+  - `b8e82a6` — `refactor(setup): modularize installer and tune sshws restart`
+  - `921a03e` — `chore: drop generated python cache files`
+  - `350fe32` — `docs: sync sshws runtime notes`
   - `9542703` — `fix(sshws): harden admission and session tracking`
   - `b7a6522` — `fix(telegram): hide disabled dangerous actions`
   - `e116d2d` — `feat(telegram): expand bot parity and refresh archive`
@@ -22,10 +27,10 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
   - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
 - Perubahan penting terbaru:
-  - Refactor modular installer sedang aktif di workspace:
+  - Refactor modular installer sudah commit + push:
     - `setup.sh` kini menjadi orchestrator tipis
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
-    - status ini belum commit/push saat handoff markdown ini diperbarui
+    - full E2E modular installer sudah lolos live
   - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
   - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
   - SSHWS kini memakai token path per-user 10 hex chars:
@@ -70,7 +75,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `/<token>` dan `/<bebas>/<token>` sama-sama lolos `101`
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-  - `python3 -m py_compile` untuk heredoc `sshws-proxy` dan `sshws-qac-enforcer` -> PASS
+  - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
   - `printf "0\n" | timeout 20 bash manage.sh` -> PASS
   - runtime SSHWS:
     - path tanpa token -> `HTTP/1.1 401 Unauthorized`
@@ -81,6 +86,9 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
     - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
+  - Validasi playbook terbaru:
+    - `TESTING_PLAYBOOK.md` sudah sinkron dengan SSHWS token path dan pengujian bot Telegram
+    - `AUDIT_PLAYBOOK.md` sudah sinkron dengan repo modular, bot, dan format audit terbaru
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
@@ -97,10 +105,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSHWS autoscript-stream, token-path SSHWS, SSHWS QAC enforcement, dan parity/hardening bot Telegram sudah commit + push ke `main` (`87b43fb`, `edd9852`, `aa199df`, `40c2825`, `e116d2d`, `b7a6522`, `9542703`).
-- Jika handoff terjadi sebelum commit refactor modular installer, expect:
-  - `M setup.sh`
-  - `?? opt/setup/`
+- Perubahan SSHWS autoscript-stream, token-path SSHWS, SSHWS QAC enforcement, parity/hardening bot Telegram, modular installer, dan playbook docs sudah commit + push ke `main`.
+- Jangan mengasumsikan working tree kotor; cek kondisi aktual tiap mulai sesi.
 
 ## Prinsip Operasional
 - Gunakan `staging` untuk test/R&D; production hanya setelah validasi.
@@ -115,10 +121,11 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 3. Jalankan `git status --short` dan pastikan baseline jelas.
 4. Validasi minimum sebelum perubahan lanjutan:
    - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh`
-   - `shellcheck setup.sh manage.sh`
+   - `shellcheck -x -S warning run.sh setup.sh manage.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh`
    - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')`
    - `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')`
    - `bash bot-telegram/scripts/gate-all.sh`
+   - jika tugasnya testing/audit, ikuti `TESTING_PLAYBOOK.md` atau `AUDIT_PLAYBOOK.md` secara penuh
 5. Jika menyentuh runtime Xray/Nginx, wajib cek:
    - `xray run -test -confdir /usr/local/etc/xray/conf.d`
    - `nginx -t`
