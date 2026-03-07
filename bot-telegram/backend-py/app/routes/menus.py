@@ -23,16 +23,51 @@ def _load_commands_file(path: str) -> dict:
         return {"menus": []}
 
 
+def _filter_commands_payload(payload: dict, enable_dangerous_actions: bool) -> dict:
+    if not isinstance(payload, dict):
+        return {"menus": []}
+
+    filtered_menus = []
+    for raw_menu in payload.get("menus", []):
+        if not isinstance(raw_menu, dict):
+            continue
+
+        filtered_actions = []
+        for raw_action in raw_menu.get("actions", []):
+            if not isinstance(raw_action, dict):
+                continue
+            if bool(raw_action.get("dangerous", False)) and not enable_dangerous_actions:
+                continue
+            filtered_actions.append(raw_action)
+
+        if not filtered_actions:
+            continue
+
+        menu_copy = dict(raw_menu)
+        menu_copy["actions"] = filtered_actions
+        filtered_menus.append(menu_copy)
+
+    payload_copy = dict(payload)
+    payload_copy["menus"] = filtered_menus
+    return payload_copy
+
+
 @router.get("/api/menus", dependencies=[Depends(verify_shared_secret)])
 def get_menus() -> dict:
     settings = get_settings()
-    return _load_commands_file(settings.commands_file)
+    return _filter_commands_payload(
+        _load_commands_file(settings.commands_file),
+        settings.enable_dangerous_actions,
+    )
 
 
 @router.get("/api/main-menu", dependencies=[Depends(verify_shared_secret)])
 def get_main_menu_overview() -> dict:
     settings = get_settings()
-    data = _load_commands_file(settings.commands_file)
+    data = _filter_commands_payload(
+        _load_commands_file(settings.commands_file),
+        settings.enable_dangerous_actions,
+    )
     return {
         "mode": "standalone",
         "dangerous_actions_enabled": settings.enable_dangerous_actions,
