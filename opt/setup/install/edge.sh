@@ -11,6 +11,8 @@ EDGE_HAPROXY_PEM_FILE="${EDGE_HAPROXY_PEM_FILE:-/etc/haproxy/autoscript/edge.pem
 EDGE_HAPROXY_FALLBACK_ENABLED="${EDGE_HAPROXY_FALLBACK_ENABLED:-true}"
 EDGE_HAPROXY_STANDBY_HTTP_PORT="${EDGE_HAPROXY_STANDBY_HTTP_PORT:-18082}"
 EDGE_HAPROXY_STANDBY_TLS_PORT="${EDGE_HAPROXY_STANDBY_TLS_PORT:-18444}"
+EDGE_NGINX_TLS_BACKEND="${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}"
+EDGE_NGINX_STREAM_CONF="${EDGE_NGINX_STREAM_CONF:-/etc/nginx/stream-conf.d/edge-stream.conf}"
 
 edge_runtime_env_file_trusted() {
   local file="${EDGE_RUNTIME_ENV_FILE}"
@@ -43,7 +45,7 @@ load_persisted_edge_runtime_env() {
 
   while IFS='=' read -r key value; do
     case "${key}" in
-      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_NGINX_HTTP_BACKEND|EDGE_SSH_CLASSIC_BACKEND|EDGE_SSH_TLS_BACKEND|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE|EDGE_HAPROXY_PEM_FILE|EDGE_HAPROXY_FALLBACK_ENABLED|EDGE_HAPROXY_STANDBY_HTTP_PORT|EDGE_HAPROXY_STANDBY_TLS_PORT)
+      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_NGINX_HTTP_BACKEND|EDGE_NGINX_TLS_BACKEND|EDGE_NGINX_STREAM_CONF|EDGE_SSH_CLASSIC_BACKEND|EDGE_SSH_TLS_BACKEND|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE|EDGE_HAPROXY_PEM_FILE|EDGE_HAPROXY_FALLBACK_ENABLED|EDGE_HAPROXY_STANDBY_HTTP_PORT|EDGE_HAPROXY_STANDBY_TLS_PORT)
         value="${value%$'\r'}"
         edge_runtime_set_default_from_persisted "${key}" "${value}"
         ;;
@@ -91,7 +93,7 @@ edge_provider_summary() {
     none) printf '%s\n' "disabled" ;;
     go) printf '%s\n' "go (active custom provider)" ;;
     haproxy) printf '%s\n' "haproxy (active fallback provider)" ;;
-    nginx-stream) printf '%s\n' "nginx-stream (planned experimental provider; scaffold only)" ;;
+    nginx-stream) printf '%s\n' "nginx-stream (experimental provider)" ;;
     *) printf '%s\n' "invalid:${provider}" ;;
   esac
 }
@@ -100,6 +102,7 @@ edge_provider_service_name() {
   case "$(edge_provider_selected)" in
     go) printf '%s\n' "${EDGE_SERVICE_NAME}" ;;
     haproxy) printf '%s\n' "${EDGE_HAPROXY_SERVICE_NAME}" ;;
+    nginx-stream) printf '%s\n' "nginx" ;;
     *) return 1 ;;
   esac
 }
@@ -159,11 +162,7 @@ edge_runtime_preflight_or_die() {
       edge_go_binary_available || die "Binary prebuilt edge-mux belum tersedia untuk provider go."
       edge_go_verify_dist_binary || die "Checksum binary prebuilt edge-mux gagal atau manifest SHA256SUMS belum siap."
       ;;
-    haproxy|nginx-stream)
-      if edge_runtime_activate_requested; then
-        die "Provider $(edge_provider_selected) belum siap untuk aktivasi runtime."
-      fi
-      ;;
+    haproxy|nginx-stream) ;;
   esac
 }
 
@@ -181,6 +180,8 @@ write_edge_runtime_env() {
     "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \
     "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
     "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
+    "EDGE_NGINX_TLS_BACKEND=${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}" \
+    "EDGE_NGINX_STREAM_CONF=${EDGE_NGINX_STREAM_CONF}" \
     "EDGE_SSH_CLASSIC_BACKEND=${EDGE_SSH_CLASSIC_BACKEND:-127.0.0.1:22022}" \
     "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}" \
     "EDGE_HTTP_DETECT_TIMEOUT_MS=${EDGE_HTTP_DETECT_TIMEOUT_MS:-250}" \
@@ -238,6 +239,28 @@ stage_edge_haproxy_provider() {
   warn "Provider haproxy sudah di-stage ke ${EDGE_HAPROXY_CFG}, tetapi service ${EDGE_HAPROXY_SERVICE_NAME} belum diaktifkan."
 }
 
+disable_edge_nginx_stream_provider() {
+  rm -f "${EDGE_NGINX_STREAM_CONF}" >/dev/null 2>&1 || true
+}
+
+stage_edge_nginx_stream_provider() {
+  command -v nginx >/dev/null 2>&1 || die "Binary nginx belum tersedia untuk provider nginx-stream."
+  install -d -m 755 "$(dirname "${EDGE_NGINX_STREAM_CONF}")"
+
+  render_setup_template_or_die \
+    "nginx/stream-edge.conf" \
+    "${EDGE_NGINX_STREAM_CONF}" \
+    0644 \
+    "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \
+    "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
+    "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
+    "EDGE_NGINX_TLS_BACKEND=${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}" \
+    "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}"
+
+  nginx -t >/dev/null 2>&1 || die "Validasi nginx-stream gagal: ${EDGE_NGINX_STREAM_CONF}"
+  warn "Provider nginx-stream sudah di-stage ke ${EDGE_NGINX_STREAM_CONF}, tetapi service nginx belum di-switch."
+}
+
 stage_edge_haproxy_standby_runtime() {
   local orig_http_port orig_tls_port
   orig_http_port="${EDGE_PUBLIC_HTTP_PORT:-80}"
@@ -265,7 +288,7 @@ edge_runtime_port_owned_only_by_edge() {
   local lines
   lines="$(ss -lntpH "( sport = :${port} )" 2>/dev/null || true)"
   [[ -n "${lines}" ]] || return 1
-  printf '%s\n' "${lines}" | grep -qvE 'users:\(\(("edge-mux"|"haproxy")' && return 1
+  printf '%s\n' "${lines}" | grep -qvE 'users:\(\(("edge-mux"|"haproxy"|"nginx")' && return 1
   return 0
 }
 
@@ -285,6 +308,11 @@ edge_runtime_activation_preflight() {
       command -v haproxy >/dev/null 2>&1 || die "Binary haproxy belum tersedia."
       [[ -s "${EDGE_HAPROXY_CFG}" ]] || die "Config haproxy belum tersedia: ${EDGE_HAPROXY_CFG}"
       haproxy -c -f "${EDGE_HAPROXY_CFG}" >/dev/null 2>&1 || die "Validasi haproxy gagal: ${EDGE_HAPROXY_CFG}"
+      ;;
+    nginx-stream)
+      command -v nginx >/dev/null 2>&1 || die "Binary nginx belum tersedia."
+      [[ -s "${EDGE_NGINX_STREAM_CONF}" ]] || die "Config nginx-stream belum tersedia: ${EDGE_NGINX_STREAM_CONF}"
+      nginx -t >/dev/null 2>&1 || die "Validasi nginx gagal untuk provider nginx-stream."
       ;;
   esac
 
@@ -350,6 +378,7 @@ install_edge_provider_stack() {
   install_setup_bin_or_die "edge-provider-switch" "/usr/local/bin/edge-provider-switch" 0755
   case "$(edge_provider_selected)" in
     go)
+      disable_edge_nginx_stream_provider
       stage_edge_go_provider
       if edge_runtime_activate_requested; then
         activate_edge_provider_runtime
@@ -359,13 +388,17 @@ install_edge_provider_stack() {
       fi
       ;;
     haproxy)
+      disable_edge_nginx_stream_provider
       stage_edge_haproxy_provider
       if edge_runtime_activate_requested; then
         activate_edge_provider_runtime
       fi
       ;;
     nginx-stream)
-      warn "Provider $(edge_provider_selected) masih berupa template desain/scaffold dan belum bisa diaktifkan."
+      stage_edge_nginx_stream_provider
+      if edge_runtime_activate_requested; then
+        activate_edge_provider_runtime
+      fi
       ;;
   esac
   if ! edge_runtime_activate_requested; then

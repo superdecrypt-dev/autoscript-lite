@@ -14,6 +14,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Status Operasional Terkini (2026-03-08)
 - Commit terbaru di `main`:
+  - `9d55920` — `feat(edge): add haproxy standby failover flow`
   - `f1bf684` — `fix(setup): avoid tty warning in non-interactive runs`
   - `da09ee0` — `fix(edge): clean dynamic env export`
   - `ca066dc` — `fix(edge): improve request classification and error handling`
@@ -39,6 +40,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - helper failover:
       - `edge-provider-switch haproxy`
       - `edge-provider-switch go`
+      - `edge-provider-switch nginx-stream`
   - Edge Gateway kini aktif live:
     - provider aktif: `go`
     - `edge-mux` memegang publik `80/443`
@@ -100,6 +102,10 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - HTTP/HTTPS publik diteruskan ke backend HTTP internal
     - `SSH WS` valid token -> `101`
     - `SSH SSL/TLS` di `443` dan `80` -> banner `dropbear`
+  - Provider `nginx-stream` sekarang sudah diimplementasikan dan tervalidasi:
+    - high-port validation -> PASS
+    - cutover live -> PASS
+    - restore kembali ke `go` -> PASS
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
@@ -114,6 +120,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - listener publik di `:80/:443`
     - `nginx` backend di `127.0.0.1:18080`
     - `haproxy` standby di `:18082/:18444`
+    - `nginx-stream` sudah lolos smoke high-port dan cutover live, tetapi tetap diposisikan experimental/non-default
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS

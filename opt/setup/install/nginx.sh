@@ -16,6 +16,10 @@ nginx_internal_backend_addr() {
   printf '%s\n' "${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}"
 }
 
+nginx_internal_tls_backend_addr() {
+  printf '%s\n' "${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}"
+}
+
 nginx_internal_backend_host() {
   local addr
   addr="$(nginx_internal_backend_addr)"
@@ -26,6 +30,34 @@ nginx_internal_backend_port() {
   local addr
   addr="$(nginx_internal_backend_addr)"
   printf '%s\n' "${addr##*:}"
+}
+
+nginx_internal_tls_backend_host() {
+  local addr
+  addr="$(nginx_internal_tls_backend_addr)"
+  printf '%s\n' "${addr%:*}"
+}
+
+nginx_internal_tls_backend_port() {
+  local addr
+  addr="$(nginx_internal_tls_backend_addr)"
+  printf '%s\n' "${addr##*:}"
+}
+
+nginx_stream_conf_path() {
+  printf '%s\n' "${EDGE_NGINX_STREAM_CONF:-/etc/nginx/stream-conf.d/edge-stream.conf}"
+}
+
+nginx_prepare_stream_conf_state() {
+  local stream_conf
+  stream_conf="$(nginx_stream_conf_path)"
+  install -d -m 755 "$(dirname "${stream_conf}")"
+
+  if [[ "${EDGE_PROVIDER:-none}" == "nginx-stream" ]] && edge_runtime_activate_requested; then
+    return 0
+  fi
+
+  rm -f "${stream_conf}" >/dev/null 2>&1 || true
 }
 
 nginx_read_live_map_value() {
@@ -227,8 +259,13 @@ write_nginx_main_conf() {
   local nginx_user
   nginx_user="$(detect_nginx_user)"
 
+  # Saat rerun di host yang sudah hidup, pertahankan context route/path dari
+  # config nginx live sebelum file utama dibersihkan dan ditulis ulang.
+  nginx_ensure_render_context_or_die
+
   rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f "${NGINX_CONF}" 2>/dev/null || true
+  nginx_prepare_stream_conf_state
 
   render_setup_template_or_die \
     "nginx/nginx.conf" \
@@ -248,12 +285,19 @@ write_nginx_main_conf() {
 write_nginx_config() {
   [[ -f "${CERT_FULLCHAIN}" && -f "${CERT_PRIVKEY}" ]] || die "Sertifikat tidak ditemukan di ${CERT_DIR}."
   nginx_ensure_render_context_or_die
+  nginx_prepare_stream_conf_state
 
   local nginx_listen_block nginx_tls_block nginx_mode_desc
   if nginx_use_internal_edge_backend; then
-    nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$';'
-    nginx_tls_block=""
-    nginx_mode_desc="internal backend $(nginx_internal_backend_addr)"
+    if [[ "${EDGE_PROVIDER:-none}" == "nginx-stream" ]] && edge_runtime_activate_requested; then
+      nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$';\n  listen '"$(nginx_internal_tls_backend_host)"':'"$(nginx_internal_tls_backend_port)"$' ssl;\n\thttp2 on;'
+      nginx_tls_block=$'  ssl_certificate '"${CERT_DIR}"$'/fullchain.pem;\n  ssl_certificate_key '"${CERT_DIR}"$'/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;'
+      nginx_mode_desc="internal backend $(nginx_internal_backend_addr) + tls $(nginx_internal_tls_backend_addr)"
+    else
+      nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$';'
+      nginx_tls_block=""
+      nginx_mode_desc="internal backend $(nginx_internal_backend_addr)"
+    fi
   else
     nginx_listen_block=$'  listen 80;\n  listen [::]:80;\n  listen 443 ssl;\n  listen [::]:443 ssl;\n\thttp2 on;'
     nginx_tls_block=$'  ssl_certificate '"${CERT_DIR}"$'/fullchain.pem;\n  ssl_certificate_key '"${CERT_DIR}"$'/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;'

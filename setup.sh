@@ -250,6 +250,7 @@ sanity_check() {
   if [[ "${edge_provider}" != "none" ]]; then
     case "${edge_provider}" in
       haproxy) edge_runtime_service="haproxy" ;;
+      nginx-stream) edge_runtime_service="nginx" ;;
       *) edge_runtime_service="edge-mux.service" ;;
     esac
     case "${edge_active}" in

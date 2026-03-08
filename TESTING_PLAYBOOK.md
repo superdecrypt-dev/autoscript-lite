@@ -119,6 +119,31 @@ Kriteria lulus tambahan:
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
 - jika fallback diaktifkan, `haproxy` standby listening di `:18082` dan `:18444`.
 
+Jika provider `nginx-stream` diuji, tambahkan juga:
+
+```bash
+edge-provider-switch nginx-stream
+ss -ltn | rg ':(80|443|18080|18443)\\b'
+printf 'GET / HTTP/1.1\r\nHost: <domain>\r\n\r\n' | timeout 5 nc 127.0.0.1 80 | sed -n '1,2p'
+printf 'GET /deadbeef00 HTTP/1.1\r\nHost: <domain>\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n' | timeout 5 openssl s_client -quiet -connect 127.0.0.1:443 -servername <domain> -alpn http/1.1 2>/dev/null | sed -n '1,2p'
+python3 - <<'PY'
+import socket, ssl
+s = socket.create_connection(("127.0.0.1", 443), timeout=5)
+c = ssl.create_default_context().wrap_socket(s, server_hostname="<domain>")
+print(c.recv(64).decode("utf-8", "replace").strip())
+c.close()
+PY
+edge-provider-switch go
+```
+
+Kriteria lulus tambahan:
+- `nginx-stream` memegang publik `:80` dan `:443`.
+- `nginx` tetap sehat di `127.0.0.1:18080`.
+- backend HTTPS internal aktif di `127.0.0.1:18443`.
+- `SSH WS` invalid token tetap `403 Forbidden`.
+- `SSH SSL/TLS` tetap memberi banner `dropbear`.
+- restore ke `go` kembali sehat.
+
 Jika topologi primary + standby dipakai, tambahkan juga:
 
 ```bash

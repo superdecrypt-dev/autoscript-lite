@@ -1,5 +1,41 @@
 # Release Notes
 
+## Rilis 2026-03-08 (Provider `nginx-stream` Experimental Implemented)
+
+### Ringkasan
+Rilis ini menyelesaikan implementasi provider `nginx-stream` sebagai opsi experimental untuk edge, lalu memvalidasinya pada:
+
+- high-port test
+- cutover live
+- restore kembali ke provider `go`
+
+### Perubahan Utama
+1. Provider `nginx-stream`
+- `nginx` sekarang bisa menjalankan mode stream edge:
+  - publik `:80/:443`
+  - backend HTTP internal `127.0.0.1:18080`
+  - backend HTTPS internal `127.0.0.1:18443`
+  - backend SSH TLS internal `127.0.0.1:22443`
+- helper operasional baru:
+  - `edge-provider-switch nginx-stream`
+
+2. Template dan render runtime
+- `nginx.conf` sekarang mendukung include `stream-conf.d/*.conf`
+- `stream-edge.conf` kini benar-benar dipakai untuk memisahkan:
+  - HTTP/plaintext vs TLS pada `:80`
+  - ALPN HTTP vs non-HTTP pada `:443`
+
+3. Validasi perilaku runtime
+- HTTP -> backend HTTP `nginx`
+- `SSH WS` invalid token -> `403 Forbidden`
+- `SSH SSL/TLS` -> banner `dropbear`
+- restore kembali ke `go` dan topologi standby `haproxy` tetap sehat
+
+### Hasil Validasi
+- high-port validation `nginx-stream` -> PASS
+- cutover live `nginx-stream` -> PASS
+- restore live ke `go` -> PASS
+
 ## Rilis 2026-03-08 (Edge Gateway Primary + HAProxy Standby Fallback)
 
 ### Ringkasan
@@ -37,7 +73,7 @@ Rilis ini mematangkan topologi edge menjadi:
 - `SSH SSL/TLS` dan `SSH WS` tetap tidak regress -> PASS
 
 ### Commit
-- perubahan ini akan muncul di riwayat git setelah sinkronisasi repo berikutnya
+- `9d55920` — `feat(edge): add haproxy standby failover flow`
 
 ## Rilis 2026-03-08 (Edge Gateway Live + SSH Surface Refresh)
 

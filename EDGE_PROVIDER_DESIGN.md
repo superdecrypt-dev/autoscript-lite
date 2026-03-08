@@ -31,6 +31,10 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
   - `haproxy` standby di `18082/18444`
   - `nginx` backend internal di `127.0.0.1:18080`
 - `nginx-stream` tetap didukung, tetapi statusnya **experimental/limited** untuk skenario `1 domain + shared 80/443`.
+- `nginx-stream` saat ini sudah diimplementasikan dan tervalidasi:
+  - uji high-port
+  - cutover live
+  tetapi tetap tidak menjadi default.
 - Provider `go` dipasang sebagai **binary prebuilt**, bukan compile di VPS saat setup normal.
 - `nginx` tidak lagi memegang listener publik `80/443` jika edge provider aktif.
 - `nginx` dipindahkan ke backend internal, misalnya `127.0.0.1:18080`.
@@ -57,19 +61,21 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
 
 Arsitektur aktif saat ini:
 
-- `nginx` publik di `:80/:443`
-- `sshws-proxy` internal
-- `dropbear` internal
-- `xray` diroute di belakang `nginx`
+- `edge-mux` aktif di publik `:80/:443`
+- `haproxy` standby di `:18082/:18444`
+- `nginx` backend internal di `127.0.0.1:18080`
+- `dropbear` internal di `127.0.0.1:22022`
+- `stunnel` internal di `127.0.0.1:22443`
+- `sshws-proxy` internal di `127.0.0.1:10015`
 
-Arsitektur lama ini sudah cocok untuk `SSH WS`, tetapi belum cukup untuk:
+Topologi ini sudah membuktikan:
 
 - `SSH WS`
 - `SSH SSL/TLS`
 - satu domain
 - shared `80/443`
 
-karena trafik klasik TLS dan trafik HTTP/WebSocket sama-sama ingin masuk lewat port yang sama.
+dapat hidup bersama lewat satu edge aktif dan backend internal yang terpisah.
 
 ## Prinsip Arsitektur Baru
 
@@ -178,7 +184,7 @@ Timeout awal yang disarankan:
 |---|---|---:|---|
 | `go` | utama | ya | paling fleksibel dan paling sesuai untuk logic sniffing proyek ini |
 | `haproxy` | fallback | ya | feasible, tapi config lebih kompleks |
-| `nginx-stream` | experimental | terbatas | paling lemah untuk klasifikasi post-TLS pada domain/port yang sama |
+| `nginx-stream` | experimental | terbatas | sudah diimplementasikan dan tervalidasi, tetapi tetap paling lemah untuk klasifikasi post-TLS pada domain/port yang sama |
 
 ## Provider `go`
 
@@ -257,7 +263,14 @@ Karena itu statusnya:
 
 - `experimental`
 
-Kita tetap bisa menyiapkan template dan flow install, tetapi provider ini tidak boleh dipromosikan sebagai mode utama untuk target requirement ini.
+Provider ini sekarang sudah memiliki:
+
+- template runtime
+- flow install
+- validasi high-port
+- cutover live dan restore kembali ke provider `go`
+
+Namun provider ini tetap tidak boleh dipromosikan sebagai mode utama untuk target requirement ini.
 
 ## Layout Repo Yang Disarankan
 
