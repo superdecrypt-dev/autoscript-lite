@@ -46,6 +46,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - provider aktif: `go`
     - `edge-mux` memegang publik `80/443`
     - `nginx` berjalan di backend internal `127.0.0.1:18080`
+    - SSH Direct kini tersedia sebagai surface resmi `SSH Direct` di `80/443`
     - SSH klasik TLS kini tersedia sebagai surface resmi `SSH SSL/TLS` di `80/443`
   - Surface operasional baru:
     - `Maintenance > Edge Gateway Status`

@@ -2711,6 +2711,14 @@ ssh_ssl_tls_public_ports_label() {
   fi
 }
 
+ssh_direct_public_ports_label() {
+  if edge_runtime_enabled_for_public_ports; then
+    ssh_ws_public_ports_label
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 ssh_account_info_write() {
   # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token
   local username="${1:-}"
@@ -2835,6 +2843,7 @@ PY
     sshws_main_disp="-"
   fi
   sshws_ports_disp="$(ssh_ws_public_ports_label)"
+  ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
   ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
 
   if ! cat > "${acc_file}" <<EOF
@@ -2854,6 +2863,7 @@ Speed Limit : ${speed_disp}
 SSH WS      : ${sshws_main_disp}
 SSH WS Alt  : ${sshws_alt_path}
 SSH WS Port : ${sshws_ports_disp}
+SSH Direct  : ${ssh_direct_ports_disp}
 SSH SSL/TLS : ${ssh_ssl_tls_ports_disp}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}

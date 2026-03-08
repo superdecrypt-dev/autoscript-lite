@@ -16,6 +16,7 @@ const (
 	ClassUnknown InitialClass = iota
 	ClassHTTP
 	ClassTLSClientHello
+	ClassSSH
 	ClassTimeout
 	ClassPossibleHTTP
 )
@@ -62,6 +63,11 @@ func IsTLSClientHello(b []byte) bool {
 	return b[0] == 0x16 && b[1] == 0x03 && b[2] <= 0x04
 }
 
+func IsSSHBanner(b []byte) bool {
+	trimmed := bytes.TrimLeft(b, "\r\n\t ")
+	return bytes.HasPrefix(trimmed, []byte("SSH-"))
+}
+
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
@@ -83,6 +89,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassHTTP, nil
 			case IsTLSClientHello(current):
 				return current, ClassTLSClientHello, nil
+			case IsSSHBanner(current):
+				return current, ClassSSH, nil
 			case IsPossibleHTTPPrefix(current):
 				continue
 			default:
@@ -110,6 +118,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassHTTP, nil
 				case IsTLSClientHello(current):
 					return current, ClassTLSClientHello, nil
+				case IsSSHBanner(current):
+					return current, ClassSSH, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -125,6 +135,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassHTTP, nil
 	case IsTLSClientHello(current):
 		return current, ClassTLSClientHello, nil
+	case IsSSHBanner(current):
+		return current, ClassSSH, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:

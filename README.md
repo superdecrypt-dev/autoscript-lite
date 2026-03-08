@@ -48,6 +48,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - nginx berjalan sebagai backend internal `127.0.0.1:18080`
 - SSH WS di `80/443`
 - SSH SSL/TLS di `80/443`
+- SSH Direct di `80/443`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
 - SSH WS QAC memakai runtime session tracking aktif untuk quota, speed, dan IP/Login limit
 - Bot Discord dan Telegram standalone

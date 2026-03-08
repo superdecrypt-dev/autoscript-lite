@@ -1,5 +1,40 @@
 # Release Notes
 
+## Rilis 2026-03-09 (SSH Direct di 80/443 via Edge Gateway)
+
+### Ringkasan
+Rilis ini menambahkan surface resmi `SSH Direct` di port `80` dan `443` lewat provider utama `Edge Gateway (go)`, tetap berdampingan dengan `SSH WS` dan `SSH SSL/TLS`.
+
+### Perubahan Utama
+1. Edge Gateway kini mengenali trafik SSH plaintext
+- `edge-mux` sekarang bisa membedakan:
+  - HTTP / WebSocket
+  - TLS client hello
+  - SSH plaintext (`SSH-`)
+- Hasilnya:
+  - `SSH Direct` bisa dipakai di `80`
+  - `SSH Direct` juga bisa dipakai di `443`
+
+2. Error handling edge dibuat lebih jelas
+- Request HTTP yang terfragmentasi tidak lagi salah jatuh ke backend SSH.
+- Jalur HTTP backend down sekarang membalas status yang jelas:
+  - `408 Request Timeout`
+  - `502 Bad Gateway`
+
+3. Surface akun SSH diperluas
+- `SSH ACCOUNT INFO` sekarang menampilkan:
+  - `SSH WS`
+  - `SSH WS Alt`
+  - `SSH WS Port`
+  - `SSH SSL/TLS`
+  - `SSH Direct`
+
+### Hasil Validasi
+- Login nyata `SSH Direct` ke `127.0.0.1:80` -> `PASS`
+- Login nyata `SSH Direct` ke `127.0.0.1:443` -> `PASS`
+- `SSH SSL/TLS` tetap hidup di `443`
+- `SSH WS` invalid token tetap `403`
+
 ## Rilis 2026-03-09 (Xray Shadowsocks Shorthand Path Only)
 
 ### Ringkasan

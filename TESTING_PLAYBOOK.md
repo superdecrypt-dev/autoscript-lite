@@ -148,6 +148,8 @@ Kriteria lulus tambahan:
 - backend HTTPS internal aktif di `127.0.0.1:18443`.
 - `SSH WS` invalid token tetap `403 Forbidden`.
 - `SSH SSL/TLS` tetap memberi banner `dropbear`.
+- `SSH Direct` di `80` memberi banner `dropbear`.
+- `SSH Direct` di `443` memberi banner `dropbear`.
 - restore ke `go` kembali sehat.
 
 Jika topologi primary + standby dipakai, tambahkan juga:
@@ -206,6 +208,7 @@ Kriteria lulus:
 - Token tidak valid mengembalikan `403 Forbidden`.
 - Saat `sshws-dropbear` dimatikan, endpoint SSH WS token-valid mengembalikan `502 Bad Gateway`.
 - Path Xray lain tetap berfungsi dan tidak bentrok dengan route SSH WS token-path.
+- `SSH Direct` login nyata di `80` dan `443` harus lolos minimal sekali setelah perubahan edge routing.
 
 Khusus runtime bot Telegram (smoke cepat; detail lengkap lihat Bagian 6):
 
