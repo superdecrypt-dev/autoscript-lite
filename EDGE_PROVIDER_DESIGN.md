@@ -5,7 +5,7 @@
 Dokumen ini mendefinisikan desain teknis untuk mendukung:
 
 - `SSH WS`
-- `SSH SSL/TLS klasik`
+- `SSH SSL/TLS`
 - route HTTP/Xray yang sudah ada
 
 berjalan pada:
@@ -35,7 +35,7 @@ Hanya **satu provider** yang aktif pada satu waktu.
 
 ### In scope
 
-- Multiplex `SSH WS` dan `SSH SSL/TLS klasik` pada domain yang sama.
+- Multiplex `SSH WS` dan `SSH SSL/TLS` pada domain yang sama.
 - Shared public port `80` dan `443`.
 - Provider abstraction `go|haproxy|nginx-stream`.
 - Installer modular untuk provider edge.
@@ -43,7 +43,7 @@ Hanya **satu provider** yang aktif pada satu waktu.
 
 ### Out of scope
 
-- Quota/speed/IP limit untuk jalur `SSH SSL/TLS klasik`.
+- Quota/speed/IP limit untuk jalur `SSH SSL/TLS`.
 - Migrasi bot Discord/Telegram ke surface edge baru.
 - Kompatibilitas penuh semua client exotic tanpa validasi bertahap.
 
@@ -56,10 +56,10 @@ Arsitektur aktif saat ini:
 - `dropbear` internal
 - `xray` diroute di belakang `nginx`
 
-Ini sudah cocok untuk `SSH WS`, tetapi belum cukup untuk:
+Arsitektur lama ini sudah cocok untuk `SSH WS`, tetapi belum cukup untuk:
 
 - `SSH WS`
-- `SSH SSL/TLS klasik`
+- `SSH SSL/TLS`
 - satu domain
 - shared `80/443`
 
@@ -116,12 +116,12 @@ Provider edge menerima semua trafik publik di `:80`.
 - Jika byte awal adalah HTTP plaintext:
   - route ke `nginx-http`
 - Jika byte awal adalah TLS ClientHello:
-  - lanjut ke jalur `SSH SSL/TLS klasik`
+  - lanjut ke jalur `SSH SSL/TLS`
 
 ### Hasil
 
 - `SSH WS` non-TLS / HTTP WS tetap bisa hidup di `:80`
-- `SSH SSL/TLS klasik` tetap bisa hidup di `:80` sebagai compatibility mode
+- `SSH SSL/TLS` tetap bisa hidup di `:80` sebagai compatibility mode
 
 Catatan:
 
@@ -309,14 +309,14 @@ EDGE_CLASSIC_TLS_ON_80=true
 - tidak perlu diubah menjadi provider edge
 - QAC SSH WS tetap berada di jalur existing
 
-### SSH SSL/TLS klasik
+### SSH SSL/TLS
 
 - menjadi jalur backend internal raw SSH
 - TLS publik diakhiri oleh edge provider
 
 ### QAC
 
-QAC SSH WS yang sekarang ada **tidak otomatis berlaku** untuk jalur klasik.
+QAC SSH WS yang sekarang ada **tidak otomatis berlaku** untuk jalur `SSH SSL/TLS`.
 
 Kalau nanti jalur klasik juga ingin punya:
 

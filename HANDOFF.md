@@ -14,19 +14,28 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Status Operasional Terkini (2026-03-08)
 - Commit terbaru di `main`:
+  - `562832c` — `feat(ssh): update ssh ws account info and docs`
+  - `8e1c990` — `chore(edge): rename user-facing labels to Edge Gateway`
+  - `3c0662d` — `feat(edge): add cli maintenance tools and rollback note`
+  - `e96dc37` — `feat(edge): cut over public ports to provider`
+  - `8617fe7` — `feat(edge): add guarded runtime activation flow`
+  - `a1fbdb6` — `feat(edge): add go provider build and staging flow`
+  - `fed9458` — `chore(edge): add provider scaffold`
+  - `5356202` — `docs: add edge provider architecture design`
   - `812cf06` — `docs: refine audit and testing playbooks`
   - `f4fa613` — `fix(run): harden local source preflight and add audit playbook`
   - `b8e82a6` — `refactor(setup): modularize installer and tune sshws restart`
   - `921a03e` — `chore: drop generated python cache files`
-  - `350fe32` — `docs: sync sshws runtime notes`
-  - `9542703` — `fix(sshws): harden admission and session tracking`
-  - `b7a6522` — `fix(telegram): hide disabled dangerous actions`
-  - `e116d2d` — `feat(telegram): expand bot parity and refresh archive`
-  - `40c2825` — `feat(telegram): sync ssh menu parity and refresh archive`
-  - `aa199df` — `fix sshws qac enforcement and domain sync`
-  - `edd9852` — `fix(runtime): harden sshws handshake and manage module loading`
-  - `87b43fb` — `fix(ssh): enforce SSH active-days and switch sshws mode`
 - Perubahan penting terbaru:
+  - Edge Gateway kini aktif live:
+    - provider aktif: `go`
+    - `edge-mux` memegang publik `80/443`
+    - `nginx` berjalan di backend internal `127.0.0.1:18080`
+    - SSH klasik TLS kini tersedia sebagai surface resmi `SSH SSL/TLS` di `80/443`
+  - Surface operasional baru:
+    - `Maintenance > Edge Gateway Status`
+    - `Maintenance > Restart Edge Gateway`
+    - `Maintenance > Edge Gateway Info`
   - Refactor modular installer sudah commit + push:
     - `setup.sh` kini menjadi orchestrator tipis
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
@@ -73,6 +82,10 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `run.sh` dijalankan dengan `RUN_USE_LOCAL_SOURCE=1 KEEP_REPO_AFTER_INSTALL=1`
     - `xray`, `nginx`, `sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`, `xray-speed`, `xray-observe.timer`, dan `xray-domain-guard.timer` aktif
     - `/<token>` dan `/<bebas>/<token>` sama-sama lolos `101`
+  - Cutover Edge Gateway sudah lolos live:
+    - HTTP/HTTPS publik diteruskan ke backend HTTP internal
+    - `SSH WS` valid token -> `101`
+    - `SSH SSL/TLS` di `443` dan `80` -> banner `dropbear`
 - Validasi runtime terakhir:
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
@@ -82,6 +95,10 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - token tidak valid -> `HTTP/1.1 403 Forbidden`
     - backend down -> `HTTP/1.1 502 Bad Gateway`
     - token valid + backend up -> `HTTP/1.1 101 Switching Protocols`
+  - runtime Edge Gateway:
+    - `edge-mux.service` -> `active`
+    - listener publik di `:80/:443`
+    - `nginx` backend di `127.0.0.1:18080`
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
@@ -102,10 +119,11 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 9. Ekspansi parity bot Telegram untuk `SSH`, `Security`, dan `Maintenance`.
 10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
 11. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
+12. Edge Gateway (`go`) sekarang aktif live dan menjadi frontend publik `80/443`.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSH WS autoscript-stream, token-path SSH WS, SSH WS QAC enforcement, parity/hardening bot Telegram, modular installer, dan playbook docs sudah commit + push ke `main`.
+- Perubahan SSH WS autoscript-stream, token-path SSH WS, SSH WS QAC enforcement, Edge Gateway live cutover, parity/hardening bot Telegram, modular installer, dan playbook docs sudah commit + push ke `main`.
 - Jangan mengasumsikan working tree kotor; cek kondisi aktual tiap mulai sesi.
 
 ## Prinsip Operasional

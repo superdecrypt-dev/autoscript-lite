@@ -90,6 +90,7 @@ Contoh pola (sesuaikan environment staging):
 systemctl status xray xray-expired xray-quota xray-limit-ip xray-speed --no-pager
 xray run -test -confdir /usr/local/etc/xray/conf.d
 systemctl status sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer --no-pager
+systemctl status edge-mux --no-pager || true
 ```
 
 Kriteria lulus:
@@ -97,14 +98,25 @@ Kriteria lulus:
 - Konfigurasi Xray valid.
 - Service SSH WS aktif (`sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`).
 - Timer enforcer SSH QAC aktif (`sshws-qac-enforcer.timer`).
+- Jika Edge Gateway aktif, `edge-mux` harus `active` dan listener publik tetap ada di `:80/:443`.
 
-Khusus SSH WebSocket (staging):
+Khusus SSH WS (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
 - Saat audit/review, konsep ini dianggap baseline tetap; referensi konsep perilaku: `https://github.com/nanotechid/supreme`.
 - Jalur resmi SSH WS sekarang berbasis token path per-user:
   - `/<token>`
   - `/<bebas>/<token>`
 - Siapkan satu akun SSH terkelola lebih dulu, lalu ambil `sshws_token` dari metadata/account info.
+
+Jika Edge Gateway aktif, tambahkan juga cek singkat:
+
+```bash
+ss -ltn | rg ':(80|443|18080)\\b'
+```
+
+Kriteria lulus tambahan:
+- `edge-mux` memegang publik `:80` dan `:443`.
+- `nginx` berjalan di backend internal `127.0.0.1:18080`.
 
 ```bash
 # Handshake check non-TLS root path (curl akan timeout setelah 101 karena tunnel tetap terbuka)
@@ -338,6 +350,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `View Account Info`
 - `Active SSH WS Sessions`
 - `SSH WS Service Status`
+- `Edge Gateway Status`
 
 4. Menu `4) Xray Quota & Access Control`
 - `Summary`
@@ -364,6 +377,8 @@ Gunakan checklist ini saat regresi menu Telegram:
 9. Menu `10) Maintenance`
 - `SSH WS Diagnostics`
 - `SSH WS Status`
+- `Edge Gateway Status`
+- `Edge Gateway Info`
 - `Daemon Status`
 
 10. Menu `12) Backup/Restore`

@@ -42,7 +42,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - Installer modular via `opt/setup/*`
 - Operasional akun Xray dan SSH dari satu menu
 - QAC untuk Xray dan SSH WS
-- SSH WebSocket di `80/443`
+- Edge Gateway (provider `go`) aktif di `80/443`
+- SSH WS di `80/443`
+- SSH SSL/TLS di `80/443`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
 - SSH WS QAC memakai runtime session tracking aktif untuk quota, speed, dan IP/Login limit
 - Bot Discord dan Telegram standalone

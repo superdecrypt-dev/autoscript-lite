@@ -2,8 +2,8 @@
 
 Direktori ini menyiapkan fondasi provider edge untuk skenario:
 
-- `SSHWS`
-- `SSH SSL/TLS klasik`
+- `SSH WS`
+- `SSH SSL/TLS`
 - route HTTP/Xray yang sudah ada
 
 berjalan pada:
@@ -13,9 +13,10 @@ berjalan pada:
 
 ## Status
 
-- Struktur ini sudah masuk tahap implementasi awal untuk provider `go`.
-- Belum aktif di runtime.
-- Tidak ada perubahan listener publik selama provider edge belum dihubungkan ke `setup.sh`.
+- Provider `go` sudah aktif live sebagai `Edge Gateway`.
+- `edge-mux` saat ini memegang publik `80/443`.
+- `nginx` berjalan di backend internal `127.0.0.1:18080`.
+- `haproxy` dan `nginx-stream` masih belum diaktifkan.
 
 ## Provider yang direncanakan
 
@@ -32,8 +33,8 @@ berjalan pada:
 
 - Hanya satu provider aktif pada satu waktu.
 - `nginx` akan dipindah ke backend internal saat edge diaktifkan.
-- `SSHWS` tetap berjalan melalui jalur HTTP/WebSocket backend.
-- Jalur `SSH SSL/TLS klasik` adalah backend terpisah.
+- `SSH WS` tetap berjalan melalui jalur HTTP/WebSocket backend.
+- Jalur `SSH SSL/TLS` adalah backend terpisah.
 
 ## Referensi
 

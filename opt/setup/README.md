@@ -20,6 +20,7 @@ Prinsip:
   - `install/`
   - `bin/`
   - `templates/`
+- `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
 - Validasi minimum yang sudah lolos:
   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`

@@ -64,6 +64,10 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh alur CLI.
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
 - SSH WS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib).
+- Edge Gateway (provider `go`) sekarang aktif sebagai frontend publik `80/443`.
+- Jalur user-facing yang harus dianggap resmi:
+  - `SSH WS`
+  - `SSH SSL/TLS`
 - `setup.sh` harus dipertahankan sebagai orchestrator tipis; implementasi installer baru ditempatkan di `opt/setup/*`.
 - Jalur SSH WS resmi sekarang wajib token path per-user:
   - `/<token>`

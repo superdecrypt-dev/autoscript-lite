@@ -1,5 +1,52 @@
 # Release Notes
 
+## Rilis 2026-03-08 (Edge Gateway Live + SSH Surface Refresh)
+
+### Ringkasan
+Rilis ini mengaktifkan `Edge Gateway` sebagai frontend publik `80/443`, memindahkan `nginx` ke backend internal, lalu merapikan surface user-facing untuk `SSH WS` dan `SSH SSL/TLS`.
+
+### Perubahan Utama
+1. Edge Gateway live cutover
+- Provider aktif saat ini: `go`
+- `edge-mux` kini memegang publik `:80` dan `:443`
+- `nginx` dipindah ke backend internal `127.0.0.1:18080`
+- `SSH WS` dan `SSH SSL/TLS` sekarang berbagi domain dan port publik yang sama lewat Edge Gateway
+
+2. Surface operasional baru
+- Maintenance menu sekarang punya:
+  - `Edge Gateway Status`
+  - `Restart Edge Gateway`
+  - `Edge Gateway Info`
+- Rollback operasional singkat didokumentasikan di `EDGE_ROLLBACK.md`
+
+3. Refresh output akun SSH
+- `SSH ACCOUNT INFO` sekarang menampilkan:
+  - `ISP`
+  - `Country`
+  - `SSH WS`
+  - `SSH WS Alt`
+  - `SSH WS Port`
+  - `SSH SSL/TLS`
+- Penamaan user-facing disederhanakan menjadi:
+  - `SSH WS`
+  - `SSH SSL/TLS`
+
+### Commit
+- `5356202` — `docs: add edge provider architecture design`
+- `fed9458` — `chore(edge): add provider scaffold`
+- `a1fbdb6` — `feat(edge): add go provider build and staging flow`
+- `8617fe7` — `feat(edge): add guarded runtime activation flow`
+- `e96dc37` — `feat(edge): cut over public ports to provider`
+- `3c0662d` — `feat(edge): add cli maintenance tools and rollback note`
+- `8e1c990` — `chore(edge): rename user-facing labels to Edge Gateway`
+- `562832c` — `feat(ssh): update ssh ws account info and docs`
+
+### Hasil Validasi
+- Edge Gateway high-port systemd validation -> PASS
+- HTTP/HTTPS publik diteruskan ke backend HTTP internal -> PASS
+- `SSH WS` valid token -> `101 Switching Protocols`
+- `SSH SSL/TLS` di `80` dan `443` -> banner `SSH-2.0-dropbear_2022.83`
+
 ## Rilis 2026-03-08 (Modular Installer + Playbook & Preflight Hardening)
 
 ### Ringkasan
@@ -163,10 +210,10 @@ Update ini menyelaraskan perilaku SSH WS ke mode autoscript-stream, lalu menamba
   - backend up -> `HTTP/1.1 101 Switching Protocols`
 - Smoke `manage.sh` (`0` keluar menu) -> PASS
 
-## Rilis 2026-03-06 (SSH WebSocket Share Port 80/443)
+## Rilis 2026-03-06 (SSH WS Share Port 80/443)
 
 ### Ringkasan
-Rilis ini menambahkan SSH WebSocket TLS/non-TLS dengan model port share `80/443` tanpa memutus jalur Xray existing.
+Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa memutus jalur Xray existing.
 
 ### Perubahan Utama
 1. Integrasi SSH WS di `setup.sh`
