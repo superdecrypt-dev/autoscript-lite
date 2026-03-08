@@ -771,7 +771,7 @@ account_info_domain_sync_state_read() {
 account_info_domain_sync_state_write() {
   local domain="${1:-}"
   [[ -n "${domain}" ]] || domain="-"
-  printf '%s\n' "${domain}" > "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}" 2>/dev/null || true
+  { printf '%s\n' "${domain}" > "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}"; } 2>/dev/null || true
   chmod 600 "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}" 2>/dev/null || true
 }
 
