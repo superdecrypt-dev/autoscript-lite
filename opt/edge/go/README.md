@@ -14,8 +14,9 @@ Binary `edge-mux` akan:
 
 ## Status
 
-- Folder ini baru scaffold.
-- Implementasi runtime belum dimulai.
+- Folder ini sudah masuk implementasi awal.
+- Runtime belum dihubungkan ke installer live.
+- Binary prebuilt belum dibuat dari repo ini.
 
 ## Layout
 
@@ -29,3 +30,34 @@ Binary `edge-mux` akan:
   - logic TLS terminate + mux
 - `internal/runtime/`
   - config/env/runtime helpers
+
+## Cakupan Implementasi Awal
+
+- parse env/config runtime
+- listener publik `:80`
+- listener publik `:443`
+- TLS termination di `:443`
+- klasifikasi awal:
+  - HTTP/WebSocket -> backend HTTP internal
+  - non-HTTP / timeout singkat -> backend SSH klasik
+- bridge stream dasar dua arah
+
+## Yang Belum
+
+- build binary prebuilt
+- wiring `setup.sh`
+- status CLI edge
+- provider `haproxy`
+- provider `nginx-stream`
+
+## Build Lokal
+
+Script build lokal:
+
+- [build-edge-mux.sh](/root/project/autoscript/opt/edge/scripts/build-edge-mux.sh)
+
+Output default:
+
+- `opt/edge/dist/edge-mux-linux-amd64`
+- `opt/edge/dist/edge-mux-linux-arm64`
+- `opt/edge/dist/SHA256SUMS`

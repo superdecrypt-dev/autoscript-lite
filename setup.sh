@@ -169,6 +169,8 @@ source_setup_module "opt/setup/install/bootstrap.sh"
 source_setup_module "opt/setup/install/domain.sh"
 # shellcheck source=opt/setup/install/nginx.sh
 source_setup_module "opt/setup/install/nginx.sh"
+# shellcheck source=opt/setup/install/edge.sh
+source_setup_module "opt/setup/install/edge.sh"
 # shellcheck source=opt/setup/install/network.sh
 source_setup_module "opt/setup/install/network.sh"
 # shellcheck source=opt/setup/install/xray.sh
@@ -321,6 +323,7 @@ main() {
   write_xray_modular_configs
   configure_xray_service_confdir
   write_nginx_config
+  install_edge_provider_stack
   if sync_xray_domain_file "${DOMAIN}"; then
     ok "Compat domain file tersimpan: ${XRAY_DOMAIN_FILE}"
   else

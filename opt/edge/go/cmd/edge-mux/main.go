@@ -1,11 +1,266 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"flag"
+	"log"
+	"net"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/proxy"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/tlsmux"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "edge-mux scaffold: implementation not started yet")
-	os.Exit(1)
+	cfg, err := runtime.LoadConfig()
+	if err != nil {
+		log.Fatalf("edge-mux config error: %v", err)
+	}
+
+	overrideFromFlags(&cfg)
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("edge-mux validate error: %v", err)
+	}
+
+	logger := log.New(os.Stderr, "", log.LstdFlags)
+	logger.Printf(
+		"edge-mux starting provider=%s http=%s tls=%s http_backend=%s ssh_backend=%s timeout=%s classic_tls_on_80=%t",
+		cfg.Provider,
+		cfg.HTTPListenAddr(),
+		cfg.TLSListenAddr(),
+		cfg.HTTPBackendAddr(),
+		cfg.SSHBackendAddr(),
+		cfg.DetectTimeout,
+		cfg.ClassicTLSOn80,
+	)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	start := func(name string, fn func(context.Context) error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				errCh <- errors.New(name + ": " + err.Error())
+			}
+		}()
+	}
+
+	start("http-listener", func(ctx context.Context) error { return serveHTTPMux(ctx, logger, cfg) })
+	start("tls-listener", func(ctx context.Context) error { return serveTLSMux(ctx, logger, cfg) })
+
+	select {
+	case <-ctx.Done():
+		logger.Printf("edge-mux stopping: %v", ctx.Err())
+	case err := <-errCh:
+		stop()
+		logger.Printf("edge-mux fatal: %v", err)
+	}
+
+	wg.Wait()
+}
+
+func overrideFromFlags(cfg *runtime.Config) {
+	var (
+		httpListen  = flag.String("http-listen", "", "public HTTP listen address")
+		tlsListen   = flag.String("tls-listen", "", "public TLS listen address")
+		httpBackend = flag.String("http-backend", "", "internal HTTP backend address")
+		sshBackend  = flag.String("ssh-backend", "", "internal SSH classic backend address")
+		certFile    = flag.String("cert-file", "", "TLS certificate file")
+		keyFile     = flag.String("key-file", "", "TLS key file")
+		timeoutMs   = flag.Int("detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
+	)
+	flag.Parse()
+
+	if *httpListen != "" {
+		cfg.PublicHTTPAddr = *httpListen
+	}
+	if *tlsListen != "" {
+		cfg.PublicTLSAddr = *tlsListen
+	}
+	if *httpBackend != "" {
+		cfg.HTTPBackend = *httpBackend
+	}
+	if *sshBackend != "" {
+		cfg.SSHBackend = *sshBackend
+	}
+	if *certFile != "" {
+		cfg.TLSCertFile = *certFile
+	}
+	if *keyFile != "" {
+		cfg.TLSKeyFile = *keyFile
+	}
+	if *timeoutMs > 0 {
+		cfg.DetectTimeout = time.Duration(*timeoutMs) * time.Millisecond
+	}
+}
+
+func serveHTTPMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) error {
+	var tlsServer *tlsmux.Server
+	if cfg.ClassicTLSOn80 {
+		var err error
+		tlsServer, err = tlsmux.NewServer(cfg)
+		if err != nil {
+			return err
+		}
+	}
+
+	ln, err := net.Listen("tcp", cfg.HTTPListenAddr())
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+
+	logger.Printf("edge-mux http listener ready on %s", cfg.HTTPListenAddr())
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go handleHTTPPortConn(logger, cfg, tlsServer, conn)
+	}
+}
+
+func serveTLSMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) error {
+	server, err := tlsmux.NewServer(cfg)
+	if err != nil {
+		return err
+	}
+
+	ln, err := server.Listen()
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+
+	logger.Printf("edge-mux tls listener ready on %s", cfg.TLSListenAddr())
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go handleTLSPortConn(logger, cfg, server, conn)
+	}
+}
+
+func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, conn net.Conn) {
+	defer conn.Close()
+
+	initial, timedOut, err := detect.ReadInitial(conn, cfg.DetectTimeout, detect.MaxPeekBytes)
+	if err != nil {
+		logger.Printf("edge-mux http read initial failed from %s: %v", safeRemote(conn), err)
+		return
+	}
+
+	if detect.IsHTTP(initial) {
+		backend, err := net.DialTimeout("tcp", cfg.HTTPBackendAddr(), 5*time.Second)
+		if err != nil {
+			logger.Printf("edge-mux http backend dial failed: %v", err)
+			return
+		}
+		defer backend.Close()
+		if err := proxy.Bridge(conn, backend, initial, nil); err != nil {
+			logger.Printf("edge-mux http bridge error: %v", err)
+		}
+		return
+	}
+
+	if detect.IsTLSClientHello(initial) && cfg.ClassicTLSOn80 && tlsServer != nil {
+		tlsConn, err := tlsServer.AcceptBufferedTLSConn(conn, initial)
+		if err != nil {
+			logger.Printf("edge-mux tls-on-80 handshake failed: %v", err)
+			return
+		}
+		defer tlsConn.Close()
+
+		backend, err := net.DialTimeout("tcp", cfg.SSHBackendAddr(), 5*time.Second)
+		if err != nil {
+			logger.Printf("edge-mux ssh backend dial failed on port 80: %v", err)
+			return
+		}
+		defer backend.Close()
+
+		if err := proxy.Bridge(tlsConn, backend, nil, nil); err != nil {
+			logger.Printf("edge-mux tls-on-80 bridge error: %v", err)
+		}
+		return
+	}
+
+	if timedOut {
+		logger.Printf("edge-mux http port timed out before classification from %s", safeRemote(conn))
+		return
+	}
+
+	logger.Printf("edge-mux http port unsupported traffic from %s", safeRemote(conn))
+}
+
+func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, conn net.Conn) {
+	defer conn.Close()
+
+	tlsConn, err := server.AcceptTLSConn(conn)
+	if err != nil {
+		logger.Printf("edge-mux tls handshake failed from %s: %v", safeRemote(conn), err)
+		return
+	}
+	defer tlsConn.Close()
+
+	initial, timedOut, err := detect.ReadInitial(tlsConn, cfg.DetectTimeout, detect.MaxPeekBytes)
+	if err != nil {
+		logger.Printf("edge-mux tls read initial failed from %s: %v", safeRemote(conn), err)
+		return
+	}
+
+	target := cfg.SSHBackendAddr()
+	if detect.IsHTTP(initial) {
+		target = cfg.HTTPBackendAddr()
+	} else if timedOut {
+		target = cfg.SSHBackendAddr()
+	}
+
+	backend, err := net.DialTimeout("tcp", target, 5*time.Second)
+	if err != nil {
+		logger.Printf("edge-mux backend dial failed target=%s: %v", target, err)
+		return
+	}
+	defer backend.Close()
+
+	if err := proxy.Bridge(tlsConn, backend, initial, nil); err != nil {
+		logger.Printf("edge-mux tls bridge error target=%s: %v", target, err)
+	}
+}
+
+func safeRemote(conn net.Conn) string {
+	if conn == nil || conn.RemoteAddr() == nil {
+		return "-"
+	}
+	return conn.RemoteAddr().String()
 }

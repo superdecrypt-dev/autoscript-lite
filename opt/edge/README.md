@@ -13,7 +13,7 @@ berjalan pada:
 
 ## Status
 
-- Struktur ini baru tahap scaffold.
+- Struktur ini sudah masuk tahap implementasi awal untuk provider `go`.
 - Belum aktif di runtime.
 - Tidak ada perubahan listener publik selama provider edge belum dihubungkan ke `setup.sh`.
 
@@ -39,3 +39,12 @@ berjalan pada:
 
 - Desain teknis: [EDGE_PROVIDER_DESIGN.md](/root/project/autoscript/EDGE_PROVIDER_DESIGN.md)
 - Installer modular setup: [opt/setup/README.md](/root/project/autoscript/opt/setup/README.md)
+
+## Build dan Prebuilt
+
+- source provider `go` ada di `opt/edge/go`
+- binary prebuilt disimpan di `opt/edge/dist`
+- manifest checksum:
+  - `opt/edge/dist/SHA256SUMS`
+- script build lokal:
+  - [build-edge-mux.sh](/root/project/autoscript/opt/edge/scripts/build-edge-mux.sh)
