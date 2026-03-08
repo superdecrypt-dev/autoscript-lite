@@ -20,7 +20,13 @@ Prinsip:
   - `install/`
   - `bin/`
   - `templates/`
+- Tambahan aktif:
+  - `opt/badvpn/`
+  - `install/badvpn.sh`
+  - `templates/systemd/badvpn-udpgw.service`
+  - `templates/config/badvpn-runtime.env`
 - `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
+- `install/badvpn.sh` sekarang sudah dipakai untuk jalur `BadVPN UDPGW`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
 - Validasi minimum yang sudah lolos:
   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
@@ -38,6 +44,7 @@ opt/setup/
     helpers.sh
   install/
     bootstrap.sh
+    badvpn.sh
     domain.sh
     edge.sh
     nginx.sh

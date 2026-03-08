@@ -91,6 +91,7 @@ systemctl status xray xray-expired xray-quota xray-limit-ip xray-speed --no-page
 xray run -test -confdir /usr/local/etc/xray/conf.d
 systemctl status sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer --no-pager
 systemctl status edge-mux --no-pager || true
+systemctl status badvpn-udpgw --no-pager || true
 ```
 
 Kriteria lulus:
@@ -99,6 +100,7 @@ Kriteria lulus:
 - Service SSH WS aktif (`sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`).
 - Timer enforcer `SSH QAC` aktif (`sshws-qac-enforcer.timer`).
 - Jika Edge Gateway aktif, `edge-mux` harus `active` dan listener publik tetap ada di `:80/:443`.
+- Jika BadVPN dipasang, `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300`.
 
 Khusus SSH WS (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
@@ -118,6 +120,7 @@ Kriteria lulus tambahan:
 - `edge-mux` memegang publik `:80` dan `:443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
 - saat provider aktif adalah `Edge Gateway (go)`, `SSH Direct`, `SSH SSL/TLS`, dan `SSH WS` diperlakukan sebagai satu sistem SSH untuk `quota`, `speed limit`, dan `IP/Login limit`.
+- jika BadVPN terpasang, `SSH ACCOUNT INFO` harus menampilkan `BadVPN UDPGW : 7300`.
 
 Khusus path Xray `shadowsocks`:
 - Baseline resmi sekarang hanya:

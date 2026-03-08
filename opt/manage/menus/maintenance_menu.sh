@@ -20,6 +20,8 @@ maintenance_menu() {
     echo "  12. Edge Gateway Status"
     echo "  13. Restart Edge Gateway"
     echo "  14. Edge Gateway Info"
+    echo "  15. BadVPN UDPGW Status"
+    echo "  16. Restart BadVPN UDPGW"
     echo "  0. Kembali"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -41,6 +43,8 @@ maintenance_menu() {
       12) edge_runtime_status_menu ;;
       13) edge_runtime_restart_menu ;;
       14) edge_runtime_info_menu ;;
+      15) badvpn_status_menu ;;
+      16) badvpn_restart_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

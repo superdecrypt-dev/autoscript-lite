@@ -1,5 +1,38 @@
 # Release Notes
 
+## Rilis 2026-03-09 (BadVPN UDPGW Sebagai Fitur Tambahan SSH)
+
+### Ringkasan
+Rilis ini menambahkan `badvpn-udpgw` sebagai fitur tambahan untuk ekosistem SSH. Distribusi memakai binary prebuilt lintas arsitektur, dipasang lewat `setup.sh`, dan diekspos ke operator lewat menu maintenance serta `SSH ACCOUNT INFO`.
+
+### Perubahan Utama
+1. Distribusi prebuilt `badvpn-udpgw`
+- Binary resmi proyek sekarang tersedia di repo:
+  - `opt/badvpn/dist/badvpn-udpgw-linux-amd64`
+  - `opt/badvpn/dist/badvpn-udpgw-linux-arm64`
+  - `opt/badvpn/dist/SHA256SUMS`
+- Installer memilih binary sesuai arsitektur dan memverifikasi checksum sebelum install.
+
+2. Integrasi setup modular
+- `setup.sh` sekarang memasang:
+  - `/usr/local/bin/badvpn-udpgw`
+  - `/etc/default/badvpn-udpgw`
+  - `badvpn-udpgw.service`
+- Runtime default:
+  - listen lokal di `127.0.0.1:7300`
+
+3. Surface operasional
+- `Maintenance` sekarang punya:
+  - `BadVPN UDPGW Status`
+  - `Restart BadVPN UDPGW`
+- `SSH ACCOUNT INFO` sekarang menampilkan:
+  - `BadVPN UDPGW : 7300`
+
+### Hasil Validasi
+- `badvpn-udpgw.service` -> `active`
+- listener lokal `127.0.0.1:7300` -> `LISTENING`
+- menu maintenance live berhasil membaca status service dan port runtime
+
 ## Rilis 2026-03-09 (SSH Edge QAC Kini Termasuk Speed Lintas Transport)
 
 ### Ringkasan

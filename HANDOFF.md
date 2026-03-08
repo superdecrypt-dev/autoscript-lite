@@ -14,6 +14,12 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Status Operasional Terkini (2026-03-09)
 - Commit terbaru di `main`:
+  - `110552f` — `feat(ssh): apply edge qac across all edge transports`
+  - `c3b87e5` — `feat(edge): add ssh direct on 80 and 443`
+  - `aac822a` — `refactor(edge): remove haproxy provider support`
+  - `27194cc` — `docs(edge): rename rollback guide to recovery`
+  - `9d55920` — `feat(edge): add haproxy standby failover flow`
+  - `0b795dc` — `feat(edge): add nginx-stream provider support`
   - `1b451b2` — `feat(xray): use shorthand shadowsocks paths only`
   - `f1bf684` — `fix(setup): avoid tty warning in non-interactive runs`
   - `da09ee0` — `fix(edge): clean dynamic env export`
@@ -45,10 +51,13 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `nginx` berjalan di backend internal `127.0.0.1:18080`
     - SSH Direct kini tersedia sebagai surface resmi `SSH Direct` di `80/443`
     - SSH klasik TLS kini tersedia sebagai surface resmi `SSH SSL/TLS` di `80/443`
+    - BadVPN UDPGW kini tersedia sebagai fitur tambahan SSH di `127.0.0.1:7300`
   - Surface operasional baru:
     - `Maintenance > Edge Gateway Status`
     - `Maintenance > Restart Edge Gateway`
     - `Maintenance > Edge Gateway Info`
+    - `Maintenance > BadVPN UDPGW Status`
+    - `Maintenance > Restart BadVPN UDPGW`
   - Refactor modular installer sudah commit + push:
     - `setup.sh` kini menjadi orchestrator tipis
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
@@ -83,6 +92,10 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `SSH WS`, `SSH Direct`, dan `SSH SSL/TLS` sekarang berbagi satu sistem SSH QAC pada jalur edge aktif
     - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
     - masa aktif dan manual block tetap berlaku pada akun SSH native
+  - Edge provider yang aktif kembali dipertegas:
+    - `go` adalah provider utama
+    - `nginx-stream` tetap experimental
+    - dukungan `haproxy` sudah dihapus dari baseline proyek
   - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:
     - `Xray Management`
     - `SSH Management`
@@ -121,6 +134,9 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - listener publik di `:80/:443`
     - `nginx` backend di `127.0.0.1:18080`
     - `nginx-stream` sudah lolos smoke high-port dan cutover live, tetapi tetap diposisikan experimental/non-default
+  - runtime BadVPN:
+    - `badvpn-udpgw.service` -> `active`
+    - listener lokal di `127.0.0.1:7300`
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
@@ -142,6 +158,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
 11. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
 12. Edge Gateway (`go`) sekarang aktif live dan menjadi frontend publik `80/443`.
+13. BadVPN UDPGW sekarang terpasang sebagai fitur tambahan SSH dengan surface status/restart di `Maintenance`.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.

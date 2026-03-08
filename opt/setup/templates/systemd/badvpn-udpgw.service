@@ -1,0 +1,14 @@
+[Unit]
+Description=Autoscript BadVPN UDPGW
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-__BADVPN_RUNTIME_ENV_FILE__
+ExecStart=__BADVPN_BIN_INSTALL_PATH__ --listen-addr 127.0.0.1:${BADVPN_UDPGW_PORT} --max-clients ${BADVPN_UDPGW_MAX_CLIENTS} --max-connections-for-client ${BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT} --client-socket-sndbuf ${BADVPN_UDPGW_BUFFER_SIZE}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

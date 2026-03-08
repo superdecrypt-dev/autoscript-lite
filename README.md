@@ -48,6 +48,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - SSH WS di `80/443`
 - SSH SSL/TLS di `80/443`
 - SSH Direct di `80/443`
+- BadVPN UDPGW tersedia untuk ekosistem SSH di `127.0.0.1:7300`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
 - SSH QAC berlaku sebagai satu sistem SSH pada:
   - `SSH WS`

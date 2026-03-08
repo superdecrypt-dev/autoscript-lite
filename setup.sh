@@ -175,6 +175,8 @@ source_setup_module "opt/setup/install/nginx.sh"
 # shellcheck source=opt/setup/install/edge.sh
 source_setup_module "opt/setup/install/edge.sh"
 load_persisted_edge_runtime_env
+# shellcheck source=opt/setup/install/badvpn.sh
+source_setup_module "opt/setup/install/badvpn.sh"
 # shellcheck source=opt/setup/install/network.sh
 source_setup_module "opt/setup/install/network.sh"
 # shellcheck source=opt/setup/install/xray.sh
@@ -358,6 +360,7 @@ main() {
   fi
   install_sshws_stack
   install_sshws_qac_enforcer
+  install_badvpn_udpgw_stack
   install_management_scripts
   sync_manage_modules_layout
   sync_setup_runtime_layout

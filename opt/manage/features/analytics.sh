@@ -1243,6 +1243,25 @@ edge_runtime_env_file() {
   printf '%s\n' "/etc/default/edge-runtime"
 }
 
+badvpn_runtime_env_file() {
+  printf '%s\n' "/etc/default/badvpn-udpgw"
+}
+
+badvpn_runtime_get_env() {
+  local key="$1"
+  local env_file
+  env_file="$(badvpn_runtime_env_file)"
+  [[ -r "${env_file}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[[:space:]]+/, "", $2)
+      sub(/[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }
+  ' "${env_file}"
+}
+
 edge_runtime_get_env() {
   local key="$1"
   local env_file
@@ -1409,6 +1428,66 @@ edge_runtime_info_menu() {
     echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
   fi
   echo "  - default gateway aktif hanya satu pada port publik"
+  hr
+  pause
+}
+
+badvpn_status_menu() {
+  title
+  echo "10) Maintenance > BadVPN UDPGW Status"
+  hr
+
+  local env_file port max_clients max_conn sndbuf svc
+  svc="badvpn-udpgw.service"
+  env_file="$(badvpn_runtime_env_file)"
+  port="$(badvpn_runtime_get_env BADVPN_UDPGW_PORT 2>/dev/null || echo "7300")"
+  max_clients="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CLIENTS 2>/dev/null || echo "512")"
+  max_conn="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT 2>/dev/null || echo "8")"
+  sndbuf="$(badvpn_runtime_get_env BADVPN_UDPGW_BUFFER_SIZE 2>/dev/null || echo "1048576")"
+
+  echo "Runtime env : ${env_file}"
+  echo "Listen port : 127.0.0.1:${port}"
+  echo "Max clients : ${max_clients}"
+  echo "Max conn    : ${max_conn}"
+  echo "Sock sndbuf : ${sndbuf}"
+  hr
+
+  if svc_exists "${svc}"; then
+    svc_status_line "${svc}"
+  else
+    warn "${svc} tidak terpasang"
+  fi
+
+  hr
+  if have_cmd ss; then
+    if ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
+      log "UDPGW 127.0.0.1:${port} : LISTENING ✅"
+    else
+      warn "UDPGW 127.0.0.1:${port} : NOT listening ❌"
+    fi
+  else
+    warn "ss tidak tersedia, skip cek port TCP UDPGW"
+  fi
+
+  hr
+  pause
+}
+
+badvpn_restart_menu() {
+  title
+  echo "10) Maintenance > Restart BadVPN UDPGW"
+  hr
+
+  local svc
+  svc="badvpn-udpgw.service"
+  if ! svc_exists "${svc}"; then
+    warn "${svc} tidak ditemukan."
+    hr
+    pause
+    return 0
+  fi
+
+  svc_restart "${svc}"
   hr
   pause
 }
@@ -2666,6 +2745,16 @@ ssh_direct_public_ports_label() {
   fi
 }
 
+badvpn_public_port_label() {
+  local port
+  port="$(badvpn_runtime_get_env BADVPN_UDPGW_PORT 2>/dev/null || echo "7300")"
+  if svc_exists badvpn-udpgw || [[ -r "$(badvpn_runtime_env_file)" ]]; then
+    printf '%s\n' "${port}"
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 ssh_account_info_write() {
   # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token
   local username="${1:-}"
@@ -2690,7 +2779,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_ssl_tls_ports_disp geo
+  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -2792,6 +2881,7 @@ PY
   sshws_ports_disp="$(ssh_ws_public_ports_label)"
   ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
   ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
+  badvpn_port_disp="$(badvpn_public_port_label)"
 
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
@@ -2812,6 +2902,7 @@ SSH WS Alt  : ${sshws_alt_path}
 SSH WS Port : ${sshws_ports_disp}
 SSH Direct  : ${ssh_direct_ports_disp}
 SSH SSL/TLS : ${ssh_ssl_tls_ports_disp}
+BadVPN UDPGW: ${badvpn_port_disp}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}
 
