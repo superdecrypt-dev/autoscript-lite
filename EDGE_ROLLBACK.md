@@ -11,13 +11,7 @@ Rollback singkat untuk memindahkan host dari mode `Edge Gateway` kembali ke mode
 - perlu kembali cepat ke mode `nginx` publik
 
 ## Catatan Sebelum Rollback
-- Jika hanya perlu menjaga layanan tetap hidup, utamakan failover ke `HAProxy`:
-
-```bash
-edge-provider-switch haproxy
-```
-
-- Dokumen ini adalah rollback yang lebih drastis:
+- Dokumen ini adalah rollback darurat:
   - `edge-mux` dimatikan
   - `nginx` kembali menjadi frontend publik
 

@@ -3,7 +3,7 @@
 
 nginx_use_internal_edge_backend() {
   case "${EDGE_PROVIDER:-none}" in
-    go|haproxy|nginx-stream)
+    go|nginx-stream)
       case "${EDGE_ACTIVATE_RUNTIME:-false}" in
         1|true|TRUE|yes|YES|on|ON) return 0 ;;
       esac

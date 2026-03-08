@@ -14,9 +14,9 @@ Binary `edge-mux` akan:
 
 ## Status
 
-- Folder ini sudah masuk implementasi awal.
-- Runtime belum dihubungkan ke installer live.
-- Binary prebuilt belum dibuat dari repo ini.
+- Provider `go` sudah aktif live sebagai `Edge Gateway`.
+- Binary prebuilt dipakai sebagai jalur deploy utama.
+- Source Go di sini adalah source of truth untuk build `edge-mux`.
 
 ## Layout
 
@@ -44,11 +44,8 @@ Binary `edge-mux` akan:
 
 ## Yang Belum
 
-- build binary prebuilt
-- wiring `setup.sh`
-- status CLI edge
-- provider `haproxy`
-- provider `nginx-stream`
+- parity lanjutan untuk provider `nginx-stream`
+- hardening tambahan jika scope edge nanti diperluas lagi
 
 ## Build Lokal
 

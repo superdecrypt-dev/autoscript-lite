@@ -43,7 +43,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - Operasional akun Xray dan SSH dari satu menu
 - QAC untuk Xray dan seluruh surface SSH yang dikelola edge
 - Edge Gateway (provider `go`) aktif di `80/443`
-- HAProxy fallback standby tersedia di `18082/18444`
 - provider `nginx-stream` tersedia sebagai opsi experimental
 - nginx berjalan sebagai backend internal `127.0.0.1:18080`
 - SSH WS di `80/443`
@@ -73,7 +72,6 @@ bash run.sh
 manage
 install-discord-bot
 install-telegram-bot
-edge-provider-switch haproxy
 edge-provider-switch go
 edge-provider-switch nginx-stream
 ```

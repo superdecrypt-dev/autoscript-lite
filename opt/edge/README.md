@@ -16,7 +16,7 @@ berjalan pada:
 - Provider `go` sudah aktif live sebagai `Edge Gateway`.
 - `edge-mux` saat ini memegang publik `80/443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
-- `haproxy` dan `nginx-stream` masih belum diaktifkan.
+- `nginx-stream` tersedia sebagai opsi experimental/non-default.
 
 ## Provider yang direncanakan
 
@@ -24,9 +24,7 @@ berjalan pada:
    - provider utama
    - custom edge proxy
    - deploy memakai binary prebuilt
-2. `haproxy`
-   - fallback production-grade
-3. `nginx-stream`
+2. `nginx-stream`
    - experimental
 
 ## Prinsip

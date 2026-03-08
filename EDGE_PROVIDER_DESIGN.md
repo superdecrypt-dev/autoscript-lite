@@ -13,22 +13,18 @@ berjalan pada:
 - `1 domain`
 - port publik yang sama: `80` dan `443`
 
-dengan tiga opsi provider edge:
+dengan dua opsi provider edge:
 
 1. `go` custom edge proxy
-2. `haproxy`
-3. `nginx-stream`
+2. `nginx-stream`
 
 Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
-`HAProxy` dapat tetap hidup sebagai **standby fallback** pada port cadangan.
 
 ## Ringkasan Keputusan
 
 - `go` menjadi provider utama.
-- `haproxy` menjadi fallback production-grade.
 - topologi operasional yang direkomendasikan adalah:
   - `go` aktif di publik `80/443`
-  - `haproxy` standby di `18082/18444`
   - `nginx` backend internal di `127.0.0.1:18080`
 - `nginx-stream` tetap didukung, tetapi statusnya **experimental/limited** untuk skenario `1 domain + shared 80/443`.
 - `nginx-stream` saat ini sudah diimplementasikan dan tervalidasi:
@@ -46,10 +42,9 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
 
 - Multiplex `SSH WS` dan `SSH SSL/TLS` pada domain yang sama.
 - Shared public port `80` dan `443`.
-- Provider abstraction `go|haproxy|nginx-stream`.
+- Provider abstraction `go|nginx-stream`.
 - Installer modular untuk provider edge.
 - Runtime/service management untuk edge aktif.
-- Failover manual dari `go` ke `haproxy`.
 
 ### Out of scope
 
@@ -62,7 +57,6 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
 Arsitektur aktif saat ini:
 
 - `edge-mux` aktif di publik `:80/:443`
-- `haproxy` standby di `:18082/:18444`
 - `nginx` backend internal di `127.0.0.1:18080`
 - `dropbear` internal di `127.0.0.1:22022`
 - `stunnel` internal di `127.0.0.1:22443`
@@ -87,23 +81,6 @@ Jika edge provider aktif, maka:
 - edge provider bind ke `0.0.0.0:443`
 
 Lalu edge provider memutuskan trafik masuk ke backend yang benar.
-
-### 1a. HAProxy standby boleh tetap hidup
-
-Untuk operasional yang lebih aman, `haproxy` boleh tetap aktif sebagai standby fallback:
-
-- `18082` untuk HTTP/plaintext compatibility
-- `18444` untuk TLS compatibility
-
-Saat failover manual dibutuhkan:
-
-- `haproxy` dipromosikan mengambil `80/443`
-- `edge-mux` dinonaktifkan dari `80/443`
-
-Setelah incident selesai:
-
-- `edge-mux` dikembalikan ke `80/443`
-- `haproxy` kembali ke mode standby
 
 ### 2. Nginx pindah ke backend internal
 
@@ -183,7 +160,6 @@ Timeout awal yang disarankan:
 | Provider | Status | Cocok untuk 1 domain + shared 80/443 | Catatan |
 |---|---|---:|---|
 | `go` | utama | ya | paling fleksibel dan paling sesuai untuk logic sniffing proyek ini |
-| `haproxy` | fallback | ya | feasible, tapi config lebih kompleks |
 | `nginx-stream` | experimental | terbatas | sudah diimplementasikan dan tervalidasi, tetapi tetap paling lemah untuk klasifikasi post-TLS pada domain/port yang sama |
 
 ## Provider `go`
@@ -224,26 +200,6 @@ Build on host hanya untuk mode dev eksplisit, misalnya:
 - `EDGE_BUILD_LOCAL=1`
 
 dan **bukan** jalur setup normal.
-
-## Provider `haproxy`
-
-### Peran
-
-Fallback production-grade saat operator tidak ingin memakai binary custom.
-
-### Catatan desain
-
-- tetap menjadi provider edge publik tunggal
-- tetap perlu memindahkan `nginx` ke backend internal
-- tetap memerlukan klasifikasi:
-  - HTTP plaintext vs TLS di `:80`
-  - HTTP-over-TLS vs SSH klasik di `:443`
-
-### Posisi
-
-- layak sebagai fallback
-- cocok sebagai standby live yang siap dipromosikan
-- tidak menjadi default karena complexity-to-control ratio lebih buruk dibanding provider `go` untuk requirement proyek ini
 
 ## Provider `nginx-stream`
 
@@ -299,8 +255,6 @@ opt/setup/templates/
     edge-runtime.env
   systemd/
     edge-mux.service
-  haproxy/
-    haproxy.cfg
   nginx/
     stream-edge.conf
 ```
@@ -312,9 +266,6 @@ Default mapping yang disarankan:
 - public:
   - `:80` -> edge provider
   - `:443` -> edge provider
-- standby fallback:
-  - `:18082` -> `haproxy` standby
-  - `:18444` -> `haproxy` standby
 - internal:
   - `127.0.0.1:18080` -> `nginx-http`
   - `127.0.0.1:22022` -> `ssh-classic`
@@ -332,9 +283,6 @@ EDGE_PUBLIC_HTTP_PORT=80
 EDGE_PUBLIC_TLS_PORT=443
 EDGE_NGINX_HTTP_BACKEND=127.0.0.1:18080
 EDGE_SSH_CLASSIC_BACKEND=127.0.0.1:22022
-EDGE_HAPROXY_FALLBACK_ENABLED=true
-EDGE_HAPROXY_STANDBY_HTTP_PORT=18082
-EDGE_HAPROXY_STANDBY_TLS_PORT=18444
 EDGE_HTTP_DETECT_TIMEOUT_MS=250
 EDGE_CLASSIC_TLS_ON_80=true
 ```
@@ -419,15 +367,10 @@ Tidak wajib untuk fase desain, tetapi sebaiknya dipersiapkan:
 
 ### Fase 4
 
-- template/provider `haproxy`
-- parity basic terhadap provider `go`
-
-### Fase 5
-
 - template/provider `nginx-stream`
 - tandai sebagai experimental
 
-### Fase 6
+### Fase 5
 
 - CLI status/restart edge
 - testing dan audit playbook tambahan
@@ -443,16 +386,12 @@ Minimum test untuk provider aktif:
 5. `SSH klasik TLS` di `:443` masuk ke backend SSH
 6. jalur Xray existing tidak regress
 7. `nginx` backend internal tetap sehat
-8. jika fallback diaktifkan, `haproxy` standby harus listening di `18082/18444`
-9. helper `edge-provider-switch haproxy` harus mempromosikan `haproxy` ke `80/443`
-10. helper `edge-provider-switch go` harus mengembalikan topologi utama dan menyalakan lagi standby `haproxy`
+8. helper `edge-provider-switch go` harus mengembalikan topologi utama jika provider lain pernah diaktifkan
 
 ## Keputusan Final Desain
 
-- proyek ini mendukung tiga provider edge
+- proyek ini mendukung dua provider edge
 - hanya satu provider yang memegang `80/443` pada satu waktu
 - `go` menjadi provider utama
-- `haproxy` dapat tetap hidup sebagai standby fallback
 - deploy `go` memakai **binary prebuilt**
-- `haproxy` menjadi fallback
 - `nginx-stream` tetap tersedia tetapi tidak menjadi default untuk requirement ini

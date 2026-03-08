@@ -4,12 +4,12 @@ set -euo pipefail
 TARGET_PROVIDER="${1:-}"
 
 if [[ -z "${TARGET_PROVIDER}" ]]; then
-  echo "Usage: edge-provider-switch <go|haproxy|nginx-stream>" >&2
+  echo "Usage: edge-provider-switch <go|nginx-stream>" >&2
   exit 1
 fi
 
 case "${TARGET_PROVIDER}" in
-  go|haproxy|nginx-stream) ;;
+  go|nginx-stream) ;;
   *)
     echo "Provider tidak dikenal: ${TARGET_PROVIDER}" >&2
     exit 1
@@ -49,9 +49,5 @@ export EDGE_ACTIVATE_RUNTIME=true
 write_edge_runtime_env
 write_nginx_config
 install_edge_provider_stack
-
-if [[ "${TARGET_PROVIDER}" == "go" && "${EDGE_HAPROXY_FALLBACK_ENABLED:-true}" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
-  stage_edge_haproxy_standby_runtime
-fi
 
 echo "Edge provider aktif: ${TARGET_PROVIDER}"
