@@ -16,6 +16,9 @@ export PATH
 # -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_USE_LOCAL_SOURCE="${RUN_USE_LOCAL_SOURCE:-0}"
+EDGE_PROVIDER="${EDGE_PROVIDER:-go}"
+EDGE_ACTIVATE_RUNTIME="${EDGE_ACTIVATE_RUNTIME:-true}"
+export EDGE_PROVIDER EDGE_ACTIVATE_RUNTIME
 REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript.git}"
 REPO_DIR="${REPO_DIR:-/opt/autoscript}"
 if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
