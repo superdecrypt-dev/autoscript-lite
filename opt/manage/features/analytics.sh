@@ -2602,28 +2602,28 @@ ssh_qac_traffic_enforcement_ready() {
 
 ssh_qac_traffic_scope_label() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota: all SSH transports | Speed: all edge SSH transports | IP/Login: all SSH transports"
+    echo "Unified SSH QAC"
   else
-    echo "Metadata only (SSH WS not installed)"
+    echo "Metadata only (SSH runtime not installed)"
   fi
 }
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct. Speed limit berlaku pada SSH WS, SSH SSL/TLS, dan SSH Direct saat Edge Gateway (go) menjadi provider aktif. IP/Login limit dihitung lintas semua transport SSH; distinct client IP runtime hanya tersedia penuh di SSH WS."
+    echo "Quota, speed limit, dan IP/Login limit berlaku sebagai satu sistem SSH pada SSH WS, SSH SSL/TLS, dan SSH Direct selama transport melewati Edge Gateway aktif. Native sshd port 22 tetap di luar scope traffic enforcement."
   else
-    echo "SSH WS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
+    echo "SSH runtime belum terpasang; quota/IP-login/speed SSH masih metadata dan native sshd port 22 tidak dihitung atau di-throttle."
   fi
 }
 
 ssh_qac_print_scope_notice() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Traffic scope : quota used SSH berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct."
-    echo "IP/Login calc : berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct; distinct client IP runtime tersedia penuh di SSH WS."
-    echo "Speed limit   : berlaku pada SSH WS, SSH SSL/TLS, dan SSH Direct saat Edge Gateway (go) aktif; fallback provider lain dapat berbeda."
+    echo "Traffic scope : quota used, speed limit, dan IP/Login limit berlaku sebagai satu sistem SSH."
+    echo "Edge surface  : berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct."
+    echo "Client IP     : distinct client IP runtime tersedia paling lengkap pada jalur SSH WS."
     echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
   else
-    echo "Traffic scope : SSH WS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
+    echo "Traffic scope : SSH runtime belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
     echo "Native SSH    : yang benar-benar berlaku saat ini tetap masa aktif dan manual block."
   fi
 }
@@ -4060,7 +4060,7 @@ sshws_active_sessions_print_page() {
   fi
   SSHWS_SESSION_PAGE="${page}"
 
-  echo "Active SSH WS sessions: ${total} | page $((page + 1))/${display_pages}"
+  echo "Active SSH sessions: ${total} | page $((page + 1))/${display_pages}"
   if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
     echo "Filter: '${SSHWS_SESSION_QUERY}'"
   fi
@@ -4124,7 +4124,7 @@ sshws_active_session_detail() {
   IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
 
   title
-  echo "3) SSH Management > Active SSH WS Session Detail"
+  echo "3) SSH Management > Active SSH Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
   printf "%-16s : %s\n" "Client IP" "${client_ip}"
@@ -4160,7 +4160,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "3) SSH Management > Active SSH WS Sessions"
+    echo "3) SSH Management > Active SSH Sessions"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -4230,7 +4230,7 @@ ssh_menu() {
     echo "  5) List Managed SSH Users"
     echo "  6) SSH WS Service Status"
     echo "  7) Restart SSH WS Stack"
-    echo "  8) Active SSH WS Sessions"
+    echo "  8) Active SSH Sessions"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -5387,9 +5387,9 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
     printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH WS)" "${speed_down}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH WS)" "${speed_up}"
-    printf "%-${label_w}s : %s\n" "Speed Limit (SSH WS)" "${speed_state}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
     printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
     ssh_qac_print_scope_notice
@@ -5397,14 +5397,14 @@ ssh_qac_edit_flow() {
 
     echo "  1) View JSON"
     echo "  2) Set Quota Limit (GB)"
-    echo "  3) Reset Quota Used SSH WS (set 0)"
+    echo "  3) Reset Quota Used SSH (set 0)"
     echo "  4) Manual Block/Unblock (toggle)"
     echo "  5) IP/Login Limit Enable/Disable (toggle)"
     echo "  6) Set IP/Login Limit (angka)"
     echo "  7) Unlock IP/Login Lock"
-    echo "  8) Set Speed Download SSH WS (Mbps)"
-    echo "  9) Set Speed Upload SSH WS (Mbps)"
-    echo " 10) Speed Limit SSH WS Enable/Disable (toggle)"
+    echo "  8) Set Speed Download SSH (Mbps)"
+    echo "  9) Set Speed Upload SSH (Mbps)"
+    echo " 10) Speed Limit SSH Enable/Disable (toggle)"
     echo "  0) Kembali"
     hr
     if ! read -r -p "Pilih: " c; then

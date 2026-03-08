@@ -49,10 +49,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - SSH SSL/TLS di `80/443`
 - SSH Direct di `80/443`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
-- QAC SSH berlaku seperti ini:
-  - `SSH WS`: quota, speed, dan IP/Login limit
-  - `SSH Direct` / `SSH SSL/TLS`: quota, speed, dan IP/Login limit saat provider aktif adalah `Edge Gateway (go)`
-  - `sshd:22` native: bukan target traffic enforcement
+- QAC SSH berlaku sebagai satu sistem SSH pada:
+  - `SSH WS`
+  - `SSH Direct`
+  - `SSH SSL/TLS`
+- `sshd:22` native tetap bukan target traffic enforcement
 - Bot Discord dan Telegram standalone
 
 ## Bot
