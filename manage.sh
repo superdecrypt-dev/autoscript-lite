@@ -826,10 +826,25 @@ ssh_account_info_compat_needs_refresh() {
     if [[ ! -f "${acc_file}" ]]; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]+\(token:[[:space:]]*[A-Fa-f0-9]{10}\)[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^ISP[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSHWS Alt[[:space:]]*:[[:space:]]*/[^[:space:]]+/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^Country[[:space:]]*:' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^SSH WS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^SSH WS Path Alt[[:space:]]*:[[:space:]]*/<bebas>/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^SSH Direct[[:space:]]+Port[[:space:]]*:' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^SSH SSL/TLS[[:space:]]+Port[[:space:]]*:' "${acc_file}" 2>/dev/null; then
+      return 0
+    fi
+    if ! grep -Eq '^BadVPN UDPGW[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
@@ -919,6 +934,8 @@ account_info_compat_needs_refresh() {
   # - nama file format kompatibilitas (username.txt, belum username@proto.txt)
   # - belum memiliki blok "Links Import" modern
   # - belum memiliki baris link gRPC
+  # - belum memiliki field ISP/Country
+  # - belum memiliki field Path/Path Alt/Port modern
   ensure_account_quota_dirs
   account_collect_files
 
@@ -945,6 +962,26 @@ account_info_compat_needs_refresh() {
     fi
 
     if ! grep -Eq '^  gRPC[[:space:]]*:' "${f}" 2>/dev/null; then
+      return 0
+    fi
+
+    if ! grep -Eq '^ISP[[:space:]]*:' "${f}" 2>/dev/null; then
+      return 0
+    fi
+
+    if ! grep -Eq '^Country[[:space:]]*:' "${f}" 2>/dev/null; then
+      return 0
+    fi
+
+    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path[[:space:]]*:' "${f}" 2>/dev/null; then
+      return 0
+    fi
+
+    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path Alt[[:space:]]*:' "${f}" 2>/dev/null; then
+      return 0
+    fi
+
+    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Port[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
   done
@@ -1966,7 +2003,7 @@ domain_control_set_domain_now() {
 
 domain_control_show_info() {
   title
-  echo "6) Domain Control > Show Current Domain"
+  echo "6) Domain Control > Current Domain"
   hr
   echo "Domain aktif : $(detect_domain)"
   echo "Cert file    : ${CERT_FULLCHAIN}"
@@ -1982,7 +2019,7 @@ domain_control_show_info() {
 
 domain_control_guard_check() {
   title
-  echo "6) Domain Control > Domain & Cert Guard Check"
+  echo "6) Domain Control > Guard Check"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -2015,7 +2052,7 @@ domain_control_guard_check() {
 
 domain_control_guard_renew_if_needed() {
   title
-  echo "6) Domain Control > Domain & Cert Guard Renew-if-Needed"
+  echo "6) Domain Control > Guard Renew"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -2057,15 +2094,15 @@ domain_control_guard_renew_if_needed() {
 domain_control_menu() {
   while true; do
     title
-    echo -e "${UI_BOLD}${UI_ACCENT}6) Domain Control${UI_RESET}"
+    echo -e "${UI_BOLD}${UI_ACCENT}7) Domain Control${UI_RESET}"
     hr
-    echo -e "  ${UI_ACCENT}1)${UI_RESET} Set Domain + Issue Certificate"
-    echo -e "  ${UI_ACCENT}2)${UI_RESET} Show Current Domain"
-    echo -e "  ${UI_ACCENT}3)${UI_RESET} Domain & Cert Guard Check"
-    echo -e "  ${UI_ACCENT}4)${UI_RESET} Domain & Cert Guard Renew-if-Needed"
-    echo -e "  ${UI_ACCENT}0)${UI_RESET} Kembali"
+    echo -e "  ${UI_ACCENT}1)${UI_RESET} Set Domain"
+    echo -e "  ${UI_ACCENT}2)${UI_RESET} Current Domain"
+    echo -e "  ${UI_ACCENT}3)${UI_RESET} Guard Check"
+    echo -e "  ${UI_ACCENT}4)${UI_RESET} Guard Renew"
+    echo -e "  ${UI_ACCENT}0)${UI_RESET} Back"
     hr
-    if ! read -r -p "Pilih (1-4/0/kembali): " c; then
+    if ! read -r -p "Pilih (1-4/0): " c; then
       echo
       break
     fi
@@ -2662,7 +2699,7 @@ account_view_flow() {
 
 account_search_flow() {
   title
-  echo "Xray Management > Search (read-only)"
+  echo "Xray Users > Search"
   hr
   if ! have_cmd grep; then
     warn "grep tidak tersedia"
@@ -2714,7 +2751,7 @@ account_search_flow() {
   done
   hr
   echo "  1) View salah satu hasil"
-  echo "  0) Kembali"
+  echo "  0) Back"
   hr
   if ! read -r -p "Pilih: " c; then
     echo
@@ -2964,7 +3001,7 @@ sanity_check_now() {
 
 observability_snapshot_now() {
   title
-  echo "1) Status & Diagnostics > Observability Snapshot"
+  echo "1) Status > Observability Snapshot"
   hr
 
   if [[ ! -x "${XRAY_OBSERVE_BIN}" ]]; then
@@ -2992,7 +3029,7 @@ observability_snapshot_now() {
 
 observability_status_show() {
   title
-  echo "1) Status & Diagnostics > Observability Status"
+  echo "1) Status > Observability Status"
   hr
 
   if [[ ! -x "${XRAY_OBSERVE_BIN}" ]]; then
@@ -3027,7 +3064,7 @@ observability_status_show() {
 
 observability_alert_log_show() {
   title
-  echo "1) Status & Diagnostics > Alert Log"
+  echo "1) Status > Alert Log"
   hr
 
   if [[ -s "${XRAY_OBSERVE_ALERT_LOG}" ]]; then
@@ -3043,13 +3080,13 @@ observability_alert_log_show() {
 status_diagnostics_menu() {
   while true; do
     title
-    echo "1) Status & Diagnostics"
+    echo "1) Status"
     hr
-    echo "  1) Sanity Check (core)"
-    echo "  2) Observability Snapshot"
-    echo "  3) Observability Status"
-    echo "  4) View Observability Alert Log"
-    echo "  0) Kembali"
+    echo "  1) Core Check"
+    echo "  2) Snapshot"
+    echo "  3) Observability"
+    echo "  4) Alert Log"
+    echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -4236,19 +4273,23 @@ write_account_artifacts() {
   ensure_account_quota_dirs
   need_python3
 
-  local domain ip created expired
+  local domain ip created expired geo isp country
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
-  created="$(date -u '+%Y-%m-%d')"
+  created="$(date -u '+%Y-%m-%d %H:%M')"
   expired="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -u '+%Y-%m-%d')"
+  geo="$(main_info_geo_lookup "${ip}")"
+  IFS='|' read -r isp country <<<"${geo}"
+  [[ -n "${isp}" ]] || isp="-"
+  [[ -n "${country}" ]] || country="-"
 
   local acc_file quota_file
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
 
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
 import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
-acc_file, quota_file, inbounds_file, domain, ip, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up = sys.argv[1:18]
+acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up = sys.argv[1:20]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
 ip_enabled = str(ip_enabled).lower() in ("1","true","yes","y","on")
@@ -4294,6 +4335,25 @@ def fmt_mbit(v):
     return str(int(round(n)))
   s=f"{n:.2f}"
   return s.rstrip("0").rstrip(".")
+
+PROTO_LABELS = {
+  "vless": "Vless",
+  "vmess": "Vmess",
+  "trojan": "Trojan",
+  "shadowsocks": "SS",
+  "shadowsocks2022": "SS2022",
+}
+
+def proto_label(p):
+  return PROTO_LABELS.get(str(p or "").strip().lower(), str(p or "").strip().title() or "Xray")
+
+def path_alt_placeholder(path):
+  raw = str(path or "").strip()
+  if not raw:
+    return "-"
+  if not raw.startswith("/"):
+    raw = "/" + raw
+  return f"/<bebas>{raw}"
 
 def is_public_ipv4(raw):
   try:
@@ -4451,12 +4511,17 @@ for net in ("ws","httpupgrade","grpc"):
 
 quota_gb = quota_bytes/(1024**3) if quota_bytes else 0
 quota_gb_disp = fmt_gb(quota_gb)
+proto_disp = proto_label(proto)
+ws_path = public_proto.get("ws", "") or "/"
+ws_path_alt = path_alt_placeholder(ws_path)
 
 # Write account txt
 lines=[]
 lines.append("=== XRAY ACCOUNT INFO ===")
 lines.append(f"Domain      : {domain}")
 lines.append(f"IP          : {ip}")
+lines.append(f"ISP         : {isp or '-'}")
+lines.append(f"Country     : {country or '-'}")
 lines.append(f"Username    : {username}")
 lines.append(f"Protocol    : {proto}")
 if proto in ("vless","vmess"):
@@ -4477,6 +4542,9 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
+lines.append(f"{proto_disp} Path : {ws_path}")
+lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
+lines.append(f"{proto_disp} Port : 443 & 80")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws','-')}")
@@ -4555,9 +4623,13 @@ account_info_refresh_for_user() {
     [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   fi
 
-  local rc=0
+  local rc=0 geo isp country
+  geo="$(main_info_geo_lookup "${ip}")"
+  IFS='|' read -r isp country <<<"${geo}"
+  [[ -n "${isp}" ]] || isp="-"
+  [[ -n "${country}" ]] || country="-"
   set +e
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${username}" "${proto}"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}"
 import base64
 import ipaddress
 import json
@@ -4567,7 +4639,7 @@ import sys
 import urllib.parse
 from datetime import date, datetime
 
-acc_file, quota_file, inbounds_file, domain_arg, ip_arg, username, proto = sys.argv[1:8]
+acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto = sys.argv[1:10]
 email = f"{username}@{proto}"
 
 
@@ -4625,6 +4697,24 @@ def fmt_mbit(v):
   if abs(n - round(n)) < 1e-9:
     return str(int(round(n)))
   return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+PROTO_LABELS = {
+  "vless": "Vless",
+  "vmess": "Vmess",
+  "trojan": "Trojan",
+  "shadowsocks": "SS",
+  "shadowsocks2022": "SS2022",
+}
+
+
+def path_alt_placeholder(path):
+  raw = str(path or "").strip()
+  if not raw:
+    return "-"
+  if not raw.startswith("/"):
+    raw = "/" + raw
+  return f"/<bebas>{raw}"
 
 
 def is_public_ipv4(raw):
@@ -4725,6 +4815,8 @@ existing = read_account_fields(acc_file)
 
 domain = str(domain_arg or "").strip() or str(existing.get("Domain") or "").strip() or "-"
 ip = str(ip_arg or "").strip() or str(existing.get("IP") or "").strip() or "0.0.0.0"
+isp = str(isp_arg or "").strip() or str(existing.get("ISP") or "").strip() or "-"
+country = str(country_arg or "").strip() or str(existing.get("Country") or "").strip() or "-"
 
 meta = {}
 if os.path.isfile(quota_file):
@@ -4752,14 +4844,20 @@ if created_at:
   if s.endswith("Z"):
     s = s[:-1]
   try:
-    created_at = datetime.fromisoformat(s).strftime("%Y-%m-%d")
+    dt = datetime.fromisoformat(s)
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and len(s) <= 10:
+      created_at = dt.strftime("%Y-%m-%d")
+    else:
+      created_at = dt.strftime("%Y-%m-%d %H:%M")
   except Exception:
-    if len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
+    if len(s) >= 16 and s[4:5] == "-" and s[7:8] == "-" and s[13:14] == ":":
+      created_at = s[:16]
+    elif len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
       created_at = s[:10]
     else:
-      created_at = datetime.utcnow().strftime("%Y-%m-%d")
+      created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 else:
-  created_at = datetime.utcnow().strftime("%Y-%m-%d")
+  created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 expired_at = str(meta.get("expired_at") or existing.get("Valid Until") or "").strip()
 expired_at = expired_at[:10] if expired_at else "-"
 
@@ -4914,6 +5012,9 @@ def ss_link(method, password, net, val):
 
 links = {}
 public_proto = PUBLIC_PATHS.get(proto, {})
+proto_disp = PROTO_LABELS.get(proto, proto.title() or "Xray")
+ws_path = public_proto.get("ws", "") or "/"
+ws_path_alt = path_alt_placeholder(ws_path)
 for net in ("ws", "httpupgrade", "grpc"):
   val = public_proto.get(net, "")
   if proto == "vless":
@@ -4934,6 +5035,8 @@ lines = []
 lines.append("=== XRAY ACCOUNT INFO ===")
 lines.append(f"Domain      : {domain}")
 lines.append(f"IP          : {ip}")
+lines.append(f"ISP         : {isp}")
+lines.append(f"Country     : {country}")
 lines.append(f"Username    : {username}")
 lines.append(f"Protocol    : {proto}")
 if proto in ("vless", "vmess"):
@@ -4954,6 +5057,9 @@ if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("Speed Limit : OFF")
+lines.append(f"{proto_disp} Path : {ws_path}")
+lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
+lines.append(f"{proto_disp} Port : 443 & 80")
 lines.append("")
 lines.append("Links Import:")
 lines.append(f"  WebSocket   : {links.get('ws', '-')}")
@@ -5073,7 +5179,7 @@ user_add_menu() {
   local page=0
   while true; do
     title
-    echo "Xray Management > Add user"
+    echo "Xray Users > Add User"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -5104,7 +5210,7 @@ user_add_menu() {
   done
 
   title
-  echo "Xray Management > Add user"
+  echo "Xray Users > Add User"
   hr
 
   ensure_account_quota_dirs
@@ -5361,7 +5467,7 @@ user_del_menu() {
   local page=0
   while true; do
     title
-    echo "Xray Management > Delete user"
+    echo "Xray Users > Delete User"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -5392,7 +5498,7 @@ user_del_menu() {
   done
 
   title
-  echo "Xray Management > Delete user"
+  echo "Xray Users > Delete User"
   hr
 
   ensure_account_quota_dirs
@@ -5465,7 +5571,7 @@ user_extend_expiry_menu() {
   local page=0
   while true; do
     title
-    echo "Xray Management > Extend/Set Expiry"
+    echo "Xray Users > Set Expiry"
     hr
     echo "Daftar akun (10 per halaman):"
     hr
@@ -5496,7 +5602,7 @@ user_extend_expiry_menu() {
   done
 
   title
-  echo "Xray Management > Extend/Set Expiry"
+  echo "Xray Users > Set Expiry"
   hr
 
   ensure_account_quota_dirs
@@ -5569,7 +5675,7 @@ PY
   hr
   echo "  1) Tambah hari (extend)"
   echo "  2) Set tanggal langsung (YYYY-MM-DD)"
-  echo "  0) Kembali"
+  echo "  0) Back"
   hr
   if ! read -r -p "Pilih mode: " mode; then
     echo
@@ -5782,7 +5888,7 @@ user_list_menu() {
   ACCOUNT_PAGE=0
   while true; do
     title
-    echo "Xray Management > List users (from ${ACCOUNT_ROOT})"
+    echo "Xray Users > List Users"
     hr
 
     account_collect_files
@@ -5828,13 +5934,13 @@ user_list_menu() {
 user_menu() {
   while true; do
     title
-    echo "2) Xray Management"
+    echo "2) Xray Users"
     hr
-    echo "  1. Add user"
-    echo "  2. Delete user"
-    echo "  3. Extend/Set Expiry"
-    echo "  4. List users (read-only)"
-    echo "  0. Kembali"
+    echo "  1) Add User"
+    echo "  2) Delete User"
+    echo "  3) Set Expiry"
+    echo "  4) List Users"
+    echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -6705,16 +6811,16 @@ quota_edit_flow() {
     hr
 
     echo "  1) View JSON"
-    echo "  2) Set Quota Limit (GB)"
-    echo "  3) Reset Quota Used (set 0)"
-    echo "  4) Manual Block/Unblock (toggle)"
-    echo "  5) IP Limit Enable/Disable (toggle)"
-    echo "  6) Set IP Limit (angka)"
-    echo "  7) Unlock IP Lock"
-    echo "  8) Set Speed Download (Mbps)"
-    echo "  9) Set Speed Upload (Mbps)"
-    echo " 10) Speed Limit Enable/Disable (toggle)"
-    echo "  0) Kembali"
+    echo "  2) Set Quota (GB)"
+    echo "  3) Reset Quota"
+    echo "  4) Toggle Block"
+    echo "  5) Toggle IP Limit"
+    echo "  6) Set IP Limit"
+    echo "  7) Unlock IP"
+    echo "  8) Set Speed Download"
+    echo "  9) Set Speed Upload"
+    echo " 10) Toggle Speed Limit"
+    echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
       echo

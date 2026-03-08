@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 # Guardrail:
-# Logic live untuk Xray Management masih berada di manage.sh (mis. user_menu()).
+# Logic live untuk Xray Users masih berada di manage.sh (mis. user_menu()).
 # File ini sengaja placeholder sampai refactor per-action dipindah dengan aman.
 
 manage_feature_users_ready() {

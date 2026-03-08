@@ -12,19 +12,19 @@ main_menu() {
     main_menu_info_header_print
     echo -e "${UI_BOLD}${UI_ACCENT}Main Menu${UI_RESET}"
     hr
-    echo -e "  ${UI_ACCENT}1)${UI_RESET} Status & Diagnostics"
-    echo -e "  ${UI_ACCENT}2)${UI_RESET} Xray Management"
-    echo -e "  ${UI_ACCENT}3)${UI_RESET} SSH Management"
+    echo -e "  ${UI_ACCENT}1)${UI_RESET} Status"
+    echo -e "  ${UI_ACCENT}2)${UI_RESET} Xray Users"
+    echo -e "  ${UI_ACCENT}3)${UI_RESET} SSH Users"
     echo -e "  ${UI_ACCENT}4)${UI_RESET} Xray QAC"
     echo -e "  ${UI_ACCENT}5)${UI_RESET} SSH QAC"
-    echo -e "  ${UI_ACCENT}6)${UI_RESET} Network Controls"
+    echo -e "  ${UI_ACCENT}6)${UI_RESET} Network"
     echo -e "  ${UI_ACCENT}7)${UI_RESET} Domain Control"
     echo -e "  ${UI_ACCENT}8)${UI_RESET} Speedtest"
     echo -e "  ${UI_ACCENT}9)${UI_RESET} Security"
     echo -e "  ${UI_ACCENT}10)${UI_RESET} Maintenance"
-    echo -e "  ${UI_ACCENT}11)${UI_RESET} Traffic Analytics"
-    echo -e "  ${UI_ACCENT}12)${UI_RESET} Install BOT Discord"
-    echo -e "  ${UI_ACCENT}13)${UI_RESET} Install BOT Telegram"
+    echo -e "  ${UI_ACCENT}11)${UI_RESET} Traffic"
+    echo -e "  ${UI_ACCENT}12)${UI_RESET} Discord Bot"
+    echo -e "  ${UI_ACCENT}13)${UI_RESET} Telegram Bot"
     echo -e "  ${UI_ACCENT}0)${UI_RESET} Keluar"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -32,19 +32,19 @@ main_menu() {
       exit 0
     fi
     case "${c}" in
-      1) run_action "Status & Diagnostics" status_diagnostics_menu ;;
-      2) run_action "Xray Management" user_menu ;;
-      3|ssh) run_action "SSH Management" ssh_menu ;;
+      1) run_action "Status" status_diagnostics_menu ;;
+      2) run_action "Xray Users" user_menu ;;
+      3|ssh) run_action "SSH Users" ssh_menu ;;
       4|quota) run_action "Xray QAC" quota_menu ;;
       5|sshquota|ssh-qac) run_action "SSH QAC" ssh_quota_menu ;;
-      6|network) run_action "Network Controls" network_menu ;;
+      6|network) run_action "Network" network_menu ;;
       7|domain) run_action "Domain Control" domain_control_menu ;;
       8|speedtest|speed) run_action "Speedtest" speedtest_menu ;;
       9|security) run_action "Security" fail2ban_menu ;;
       10|maintenance|maint) run_action "Maintenance" maintenance_menu ;;
-      11|analytics|traffic) run_action "Traffic Analytics" traffic_analytics_menu ;;
-      12) run_action "Install BOT Discord" install_discord_bot_menu ;;
-      13) run_action "Install BOT Telegram" install_telegram_bot_menu ;;
+      11|analytics|traffic) run_action "Traffic" traffic_analytics_menu ;;
+      12) run_action "Discord Bot" install_discord_bot_menu ;;
+      13) run_action "Telegram Bot" install_telegram_bot_menu ;;
       0|kembali|k|back|b) exit 0 ;;
       *) invalid_choice ;;
     esac

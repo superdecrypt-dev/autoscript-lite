@@ -127,7 +127,7 @@ traffic_analytics_dataset_make_tmp() {
 
 traffic_analytics_overview_show() {
   title
-  echo "11) Traffic Analytics > Overview"
+  echo "11) Traffic > Overview"
   hr
 
   local dataset
@@ -207,7 +207,7 @@ PY
 
 traffic_analytics_top_users_show() {
   title
-  echo "11) Traffic Analytics > Top Users by Usage"
+  echo "11) Traffic > Top Users by Usage"
   hr
 
   local n
@@ -287,7 +287,7 @@ PY
 
 traffic_analytics_search_user_show() {
   title
-  echo "11) Traffic Analytics > Search User Traffic"
+  echo "11) Traffic > Search User Traffic"
   hr
 
   local q
@@ -371,7 +371,7 @@ PY
 
 traffic_analytics_export_json() {
   title
-  echo "11) Traffic Analytics > Export JSON Report"
+  echo "11) Traffic > Export JSON"
   hr
 
   local dataset out
@@ -398,13 +398,13 @@ traffic_analytics_export_json() {
 traffic_analytics_menu() {
   while true; do
     title
-    echo "11) Traffic Analytics"
+    echo "11) Traffic"
     hr
     echo "  1) Overview"
-    echo "  2) Top Users by Usage"
-    echo "  3) Search User Traffic"
-    echo "  4) Export JSON Report"
-    echo "  0) Kembali"
+    echo "  2) Top Users"
+    echo "  3) Search User"
+    echo "  4) Export JSON"
+    echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -423,10 +423,10 @@ traffic_analytics_menu() {
 
 # -------------------------
 # Security
-# - TLS & Certificate
-# - Fail2ban Protection
-# - System Hardening Status
-# - Security Overview
+# - TLS & Cert
+# - Fail2ban
+# - Hardening
+# - Overview
 # -------------------------
 cert_openssl_info() {
   if ! have_cmd openssl; then
@@ -471,7 +471,7 @@ cert_expiry_days_left() {
 
 cert_menu_show_info() {
   title
-  echo "TLS & Certificate > Show Certificate Info"
+  echo "TLS & Cert > Cert Info"
   hr
   if ! cert_openssl_info; then
     warn "Gagal membaca info sertifikat"
@@ -482,7 +482,7 @@ cert_menu_show_info() {
 
 cert_menu_check_expiry() {
   title
-  echo "TLS & Certificate > Check Expiry"
+  echo "TLS & Cert > Check Expiry"
   hr
   local days
   days="$(cert_expiry_days_left)"
@@ -513,7 +513,7 @@ acme_sh_path_get() {
 
 cert_menu_renew() {
   title
-  echo "TLS & Certificate > Renew Certificate"
+  echo "TLS & Cert > Renew Certificate"
   hr
 
   local acme
@@ -598,7 +598,7 @@ cert_menu_renew() {
 
 cert_menu_reload_nginx() {
   title
-  echo "TLS & Certificate > Reload Nginx"
+  echo "TLS & Cert > Reload Nginx"
   hr
   if ! svc_exists nginx; then
     warn "nginx.service tidak terdeteksi"
@@ -625,11 +625,11 @@ cert_menu_reload_nginx() {
 security_tls_menu() {
   while true; do
     title
-    echo "TLS & Certificate"
+    echo "TLS & Cert"
     hr
-    echo "  1) Show Certificate Info"
+    echo "  1) Cert Info"
     echo "  2) Check Expiry"
-    echo "  3) Renew Certificate"
+    echo "  3) Renew Cert"
     echo "  4) Reload Nginx"
     echo "  0) Back"
     hr
@@ -711,7 +711,7 @@ fail2ban_total_banned_get() {
 
 fail2ban_menu_show_jail_status() {
   title
-  echo "Fail2ban Protection > Show Jail Status"
+  echo "Fail2ban > Jail Status"
   hr
 
   if ! svc_exists fail2ban; then
@@ -755,7 +755,7 @@ fail2ban_menu_show_jail_status() {
 
 fail2ban_menu_show_banned_ip() {
   title
-  echo "Fail2ban Protection > Show Banned IP"
+  echo "Fail2ban > Banned IP"
   hr
   if ! fail2ban_client_ready; then
     warn "fail2ban-client tidak tersedia"
@@ -793,7 +793,7 @@ fail2ban_menu_show_banned_ip() {
 
 fail2ban_menu_unban_ip() {
   title
-  echo "Fail2ban Protection > Unban IP"
+  echo "Fail2ban > Unban IP"
   hr
   if ! fail2ban_client_ready; then
     warn "fail2ban-client tidak tersedia"
@@ -862,7 +862,7 @@ fail2ban_menu_unban_ip() {
 
 fail2ban_menu_restart() {
   title
-  echo "Fail2ban Protection > Restart Fail2ban"
+  echo "Fail2ban > Restart"
   hr
   if ! svc_exists fail2ban; then
     warn "fail2ban.service tidak terdeteksi"
@@ -884,10 +884,10 @@ fail2ban_menu_restart() {
 security_fail2ban_menu() {
   while true; do
     title
-    echo "Fail2ban Protection"
+    echo "Fail2ban"
     hr
-    echo "  1) Show Jail Status"
-    echo "  2) Show Banned IP"
+    echo "  1) Jail Status"
+    echo "  2) Banned IP"
     echo "  3) Unban IP"
     echo "  4) Restart Fail2ban"
     echo "  0) Back"
@@ -909,7 +909,7 @@ security_fail2ban_menu() {
 
 hardening_check_bbr() {
   title
-  echo "System Hardening Status > Check BBR"
+  echo "Hardening > BBR"
   hr
   if ! have_cmd sysctl; then
     warn "sysctl tidak tersedia"
@@ -957,7 +957,7 @@ swap_status_pretty_get() {
 
 hardening_check_swap() {
   title
-  echo "System Hardening Status > Check Swap"
+  echo "Hardening > Swap"
   hr
   if ! have_cmd free; then
     warn "free tidak tersedia"
@@ -975,7 +975,7 @@ hardening_check_swap() {
 
 hardening_check_ulimit() {
   title
-  echo "System Hardening Status > Check Ulimit"
+  echo "Hardening > Ulimit"
   hr
   local cur
   cur="$(ulimit -n 2>/dev/null || echo "-")"
@@ -992,7 +992,7 @@ hardening_check_ulimit() {
 
 hardening_check_chrony() {
   title
-  echo "System Hardening Status > Check Chrony"
+  echo "Hardening > Chrony"
   hr
   if svc_exists chrony; then
     svc_status_line chrony
@@ -1012,12 +1012,12 @@ hardening_check_chrony() {
 security_hardening_menu() {
   while true; do
     title
-    echo "System Hardening Status"
+    echo "Hardening"
     hr
-    echo "  1) Check BBR"
-    echo "  2) Check Swap"
-    echo "  3) Check Ulimit"
-    echo "  4) Check Chrony"
+    echo "  1) BBR"
+    echo "  2) Swap"
+    echo "  3) Ulimit"
+    echo "  4) Chrony"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1055,7 +1055,7 @@ fail2ban_jail_active_bool() {
 
 security_overview_menu() {
   title
-  echo "Security Overview"
+  echo "Overview"
   hr
 
   local tls_days tls_line
@@ -1126,10 +1126,10 @@ fail2ban_menu() {
     title
     echo "9) Security"
     hr
-    echo "  1) TLS & Certificate"
-    echo "  2) Fail2ban Protection"
-    echo "  3) System Hardening Status"
-    echo "  4) Security Overview"
+    echo "  1) TLS & Cert"
+    echo "  2) Fail2ban"
+    echo "  3) Hardening"
+    echo "  4) Overview"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1151,7 +1151,7 @@ fail2ban_menu() {
 # -------------------------
 wireproxy_status_menu() {
   title
-  echo "10) Maintenance > Wireproxy (WARP) Status"
+  echo "10) Maintenance > WARP Status"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1224,7 +1224,7 @@ wireproxy_status_menu() {
 
 wireproxy_restart_menu() {
   title
-  echo "10) Maintenance > Restart Wireproxy (WARP)"
+  echo "10) Maintenance > Restart WARP"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1580,7 +1580,7 @@ sshws_status_menu() {
 
 sshws_restart_menu() {
   title
-  echo "10) Maintenance > Restart SSH WS Stack"
+  echo "10) Maintenance > Restart SSH WS"
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -2783,7 +2783,7 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
+  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
@@ -2870,8 +2870,6 @@ PY
     speed_disp="OFF"
   fi
 
-  traffic_scope_disp="$(ssh_qac_traffic_scope_label)"
-  traffic_scope_note="$(ssh_qac_traffic_scope_line)"
   if sshws_token_valid "${sshws_token}"; then
     sshws_token="${sshws_token,,}"
     sshws_path="$(sshws_path_from_token "${sshws_token}")"
@@ -2881,6 +2879,9 @@ PY
     sshws_path="-"
     sshws_alt_path="-"
     sshws_main_disp="-"
+  fi
+  if [[ "${sshws_alt_path}" == /bebas/* ]]; then
+    sshws_alt_path="/<bebas>/${sshws_token}"
   fi
   sshws_ports_disp="$(ssh_ws_public_ports_label)"
   ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
@@ -2901,14 +2902,12 @@ Valid Until : ${valid_until}
 Created     : ${created_disp}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
-SSH WS      : ${sshws_main_disp}
-SSH WS Alt  : ${sshws_alt_path}
+SSH WS Path : ${sshws_main_disp}
+SSH WS Path Alt : ${sshws_alt_path}
 SSH WS Port : ${sshws_ports_disp}
-SSH Direct  : ${ssh_direct_ports_disp}
-SSH SSL/TLS : ${ssh_ssl_tls_ports_disp}
+SSH Direct Port : ${ssh_direct_ports_disp}
+SSH SSL/TLS Port : ${ssh_ssl_tls_ports_disp}
 BadVPN UDPGW: ${badvpn_port_disp}
-Traffic Scope : ${traffic_scope_disp}
-Traffic Note  : ${traffic_scope_note}
 
 Standard Payload:
 Payload WSS:
@@ -3268,7 +3267,7 @@ ssh_add_user_menu() {
   local username qf acc_file header_page=0
   while true; do
     title
-    echo "3) SSH Management > Add SSH User"
+    echo "3) SSH Users > Add User"
     hr
     ssh_add_user_header_render header_page
     hr
@@ -3542,7 +3541,7 @@ ssh_add_user_menu() {
 
 ssh_delete_user_menu() {
   title
-  echo "3) SSH Management > Delete SSH User"
+  echo "3) SSH Users > Delete User"
   hr
 
   local username
@@ -3580,7 +3579,7 @@ ssh_delete_user_menu() {
 
 ssh_extend_expiry_menu() {
   title
-  echo "3) SSH Management > Extend/Set Expiry"
+  echo "3) SSH Users > Set Expiry"
   hr
 
   local username
@@ -3599,9 +3598,9 @@ ssh_extend_expiry_menu() {
   [[ -n "${current_exp}" ]] || current_exp="-"
   echo "Expiry saat ini: ${current_exp}"
   hr
-  echo "  1) Tambah hari dari hari ini"
-  echo "  2) Set tanggal expiry (YYYY-MM-DD)"
-  echo "  0) Kembali"
+  echo "  1) Add days from today"
+  echo "  2) Set date (YYYY-MM-DD)"
+  echo "  0) Back"
   hr
 
   local mode
@@ -3682,7 +3681,7 @@ ssh_extend_expiry_menu() {
 
 ssh_reset_password_menu() {
   title
-  echo "3) SSH Management > Reset Password"
+  echo "3) SSH Users > Reset Password"
   hr
 
   local username
@@ -3737,7 +3736,7 @@ ssh_list_users_menu() {
 
   if (( ${#users[@]} == 0 )); then
     title
-    echo "3) SSH Management > List Managed SSH Users"
+    echo "3) SSH Users > List Users"
     hr
     warn "Belum ada akun SSH terkelola."
     hr
@@ -3747,7 +3746,7 @@ ssh_list_users_menu() {
 
   while true; do
     title
-    echo "3) SSH Management > List Managed SSH Users"
+    echo "3) SSH Users > List Users"
     hr
     printf "%-4s %-20s %-12s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
     local i username qf fields meta_user created expired sys_user
@@ -3816,7 +3815,7 @@ PY
     done
     hr
     echo "Ketik NO untuk lihat detail SSH ACCOUNT INFO."
-    echo "0/kembali untuk kembali ke SSH Management."
+    echo "0/back untuk kembali ke SSH Users."
     hr
 
     local pick
@@ -3839,7 +3838,7 @@ PY
     acc_file="$(ssh_account_info_file "${username}")"
 
     title
-    echo "3) SSH Management > SSH ACCOUNT INFO"
+    echo "3) SSH Users > SSH ACCOUNT INFO"
     hr
     echo "Username : ${username}"
     echo "File     : ${acc_file}"
@@ -4219,7 +4218,7 @@ sshws_active_session_detail() {
   IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
 
   title
-  echo "3) SSH Management > Active SSH Session Detail"
+  echo "3) SSH Users > Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
   printf "%-16s : %s\n" "Client IP" "${client_ip}"
@@ -4255,7 +4254,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "3) SSH Management > Active SSH Sessions"
+    echo "3) SSH Users > Active Sessions"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -4316,16 +4315,16 @@ sshws_active_sessions_menu() {
 ssh_menu() {
   while true; do
     title
-    echo "3) SSH Management"
+    echo "3) SSH Users"
     hr
-    echo "  1) Add SSH User"
-    echo "  2) Delete SSH User"
-    echo "  3) Extend/Set Expiry"
+    echo "  1) Add User"
+    echo "  2) Delete User"
+    echo "  3) Set Expiry"
     echo "  4) Reset Password"
-    echo "  5) List Managed SSH Users"
-    echo "  6) SSH WS Service Status"
-    echo "  7) Restart SSH WS Stack"
-    echo "  8) Active SSH Sessions"
+    echo "  5) List Users"
+    echo "  6) SSH WS Status"
+    echo "  7) Restart SSH WS"
+    echo "  8) Active Sessions"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -5491,16 +5490,16 @@ ssh_qac_edit_flow() {
     hr
 
     echo "  1) View JSON"
-    echo "  2) Set Quota Limit (GB)"
-    echo "  3) Reset Quota Used SSH (set 0)"
-    echo "  4) Manual Block/Unblock (toggle)"
-    echo "  5) IP/Login Limit Enable/Disable (toggle)"
-    echo "  6) Set IP/Login Limit (angka)"
-    echo "  7) Unlock IP/Login Lock"
-    echo "  8) Set Speed Download SSH (Mbps)"
-    echo "  9) Set Speed Upload SSH (Mbps)"
+    echo "  2) Set Quota (GB)"
+    echo "  3) Reset Quota"
+    echo "  4) Toggle Block"
+    echo "  5) Toggle IP/Login Limit"
+    echo "  6) Set IP/Login Limit"
+    echo "  7) Unlock IP/Login"
+    echo "  8) Set Speed Download"
+    echo "  9) Set Speed Upload"
     echo " 10) Speed Limit SSH Enable/Disable (toggle)"
-    echo "  0) Kembali"
+    echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -5896,7 +5895,7 @@ install_telegram_bot_menu() {
 
 daemon_status_menu() {
   title
-  echo "10) Maintenance > Daemon Status"
+  echo "10) Maintenance > Xray Daemons"
   hr
 
   local sshws_dropbear_svc="${SSHWS_DROPBEAR_SERVICE:-sshws-dropbear}"
@@ -5918,25 +5917,25 @@ daemon_status_menu() {
   done
   hr
 
-  echo "Info: log daemon disembunyikan agar tampilan ringkas."
+  echo "Info: daemon logs disembunyikan agar ringkas."
   hr
 
   echo "  1) Restart xray-expired"
   echo "  2) Restart xray-quota"
   echo "  3) Restart xray-limit-ip"
   echo "  4) Restart xray-speed"
-  echo "  5) Restart semua daemon xray (expired + quota + limit-ip + speed)"
-  echo "  6) Lihat log xray-expired (20 baris)"
-  echo "  7) Lihat log xray-quota (20 baris)"
-  echo "  8) Lihat log xray-limit-ip (20 baris)"
-  echo "  9) Lihat log xray-speed (20 baris)"
+  echo "  5) Restart All Xray Daemons"
+  echo "  6) xray-expired Logs"
+  echo "  7) xray-quota Logs"
+  echo "  8) xray-limit-ip Logs"
+  echo "  9) xray-speed Logs"
   echo " 10) Restart ${sshws_dropbear_svc}"
   echo " 11) Restart ${sshws_stunnel_svc}"
   echo " 12) Restart ${sshws_proxy_svc}"
-  echo " 13) Restart semua daemon SSH WS (dropbear + stunnel + proxy)"
-  echo " 14) Lihat log ${sshws_dropbear_svc} (20 baris)"
-  echo " 15) Lihat log ${sshws_stunnel_svc} (20 baris)"
-  echo " 16) Lihat log ${sshws_proxy_svc} (20 baris)"
+  echo " 13) Restart All SSH WS"
+  echo " 14) ${sshws_dropbear_svc} Logs"
+  echo " 15) ${sshws_stunnel_svc} Logs"
+  echo " 16) ${sshws_proxy_svc} Logs"
   echo "  0) Back"
   hr
   if ! read -r -p "Pilih: " c; then
