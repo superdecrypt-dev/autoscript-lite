@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -175,16 +176,18 @@ func serveTLSMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) er
 func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, conn net.Conn) {
 	defer conn.Close()
 
-	initial, timedOut, err := detect.ReadInitial(conn, cfg.DetectTimeout, detect.MaxPeekBytes)
+	initial, class, err := detect.ReadInitial(conn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
 		logger.Printf("edge-mux http read initial failed from %s: %v", safeRemote(conn), err)
 		return
 	}
 
-	if detect.IsHTTP(initial) {
+	switch class {
+	case detect.ClassHTTP:
 		backend, err := net.DialTimeout("tcp", cfg.HTTPBackendAddr(), 5*time.Second)
 		if err != nil {
 			logger.Printf("edge-mux http backend dial failed: %v", err)
+			_ = writeHTTPError(conn, 502, "Bad Gateway")
 			return
 		}
 		defer backend.Close()
@@ -192,9 +195,11 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 			logger.Printf("edge-mux http bridge error: %v", err)
 		}
 		return
-	}
-
-	if detect.IsTLSClientHello(initial) && cfg.ClassicTLSOn80 && tlsServer != nil {
+	case detect.ClassTLSClientHello:
+		if !cfg.ClassicTLSOn80 || tlsServer == nil {
+			logger.Printf("edge-mux tls-on-80 disabled for %s", safeRemote(conn))
+			return
+		}
 		tlsConn, err := tlsServer.AcceptBufferedTLSConn(conn, initial)
 		if err != nil {
 			logger.Printf("edge-mux tls-on-80 handshake failed: %v", err)
@@ -213,14 +218,17 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 			logger.Printf("edge-mux tls-on-80 bridge error: %v", err)
 		}
 		return
-	}
-
-	if timedOut {
+	case detect.ClassTimeout:
 		logger.Printf("edge-mux http port timed out before classification from %s", safeRemote(conn))
+		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
+	case detect.ClassPossibleHTTP:
+		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
+		_ = writeHTTPError(conn, 408, "Request Timeout")
+		return
+	default:
+		logger.Printf("edge-mux http port unsupported traffic from %s", safeRemote(conn))
 	}
-
-	logger.Printf("edge-mux http port unsupported traffic from %s", safeRemote(conn))
 }
 
 func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, conn net.Conn) {
@@ -233,22 +241,30 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 	}
 	defer tlsConn.Close()
 
-	initial, timedOut, err := detect.ReadInitial(tlsConn, cfg.DetectTimeout, detect.MaxPeekBytes)
+	initial, class, err := detect.ReadInitial(tlsConn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
 		logger.Printf("edge-mux tls read initial failed from %s: %v", safeRemote(conn), err)
 		return
 	}
 
 	target := cfg.SSHBackendAddr()
-	if detect.IsHTTP(initial) {
+	switch class {
+	case detect.ClassHTTP:
 		target = cfg.HTTPBackendAddr()
-	} else if timedOut {
+	case detect.ClassPossibleHTTP:
+		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
+		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
+		return
+	case detect.ClassTimeout:
 		target = cfg.SSHBackendAddr()
 	}
 
 	backend, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
 		logger.Printf("edge-mux backend dial failed target=%s: %v", target, err)
+		if target == cfg.HTTPBackendAddr() {
+			_ = writeHTTPError(tlsConn, 502, "Bad Gateway")
+		}
 		return
 	}
 	defer backend.Close()
@@ -263,4 +279,17 @@ func safeRemote(conn net.Conn) string {
 		return "-"
 	}
 	return conn.RemoteAddr().String()
+}
+
+func writeHTTPError(conn net.Conn, status int, text string) error {
+	body := fmt.Sprintf("%d %s\n", status, text)
+	resp := fmt.Sprintf(
+		"HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\n\r\n%s",
+		status,
+		text,
+		len(body),
+		body,
+	)
+	_, err := conn.Write([]byte(resp))
+	return err
 }

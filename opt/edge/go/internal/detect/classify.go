@@ -10,6 +10,16 @@ import (
 
 const MaxPeekBytes = 4096
 
+type InitialClass int
+
+const (
+	ClassUnknown InitialClass = iota
+	ClassHTTP
+	ClassTLSClientHello
+	ClassTimeout
+	ClassPossibleHTTP
+)
+
 var httpMethods = [][]byte{
 	[]byte("GET "),
 	[]byte("POST "),
@@ -32,6 +42,19 @@ func IsHTTP(b []byte) bool {
 	return false
 }
 
+func IsPossibleHTTPPrefix(b []byte) bool {
+	trimmed := bytes.TrimLeft(b, "\r\n\t ")
+	if len(trimmed) == 0 {
+		return true
+	}
+	for _, method := range httpMethods {
+		if len(trimmed) <= len(method) && bytes.HasPrefix(method, trimmed) {
+			return true
+		}
+	}
+	return false
+}
+
 func IsTLSClientHello(b []byte) bool {
 	if len(b) < 3 {
 		return false
@@ -39,25 +62,72 @@ func IsTLSClientHello(b []byte) bool {
 	return b[0] == 0x16 && b[1] == 0x03 && b[2] <= 0x04
 }
 
-func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, bool, error) {
+func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, false, err
+		return nil, ClassUnknown, err
 	}
 	defer conn.SetReadDeadline(time.Time{})
 
 	buf := make([]byte, maxBytes)
-	n, err := conn.Read(buf)
-	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return nil, true, nil
+	used := 0
+	for used < len(buf) {
+		n, err := conn.Read(buf[used:])
+		if n > 0 {
+			used += n
+			current := buf[:used]
+			switch {
+			case IsHTTP(current):
+				return current, ClassHTTP, nil
+			case IsTLSClientHello(current):
+				return current, ClassTLSClientHello, nil
+			case IsPossibleHTTPPrefix(current):
+				continue
+			default:
+				return current, ClassUnknown, nil
+			}
 		}
-		if errors.Is(err, io.EOF) {
-			return nil, false, io.EOF
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if used == 0 {
+					return nil, ClassTimeout, nil
+				}
+				current := buf[:used]
+				if IsPossibleHTTPPrefix(current) {
+					return current, ClassPossibleHTTP, nil
+				}
+				return current, ClassTimeout, nil
+			}
+			if errors.Is(err, io.EOF) {
+				if used == 0 {
+					return nil, ClassUnknown, io.EOF
+				}
+				current := buf[:used]
+				switch {
+				case IsHTTP(current):
+					return current, ClassHTTP, nil
+				case IsTLSClientHello(current):
+					return current, ClassTLSClientHello, nil
+				case IsPossibleHTTPPrefix(current):
+					return current, ClassPossibleHTTP, nil
+				default:
+					return current, ClassUnknown, nil
+				}
+			}
+			return nil, ClassUnknown, err
 		}
-		return nil, false, err
 	}
-	return buf[:n], false, nil
+	current := buf[:used]
+	switch {
+	case IsHTTP(current):
+		return current, ClassHTTP, nil
+	case IsTLSClientHello(current):
+		return current, ClassTLSClientHello, nil
+	case IsPossibleHTTPPrefix(current):
+		return current, ClassPossibleHTTP, nil
+	default:
+		return current, ClassUnknown, nil
+	}
 }

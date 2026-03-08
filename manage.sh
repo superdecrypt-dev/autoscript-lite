@@ -5067,7 +5067,9 @@ delete_account_artifacts() {
   delete_one_file "${acc_file}"
   delete_one_file "${acc_file_compatfmt}"
   delete_one_file "${quota_file}"
+  delete_one_file "${quota_file}.lock"
   delete_one_file "${quota_file_compatfmt}"
+  delete_one_file "${quota_file_compatfmt}.lock"
   speed_policy_remove "${proto}" "${username}"
 }
 
