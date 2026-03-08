@@ -2,7 +2,7 @@
 # Management/bot sync module for setup runtime.
 
 install_management_scripts() {
-  ok "Menyiapkan script manajemen (placeholder) ..."
+  ok "Siapkan tools runtime..."
 
   mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
   mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
@@ -1581,7 +1581,7 @@ EOF
     die "xray-quota gagal diaktifkan. Cek log di atas."
   fi
 
-  ok "Script manajemen siap:"
+  ok "Tools runtime siap:"
   ok "  - /usr/local/bin/xray-expired (service: xray-expired)"
   ok "  - /usr/local/bin/limit-ip     (service: xray-limit-ip)"
   ok "  - /usr/local/bin/user-block   (CLI)"
@@ -1602,7 +1602,7 @@ sync_manage_modules_layout() {
       mkdir -p "$(dirname "${dst_path}")"
       install -m 0755 "${src_path}" "${dst_path}"
       chown root:root "${dst_path}" 2>/dev/null || true
-      ok "Installer ${label} disegarkan: ${dst_path}"
+      ok "Installer ${label} diperbarui."
     fi
   }
 
@@ -1636,7 +1636,7 @@ sync_manage_modules_layout() {
     return 0
   }
 
-  ok "Sinkronisasi modular manage ke ${MANAGE_MODULES_DST_DIR} ..."
+  ok "Sync manage modules..."
 
   # Pada flow run.sh normal, source lokal dari repo selalu tersedia.
   # Default: prioritaskan source lokal agar rerun idempotent dan tidak tergantung

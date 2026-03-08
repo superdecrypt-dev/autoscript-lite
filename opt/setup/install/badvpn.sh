@@ -58,7 +58,7 @@ EOF
 install_badvpn_udpgw_stack() {
   local bin src_name
   if ! badvpn_prebuilt_ready; then
-    warn "Binary prebuilt BadVPN UDPGW belum tersedia. Install dilewati."
+    warn "Binary prebuilt BadVPN UDPGW belum ada. Skip."
     return 0
   fi
 
@@ -84,5 +84,5 @@ install_badvpn_udpgw_stack() {
 
   systemctl daemon-reload >/dev/null 2>&1 || true
   service_enable_restart_checked "${BADVPN_SERVICE_NAME}" || die "Gagal mengaktifkan ${BADVPN_SERVICE_NAME}"
-  ok "BadVPN UDPGW aktif dari prebuilt ${src_name}"
+  ok "BadVPN UDPGW aktif (${src_name})"
 }

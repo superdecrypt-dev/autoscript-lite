@@ -274,7 +274,7 @@ cf_prepare_subdomain_a_record() {
   local ip="$3"
   local proxied="${4:-false}"
 
-  ok "Validasi DNS A record Cloudflare untuk: ${fqdn}"
+  ok "Cek DNS A: ${fqdn}"
 
   local json rec_ips any_same any_diff
   json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
@@ -300,7 +300,7 @@ cf_prepare_subdomain_a_record() {
         warn "A record sudah ada: ${fqdn} -> ${ip} (sama dengan IP VPS)"
         if confirm_yn "Lanjut menggunakan domain ini?"; then
           cf_force_a_record_dns_only "${zone_id}" "${fqdn}" "${ip}"
-          ok "Melanjutkan proses."
+          ok "Lanjut."
           return 0
         fi
         die "Dibatalkan oleh pengguna."
@@ -323,7 +323,7 @@ cf_prepare_subdomain_a_record() {
     done
   fi
 
-  ok "Membuat DNS A record: ${fqdn} -> ${ip}"
+  ok "Buat A record: ${fqdn} -> ${ip}"
   cf_create_a_record "${zone_id}" "${fqdn}" "${ip}" "${proxied}"
 }
 
@@ -359,7 +359,7 @@ domain_menu_v2() {
       }
 
       if [[ "${DOMAIN}" =~ ${re} ]]; then
-        ok "Domain valid: ${DOMAIN}"
+        ok "Domain: ${DOMAIN}"
         ACME_CERT_MODE="standalone"
         ACME_ROOT_DOMAIN=""
         CF_ZONE_ID=""
@@ -372,7 +372,7 @@ domain_menu_v2() {
   fi
 
   VPS_IPV4="$(get_public_ipv4)"
-  ok "Public IPv4 VPS: ${VPS_IPV4}"
+  ok "IP publik: ${VPS_IPV4}"
 
   [[ ${#PROVIDED_ROOT_DOMAINS[@]} -gt 0 ]] || die "Daftar domain induk (PROVIDED_ROOT_DOMAINS) kosong."
 
@@ -396,12 +396,12 @@ domain_menu_v2() {
   done
 
   ACME_ROOT_DOMAIN="${PROVIDED_ROOT_DOMAINS[$((pick-1))]}"
-  ok "Domain induk terpilih: ${ACME_ROOT_DOMAIN}"
+  ok "Root domain: ${ACME_ROOT_DOMAIN}"
 
   CF_ZONE_ID="$(cf_get_zone_id_by_name "${ACME_ROOT_DOMAIN}" || true)"
   [[ -n "${CF_ZONE_ID:-}" ]] || die "Zone Cloudflare untuk ${ACME_ROOT_DOMAIN} tidak ditemukan / token tidak punya akses (butuh Zone:Read + DNS:Edit)."
   CF_ACCOUNT_ID="$(cf_get_account_id_by_zone "${CF_ZONE_ID}" || true)"
-  [[ -n "${CF_ACCOUNT_ID:-}" ]] || warn "Tidak bisa ambil CF_ACCOUNT_ID dari zone (acme.sh dns_cf mungkin tetap bisa jalan tanpa ini)."
+  [[ -n "${CF_ACCOUNT_ID:-}" ]] || warn "CF_ACCOUNT_ID tidak terbaca (boleh lanjut)."
 
   echo
   echo -e "${BOLD}Pilih metode pembuatan subdomain${NC}"
@@ -422,7 +422,7 @@ domain_menu_v2() {
   local sub=""
   if [[ "${mth}" == "1" ]]; then
     sub="$(gen_subdomain_random)"
-    ok "Subdomain acak: ${sub}"
+    ok "Subdomain: ${sub}"
   else
     while true; do
       if ! read -r -p "Masukkan nama subdomain: " sub; then
@@ -430,7 +430,7 @@ domain_menu_v2() {
       fi
       sub="${sub,,}"
       if validate_subdomain "${sub}"; then
-        ok "Subdomain valid: ${sub}"
+        ok "Subdomain: ${sub}"
         break
       fi
       echo "Subdomain tidak valid. Gunakan huruf kecil, angka, titik, dan strip (-)."
@@ -439,17 +439,17 @@ domain_menu_v2() {
 
   echo
   if confirm_yn "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    warn "Cloudflare proxy (orange cloud) dinonaktifkan pada setup ini."
+    warn "Cloudflare proxy dimatikan."
   fi
   CF_PROXIED="false"
-  ok "Cloudflare proxy: OFF (proxied=false)"
+  ok "Cloudflare proxy: OFF"
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
-  ok "Domain final: ${DOMAIN}"
+  ok "Domain: ${DOMAIN}"
 
   cf_prepare_subdomain_a_record "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${CF_PROXIED}"
 
   ACME_CERT_MODE="dns_cf_wildcard"
-  ok "Mode sertifikat: wildcard dns_cf untuk ${DOMAIN} (meliputi *.${DOMAIN})"
+  ok "Mode cert: dns_cf wildcard"
 }
 
 install_acme_and_issue_cert() {
@@ -467,9 +467,9 @@ install_acme_and_issue_cert() {
   if [[ -x /root/.acme.sh/acme.sh ]]; then
     ok "acme.sh sudah ada."
   else
-    ok "Install acme.sh..."
+    ok "Pasang acme.sh..."
     email="$(rand_email)"
-    ok "Email acme.sh (acak): ${email}"
+    ok "Email ACME: ${email}"
     local acme_tarball acme_tmpdir acme_dns_hook
     acme_tarball="$(mktemp)"
     acme_tmpdir="$(mktemp -d)"
@@ -497,7 +497,7 @@ install_acme_and_issue_cert() {
   /root/.acme.sh/acme.sh --set-default-ca --server "${ACME_DEFAULT_CA}" >/dev/null 2>&1 || true
 
   if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
-    ok "Issue wildcard certificate untuk $DOMAIN via dns_cf ..."
+    ok "Issue wildcard cert via dns_cf..."
     [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong."
     [[ -n "${CF_ZONE_ID:-}" ]] || die "CF_ZONE_ID kosong untuk mode dns_cf_wildcard."
 
@@ -515,7 +515,7 @@ install_acme_and_issue_cert() {
       --reloadcmd "/bin/true" >/dev/null \
       || die "Gagal install sertifikat wildcard ke ${CERT_DIR}."
   else
-    ok "Issue sertifikat untuk ${DOMAIN} via acme.sh (standalone port 80)..."
+    ok "Issue cert via standalone :80..."
     /root/.acme.sh/acme.sh --issue --force --standalone -d "${DOMAIN}" --httpport 80 \
       || die "Gagal issue sertifikat (pastikan port 80 terbuka & DNS domain mengarah ke VPS)."
 
@@ -532,7 +532,7 @@ install_acme_and_issue_cert() {
   chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
   _ACME_RESTORE_NEEDED=0
 
-  ok "Sertifikat tersimpan:"
+  ok "Cert saved:"
   ok "  - ${CERT_FULLCHAIN}"
   ok "  - ${CERT_PRIVKEY}"
 }

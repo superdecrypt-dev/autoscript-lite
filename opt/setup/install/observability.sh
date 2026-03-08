@@ -2,7 +2,7 @@
 # Observability, guard, and log maintenance module for setup runtime.
 
 setup_logrotate() {
-  ok "Setup logrotate (nginx & xray)..."
+  ok "Pasang logrotate..."
 
   cat > /etc/logrotate.d/xray-nginx <<'EOF'
 /var/log/nginx/*.log /var/log/xray/*.log {
@@ -17,11 +17,11 @@ setup_logrotate() {
 EOF
 
   rm -f /etc/cron.d/cleanup-xray-nginx-logs /usr/local/bin/cleanup-xray-nginx-logs 2>/dev/null || true
-  ok "Logrotate aktif: /etc/logrotate.d/xray-nginx"
+  ok "Logrotate aktif."
 }
 
 install_observability_alerting() {
-  ok "Setup observability & alerting (xray-observe)..."
+  ok "Pasang observability..."
 
   mkdir -p "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}"
   chmod 700 "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}" || true
@@ -63,7 +63,7 @@ EOF
 }
 
 install_domain_cert_guard() {
-  ok "Setup domain & cert guard (xray-domain-guard)..."
+  ok "Pasang domain guard..."
 
   mkdir -p "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}"
   chmod 700 "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}" || true
@@ -95,7 +95,7 @@ EOF
   systemctl daemon-reload
   if systemctl enable --now xray-domain-guard.timer >/dev/null 2>&1; then
     systemctl start xray-domain-guard.service >/dev/null 2>&1 || true
-    ok "Domain & cert guard aktif:"
+    ok "Domain guard aktif:"
     ok "  - binary: /usr/local/bin/xray-domain-guard"
     ok "  - config: ${DOMAIN_GUARD_CONFIG_FILE}"
     ok "  - timer : xray-domain-guard.timer (12 jam)"

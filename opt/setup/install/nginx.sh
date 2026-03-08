@@ -171,7 +171,7 @@ nginx_export_if_missing_from_live() {
   fi
 }
 
-nginx_ensure_render_context_or_die() {
+nginx_ensure_domain_context_or_die() {
   local detected_domain
   if [[ -z "${DOMAIN:-}" ]]; then
     detected_domain="$(detect_domain 2>/dev/null || true)"
@@ -181,6 +181,10 @@ nginx_ensure_render_context_or_die() {
     [[ -n "${detected_domain}" ]] || die "DOMAIN belum tersedia untuk render nginx."
     export DOMAIN="${detected_domain}"
   fi
+}
+
+nginx_capture_live_route_context() {
+  [[ -f "${NGINX_CONF}" ]] || return 0
 
   nginx_export_if_missing_from_live P_VLESS_WS "$(nginx_read_live_map_value internal_port 'vless-ws' || true)"
   nginx_export_if_missing_from_live P_VMESS_WS "$(nginx_read_live_map_value internal_port 'vmess-ws' || true)"
@@ -217,6 +221,11 @@ nginx_ensure_render_context_or_die() {
   nginx_export_if_missing_from_live I_TROJAN_GRPC "$(nginx_read_live_grpc_value 'trojan-grpc' || true)"
   nginx_export_if_missing_from_live I_SS_GRPC "$(nginx_read_live_grpc_value_first 'ss-grpc' '\(\?:shadowsocks\|ss\)-grpc' || true)"
   nginx_export_if_missing_from_live I_SS2022_GRPC "$(nginx_read_live_grpc_value_first 'ss2022-grpc' '\(\?:shadowsocks2022\|ss2022\)-grpc' || true)"
+}
+
+nginx_ensure_render_context_or_die() {
+  nginx_ensure_domain_context_or_die
+  nginx_capture_live_route_context
 
   local required_vars=(
     P_VLESS_WS P_VMESS_WS P_TROJAN_WS P_SS_WS P_SS2022_WS
@@ -265,12 +274,12 @@ install_nginx_official_repo() {
 
   ensure_dpkg_consistent
   if nginx_installed_from_nginx_org; then
-    ok "Nginx mainline dari nginx.org sudah terpasang; skip uninstall paket nginx distro."
+    ok "Nginx mainline sudah ada."
   elif dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-common 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-full 2>/dev/null | grep -q "install ok installed" \
     || dpkg-query -W -f='${Status}' nginx-core 2>/dev/null | grep -q "install ok installed"; then
-    ok "Migrasi paket Nginx distro ke nginx.org mainline..."
+    ok "Migrasi Nginx ke mainline..."
     apt_get_with_lock_retry remove -y nginx nginx-common nginx-full nginx-core 2>/dev/null || true
   fi
 
@@ -328,7 +337,7 @@ EOF
 
   apt_get_with_lock_retry update -y
   apt_get_with_lock_retry install -y nginx jq
-  ok "Nginx terpasang dari repo resmi nginx.org (mainline)."
+  ok "Nginx mainline siap."
 }
 
 detect_nginx_user() {
@@ -349,7 +358,8 @@ write_nginx_main_conf() {
 
   # Saat rerun di host yang sudah hidup, pertahankan context route/path dari
   # config nginx live sebelum file utama dibersihkan dan ditulis ulang.
-  nginx_ensure_render_context_or_die
+  nginx_ensure_domain_context_or_die
+  nginx_capture_live_route_context
 
   rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
   rm -f "${NGINX_CONF}" 2>/dev/null || true
@@ -367,7 +377,7 @@ write_nginx_main_conf() {
     0644
 
   nginx -t || die "Konfigurasi /etc/nginx/nginx.conf invalid."
-  ok "Nginx main config ditulis: /etc/nginx/nginx.conf (optimized 1 vCPU / 1GB RAM)."
+  ok "nginx.conf ditulis."
 }
 
 write_nginx_config() {
@@ -439,5 +449,5 @@ write_nginx_config() {
   nginx -t || die "Konfigurasi Nginx invalid."
   systemctl enable nginx --now
   systemctl restart nginx
-  ok "Nginx reverse proxy aktif (${nginx_mode_desc} -> internal port/path via map \$uri)."
+  ok "Nginx backend aktif (${nginx_mode_desc})."
 }

@@ -45,7 +45,15 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/install/xray.sh"
   "opt/setup/install/management.sh"
   "opt/setup/install/sshws.sh"
+  "opt/setup/install/edge.sh"
+  "opt/setup/install/badvpn.sh"
   "opt/setup/install/observability.sh"
+  "opt/setup/templates/config/edge-runtime.env"
+  "opt/setup/templates/config/badvpn-runtime.env"
+  "opt/setup/templates/systemd/edge-mux.service"
+  "opt/setup/templates/systemd/badvpn-udpgw.service"
+  "opt/edge/dist/SHA256SUMS"
+  "opt/badvpn/dist/SHA256SUMS"
   "opt/manage/features/network.sh"
   "opt/manage/features/analytics.sh"
   "opt/manage/menus/maintenance_menu.sh"
@@ -107,10 +115,19 @@ repo_layout_missing_files() {
   printf '%s\n' "${missing[@]}"
 }
 
+run_prebuilt_arch_suffix() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s\n' "amd64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
 preflight_repo_layout() {
   local root="$1"
   local -a missing=()
   local rel=""
+  local arch_suffix=""
 
   [[ -d "${root}" ]] || die "Direktori source repo tidak ditemukan: ${root}"
   [[ -d "${root}/opt/setup" ]] || die "Source modular setup tidak ditemukan: ${root}/opt/setup"
@@ -120,6 +137,12 @@ preflight_repo_layout() {
     [[ -n "${rel}" ]] || continue
     missing+=("${rel}")
   done < <(repo_layout_missing_files "${root}" setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh opt/setup opt/manage)
+
+  arch_suffix="$(run_prebuilt_arch_suffix 2>/dev/null || true)"
+  if [[ -n "${arch_suffix}" ]]; then
+    [[ -f "${root}/opt/edge/dist/edge-mux-linux-${arch_suffix}" ]] || missing+=("opt/edge/dist/edge-mux-linux-${arch_suffix}")
+    [[ -f "${root}/opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}" ]] || missing+=("opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}")
+  fi
 
   if (( ${#missing[@]} > 0 )); then
     warn "Layout repo tidak lengkap di: ${root}"
@@ -170,15 +193,15 @@ reclone_repo_with_backup() {
   local backup=""
   backup="${target}.backup.$(date +%Y%m%d%H%M%S)"
 
-  warn "Repositori existing memiliki perubahan lokal. Menyimpan backup ke: ${backup}"
+  warn "Repo kotor. Backup: ${backup}"
   mv "${target}" "${backup}" || die "Gagal backup repositori lama: ${target}"
 
-  log "Mengkloning ulang repositori bersih ke ${target} ..."
+  log "Clone ulang repo ke ${target} ..."
   if ! git clone --depth=1 "${REPO_URL}" "${target}" 2>&1; then
     die "Gagal re-clone repositori setelah backup. Backup tersedia di: ${backup}"
   fi
-  ok "Repositori bersih berhasil dibuat ulang."
-  ok "Backup repositori lama tersimpan di: ${backup}"
+  ok "Repo bersih siap."
+  ok "Backup lama: ${backup}"
 }
 
 # -------------------------
@@ -222,11 +245,11 @@ check_deps() {
   done
 
   if [[ ${#missing[@]} -gt 0 ]]; then
-    warn "Dependency berikut tidak ditemukan: ${missing[*]}"
-    log "Mencoba menginstal dependency yang hilang..."
+    warn "Dependency belum ada: ${missing[*]}"
+    log "Pasang dependency yang kurang..."
     apt-get update -y >/dev/null 2>&1 || true
     apt-get install -y "${missing[@]}" || die "Gagal menginstal: ${missing[*]}"
-    ok "Dependency berhasil dipasang."
+    ok "Dependency siap."
   fi
 }
 
@@ -236,7 +259,7 @@ check_deps() {
 clone_repo() {
   if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
     preflight_repo_layout "${REPO_DIR}"
-    log "RUN_USE_LOCAL_SOURCE=1 -> gunakan source lokal: ${REPO_DIR}"
+    log "Source lokal: ${REPO_DIR}"
     return 0
   fi
 
@@ -251,21 +274,21 @@ clone_repo() {
   fi
 
   if [[ -d "${REPO_DIR}/.git" ]]; then
-    log "Memperbarui repositori di ${REPO_DIR} ..."
+    log "Update repo di ${REPO_DIR} ..."
     if ! git -C "${REPO_DIR}" pull --ff-only origin main 2>&1; then
       if repo_has_local_changes "${REPO_DIR}"; then
-        warn "Update gagal karena working tree tidak bersih."
+        warn "Update repo gagal: working tree kotor."
         reclone_repo_with_backup "${REPO_DIR}"
         return 0
       fi
       die "Gagal update repositori di ${REPO_DIR}. Penyebab bukan perubahan lokal; cek koneksi/remote lalu coba lagi."
     fi
     preflight_repo_layout "${REPO_DIR}"
-    ok "Repositori berhasil diperbarui."
+    ok "Repo updated."
     return 0
   fi
 
-  log "Mengkloning repositori ke ${REPO_DIR} ..."
+  log "Clone repo ke ${REPO_DIR} ..."
   local clone_err=""
   if ! clone_err="$(git clone --depth=1 "${REPO_URL}" "${REPO_DIR}" 2>&1)"; then
     if grep -Eqi 'could not create work tree dir|permission denied|operation not permitted|read-only file system' <<<"${clone_err}"; then
@@ -274,7 +297,7 @@ clone_repo() {
     die "Gagal mengkloning repositori: ${REPO_URL}\n  Pastikan server memiliki koneksi internet dan URL repo benar.\n  Detail git: ${clone_err}"
   fi
   preflight_repo_layout "${REPO_DIR}"
-  ok "Repositori berhasil diunduh."
+  ok "Repo siap."
 }
 
 install_manage() {
@@ -287,31 +310,31 @@ install_manage() {
   [[ -f "${telegram_installer_src}" ]] || die "File install-telegram-bot.sh tidak ditemukan di repositori."
   preflight_repo_layout "${REPO_DIR}"
 
-  log "Sinkronisasi modul manage ke ${MANAGE_MODULES_DST_DIR} ..."
+  log "Sync manage -> ${MANAGE_MODULES_DST_DIR} ..."
   sync_tree_atomic "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_MODULES_DST_DIR}" "modul manage"
   find "${MANAGE_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${MANAGE_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
   chown -R root:root "${MANAGE_MODULES_DST_DIR}" 2>/dev/null || true
-  ok "Modul manage tersedia di: ${MANAGE_MODULES_DST_DIR}"
+  ok "Manage modules: ${MANAGE_MODULES_DST_DIR}"
 
-  log "Sinkronisasi fallback modul manage ke ${MANAGE_FALLBACK_MODULES_DST_DIR} ..."
+  log "Sync fallback manage -> ${MANAGE_FALLBACK_MODULES_DST_DIR} ..."
   sync_tree_atomic "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_FALLBACK_MODULES_DST_DIR}" "fallback modul manage"
   find "${MANAGE_FALLBACK_MODULES_DST_DIR}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${MANAGE_FALLBACK_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
   chown -R root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}" 2>/dev/null || true
-  ok "Fallback modul manage tersedia di: ${MANAGE_FALLBACK_MODULES_DST_DIR}"
+  ok "Fallback manage: ${MANAGE_FALLBACK_MODULES_DST_DIR}"
 
-  log "Menginstal 'manage' ke ${MANAGE_BIN} ..."
+  log "Pasang manage -> ${MANAGE_BIN} ..."
   install -m 0755 "${src}" "${MANAGE_BIN}"
-  ok "Perintah 'manage' tersedia di: ${MANAGE_BIN}"
+  ok "manage siap."
 
-  log "Menginstal installer bot Discord ke ${BOT_INSTALLER_BIN} ..."
+  log "Pasang installer Discord -> ${BOT_INSTALLER_BIN} ..."
   install -m 0755 "${bot_installer_src}" "${BOT_INSTALLER_BIN}"
-  ok "Installer bot Discord tersedia di: ${BOT_INSTALLER_BIN}"
+  ok "Installer Discord siap."
 
-  log "Menginstal installer bot Telegram ke ${TELEGRAM_INSTALLER_BIN} ..."
+  log "Pasang installer Telegram -> ${TELEGRAM_INSTALLER_BIN} ..."
   install -m 0755 "${telegram_installer_src}" "${TELEGRAM_INSTALLER_BIN}"
-  ok "Installer bot Telegram tersedia di: ${TELEGRAM_INSTALLER_BIN}"
+  ok "Installer Telegram siap."
 }
 
 seed_discord_bot_home() {
@@ -321,15 +344,15 @@ seed_discord_bot_home() {
   fi
 
   if [[ -d "${DISCORD_BOT_HOME}" ]] && [[ -n "$(find "${DISCORD_BOT_HOME}" -mindepth 1 -maxdepth 1 2>/dev/null || true)" ]]; then
-    ok "Bot home sudah ada: ${DISCORD_BOT_HOME}"
+    ok "Discord home sudah ada."
     return 0
   fi
 
-  log "Menyiapkan source awal bot Discord ke ${DISCORD_BOT_HOME} ..."
+  log "Siapkan source Discord -> ${DISCORD_BOT_HOME} ..."
   mkdir -p "${DISCORD_BOT_HOME}"
   cp -a "${DISCORD_BOT_SRC_DIR}/." "${DISCORD_BOT_HOME}/"
   chown -R root:root "${DISCORD_BOT_HOME}" 2>/dev/null || true
-  ok "Bootstrap bot Discord selesai: ${DISCORD_BOT_HOME}"
+  ok "Discord source siap."
 }
 
 seed_telegram_bot_home() {
@@ -339,25 +362,25 @@ seed_telegram_bot_home() {
   fi
 
   if [[ -d "${TELEGRAM_BOT_HOME}" ]] && [[ -n "$(find "${TELEGRAM_BOT_HOME}" -mindepth 1 -maxdepth 1 2>/dev/null || true)" ]]; then
-    ok "Bot home sudah ada: ${TELEGRAM_BOT_HOME}"
+    ok "Telegram home sudah ada."
     return 0
   fi
 
-  log "Menyiapkan source awal bot Telegram ke ${TELEGRAM_BOT_HOME} ..."
+  log "Siapkan source Telegram -> ${TELEGRAM_BOT_HOME} ..."
   mkdir -p "${TELEGRAM_BOT_HOME}"
   cp -a "${TELEGRAM_BOT_SRC_DIR}/." "${TELEGRAM_BOT_HOME}/"
   chown -R root:root "${TELEGRAM_BOT_HOME}" 2>/dev/null || true
-  ok "Bootstrap bot Telegram selesai: ${TELEGRAM_BOT_HOME}"
+  ok "Telegram source siap."
 }
 
 cleanup_repo_after_success() {
   if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
-    warn "RUN_USE_LOCAL_SOURCE=1 -> lewati hapus source lokal (${REPO_DIR})."
+    warn "Source lokal dipertahankan: ${REPO_DIR}"
     return 0
   fi
 
   if [[ "${KEEP_REPO_AFTER_INSTALL:-0}" == "1" ]]; then
-    warn "KEEP_REPO_AFTER_INSTALL=1 -> lewati hapus source repo (${REPO_DIR})."
+    warn "Repo dipertahankan: ${REPO_DIR}"
     return 0
   fi
 
@@ -382,7 +405,7 @@ cleanup_repo_after_success() {
   fi
 
   rm -rf -- "${resolved}"
-  ok "Source repo dibersihkan setelah instalasi: ${resolved}"
+  ok "Source repo dibersihkan."
 }
 
 run_setup() {
@@ -390,12 +413,12 @@ run_setup() {
 
   [[ -f "${setup}" ]] || die "File setup.sh tidak ditemukan di repositori."
 
-  log "Menjalankan setup.sh dalam 3 detik ..."
+  log "Jalankan setup.sh dalam 3 detik ..."
   sleep 3
   hr
   bash "${setup}"
   hr
-  ok "setup.sh selesai dijalankan."
+  ok "setup.sh selesai."
 }
 
 # -------------------------
@@ -404,7 +427,7 @@ run_setup() {
 main() {
   echo
   echo -e "${BOLD}============================================================${NC}"
-  echo -e "${BOLD}   Xray VPN Server — Installer Otomatis${NC}"
+  echo -e "${BOLD}   Autoscript Installer${NC}"
   echo -e "${BOLD}============================================================${NC}"
   echo
 
@@ -420,10 +443,8 @@ main() {
 
   echo
   echo -e "${BOLD}============================================================${NC}"
-  ok "Instalasi selesai."
-  echo
-  echo -e "  Gunakan perintah berikut untuk membuka menu manajemen:"
-  echo -e "  ${BOLD}sudo manage / manage${NC}"
+  ok "Install selesai."
+  echo -e "  Buka panel: ${BOLD}manage${NC}"
   echo -e "${BOLD}============================================================${NC}"
   echo
 }

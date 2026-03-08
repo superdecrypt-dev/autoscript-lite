@@ -197,55 +197,64 @@ sanity_check() {
 
   # Core services (must be active)
   if systemctl is-active --quiet xray; then
-    ok "sanity: xray active"
+    ok "check: xray active"
   else
-    warn "sanity: xray NOT active"
+    warn "check: xray inactive"
     systemctl status xray --no-pager >&2 || true
     journalctl -u xray -n 200 --no-pager >&2 || true
     failed=1
   fi
 
   if systemctl is-active --quiet nginx; then
-    ok "sanity: nginx active"
+    ok "check: nginx active"
   else
-    warn "sanity: nginx NOT active"
+    warn "check: nginx inactive"
     systemctl status nginx --no-pager >&2 || true
     journalctl -u nginx -n 200 --no-pager >&2 || true
     failed=1
   fi
 
   if systemctl is-active --quiet sshws-dropbear; then
-    ok "sanity: sshws-dropbear active"
+    ok "check: sshws-dropbear active"
   else
-    warn "sanity: sshws-dropbear NOT active"
+    warn "check: sshws-dropbear inactive"
     systemctl status sshws-dropbear --no-pager >&2 || true
     journalctl -u sshws-dropbear -n 120 --no-pager >&2 || true
     failed=1
   fi
 
   if systemctl is-active --quiet sshws-stunnel; then
-    ok "sanity: sshws-stunnel active"
+    ok "check: sshws-stunnel active"
   else
-    warn "sanity: sshws-stunnel NOT active"
+    warn "check: sshws-stunnel inactive"
     systemctl status sshws-stunnel --no-pager >&2 || true
     journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
-    warn "sanity: sshws-stunnel bersifat opsional (jalur utama SSHWS tetap via proxy -> dropbear direct)."
+    warn "check: sshws-stunnel opsional"
   fi
 
   if systemctl is-active --quiet sshws-proxy; then
-    ok "sanity: sshws-proxy active"
+    ok "check: sshws-proxy active"
   else
-    warn "sanity: sshws-proxy NOT active"
+    warn "check: sshws-proxy inactive"
     systemctl status sshws-proxy --no-pager >&2 || true
     journalctl -u sshws-proxy -n 120 --no-pager >&2 || true
     failed=1
   fi
 
   if systemctl is-active --quiet sshws-qac-enforcer.timer; then
-    ok "sanity: sshws-qac-enforcer.timer active"
+    ok "check: ssh qac timer active"
   else
-    warn "sanity: sshws-qac-enforcer.timer NOT active"
+    warn "check: ssh qac timer inactive"
     systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet badvpn-udpgw.service; then
+    ok "check: badvpn-udpgw active"
+  else
+    warn "check: badvpn-udpgw inactive"
+    systemctl status badvpn-udpgw.service --no-pager >&2 || true
+    journalctl -u badvpn-udpgw.service -n 120 --no-pager >&2 || true
     failed=1
   fi
 
@@ -257,9 +266,9 @@ sanity_check() {
     case "${edge_active}" in
       1|true|TRUE|yes|YES|on|ON)
         if systemctl is-active --quiet "${edge_runtime_service}"; then
-          ok "sanity: ${edge_runtime_service} active"
+          ok "check: ${edge_runtime_service} active"
         else
-          warn "sanity: ${edge_runtime_service} NOT active"
+          warn "check: ${edge_runtime_service} inactive"
           systemctl status "${edge_runtime_service}" --no-pager >&2 || true
           journalctl -u "${edge_runtime_service}" -n 120 --no-pager >&2 || true
           failed=1
@@ -271,9 +280,9 @@ sanity_check() {
   # Config sanity (non-fatal if tools missing)
   if command -v nginx >/dev/null 2>&1; then
     if nginx -t >/dev/null 2>&1; then
-      ok "sanity: nginx -t OK"
+      ok "check: nginx -t OK"
     else
-      warn "sanity: nginx -t FAILED"
+      warn "check: nginx -t failed"
       nginx -t >&2 || true
       failed=1
     fi
@@ -281,9 +290,9 @@ sanity_check() {
 
   if command -v jq >/dev/null 2>&1 && [[ -f "${XRAY_CONFDIR}/10-inbounds.json" ]]; then
     if jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >/dev/null 2>&1; then
-      ok "sanity: xray config JSON OK"
+      ok "check: xray config OK"
     else
-      warn "sanity: xray config JSON INVALID"
+      warn "check: xray config invalid"
       jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >&2 || true
       failed=1
     fi
@@ -291,24 +300,31 @@ sanity_check() {
 
   # Cert presence (TLS termination depends on these)
   if [[ -s "/opt/cert/fullchain.pem" && -s "/opt/cert/privkey.pem" ]]; then
-    ok "sanity: TLS cert files present"
+    ok "check: cert files present"
   else
-    warn "sanity: TLS cert files missing under /opt/cert"
+    warn "check: cert files missing"
     failed=1
   fi
 
   # Listener hints (informational only)
   # Match exact port agar tidak false-positive ke :4430 dst.
   if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
-    ok "sanity: port 80 is listening"
+    ok "check: port 80 listening"
   else
-    warn "sanity: port 80 not detected as listening (check nginx)"
+    warn "check: port 80 not listening"
   fi
 
   if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
-    ok "sanity: port 443 is listening"
+    ok "check: port 443 listening"
   else
-    warn "sanity: port 443 not detected as listening (check nginx)"
+    warn "check: port 443 not listening"
+  fi
+
+  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:7300([[:space:]]|$)'; then
+    ok "check: badvpn 7300 listening"
+  else
+    warn "check: badvpn 7300 not listening"
+    failed=1
   fi
 
   if [[ "$failed" -ne 0 ]]; then
@@ -370,7 +386,7 @@ main() {
   setup_logrotate
   configure_fail2ban_aggressive_jails
   sanity_check
-  ok "Setup telah selesai ✅"
+  ok "Setup selesai."
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

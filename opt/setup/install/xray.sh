@@ -2,7 +2,7 @@
 # Xray install/config module for setup runtime.
 
 install_xray() {
-  ok "Install Xray-core..."
+  ok "Pasang Xray..."
   local xray_installer
   xray_installer="$(mktemp)"
   download_file_or_die "${XRAY_INSTALL_SCRIPT_URL}" "${xray_installer}" "${XRAY_INSTALL_SCRIPT_SHA256}" "xray installer script"
@@ -12,7 +12,7 @@ install_xray() {
   rm -f "${xray_installer}" >/dev/null 2>&1 || true
 
   command -v xray >/dev/null 2>&1 || die "Xray tidak terpasang."
-  ok "Xray-core terpasang."
+  ok "Xray siap."
 }
 
 write_xray_config() {
@@ -740,7 +740,7 @@ EOF
   # Tidak perlu enable/restart xray di sini.
   # configure_xray_service_confdir (dipanggil setelah write_xray_modular_configs)
   # akan meng-install unit file yang benar (-confdir) dan merestart xray satu kali.
-  ok "Config Xray (monolitik) dibuat & divalidasi. Service akan dimulai setelah dipecah ke conf.d."
+  ok "Config Xray dasar siap."
   declare -gx XR_UUID="$UUID"
   declare -gx XR_TROJAN_PASS="$TROJAN_PASS"
   declare -gx XR_SS_PASS="$SS_PASS"
@@ -782,7 +782,7 @@ EOF
 }
 
 write_xray_modular_configs() {
-  ok "Membuat konfigurasi modular Xray-core (conf.d)..."
+  ok "Buat config Xray modular..."
   mkdir -p "${XRAY_CONFDIR}"
   need_python3
 
@@ -827,7 +827,7 @@ for name, obj in parts:
 PY
 
   chmod 640 "${XRAY_CONFDIR}"/*.json 2>/dev/null || true
-  ok "Konfigurasi modular siap:"
+  ok "Config modular siap:"
   ok "  - ${XRAY_CONFDIR}/00-log.json"
   ok "  - ${XRAY_CONFDIR}/01-api.json"
   ok "  - ${XRAY_CONFDIR}/02-dns.json"
@@ -851,7 +851,7 @@ ensure_xray_service_user() {
 }
 
 configure_xray_service_confdir() {
-  ok "Mengatur xray.service agar memakai -confdir (systemd drop-in) ..."
+  ok "Atur xray.service -> -confdir ..."
 
   local xray_bin
   xray_bin="$(command -v xray || true)"
@@ -900,19 +900,19 @@ configure_xray_service_confdir() {
 
   systemctl enable xray >/dev/null 2>&1 || true
   systemctl restart xray >/dev/null 2>&1 || { journalctl -u xray -n 200 --no-pager >&2 || true; die "Gagal restart xray"; }
-  ok "xray.service di-enable dan berhasil direstart dengan -confdir."
+  ok "xray.service aktif."
 
   # Setelah Xray berjalan menggunakan conf.d, config.json tidak diperlukan lagi.
   if [[ -f "${XRAY_CONFIG}" ]]; then
     rm -f "${XRAY_CONFIG}" 2>/dev/null || true
-    ok "Konfigurasi bawaan dihapus: ${XRAY_CONFIG}"
+    ok "Config bawaan dihapus: ${XRAY_CONFIG}"
   fi
 }
 
 
 
 setup_xray_geodata_updater() {
-  ok "Setup updater geodata Xray-core (24 jam)..."
+  ok "Pasang updater geodata..."
 
   cat > /usr/local/bin/xray-update-geodata <<EOF
 #!/usr/bin/env bash
@@ -967,17 +967,17 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 0 4 * * * root /usr/local/bin/xray-update-geodata >/dev/null 2>&1
 EOF
 
-  ok "Cron geodata updater terpasang: /etc/cron.d/xray-update-geodata"
+  ok "Cron geodata siap."
 
 
-  ok "Menjalankan update geodata pertama kali..."
+  ok "Update geodata awal..."
   /usr/local/bin/xray-update-geodata || die "Gagal update geodata pertama kali (cek koneksi ke github.com)."
-  ok "Update geodata pertama kali selesai."
+  ok "Geodata awal selesai."
 
 }
 
 install_custom_geosite_adblock() {
-  ok "Download custom geosite adblock (custom.dat)..."
+  ok "Unduh geosite custom..."
   mkdir -p "${XRAY_ASSET_DIR}"
 
   local tmp
@@ -990,11 +990,11 @@ install_custom_geosite_adblock() {
 
   install -m 644 "${tmp}" "${CUSTOM_GEOSITE_DEST}"
   rm -f "${tmp}" >/dev/null 2>&1 || true
-  ok "custom.dat tersimpan di: ${CUSTOM_GEOSITE_DEST}"
+  ok "custom.dat tersimpan."
 }
 
 install_xray_speed_limiter_foundation() {
-  ok "Setup fondasi speed limiter per-user (xray-speed)..."
+  ok "Pasang xray-speed..."
 
   mkdir -p "${SPEED_POLICY_ROOT}" "${SPEED_STATE_DIR}" "${SPEED_CONFIG_DIR}"
   chmod 700 "${SPEED_POLICY_ROOT}" "${SPEED_STATE_DIR}" "${SPEED_CONFIG_DIR}" || true
@@ -1013,13 +1013,13 @@ install_xray_speed_limiter_foundation() {
 
   systemctl daemon-reload
   if service_enable_restart_checked xray-speed; then
-    ok "Speed limiter foundation aktif:"
+    ok "xray-speed aktif:"
     ok "  - policy root: ${SPEED_POLICY_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
     ok "  - config: ${SPEED_CONFIG_DIR}/config.json"
     ok "  - binary: /usr/local/bin/xray-speed"
     ok "  - service: xray-speed"
   else
-    warn "xray-speed service gagal aktif otomatis. Fitur ini opsional dan bisa diaktifkan manual setelah setup:"
+    warn "xray-speed gagal aktif otomatis. Bisa diaktifkan manual:"
     warn "  systemctl status xray-speed --no-pager"
     warn "  journalctl -u xray-speed -n 100 --no-pager"
     systemctl disable --now xray-speed >/dev/null 2>&1 || true

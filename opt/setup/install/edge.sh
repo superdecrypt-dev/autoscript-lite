@@ -198,7 +198,7 @@ stage_edge_go_provider() {
     0644
 
   systemctl daemon-reload >/dev/null 2>&1 || true
-  warn "Provider go sudah di-stage ke ${EDGE_BIN}, tetapi service ${EDGE_SERVICE_NAME} belum diaktifkan."
+  warn "Provider go sudah di-stage ke ${EDGE_BIN}."
 }
 
 disable_edge_nginx_stream_provider() {
@@ -220,7 +220,7 @@ stage_edge_nginx_stream_provider() {
     "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}"
 
   nginx -t >/dev/null 2>&1 || die "Validasi nginx-stream gagal: ${EDGE_NGINX_STREAM_CONF}"
-  warn "Provider nginx-stream sudah di-stage ke ${EDGE_NGINX_STREAM_CONF}, tetapi service nginx belum di-switch."
+  warn "Provider nginx-stream sudah di-stage."
 }
 
 edge_runtime_port_busy() {
@@ -284,14 +284,14 @@ activate_edge_provider_runtime() {
   done
 
   if ! systemctl enable "${target_service}" --now >/dev/null 2>&1; then
-    warn "Gagal mengaktifkan ${target_service}; mencoba menghidupkan kembali provider sebelumnya."
+    warn "Aktivasi ${target_service} gagal; coba pulihkan provider lama."
     for svc in "${restore_services[@]}"; do
       systemctl enable "${svc}" --now >/dev/null 2>&1 || true
     done
     die "Gagal enable ${target_service}"
   fi
   if ! systemctl restart "${target_service}" >/dev/null 2>&1; then
-    warn "Gagal restart ${target_service}; mencoba menghidupkan kembali provider sebelumnya."
+    warn "Restart ${target_service} gagal; coba pulihkan provider lama."
     systemctl stop "${target_service}" >/dev/null 2>&1 || true
     for svc in "${restore_services[@]}"; do
       systemctl enable "${svc}" --now >/dev/null 2>&1 || true
@@ -299,7 +299,7 @@ activate_edge_provider_runtime() {
     die "Gagal restart ${target_service}"
   fi
   systemctl is-active --quiet "${target_service}" || die "${target_service} tidak aktif setelah start"
-  ok "Edge runtime aktif: ${target_service}"
+  ok "Edge aktif: ${target_service}"
 }
 
 install_edge_provider_stack() {
@@ -310,11 +310,11 @@ install_edge_provider_stack() {
   write_edge_runtime_env
 
   if ! edge_provider_enabled; then
-    ok "Edge provider tidak diaktifkan (EDGE_PROVIDER=none)."
+    ok "Edge: OFF"
     return 0
   fi
 
-  warn "Edge provider dipilih: $(edge_provider_summary)"
+  warn "Edge provider: $(edge_provider_summary)"
   install_setup_bin_or_die "edge-provider-switch" "/usr/local/bin/edge-provider-switch" 0755
   case "$(edge_provider_selected)" in
     go)
@@ -332,8 +332,8 @@ install_edge_provider_stack() {
       ;;
   esac
   if ! edge_runtime_activate_requested; then
-    warn "Runtime edge belum diaktifkan oleh installer. Set EDGE_ACTIVATE_RUNTIME=true jika ingin mencoba aktivasi pada port yang aman."
+    warn "Edge belum diaktifkan. Set EDGE_ACTIVATE_RUNTIME=true bila ingin mengaktifkan."
   fi
-  warn "Dokumen desain: /root/project/autoscript/EDGE_PROVIDER_DESIGN.md"
+  warn "Lihat: /root/project/autoscript/EDGE_PROVIDER_DESIGN.md"
   return 0
 }

@@ -2,10 +2,10 @@
 # Network/runtime tuning module for setup runtime.
 
 install_fail2ban_aggressive() {
-  ok "Enable fail2ban..."
+  ok "Aktifkan fail2ban..."
 
   if service_enable_restart_checked fail2ban; then
-    ok "fail2ban aktif. Konfigurasi jail.local aggressive akan diterapkan setelah Nginx siap."
+    ok "fail2ban aktif."
   else
     warn "fail2ban belum aktif (akan dicoba lagi setelah jail.local diterapkan)."
   fi
@@ -51,7 +51,7 @@ EOF
 }
 
 configure_fail2ban_aggressive_jails() {
-  ok "Konfigurasi fail2ban mode aggressive (sshd, nginx-http-auth, nginx-botsearch, recidive)..."
+  ok "Terapkan fail2ban mode aggressive..."
 
   ensure_fail2ban_nginx_filters
 
@@ -112,7 +112,7 @@ EOF
 }
 
 enable_bbr() {
-  ok "Enable TCP BBR..."
+  ok "Aktifkan TCP BBR..."
 
   cat > /etc/sysctl.d/99-custom-net.conf <<'EOF'
 net.core.default_qdisc = fq
@@ -124,10 +124,10 @@ EOF
 }
 
 setup_swap_2gb() {
-  ok "Setup swap 2GB..."
+  ok "Siapkan swap 2GB..."
 
   if swapon --show 2>/dev/null | awk '{print $1}' | grep -qx "/swapfile"; then
-    ok "Swapfile sudah aktif, skip."
+    ok "Swap sudah aktif."
     return 0
   fi
 
@@ -156,7 +156,7 @@ EOF
 }
 
 tune_ulimit() {
-  ok "Tuning ulimit..."
+  ok "Atur ulimit..."
 
   mkdir -p /etc/security/limits.d
   cat > /etc/security/limits.d/99-custom-limits.conf <<'EOF'
@@ -180,7 +180,7 @@ EOF
 }
 
 setup_time_sync_chrony() {
-  ok "Setup time sync (chrony)..."
+  ok "Aktifkan chrony..."
 
   systemctl disable --now systemd-timesyncd >/dev/null 2>&1 || true
   systemctl enable chrony --now >/dev/null 2>&1 || true
@@ -220,11 +220,11 @@ PY
 
 install_wgcf() {
   if command -v wgcf >/dev/null 2>&1; then
-    ok "wgcf sudah terpasang, skip."
+    ok "wgcf sudah ada."
     return 0
   fi
 
-  ok "Install wgcf..."
+  ok "Pasang wgcf..."
   local arch match url
   arch="$(get_arch)"
 
@@ -237,16 +237,16 @@ install_wgcf() {
   url="$(github_latest_asset_url "ViRb3/wgcf" "$match")" || die "Gagal mengambil URL release wgcf."
   curl -fsSL "$url" -o /usr/local/bin/wgcf || die "Gagal download wgcf."
   chmod +x /usr/local/bin/wgcf
-  ok "wgcf terpasang."
+  ok "wgcf siap."
 }
 
 install_wireproxy() {
   if command -v wireproxy >/dev/null 2>&1; then
-    ok "wireproxy sudah terpasang, skip."
+    ok "wireproxy sudah ada."
     return 0
   fi
 
-  ok "Install wireproxy..."
+  ok "Pasang wireproxy..."
   local arch match url tmpdir tgz bin
   arch="$(get_arch)"
 
@@ -272,7 +272,7 @@ install_wireproxy() {
 }
 
 setup_wgcf() {
-  ok "Setup wgcf (register & generate)..."
+  ok "Siapkan wgcf..."
 
   mkdir -p /etc/wgcf
 
@@ -331,11 +331,11 @@ EOF
   rm -f "$gen_log" >/dev/null 2>&1 || true
 
   popd >/dev/null || die "Gagal kembali dari /etc/wgcf."
-  ok "wgcf selesai."
+  ok "wgcf siap."
 }
 
 setup_wireproxy() {
-  ok "Setup wireproxy..."
+  ok "Siapkan wireproxy..."
 
   mkdir -p /etc/wireproxy
   cp -f /etc/wgcf/wgcf-profile.conf /etc/wireproxy/config.conf
@@ -367,28 +367,27 @@ EOF
 
   systemctl daemon-reload
   service_enable_restart_checked wireproxy || die "wireproxy gagal diaktifkan. Cek: journalctl -u wireproxy -n 100 --no-pager"
-  ok "wireproxy service aktif."
+  ok "wireproxy aktif."
 }
 
 cleanup_wgcf_files() {
-  ok "Cleanup file wgcf (wgcf-profile.conf & wgcf-account.toml)..."
+  ok "Bersihkan file wgcf..."
 
   rm -f /etc/wgcf/wgcf-profile.conf /etc/wgcf/wgcf-account.toml || true
-  ok "Cleanup wgcf selesai."
+  ok "Cleanup wgcf siap."
 }
 
 enable_cron_service() {
-  ok "Enable cron..."
+  ok "Aktifkan cron..."
 
-  local cron_svc=""
   if service_enable_restart_checked cron; then
-    cron_svc="cron"
+    :
   elif service_enable_restart_checked crond; then
-    cron_svc="crond"
+    :
   else
     die "Gagal mengaktifkan cron maupun crond."
   fi
 
-  ok "cron aktif (${cron_svc})."
+  ok "cron aktif."
 }
 

@@ -46,7 +46,7 @@ validate_sshws_ports_config() {
     esac
   done
   if [[ "${stunnel_enabled}" != "true" ]]; then
-    warn "Validasi port stunnel dilewati (stunnel belum tersedia, mode opsional)."
+    warn "Cek port stunnel dilewati (opsional)."
   fi
 }
 
@@ -68,7 +68,7 @@ write_sshws_runtime_env() {
 }
 
 install_sshws_stack() {
-  ok "Setup SSH WebSocket stack (dropbear + stunnel4 + proxy, backend direct ke dropbear)..."
+  ok "Pasang SSH WS stack..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
   [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
 
@@ -78,7 +78,7 @@ install_sshws_stack() {
   elif command -v stunnel >/dev/null 2>&1; then
     stunnel_bin="$(command -v stunnel)"
   else
-    warn "stunnel4/stunnel tidak ditemukan. Service sshws-stunnel akan dilewati (opsional)."
+    warn "stunnel tidak ada. sshws-stunnel dilewati."
   fi
 
   install -d -m 755 /etc/systemd/system
@@ -144,13 +144,13 @@ install_sshws_stack() {
   service_enable_restart_checked sshws-dropbear || die "Gagal mengaktifkan sshws-dropbear."
   if [[ -n "${stunnel_bin}" ]]; then
     if service_enable_restart_checked sshws-stunnel; then
-      ok "sshws-stunnel aktif (standby TLS local bridge)."
+      ok "sshws-stunnel aktif."
     else
-      warn "sshws-stunnel gagal aktif. Layanan utama SSHWS tetap berjalan via jalur proxy -> dropbear direct."
+      warn "sshws-stunnel gagal aktif. SSH WS utama tetap jalan."
       systemctl disable --now sshws-stunnel >/dev/null 2>&1 || true
     fi
   else
-    ok "sshws-stunnel dilewati (binary stunnel tidak tersedia)."
+    ok "sshws-stunnel dilewati."
     systemctl disable --now sshws-stunnel >/dev/null 2>&1 || true
   fi
   service_enable_restart_checked sshws-proxy || die "Gagal mengaktifkan sshws-proxy."
@@ -159,15 +159,15 @@ install_sshws_stack() {
 
   if systemctl is-active --quiet ssh >/dev/null 2>&1 || systemctl is-active --quiet sshd >/dev/null 2>&1; then
     systemctl disable dropbear >/dev/null 2>&1 || true
-    ok "Dropbear distro diset disabled (fallback OpenSSH aktif)."
+    ok "Dropbear distro dinonaktifkan."
   else
-    warn "Dropbear distro dipertahankan untuk mencegah lockout SSH (OpenSSH tidak aktif)."
+    warn "Dropbear distro dipertahankan agar SSH tetap aman."
   fi
-  ok "SSH WebSocket stack aktif (proxy -> dropbear direct, stunnel standby)."
+  ok "SSH WS stack aktif."
 }
 
 install_sshws_qac_enforcer() {
-  ok "Setup SSH QAC enforcer (timer 1 menit)..."
+  ok "Pasang SSH QAC enforcer..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH QAC enforcer."
   install -d -m 755 /etc/systemd/system
   write_sshws_runtime_env
