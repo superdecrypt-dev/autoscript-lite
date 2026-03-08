@@ -18,7 +18,7 @@ import {
   shouldSelectContinueToModal,
 } from "../constants/action_selects";
 import { isXrayProtocol, shouldUseProtocolSelect, shouldUseUsernameSelect } from "../constants/protocols";
-import { findAction } from "../router";
+import { findAction, isKnownDisabledAction } from "../router";
 import { createPendingConfirm } from "./confirm_state";
 import { buildPendingConfirmView } from "./confirm_view";
 import { sendActionResult } from "./result";
@@ -26,6 +26,7 @@ import { createUserContextToken, isUserContextToken, resolveUserContext } from "
 
 const USER_SELECT_PAGE_SIZE = 25;
 const INVALID_INTERACTION_MSG = "Pilihan tidak valid atau kadaluarsa. Silakan ulangi dari menu.";
+const DISABLED_ACTION_MSG = "Action ini sedang nonaktif.";
 
 function buildUsernameSelectView(menuId: string, actionId: string, proto: string, usernames: string[], pageRaw = 0) {
   const action = findAction(menuId, actionId);
@@ -151,6 +152,10 @@ export async function handleSelect(interaction: StringSelectMenuInteraction, bac
 
   const action = findAction(menuId, actionId);
   if (!action || action.mode !== "modal" || !action.modal) {
+    if (isKnownDisabledAction(menuId, actionId)) {
+      await interaction.reply({ content: DISABLED_ACTION_MSG, flags: MessageFlags.Ephemeral });
+      return true;
+    }
     return false;
   }
 

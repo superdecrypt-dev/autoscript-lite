@@ -3,7 +3,7 @@ import { MessageFlags, ModalSubmitInteraction } from "discord.js";
 import type { BackendClient } from "../api_client";
 import { decodeSingleSelectPreset } from "../constants/action_selects";
 import { isXrayProtocol, shouldUseProtocolSelect, shouldUseUsernameSelect } from "../constants/protocols";
-import { findAction } from "../router";
+import { findAction, isKnownDisabledAction } from "../router";
 import { createPendingConfirm } from "./confirm_state";
 import { buildPendingConfirmView } from "./confirm_view";
 import { sendActionResult } from "./result";
@@ -22,6 +22,7 @@ type ParsedFormCustomId = {
   presetSelectToken: string;
 };
 const INVALID_INTERACTION_MSG = "Pilihan tidak valid atau kadaluarsa. Silakan ulangi dari menu.";
+const DISABLED_ACTION_MSG = "Action ini sedang nonaktif.";
 
 function parseFormCustomId(customId: string): ParsedFormCustomId | null {
   if (!customId.startsWith("form:")) {
@@ -115,7 +116,8 @@ export async function handleModal(interaction: ModalSubmitInteraction, backend: 
   const { menuId, actionId, presetProto, presetUsername, presetSelectToken } = parsedId;
   const action = findAction(menuId, actionId);
   if (!action || action.mode !== "modal" || !action.modal) {
-    await interaction.reply({ content: INVALID_INTERACTION_MSG, flags: MessageFlags.Ephemeral });
+    const message = isKnownDisabledAction(menuId, actionId) ? DISABLED_ACTION_MSG : INVALID_INTERACTION_MSG;
+    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
     return true;
   }
 

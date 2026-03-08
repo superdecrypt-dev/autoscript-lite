@@ -1,4 +1,5 @@
 import base64
+from functools import lru_cache
 import grp
 import hashlib
 import ipaddress
@@ -380,6 +381,22 @@ def _detect_public_ipv4() -> str:
     return "0.0.0.0"
 
 
+@lru_cache(maxsize=64)
+def _geo_lookup_cached(raw: str) -> tuple[str, str]:
+    if not raw:
+        return "-", "-"
+    try:
+        with urllib.request.urlopen(f"https://ipwho.is/{raw}", timeout=2) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return "-", "-"
+    if not isinstance(payload, dict) or not bool(payload.get("success")):
+        return "-", "-"
+    isp = str(((payload.get("connection") or {}).get("isp")) or payload.get("isp") or "-").strip() or "-"
+    country = str(payload.get("country") or "-").strip() or "-"
+    return isp, country
+
+
 def _geo_lookup(ip: str) -> tuple[str, str]:
     raw = str(ip or "").strip()
     if not raw:
@@ -398,16 +415,7 @@ def _geo_lookup(ip: str) -> tuple[str, str]:
         or addr.is_reserved
     ):
         return "-", "-"
-    try:
-        with urllib.request.urlopen(f"https://ipwho.is/{raw}", timeout=6) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except Exception:
-        return "-", "-"
-    if not isinstance(payload, dict) or not bool(payload.get("success")):
-        return "-", "-"
-    isp = str(((payload.get("connection") or {}).get("isp")) or payload.get("isp") or "-").strip() or "-"
-    country = str(payload.get("country") or "-").strip() or "-"
-    return isp, country
+    return _geo_lookup_cached(raw)
 
 
 def _detect_domain() -> str:
@@ -2378,9 +2386,10 @@ def _write_account_artifacts(
 ) -> tuple[Path, Path]:
     _ensure_runtime_dirs()
 
-    created_date = datetime.now(timezone.utc).date()
+    created_dt = datetime.now(timezone.utc)
+    created_date = created_dt.date()
     expired_date = created_date + timedelta(days=max(1, int(days)))
-    created_at = created_date.strftime("%Y-%m-%d")
+    created_at = created_dt.strftime("%Y-%m-%d %H:%M")
     expired_at = expired_date.strftime("%Y-%m-%d")
 
     domain = _detect_domain()

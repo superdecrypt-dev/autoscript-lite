@@ -14,7 +14,7 @@ import {
 import type { BackendClient } from "../api_client";
 import { getSingleFieldSelectConfig } from "../constants/action_selects";
 import { isXrayProtocol, shouldUseProtocolSelect, XRAY_PROTOCOLS } from "../constants/protocols";
-import { findAction, findMenu } from "../router";
+import { findAction, findMenu, isKnownDisabledAction } from "../router";
 import type { MenuActionDef } from "../views/types";
 import { buildMainMenuView } from "../views/main_menu";
 import { consumePendingConfirm } from "./confirm_state";
@@ -23,6 +23,7 @@ import { createUserContextToken } from "./user_context_state";
 
 const USER_SELECT_PAGE_SIZE = 25;
 const INVALID_INTERACTION_MSG = "Pilihan tidak valid atau kadaluarsa. Silakan ulangi dari menu.";
+const DISABLED_ACTION_MSG = "Action ini sedang nonaktif.";
 
 function toButtonStyle(style: MenuActionDef["style"]): ButtonStyle {
   switch (style) {
@@ -272,7 +273,8 @@ export async function handleButton(interaction: ButtonInteraction, backend: Back
     const [, menuId, actionId] = id.split(":");
     const action = findAction(menuId, actionId);
     if (!action || action.mode !== "modal" || !action.modal) {
-      await interaction.reply({ content: INVALID_INTERACTION_MSG, flags: MessageFlags.Ephemeral });
+      const message = isKnownDisabledAction(menuId, actionId) ? DISABLED_ACTION_MSG : INVALID_INTERACTION_MSG;
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
       return true;
     }
     const hasProto = actionHasProtoField(action);
@@ -309,7 +311,8 @@ export async function handleButton(interaction: ButtonInteraction, backend: Back
 
     const action = findAction(menuId, actionId);
     if (!action) {
-      await interaction.reply({ content: INVALID_INTERACTION_MSG, flags: MessageFlags.Ephemeral });
+      const message = isKnownDisabledAction(menuId, actionId) ? DISABLED_ACTION_MSG : INVALID_INTERACTION_MSG;
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
       return true;
     }
 

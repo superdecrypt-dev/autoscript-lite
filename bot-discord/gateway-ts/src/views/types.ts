@@ -19,6 +19,7 @@ export interface MenuActionDef {
   label: string;
   mode: ActionMode;
   style?: ButtonTone;
+  dangerous?: boolean;
   confirm?: boolean;
   modal?: ModalDef;
 }

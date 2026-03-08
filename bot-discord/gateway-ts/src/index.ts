@@ -29,6 +29,7 @@ import { handleButton } from "./interactions/buttons";
 import { handleModal } from "./interactions/modals";
 import { handlePanelCommand } from "./interactions/panel";
 import { handleSelect } from "./interactions/selects";
+import { MENUS, syncMenusFromBackend } from "./router";
 
 const cfg = loadConfig();
 const backend = new BackendClient(cfg.backendBaseUrl, cfg.sharedSecret);
@@ -624,6 +625,20 @@ client.once(Events.ClientReady, async (ready) => {
     console.log("[gateway] slash commands registered: /panel, /status, /purge_bot, /set_notif_service.");
   } else {
     console.error("[gateway] slash command registration failed after retries; bot continues running.");
+  }
+  try {
+    const mainMenu = await backend.getMainMenu();
+    const warnings = syncMenusFromBackend(Array.isArray(mainMenu.menus) ? mainMenu.menus : []);
+    console.log(
+      `[gateway] menu sync complete: menus=${MENUS.length}, dangerous_actions_enabled=${Boolean(mainMenu.dangerous_actions_enabled)}.`
+    );
+    for (const warning of warnings) {
+      console.warn(`[gateway] menu parity warning: ${warning}`);
+    }
+  } catch (err) {
+    console.error(`[gateway] menu sync failed: ${formatError(err)}`);
+    console.error("[gateway] startup aborted to avoid serving stale local menus.");
+    process.exit(1);
   }
   startNotifScheduler();
   console.log("[gateway] notifier scheduler started (tick=60s).");

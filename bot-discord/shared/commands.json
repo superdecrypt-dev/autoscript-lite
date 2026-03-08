@@ -113,7 +113,8 @@
                 "placeholder": "contoh: 10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "delete_user",
@@ -139,7 +140,8 @@
                 "placeholder": "contoh: alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "extend_expiry",
@@ -178,7 +180,8 @@
                 "placeholder": "7 atau 2026-12-31"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "list_users",
@@ -297,7 +300,8 @@
                 "placeholder": "100"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "reset_quota_used",
@@ -323,7 +327,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "manual_block",
@@ -355,7 +360,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "ip_limit_enable",
@@ -387,7 +393,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_ip_limit",
@@ -419,7 +426,8 @@
                 "placeholder": "2"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "unlock_ip_lock",
@@ -444,7 +452,8 @@
                 "placeholder": "alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_download",
@@ -476,7 +485,8 @@
                 "placeholder": "20"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_speed_upload",
@@ -508,7 +518,8 @@
                 "placeholder": "10"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "speed_limit",
@@ -540,7 +551,8 @@
                 "placeholder": "on / off"
               }
             ]
-          }
+          },
+          "dangerous": true
         }
       ]
     },
@@ -571,7 +583,8 @@
                 "placeholder": "direct / warp / balancer"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_balancer_strategy",
@@ -589,13 +602,15 @@
                 "placeholder": "random / roundRobin / leastPing / leastLoad"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_balancer_selector_auto",
           "label": "Auto Balance Sel",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         },
         {
           "id": "set_balancer_selector",
@@ -613,7 +628,8 @@
                 "placeholder": "auto atau direct,warp"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "dns_summary",
@@ -637,7 +653,8 @@
                 "placeholder": "contoh: 1.1.1.1"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_dns_secondary",
@@ -655,7 +672,8 @@
                 "placeholder": "contoh: 8.8.8.8"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "set_dns_query_strategy",
@@ -673,13 +691,15 @@
                 "placeholder": "UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "toggle_dns_cache",
           "label": "Toggle DNS Cache",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         },
         {
           "id": "state_file",
@@ -711,7 +731,8 @@
                 "placeholder": "vpn.example.com"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "setup_domain_cloudflare",
@@ -758,7 +779,8 @@
                 "placeholder": "on / off (default: off)"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "domain_info",
@@ -783,7 +805,8 @@
           "label": "Run Guard Renew",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "nginx_server_name",
@@ -795,7 +818,8 @@
           "id": "refresh_account_info",
           "label": "Refresh Accounts",
           "mode": "direct",
-          "style": "secondary"
+          "style": "secondary",
+          "dangerous": true
         }
       ]
     },
@@ -853,14 +877,16 @@
           "label": "Restart Xray",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "restart_nginx",
           "label": "Restart Nginx",
           "mode": "direct",
           "style": "danger",
-          "confirm": true
+          "confirm": true,
+          "dangerous": true
         }
       ]
     },
