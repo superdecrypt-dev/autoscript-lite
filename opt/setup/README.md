@@ -38,6 +38,7 @@ opt/setup/
   install/
     bootstrap.sh
     domain.sh
+    edge.sh
     nginx.sh
     xray.sh
     sshws.sh
@@ -69,20 +70,22 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
    - target modul: `install/domain.sh`
 7. `install_nginx_official_repo`, `write_nginx_main_conf`, `write_nginx_config`
    - target modul: `install/nginx.sh`
-8. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
+8. `install_edge_provider_stack`
+   - target modul: `install/edge.sh`
+9. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
    `configure_xray_service_confdir`, `setup_xray_geodata_updater`,
    `install_custom_geosite_adblock`
    - target modul: `install/xray.sh`
-9. `install_sshws_stack`, `install_sshws_qac_enforcer`
+10. `install_sshws_stack`, `install_sshws_qac_enforcer`
    - target modul: `install/sshws.sh`
-10. `install_xray_speed_limiter_foundation`
+11. `install_xray_speed_limiter_foundation`
     - target modul: `install/xray.sh`
-11. `install_observability_alerting`, `install_domain_cert_guard`
+12. `install_observability_alerting`, `install_domain_cert_guard`
     - target modul: `install/observability.sh`
-12. `install_management_scripts`, `sync_manage_modules_layout`,
+13. `install_management_scripts`, `sync_manage_modules_layout`,
     `install_bot_installer_if_present`
     - target modul: `install/management.sh`
-13. `setup_logrotate`, `sanity_check`, `cleanup`
+14. `setup_logrotate`, `sanity_check`, `cleanup`
     - target modul: `install/bootstrap.sh`, `install/observability.sh`
 
 ## Tahapan Refactor
@@ -99,6 +102,8 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
 - Pindahkan helper umum ke `core/`.
 - Pastikan tidak ada duplikasi fungsi seperti `bool_is_true`, `safe_int`,
   `detect_domain`, dan helper logging.
+- Tambahkan scaffold provider edge di `opt/edge/` dan `install/edge.sh`
+  tanpa mengaktifkan runtime baru.
 - Status: baseline selesai; lanjutkan perapihan hanya jika ditemukan drift baru.
 
 ### Tahap 3

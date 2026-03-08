@@ -1,0 +1,16 @@
+[Unit]
+Description=Autoscript Edge Provider (Go)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/edge-runtime
+ExecStart=/usr/local/bin/edge-mux
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
