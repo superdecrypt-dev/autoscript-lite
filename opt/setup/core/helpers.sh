@@ -199,7 +199,15 @@ ensure_runtime_lock_dirs() {
 
 ensure_stdin_available() {
   if [[ ! -t 0 ]]; then
-    exec </dev/tty || true
+    local tty_name=""
+    local tty_path=""
+    tty_name="$(ps -o tty= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -n "${tty_name}" && "${tty_name}" != "?" ]]; then
+      tty_path="/dev/${tty_name}"
+      if [[ -r "${tty_path}" ]]; then
+        exec <"${tty_path}" || true
+      fi
+    fi
   fi
 }
 
