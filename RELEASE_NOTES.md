@@ -171,7 +171,7 @@ Rilis ini mengaktifkan `Edge Gateway` sebagai frontend publik `80/443`, memindah
   - `Edge Gateway Status`
   - `Restart Edge Gateway`
   - `Edge Gateway Info`
-- Rollback operasional singkat didokumentasikan di `EDGE_ROLLBACK.md`
+- Recovery operasional singkat didokumentasikan di `EDGE_RECOVERY.md`
 
 3. Refresh output akun SSH
 - `SSH ACCOUNT INFO` sekarang menampilkan:
