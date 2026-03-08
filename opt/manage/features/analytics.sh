@@ -1264,7 +1264,7 @@ edge_runtime_service_name() {
 
 edge_runtime_status_menu() {
   title
-  echo "10) Maintenance > Edge Status"
+  echo "10) Maintenance > Edge Gateway Status"
   hr
 
   local svc env_file provider active http_port tls_port http_backend ssh_backend detect_timeout tls80
@@ -1336,7 +1336,7 @@ edge_runtime_status_menu() {
 
 edge_runtime_restart_menu() {
   title
-  echo "10) Maintenance > Restart Edge"
+  echo "10) Maintenance > Restart Edge Gateway"
   hr
 
   local svc
@@ -1355,7 +1355,7 @@ edge_runtime_restart_menu() {
 
 edge_runtime_info_menu() {
   title
-  echo "10) Maintenance > Edge Provider Info"
+  echo "10) Maintenance > Edge Gateway Info"
   hr
 
   local provider active http_port tls_port http_backend ssh_backend detect_timeout tls80 cert_file key_file
@@ -1384,7 +1384,7 @@ edge_runtime_info_menu() {
   echo "Mode ringkas:"
   echo "  - HTTP / WebSocket -> backend HTTP (${http_backend})"
   echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
-  echo "  - default provider aktif hanya satu pada port publik"
+  echo "  - default gateway aktif hanya satu pada port publik"
   hr
   pause
 }

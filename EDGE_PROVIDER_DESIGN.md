@@ -1,4 +1,4 @@
-# Edge Provider Design
+# Edge Gateway Design
 
 ## Tujuan
 
@@ -67,7 +67,7 @@ karena trafik klasik TLS dan trafik HTTP/WebSocket sama-sama ingin masuk lewat p
 
 ## Prinsip Arsitektur Baru
 
-### 1. Edge provider menjadi pintu publik tunggal
+### 1. Edge Gateway menjadi pintu publik tunggal
 
 Jika edge provider aktif, maka:
 
@@ -344,9 +344,9 @@ maka harus dibuat desain enforcement terpisah.
 
 Tidak wajib untuk fase desain, tetapi sebaiknya dipersiapkan:
 
-- `Maintenance > Edge Status`
-- `Maintenance > Restart Edge`
-- `Maintenance > Edge Provider Info`
+- `Maintenance > Edge Gateway Status`
+- `Maintenance > Restart Edge Gateway`
+- `Maintenance > Edge Gateway Info`
 
 ## Fase Implementasi
 

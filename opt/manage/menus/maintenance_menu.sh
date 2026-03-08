@@ -17,9 +17,9 @@ maintenance_menu() {
     echo "  9. SSH WS Status (dropbear/stunnel/proxy)"
     echo "  10. Restart SSH WS Stack"
     echo "  11. SSH WS Diagnostics"
-    echo "  12. Edge Status"
-    echo "  13. Restart Edge"
-    echo "  14. Edge Provider Info"
+    echo "  12. Edge Gateway Status"
+    echo "  13. Restart Edge Gateway"
+    echo "  14. Edge Gateway Info"
     echo "  0. Kembali"
     hr
     if ! read -r -p "Pilih: " c; then

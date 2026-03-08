@@ -1,6 +1,6 @@
-# Edge Rollback
+# Edge Gateway Rollback
 
-Rollback singkat untuk memindahkan host dari mode `edge-mux` kembali ke mode lama:
+Rollback singkat untuk memindahkan host dari mode `Edge Gateway` kembali ke mode lama:
 - `nginx` kembali pegang publik `80/443`
 - `edge-mux` dimatikan
 - backend internal `127.0.0.1:18080` tidak lagi dipakai sebagai listener publik

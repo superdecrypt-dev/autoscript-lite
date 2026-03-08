@@ -1,5 +1,5 @@
 [Unit]
-Description=Autoscript Edge Provider (Go)
+Description=Autoscript Edge Gateway (Go)
 After=network-online.target
 Wants=network-online.target
 
