@@ -25,8 +25,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 1) Status & Diagnostics
 2) Xray Management
 3) SSH Management
-4) Xray Quota & Access Control
-5) SSH Quota & Access Control
+4) Xray QAC
+5) SSH QAC
 6) Network Controls
 7) Domain Control
 8) Speedtest
@@ -49,7 +49,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - SSH SSL/TLS di `80/443`
 - SSH Direct di `80/443`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
-- QAC SSH berlaku sebagai satu sistem SSH pada:
+- SSH QAC berlaku sebagai satu sistem SSH pada:
   - `SSH WS`
   - `SSH Direct`
   - `SSH SSL/TLS`

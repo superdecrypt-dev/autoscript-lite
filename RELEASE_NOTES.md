@@ -3,7 +3,7 @@
 ## Rilis 2026-03-09 (SSH Edge QAC Kini Termasuk Speed Lintas Transport)
 
 ### Ringkasan
-Rilis ini menyatukan perilaku QAC SSH di jalur yang berada di belakang `Edge Gateway (go)`. Setelah patch ini, `quota`, `IP/Login limit`, dan `speed limit` tidak lagi eksklusif ke `SSH WS`, tetapi juga bekerja pada `SSH Direct` dan `SSH SSL/TLS`.
+Rilis ini menyatukan perilaku SSH QAC di jalur yang berada di belakang `Edge Gateway (go)`. Setelah patch ini, `quota`, `IP/Login limit`, dan `speed limit` tidak lagi eksklusif ke `SSH WS`, tetapi juga bekerja pada `SSH Direct` dan `SSH SSL/TLS`.
 
 ### Perubahan Utama
 1. Quota SSH lintas transport edge
@@ -254,7 +254,7 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
 ## Rilis 2026-03-07 (SSH WS Token Path + QAC Hardening + Telegram Parity)
 
 ### Ringkasan
-Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, memperketat QAC SSH WS di runtime nyata, dan mendekatkan parity bot Telegram ke CLI sambil menutup beberapa gap operasional.
+Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, memperketat SSH QAC pada runtime nyata, dan mendekatkan parity bot Telegram ke CLI sambil menutup beberapa gap operasional.
 
 ### Perubahan Utama
 1. SSH WS token path per-user
@@ -268,7 +268,7 @@ Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, 
   - backend internal down -> `502 Bad Gateway`
   - token valid + backend siap -> `101 Switching Protocols`
 
-2. QAC SSH WS runtime lebih ketat
+2. Runtime SSH QAC lebih ketat
 - `quota` dan `speed limit` menempel ke user dari awal lewat token path.
 - `IP/Login limit` dipindahkan lebih dekat ke admission runtime, bukan hanya menunggu timer.
 - Runtime session SSH WS kini melacak:
@@ -282,8 +282,8 @@ Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, 
 - Menu Telegram makin dekat ke CLI untuk area:
   - `Xray Management`
   - `SSH Management`
-  - `Xray Quota & Access Control`
-  - `SSH Quota & Access Control`
+  - `Xray QAC`
+  - `SSH QAC`
   - `Security`
   - `Maintenance`
 - Action dangerous sekarang otomatis disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`.
@@ -376,7 +376,7 @@ Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa 
   - `sshws-dropbear` (local-only `127.0.0.1:22022`)
   - `sshws-stunnel` (TLS bridge local `127.0.0.1:22443`)
   - `sshws-proxy` (custom Python websocket tunnel `127.0.0.1:10015`)
-  - `sshws-qac-enforcer.timer` (enforcement SSH QAC tiap 1 menit)
+- `sshws-qac-enforcer.timer` (enforcement SSH QAC tiap 1 menit)
 - `sanity_check` sekarang memverifikasi ketiga service SSH WS, timer enforcer SSH QAC, dan listener port `80/443`.
 
 2. Integrasi nginx share port
@@ -397,7 +397,7 @@ Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa 
   - reset password
   - list akun terkelola
   - shortcut status/restart stack SSH WS
-- Main Menu sekarang juga menambah `5) SSH Quota & Access Control`:
+- Main Menu sekarang juga menambah `5) SSH QAC`:
   - opsi detail mirip quota Xray (view JSON, set quota, reset used, manual block, IP/login limit, speed policy)
   - enforcement lock akun Linux via `passwd -l/-u`
   - lock otomatis limit sesi/login via timer `sshws-qac-enforcer.timer`

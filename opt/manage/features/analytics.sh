@@ -4253,7 +4253,7 @@ ssh_menu() {
 }
 
 # -------------------------
-# SSH Quota & Access Control
+# SSH QAC
 # -------------------------
 SSH_QAC_FILES=()
 SSH_QAC_PAGE_SIZE=10
@@ -5364,7 +5364,7 @@ ssh_qac_edit_flow() {
 
   while true; do
     title
-    echo "5) SSH Quota & Access Control > Detail"
+    echo "5) SSH QAC > Detail"
     hr
     echo "File  : ${qf}"
     hr
@@ -5664,7 +5664,7 @@ ssh_quota_menu() {
 
   while true; do
     title
-    echo "5) SSH Quota & Access Control"
+    echo "5) SSH QAC"
     hr
 
     ssh_qac_enforce_now_warn || true

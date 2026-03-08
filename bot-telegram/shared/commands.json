@@ -452,7 +452,7 @@
     },
     {
       "id": "4",
-      "label": "Xray Quota & Access Control",
+      "label": "Xray QAC",
       "description": "Ringkasan kuota dan kontrol akses per pengguna Xray.",
       "actions": [
         {
@@ -774,7 +774,7 @@
     },
     {
       "id": "5",
-      "label": "SSH Quota & Access Control",
+      "label": "SSH QAC",
       "description": "Ringkasan quota dan kontrol akses per akun SSH.",
       "actions": [
         {

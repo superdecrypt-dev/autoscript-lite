@@ -6680,7 +6680,7 @@ quota_edit_flow() {
 
   while true; do
     title
-    echo "Xray Quota & Access Control > Detail"
+    echo "Xray QAC > Detail"
     hr
     echo "Proto : ${proto}"
     echo "File  : ${qf}"
@@ -6997,7 +6997,7 @@ quota_menu() {
 
   while true; do
     title
-    echo "4) Xray Quota & Access Control"
+    echo "4) Xray QAC"
     hr
 
     quota_collect_files

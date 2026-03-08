@@ -68,7 +68,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - token tidak dikenal -> `403 Forbidden`
     - backend internal down -> `502 Bad Gateway`
     - token valid + backend ready -> `101 Switching Protocols`
-  - QAC SSH WS terbaru:
+  - SSH QAC terbaru:
     - quota dan speed limit menempel ke user dari awal lewat token path
     - `IP/Login limit` sekarang dicek sebelum `101`, bukan hanya menunggu timer enforcer
     - active session SSH WS dihitung dari runtime session files
@@ -86,8 +86,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:
     - `Xray Management`
     - `SSH Management`
-    - `Xray Quota & Access Control`
-    - `SSH Quota & Access Control`
+    - `Xray QAC`
+    - `SSH QAC`
     - `Security`
     - `Maintenance`
   - Action dangerous pada bot Telegram sekarang disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`; callback stale tetap ditolak aman.

@@ -80,9 +80,9 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Baseline audit SSH WS: pertahankan konsep ini sebagai desain resmi; referensi konsep perilaku: `https://github.com/nanotechid/supreme` (tanpa wajib meniru penamaan/struktur repo referensi).
 - Scope enforcement SSH saat ini harus dianggap by design:
   - `quota_used`, quota traffic, IP/login limit, dan speed limit SSH berlaku pada jalur SSH WS.
-  - Login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC.
+- Login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC.
   - Masa aktif akun dan manual block tetap berlaku pada SSH native.
-- QAC SSH WS terbaru yang perlu dipertahankan:
+- SSH QAC terbaru yang perlu dipertahankan:
   - identitas user ditentukan dari token path, bukan infer sesi login
   - `IP/Login limit` dicek sebelum `101`
   - active session dibaca dari runtime session files SSH WS
@@ -110,7 +110,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
     - `opt/setup/install`
     - `opt/setup/bin`
     - `opt/setup/templates`
-  - QAC SSH WS sekarang lebih ketat:
+  - SSH QAC sekarang lebih ketat:
     - user resolve dari token path
     - `IP/Login limit` dicek sebelum handshake sukses
     - active session memakai runtime session files dengan heartbeat/freshness cleanup

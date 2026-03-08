@@ -32,8 +32,8 @@ Dikelola di `/etc/xray-telegram-bot/bot.env`:
 Menu bot Telegram saat ini mengikuti struktur operasional CLI pada area inti:
 - `2) Xray Management`
 - `3) SSH Management`
-- `4) Xray Quota & Access Control`
-- `5) SSH Quota & Access Control`
+- `4) Xray QAC`
+- `5) SSH QAC`
 - `6) Network Controls`
 - `7) Domain Control`
 - `8) Speedtest`

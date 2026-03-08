@@ -15,8 +15,8 @@ SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
 
 def _scope_title(scope: str, label: str) -> str:
     prefix = {
-        "xray": "Xray Quota & Access Control",
-        "ssh": "SSH Quota & Access Control",
+        "xray": "Xray QAC",
+        "ssh": "SSH QAC",
     }.get(scope, "Quota & Access Control")
     return f"{prefix} - {label}" if label else prefix
 

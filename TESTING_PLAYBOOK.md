@@ -57,7 +57,7 @@ Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
 - SSH menu (`3) SSH Management`) bisa dibuka, list user tampil aman walau data kosong.
-- Menu SSH QAC (`5) SSH Quota & Access Control`) bisa dibuka walau data user masih kosong.
+- Menu `SSH QAC` (`5) SSH QAC`) bisa dibuka walau data user masih kosong.
 
 ### 3.3 Negative/Failure
 
@@ -97,7 +97,7 @@ Kriteria lulus:
 - Service utama aktif.
 - Konfigurasi Xray valid.
 - Service SSH WS aktif (`sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`).
-- Timer enforcer SSH QAC aktif (`sshws-qac-enforcer.timer`).
+- Timer enforcer `SSH QAC` aktif (`sshws-qac-enforcer.timer`).
 - Jika Edge Gateway aktif, `edge-mux` harus `active` dan listener publik tetap ada di `:80/:443`.
 
 Khusus SSH WS (staging):
@@ -356,8 +356,8 @@ Ekspektasi:
    - `1) Status & Diagnostics`
    - `2) Xray Management`
    - `3) SSH Management`
-   - `4) Xray Quota & Access Control`
-   - `5) SSH Quota & Access Control`
+   - `4) Xray QAC`
+   - `5) SSH QAC`
    - `6) Network Controls`
    - `7) Domain Control`
    - `9) Security`
@@ -387,11 +387,11 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `SSH WS Service Status`
 - `Edge Gateway Status`
 
-4. Menu `4) Xray Quota & Access Control`
+4. Menu `4) Xray QAC`
 - `Summary`
 - `Detail` untuk satu user
 
-5. Menu `5) SSH Quota & Access Control`
+5. Menu `5) SSH QAC`
 - `Summary`
 - `Detail` untuk satu user
 
