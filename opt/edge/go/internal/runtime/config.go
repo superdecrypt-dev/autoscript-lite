@@ -10,27 +10,33 @@ import (
 )
 
 const (
-	defaultProvider       = "go"
-	defaultPublicHTTPAddr = "0.0.0.0:80"
-	defaultPublicTLSAddr  = "0.0.0.0:443"
-	defaultHTTPBackend    = "127.0.0.1:18080"
-	defaultSSHBackend     = "127.0.0.1:22022"
-	defaultTLSCertFile    = "/opt/cert/fullchain.pem"
-	defaultTLSKeyFile     = "/opt/cert/privkey.pem"
-	defaultDetectTimeout  = 250 * time.Millisecond
-	defaultTLSOn80        = true
+	defaultProvider        = "go"
+	defaultPublicHTTPAddr  = "0.0.0.0:80"
+	defaultPublicTLSAddr   = "0.0.0.0:443"
+	defaultHTTPBackend     = "127.0.0.1:18080"
+	defaultSSHBackend      = "127.0.0.1:22022"
+	defaultTLSCertFile     = "/opt/cert/fullchain.pem"
+	defaultTLSKeyFile      = "/opt/cert/privkey.pem"
+	defaultDetectTimeout   = 250 * time.Millisecond
+	defaultTLSOn80         = true
+	defaultSSHQuotaRoot    = "/opt/quota/ssh"
+	defaultSSHDropbearUnit = "sshws-dropbear"
+	defaultSSHQACEnforcer  = "/usr/local/bin/sshws-qac-enforcer"
 )
 
 type Config struct {
-	Provider       string
-	PublicHTTPAddr string
-	PublicTLSAddr  string
-	HTTPBackend    string
-	SSHBackend     string
-	TLSCertFile    string
-	TLSKeyFile     string
-	DetectTimeout  time.Duration
-	ClassicTLSOn80 bool
+	Provider        string
+	PublicHTTPAddr  string
+	PublicTLSAddr   string
+	HTTPBackend     string
+	SSHBackend      string
+	TLSCertFile     string
+	TLSKeyFile      string
+	DetectTimeout   time.Duration
+	ClassicTLSOn80  bool
+	SSHQuotaRoot    string
+	SSHDropbearUnit string
+	SSHQACEnforcer  string
 }
 
 func LoadConfig() (Config, error) {
@@ -44,15 +50,18 @@ func LoadConfig() (Config, error) {
 	}
 
 	cfg := Config{
-		Provider:       envString("EDGE_PROVIDER", defaultProvider),
-		PublicHTTPAddr: normalizeAddr(envString("EDGE_PUBLIC_HTTP_PORT", defaultPublicHTTPAddr), "0.0.0.0"),
-		PublicTLSAddr:  normalizeAddr(envString("EDGE_PUBLIC_TLS_PORT", defaultPublicTLSAddr), "0.0.0.0"),
-		HTTPBackend:    normalizeAddr(envString("EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
-		SSHBackend:     normalizeAddr(envString("EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
-		TLSCertFile:    envString("EDGE_TLS_CERT_FILE", defaultTLSCertFile),
-		TLSKeyFile:     envString("EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
-		DetectTimeout:  timeout,
-		ClassicTLSOn80: classicTLSOn80,
+		Provider:        envString("EDGE_PROVIDER", defaultProvider),
+		PublicHTTPAddr:  normalizeAddr(envString("EDGE_PUBLIC_HTTP_PORT", defaultPublicHTTPAddr), "0.0.0.0"),
+		PublicTLSAddr:   normalizeAddr(envString("EDGE_PUBLIC_TLS_PORT", defaultPublicTLSAddr), "0.0.0.0"),
+		HTTPBackend:     normalizeAddr(envString("EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
+		SSHBackend:      normalizeAddr(envString("EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
+		TLSCertFile:     envString("EDGE_TLS_CERT_FILE", defaultTLSCertFile),
+		TLSKeyFile:      envString("EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
+		DetectTimeout:   timeout,
+		ClassicTLSOn80:  classicTLSOn80,
+		SSHQuotaRoot:    envString("EDGE_SSH_QUOTA_ROOT", defaultSSHQuotaRoot),
+		SSHDropbearUnit: envString("EDGE_SSH_DROPBEAR_UNIT", defaultSSHDropbearUnit),
+		SSHQACEnforcer:  envString("EDGE_SSH_QAC_ENFORCER", defaultSSHQACEnforcer),
 	}
 	return cfg, nil
 }

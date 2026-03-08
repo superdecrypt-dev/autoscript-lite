@@ -2656,7 +2656,7 @@ ssh_qac_traffic_enforcement_ready() {
 
 ssh_qac_traffic_scope_label() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "SSH WS only"
+    echo "Quota: all SSH transports | Speed: SSH WS | IP/Login: all SSH transports"
   else
     echo "Metadata only (SSH WS not installed)"
   fi
@@ -2664,7 +2664,7 @@ ssh_qac_traffic_scope_label() {
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota/IP-login/speed berlaku pada jalur SSH WS; IP/login dihitung dari sesi aktif dan client IP runtime bila tersedia; native SSH port 22 tidak dihitung atau di-throttle."
+    echo "Quota berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct. Speed limit masih berlaku pada jalur SSH WS. IP/Login limit dihitung lintas semua transport SSH; distinct client IP runtime hanya tersedia penuh di SSH WS."
   else
     echo "SSH WS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
   fi
@@ -2672,8 +2672,9 @@ ssh_qac_traffic_scope_line() {
 
 ssh_qac_print_scope_notice() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Traffic scope : quota used, IP/login limit, dan speed limit SSH berlaku pada jalur SSH WS."
-    echo "IP/Login calc : memakai sesi aktif dan client IP runtime SSH WS bila tersedia."
+    echo "Traffic scope : quota used SSH berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct."
+    echo "IP/Login calc : berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct; distinct client IP runtime tersedia penuh di SSH WS."
+    echo "Speed limit   : masih berlaku pada jalur SSH WS."
     echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
   else
     echo "Traffic scope : SSH WS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
@@ -4346,8 +4347,8 @@ ssh_active_sessions_count() {
     return 0
   fi
 
+  local runtime_count="0"
   if [[ -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
-    local runtime_count
     stale_sec="$(sshws_runtime_session_stale_sec)"
     runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" "${stale_sec}" <<'PY' 2>/dev/null || true
 import json, pathlib, sys, time
@@ -4401,24 +4402,115 @@ if root.is_dir() and target:
 print(count)
 PY
 )"
-    runtime_count="${runtime_count:-0}"
-    [[ "${runtime_count}" =~ ^[0-9]+$ ]] || runtime_count="0"
-    echo "${runtime_count}"
-    return 0
   fi
+  runtime_count="${runtime_count:-0}"
+  [[ "${runtime_count}" =~ ^[0-9]+$ ]] || runtime_count="0"
 
   local c="0"
-  if have_cmd pgrep; then
-    c="$(pgrep -u "${username}" -x dropbear 2>/dev/null | wc -l | awk '{print $1}' || true)"
-    c="${c:-0}"
-    [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
-    if [[ "${c}" == "0" ]]; then
-      c="$(pgrep -u "${username}" -f dropbear 2>/dev/null | wc -l | awk '{print $1}' || true)"
-      c="${c:-0}"
-      [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
-    fi
+  c="$(python3 - "${username}" <<'PY' 2>/dev/null || true
+import re
+import subprocess
+import sys
+
+target = str(sys.argv[1] or "").strip().lower()
+if not target:
+    print(0)
+    raise SystemExit(0)
+
+try:
+    res = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,user=,comm=,args="],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+except FileNotFoundError:
+    print(0)
+    raise SystemExit(0)
+
+rows = []
+for line in (res.stdout or "").splitlines():
+    raw = line.strip()
+    if not raw:
+        continue
+    parts = raw.split(None, 4)
+    if len(parts) < 5:
+        continue
+    try:
+        pid = int(parts[0])
+        ppid = int(parts[1])
+    except Exception:
+        continue
+    rows.append({"pid": pid, "ppid": ppid, "comm": parts[3], "args": parts[4]})
+
+master_pids = set()
+for row in rows:
+    if row["comm"] == "dropbear" and "-p 127.0.0.1:22022" in row["args"]:
+        master_pids.add(row["pid"])
+
+session_pids = []
+for row in rows:
+    if row["comm"] == "dropbear" and row["ppid"] in master_pids:
+        session_pids.append(row["pid"])
+
+pat = re.compile(r"dropbear\[(\d+)\]: .*auth succeeded for '([^']+)'", re.IGNORECASE)
+mapping = {}
+try:
+    res = subprocess.run(
+        ["journalctl", "-u", "sshws-dropbear", "--no-pager", "-n", "2000"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    for line in (res.stdout or "").splitlines():
+        m = pat.search(line)
+        if not m:
+            continue
+        try:
+            pid = int(m.group(1))
+        except Exception:
+            continue
+        mapping[pid] = str(m.group(2) or "").strip().lower()
+except FileNotFoundError:
+    pass
+
+if not mapping:
+    try:
+        res = subprocess.run(
+            ["tail", "-n", "5000", "/var/log/auth.log"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        for line in (res.stdout or "").splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
+            try:
+                pid = int(m.group(1))
+            except Exception:
+                continue
+            mapping[pid] = str(m.group(2) or "").strip().lower()
+    except FileNotFoundError:
+        pass
+
+count = 0
+for pid in session_pids:
+    if mapping.get(pid) == target:
+        count += 1
+print(count)
+PY
+)"
+  c="${c:-0}"
+  [[ "${c}" =~ ^[0-9]+$ ]] || c="0"
+  if (( runtime_count > c )); then
+    echo "${runtime_count}"
+  else
+    echo "${c}"
   fi
-  echo "${c}"
 }
 
 ssh_qac_setup_file_trusted() {
@@ -5342,13 +5434,13 @@ ssh_qac_edit_flow() {
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
-    printf "%-${label_w}s : %s\n" "Quota Used (SSH WS)" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used (SSH)" "${qu_disp}"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active SSH WS Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH WS)" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH WS)" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit (SSH WS)" "${speed_state}"

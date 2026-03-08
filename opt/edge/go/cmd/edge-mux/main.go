@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/accounting"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/proxy"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
@@ -173,7 +174,7 @@ func serveTLSMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) er
 	}
 }
 
-func bridgeToBackend(logger *log.Logger, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
+func bridgeToBackend(logger *log.Logger, cfg runtime.Config, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
 	backend, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
 		logger.Printf("edge-mux backend dial failed target=%s context=%s: %v", target, contextLabel, err)
@@ -184,7 +185,17 @@ func bridgeToBackend(logger *log.Logger, left net.Conn, target string, leftPrefi
 	}
 	defer backend.Close()
 
-	if err := proxy.Bridge(left, backend, leftPrefix, nil); err != nil {
+	stats, err := proxy.BridgeWithStats(left, backend, leftPrefix, nil)
+	if target == cfg.SSHBackendAddr() {
+		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
+			accounting.RecordSSHQuotaByLocalPort(logger, accounting.SSHQuotaConfig{
+				StateRoot:    cfg.SSHQuotaRoot,
+				DropbearUnit: cfg.SSHDropbearUnit,
+				EnforcerPath: cfg.SSHQACEnforcer,
+			}, tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
+		}
+	}
+	if err != nil {
 		logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
 	}
 }
@@ -200,7 +211,7 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 
 	switch class {
 	case detect.ClassHTTP:
-		bridgeToBackend(logger, conn, cfg.HTTPBackendAddr(), initial, "http-port:http", true)
+		bridgeToBackend(logger, cfg, conn, cfg.HTTPBackendAddr(), initial, "http-port:http", true)
 		return
 	case detect.ClassTLSClientHello:
 		if !cfg.ClassicTLSOn80 || tlsServer == nil {
@@ -213,20 +224,20 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 			return
 		}
 		defer tlsConn.Close()
-		bridgeToBackend(logger, tlsConn, cfg.SSHBackendAddr(), nil, "http-port:ssh-ssl-tls", false)
+		bridgeToBackend(logger, cfg, tlsConn, cfg.SSHBackendAddr(), nil, "http-port:ssh-ssl-tls", false)
 		return
 	case detect.ClassSSH:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
 	}
 }
 
@@ -250,20 +261,20 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		handleTLSPayloadConn(logger, cfg, tlsConn)
 		return
 	case detect.ClassHTTP:
-		bridgeToBackend(logger, conn, cfg.HTTPBackendAddr(), initial, "tls-port:http-plaintext", true)
+		bridgeToBackend(logger, cfg, conn, cfg.HTTPBackendAddr(), initial, "tls-port:http-plaintext", true)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux tls port timed out with partial plaintext http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassSSH:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
 		return
 	default:
-		bridgeToBackend(logger, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
+		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
 		return
 	}
 }
@@ -289,7 +300,7 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, tlsConn net.Co
 	case detect.ClassSSH:
 		target = cfg.SSHBackendAddr()
 	}
-	bridgeToBackend(logger, tlsConn, target, initial, "tls-port:tls-inner", sendHTTP502)
+	bridgeToBackend(logger, cfg, tlsConn, target, initial, "tls-port:tls-inner", sendHTTP502)
 }
 
 func safeRemote(conn net.Conn) string {
