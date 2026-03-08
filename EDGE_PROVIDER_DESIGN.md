@@ -359,15 +359,22 @@ EDGE_CLASSIC_TLS_ON_80=true
 
 ### QAC
 
-QAC SSH WS yang sekarang ada **tidak otomatis berlaku** untuk jalur `SSH SSL/TLS`.
+Saat provider aktif adalah `Edge Gateway (go)`, enforcement SSH sekarang berlaku lintas surface edge:
 
-Kalau nanti jalur klasik juga ingin punya:
+- `SSH WS`
+- `SSH SSL/TLS`
+- `SSH Direct`
+
+Yang sudah berlaku lintas surface:
 
 - quota
 - speed limit
 - IP/login limit
 
-maka harus dibuat desain enforcement terpisah.
+Yang tetap di luar scope traffic enforcement:
+
+- `sshd:22` native
+- provider fallback yang tidak memakai jalur runtime `Edge Gateway (go)` aktif
 
 ## Install Flow Yang Disarankan
 

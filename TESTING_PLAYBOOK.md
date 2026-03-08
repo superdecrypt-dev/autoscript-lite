@@ -118,6 +118,7 @@ Kriteria lulus tambahan:
 - `edge-mux` memegang publik `:80` dan `:443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
 - jika fallback diaktifkan, `haproxy` standby listening di `:18082` dan `:18444`.
+- saat provider aktif adalah `Edge Gateway (go)`, `SSH Direct`, `SSH SSL/TLS`, dan `SSH WS` berbagi enforcement `quota`, `speed limit`, dan `IP/Login limit`.
 
 Khusus path Xray `shadowsocks`:
 - Baseline resmi sekarang hanya:

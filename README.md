@@ -41,7 +41,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - Xray, Nginx, TLS, WARP, dan daemon runtime
 - Installer modular via `opt/setup/*`
 - Operasional akun Xray dan SSH dari satu menu
-- QAC untuk Xray dan SSH WS
+- QAC untuk Xray dan seluruh surface SSH yang dikelola edge
 - Edge Gateway (provider `go`) aktif di `80/443`
 - HAProxy fallback standby tersedia di `18082/18444`
 - provider `nginx-stream` tersedia sebagai opsi experimental
@@ -50,7 +50,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - SSH SSL/TLS di `80/443`
 - SSH Direct di `80/443`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
-- SSH WS QAC memakai runtime session tracking aktif untuk quota, speed, dan IP/Login limit
+- QAC SSH berlaku seperti ini:
+  - `SSH WS`: quota, speed, dan IP/Login limit
+  - `SSH Direct` / `SSH SSL/TLS`: quota, speed, dan IP/Login limit saat provider aktif adalah `Edge Gateway (go)`
+  - `sshd:22` native: bukan target traffic enforcement
 - Bot Discord dan Telegram standalone
 
 ## Bot

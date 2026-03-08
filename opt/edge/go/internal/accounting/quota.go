@@ -22,13 +22,13 @@ type SSHQuotaConfig struct {
 	EnforcerPath string
 }
 
-var authLineRe = regexp.MustCompile(`auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)
+var authLineRe = regexp.MustCompile(`(?:Password )?auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)
 
 func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort int, totalBytes uint64) {
 	if localPort <= 0 || totalBytes == 0 {
 		return
 	}
-	username, err := resolveUsernameByLocalPort(cfg.DropbearUnit, localPort)
+	username, err := ResolveSSHUsernameByLocalPort(cfg.DropbearUnit, localPort)
 	if err != nil {
 		logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
 		return
@@ -45,7 +45,7 @@ func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort
 	triggerEnforcer(logger, cfg.EnforcerPath)
 }
 
-func resolveUsernameByLocalPort(unit string, localPort int) (string, error) {
+func ResolveSSHUsernameByLocalPort(unit string, localPort int) (string, error) {
 	portText := strconv.Itoa(localPort)
 	if username := scanAuthOutput(runCmd("journalctl", "-u", unit, "--no-pager", "-n", "2000"), portText); username != "" {
 		return username, nil
@@ -107,10 +107,7 @@ func candidateStateFiles(stateRoot, username string) []string {
 	}
 }
 
-func addQuotaUsed(stateRoot, username string, totalBytes uint64) error {
-	if totalBytes == 0 {
-		return nil
-	}
+func loadSSHState(stateRoot, username string) (string, map[string]any, error) {
 	var target string
 	for _, path := range candidateStateFiles(stateRoot, username) {
 		if st, err := os.Stat(path); err == nil && !st.IsDir() {
@@ -119,7 +116,44 @@ func addQuotaUsed(stateRoot, username string, totalBytes uint64) error {
 		}
 	}
 	if target == "" {
-		return fmt.Errorf("state file not found for %s", username)
+		return "", nil, fmt.Errorf("state file not found for %s", username)
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		return "", nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", nil, err
+	}
+	return target, payload, nil
+}
+
+func LoadSSHSpeedPolicy(stateRoot, username string) (SSHSpeedPolicy, error) {
+	_, payload, err := loadSSHState(stateRoot, username)
+	if err != nil {
+		return SSHSpeedPolicy{}, err
+	}
+	status, _ := payload["status"].(map[string]any)
+	if !toBool(status["speed_limit_enabled"]) {
+		return SSHSpeedPolicy{}, nil
+	}
+	down := mbitToBytesPerSecond(toFloat(status["speed_down_mbit"]))
+	up := mbitToBytesPerSecond(toFloat(status["speed_up_mbit"]))
+	return SSHSpeedPolicy{
+		Enabled:         down > 0 || up > 0,
+		DownloadBytesPS: down,
+		UploadBytesPS:   up,
+	}, nil
+}
+
+func addQuotaUsed(stateRoot, username string, totalBytes uint64) error {
+	if totalBytes == 0 {
+		return nil
+	}
+	target, payload, err := loadSSHState(stateRoot, username)
+	if err != nil {
+		return err
 	}
 	lockPath := target + ".lock"
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
@@ -132,14 +166,6 @@ func addQuotaUsed(stateRoot, username string, totalBytes uint64) error {
 	}
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
 
-	raw, err := os.ReadFile(target)
-	if err != nil {
-		return err
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return err
-	}
 	current := toUint64(payload["quota_used"])
 	payload["quota_used"] = current + totalBytes
 	return writeJSONAtomic(target, payload)
@@ -177,6 +203,54 @@ func toUint64(v any) uint64 {
 	default:
 		return 0
 	}
+}
+
+func toFloat(v any) float64 {
+	switch x := v.(type) {
+	case nil:
+		return 0
+	case float64:
+		return x
+	case float32:
+		return float64(x)
+	case int:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case uint64:
+		return float64(x)
+	case string:
+		n, _ := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+func toBool(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(x)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
+}
+
+func mbitToBytesPerSecond(v float64) uint64 {
+	if v <= 0 {
+		return 0
+	}
+	return uint64(v * 125000.0)
 }
 
 func writeJSONAtomic(path string, payload map[string]any) error {

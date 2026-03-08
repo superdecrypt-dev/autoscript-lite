@@ -1,5 +1,48 @@
 # Release Notes
 
+## Rilis 2026-03-09 (SSH Edge QAC Kini Termasuk Speed Lintas Transport)
+
+### Ringkasan
+Rilis ini menyatukan perilaku QAC SSH di jalur yang berada di belakang `Edge Gateway (go)`. Setelah patch ini, `quota`, `IP/Login limit`, dan `speed limit` tidak lagi eksklusif ke `SSH WS`, tetapi juga bekerja pada `SSH Direct` dan `SSH SSL/TLS`.
+
+### Perubahan Utama
+1. Quota SSH lintas transport edge
+- `quota_used` sekarang bertambah untuk:
+  - `SSH WS`
+  - `SSH Direct`
+  - `SSH SSL/TLS`
+- Jika limit terlampaui, login berikutnya ditolak oleh enforcer SSH.
+
+2. Speed limit SSH lintas transport edge
+- `speed_down_mbit` dan `speed_up_mbit` sekarang diterapkan juga ke:
+  - `SSH Direct`
+  - `SSH SSL/TLS`
+- Aktivasi berlaku saat provider utama yang aktif adalah `Edge Gateway (go)`.
+- Perilaku realistisnya:
+  - koneksi boleh auth dulu
+  - bulk traffic sesudah auth ditahan sesuai policy user
+
+3. IP/Login limit tetap lintas semua transport SSH edge
+- `IP/Login limit` tetap berlaku pada:
+  - `SSH WS`
+  - `SSH Direct`
+  - `SSH SSL/TLS`
+
+### Hasil Validasi
+- Uji live quota lintas transport SSH:
+  - `SSH Direct` -> `quota_used` bertambah
+  - `SSH SSL/TLS` -> `quota_used` bertambah
+  - setelah limit terlampaui, login berikutnya ditolak
+- Uji live speed limit `1 Mbps`:
+  - `DIRECT_UPLOAD=8.068s`
+  - `DIRECT_DOWNLOAD=8.014s`
+  - `SSLTLS_UPLOAD=8.212s`
+  - `SSLTLS_DOWNLOAD=8.029s`
+
+### Catatan
+- `sshd:22` native tetap bukan target traffic enforcement ini.
+- Jika failover ke provider selain `go`, perilaku `speed limit` perlu dianggap provider-dependent.
+
 ## Rilis 2026-03-09 (SSH Direct di 80/443 via Edge Gateway)
 
 ### Ringkasan

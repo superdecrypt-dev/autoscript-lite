@@ -185,7 +185,32 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, left net.Conn, targ
 	}
 	defer backend.Close()
 
-	stats, err := proxy.BridgeWithStats(left, backend, leftPrefix, nil)
+	var stats proxy.BridgeStats
+	if target == cfg.SSHBackendAddr() {
+		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
+			speedCtl := accounting.NewSSHSpeedController(logger, accounting.SSHQuotaConfig{
+				StateRoot:    cfg.SSHQuotaRoot,
+				DropbearUnit: cfg.SSHDropbearUnit,
+				EnforcerPath: cfg.SSHQACEnforcer,
+			}, tcpAddr.Port)
+			speedCtl.Start()
+			defer speedCtl.Stop()
+			stats, err = proxy.BridgeWithStatsAndOptions(left, backend, leftPrefix, nil, proxy.BridgeOptions{
+				LeftToRight: speedCtl.UploadLimiter(),
+				RightToLeft: speedCtl.DownloadLimiter(),
+			})
+			accounting.RecordSSHQuotaByLocalPort(logger, accounting.SSHQuotaConfig{
+				StateRoot:    cfg.SSHQuotaRoot,
+				DropbearUnit: cfg.SSHDropbearUnit,
+				EnforcerPath: cfg.SSHQACEnforcer,
+			}, tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
+			if err != nil {
+				logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
+			}
+			return
+		}
+	}
+	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
 	if target == cfg.SSHBackendAddr() {
 		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
 			accounting.RecordSSHQuotaByLocalPort(logger, accounting.SSHQuotaConfig{

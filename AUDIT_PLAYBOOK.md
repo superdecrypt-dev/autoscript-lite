@@ -225,7 +225,11 @@ Aturan:
 - SSH WS mengikuti konsep autoscript-stream:
   - non-hybrid
   - tanpa `Sec-WebSocket-*` wajib
-- enforcement SSH QAC saat ini berlaku pada jalur SSH WS; SSH native `sshd:22` bukan target traffic enforcement
+- enforcement SSH QAC saat ini berlaku pada seluruh surface SSH yang melewati edge aktif:
+  - `SSH WS`
+  - `SSH SSL/TLS`
+  - `SSH Direct`
+- `sshd:22` native bukan target traffic enforcement
 
 ## 10. Kapan Harus Patch
 - patch jika finding memengaruhi:

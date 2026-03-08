@@ -2656,7 +2656,7 @@ ssh_qac_traffic_enforcement_ready() {
 
 ssh_qac_traffic_scope_label() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota: all SSH transports | Speed: SSH WS | IP/Login: all SSH transports"
+    echo "Quota: all SSH transports | Speed: all edge SSH transports | IP/Login: all SSH transports"
   else
     echo "Metadata only (SSH WS not installed)"
   fi
@@ -2664,7 +2664,7 @@ ssh_qac_traffic_scope_label() {
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct. Speed limit masih berlaku pada jalur SSH WS. IP/Login limit dihitung lintas semua transport SSH; distinct client IP runtime hanya tersedia penuh di SSH WS."
+    echo "Quota berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct. Speed limit berlaku pada SSH WS, SSH SSL/TLS, dan SSH Direct saat Edge Gateway (go) menjadi provider aktif. IP/Login limit dihitung lintas semua transport SSH; distinct client IP runtime hanya tersedia penuh di SSH WS."
   else
     echo "SSH WS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
   fi
@@ -2674,7 +2674,7 @@ ssh_qac_print_scope_notice() {
   if ssh_qac_traffic_enforcement_ready; then
     echo "Traffic scope : quota used SSH berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct."
     echo "IP/Login calc : berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct; distinct client IP runtime tersedia penuh di SSH WS."
-    echo "Speed limit   : masih berlaku pada jalur SSH WS."
+    echo "Speed limit   : berlaku pada SSH WS, SSH SSL/TLS, dan SSH Direct saat Edge Gateway (go) aktif; fallback provider lain dapat berbeda."
     echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
   else
     echo "Traffic scope : SSH WS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
