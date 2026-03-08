@@ -117,7 +117,7 @@ ss -ltn | rg ':(80|443|18080)\\b'
 Kriteria lulus tambahan:
 - `edge-mux` memegang publik `:80` dan `:443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
-- saat provider aktif adalah `Edge Gateway (go)`, `SSH Direct`, `SSH SSL/TLS`, dan `SSH WS` berbagi enforcement `quota`, `speed limit`, dan `IP/Login limit`.
+- saat provider aktif adalah `Edge Gateway (go)`, `SSH Direct`, `SSH SSL/TLS`, dan `SSH WS` diperlakukan sebagai satu sistem SSH untuk `quota`, `speed limit`, dan `IP/Login limit`.
 
 Khusus path Xray `shadowsocks`:
 - Baseline resmi sekarang hanya:
@@ -383,7 +383,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 3. Menu `3) SSH Management`
 - `List Managed SSH Users`
 - `View Account Info`
-- `Active SSH WS Sessions`
+- `Active SSH Sessions`
 - `SSH WS Service Status`
 - `Edge Gateway Status`
 

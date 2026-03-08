@@ -80,8 +80,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - mewajibkan input masa aktif (hari)
     - menerima `0` sebagai `back` pada prompt masa aktif
   - Scope enforcement SSH perlu dianggap eksplisit:
-    - `SSH WS`: quota, speed limit, dan IP/login limit berlaku penuh
-    - `SSH Direct` dan `SSH SSL/TLS`: quota, speed limit, dan IP/login limit berlaku saat provider aktif adalah `Edge Gateway (go)`
+    - `SSH WS`, `SSH Direct`, dan `SSH SSL/TLS` sekarang berbagi satu sistem SSH QAC pada jalur edge aktif
     - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
     - masa aktif dan manual block tetap berlaku pada akun SSH native
   - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:

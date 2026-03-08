@@ -225,7 +225,7 @@ Aturan:
 - SSH WS mengikuti konsep autoscript-stream:
   - non-hybrid
   - tanpa `Sec-WebSocket-*` wajib
-- enforcement SSH QAC saat ini berlaku pada seluruh surface SSH yang melewati edge aktif:
+- enforcement SSH QAC saat ini diperlakukan sebagai satu sistem SSH untuk seluruh surface yang melewati edge aktif:
   - `SSH WS`
   - `SSH SSL/TLS`
   - `SSH Direct`
