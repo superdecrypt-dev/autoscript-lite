@@ -28,8 +28,7 @@ edge_runtime_set_default_from_persisted() {
   if [[ -n "${!key+x}" ]]; then
     return 0
   fi
-  printf -v "${key}" '%s' "${value}"
-  export "${key}"
+  declare -gx "${key}=${value}"
 }
 
 load_persisted_edge_runtime_env() {
