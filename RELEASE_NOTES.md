@@ -1,5 +1,45 @@
 # Release Notes
 
+## Rilis 2026-03-09 (Xray Shadowsocks Shorthand Path Only)
+
+### Ringkasan
+Rilis ini merapikan surface path publik Xray untuk `shadowsocks` dan `shadowsocks2022` agar mengikuti penamaan singkat yang searah dengan konsep `SSH WS`.
+
+### Perubahan Utama
+1. Path lama `shadowsocks*` dihapus
+- Path publik lama berikut tidak lagi dipakai:
+  - `/shadowsocks-ws`
+  - `/shadowsocks-hup`
+  - `/shadowsocks-grpc`
+  - `/shadowsocks2022-ws`
+  - `/shadowsocks2022-hup`
+  - `/shadowsocks2022-grpc`
+
+2. Path baru `ss*` dan `ss2022*` menjadi baseline
+- Path resmi sekarang:
+  - `/ss-ws`
+  - `/ss-hup`
+  - `/ss-grpc`
+  - `/ss2022-ws`
+  - `/ss2022-hup`
+  - `/ss2022-grpc`
+- Prefix opsional satu segmen juga didukung:
+  - `/<bebas>/ss-ws`
+  - `/<bebas>/ss-hup`
+  - `/<bebas>/ss-grpc`
+  - `/<bebas>/ss2022-ws`
+  - `/<bebas>/ss2022-hup`
+  - `/<bebas>/ss2022-grpc`
+
+3. Loader render `nginx` ikut dibuat tahan transisi
+- Pembaca context route live di `nginx.sh` sekarang bisa mengenali bentuk route lama maupun baru saat rerender.
+- Ini mencegah render `nginx` gagal saat host sedang berada di tengah transisi path lama -> path baru.
+
+### Hasil Validasi
+- Path lama `shadowsocks*` -> `404`
+- Path baru `ss*` / `ss2022*` -> tetap match handler yang benar
+- Reload `nginx` live -> PASS
+
 ## Rilis 2026-03-08 (Provider `nginx-stream` Experimental Implemented)
 
 ### Ringkasan
@@ -305,7 +345,8 @@ Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa 
 - Endpoint SSH WS memakai `location = /`:
   - `ws://<domain>:80/`
   - `wss://<domain>:443/`
-- Path Xray existing (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `/shadowsocks-ws`, `-hup`, `-grpc`) tetap dipertahankan.
+- Path Xray existing (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `-hup`, `-grpc`) tetap dipertahankan.
+- Catatan: baseline `shadowsocks*` kemudian berubah pada rilis `2026-03-09`, yang mengganti surface publik ke path singkat `ss*` dan `ss2022*`.
 
 3. Operasional menu `manage`
 - Maintenance menu menambah:
