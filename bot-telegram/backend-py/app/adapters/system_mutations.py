@@ -380,6 +380,36 @@ def _detect_public_ipv4() -> str:
     return "0.0.0.0"
 
 
+def _geo_lookup(ip: str) -> tuple[str, str]:
+    raw = str(ip or "").strip()
+    if not raw:
+        return "-", "-"
+    try:
+        addr = ipaddress.ip_address(raw)
+    except Exception:
+        return "-", "-"
+    if (
+        addr.version != 4
+        or addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_unspecified
+        or addr.is_reserved
+    ):
+        return "-", "-"
+    try:
+        with urllib.request.urlopen(f"https://ipwho.is/{raw}", timeout=6) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return "-", "-"
+    if not isinstance(payload, dict) or not bool(payload.get("success")):
+        return "-", "-"
+    isp = str(((payload.get("connection") or {}).get("isp")) or payload.get("isp") or "-").strip() or "-"
+    country = str(payload.get("country") or "-").strip() or "-"
+    return isp, country
+
+
 def _detect_domain() -> str:
     if NGINX_CONF.exists():
         for line in NGINX_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -702,6 +732,64 @@ def _ssh_password_from_account_info(username: str) -> str:
     return password or "-"
 
 
+def _ssh_ws_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _ssh_direct_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _ssh_ssl_tls_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _badvpn_public_port_label() -> str:
+    return "7300"
+
+
+def _path_alt_placeholder(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return "-"
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    return f"/<bebas>{raw}"
+
+
+def _proto_display_label(proto: str) -> str:
+    mapping = {
+        "vless": "Vless",
+        "vmess": "Vmess",
+        "trojan": "Trojan",
+        "shadowsocks": "SS",
+        "shadowsocks2022": "SS2022",
+    }
+    return mapping.get(str(proto or "").strip().lower(), str(proto or "").strip().title() or "Xray")
+
+
+def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return datetime.utcnow().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
+    normalized = value.replace("T", " ").strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(normalized[: len(fmt)], fmt)
+            if date_only:
+                return dt.strftime("%Y-%m-%d")
+            return dt.strftime("%Y-%m-%d" if fmt == "%Y-%m-%d" else "%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    if len(normalized) >= 10 and normalized[4:5] == "-" and normalized[7:8] == "-":
+        if date_only:
+            return normalized[:10]
+        return normalized[:16] if len(normalized) >= 16 and normalized[13:14] == ":" else normalized[:10]
+    return datetime.utcnow().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
+
+
 def _ssh_traffic_enforcement_ready() -> bool:
     return SSHWS_PROXY_BIN.exists() or _service_exists("sshws-proxy")
 
@@ -843,7 +931,7 @@ def _ssh_write_account_info(
     status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
     account_file = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
     created_at = str(quota_payload.get("created_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    created_disp = created_at[:10] if len(created_at) >= 10 else datetime.utcnow().strftime("%Y-%m-%d")
+    created_disp = _normalize_created_display(created_at, date_only=True)
     expired_at = str(quota_payload.get("expired_at") or "-").strip()[:10] or "-"
     quota_limit = max(0, _to_int(quota_payload.get("quota_limit"), 0))
     ip_enabled = bool(status.get("ip_limit_enabled"))
@@ -854,20 +942,23 @@ def _ssh_write_account_info(
     sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
         sshws_path = f"/{sshws_token}"
-        sshws_alt_path = f"/bebas/{sshws_token}"
-        sshws_main = f"{sshws_path} (token: {sshws_token})"
+        sshws_alt_path = _path_alt_placeholder(sshws_path)
+        sshws_main = sshws_path
     else:
         sshws_path = "-"
         sshws_alt_path = "-"
         sshws_main = "-"
     domain = _detect_domain() or "-"
     ip = _detect_public_ipv4() or "-"
+    isp, country = _geo_lookup(ip)
 
     content = "\n".join(
         [
             "=== SSH ACCOUNT INFO ===",
             f"Domain      : {domain}",
             f"IP          : {ip}",
+            f"ISP         : {isp}",
+            f"Country     : {country}",
             f"Username    : {username}",
             f"Password    : {_ssh_password_output(password)}",
             f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
@@ -876,10 +967,12 @@ def _ssh_write_account_info(
             f"Created     : {created_disp}",
             f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
             f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
-            f"SSHWS       : {sshws_main}",
-            f"SSHWS Alt   : {sshws_alt_path}",
-            f"Traffic Scope : {_ssh_traffic_scope_label()}",
-            f"Traffic Note  : {_ssh_traffic_scope_note()}",
+            f"SSH WS Path : {sshws_main}",
+            f"SSH WS Path Alt : {sshws_alt_path}",
+            f"SSH WS Port : {_ssh_ws_public_ports_label()}",
+            f"SSH Direct Port : {_ssh_direct_public_ports_label()}",
+            f"SSH SSL/TLS Port : {_ssh_ssl_tls_public_ports_label()}",
+            f"BadVPN UDPGW: {_badvpn_public_port_label()}",
             "",
             "Standard Payload:",
             "Payload WSS:",
@@ -2054,11 +2147,11 @@ def _build_links(proto: str, username: str, cred: str, domain: str, ss2022_serve
         "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-        "shadowsocks": {"ws": "/shadowsocks-ws", "httpupgrade": "/shadowsocks-hup", "grpc": "shadowsocks-grpc"},
+        "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
         "shadowsocks2022": {
-            "ws": "/shadowsocks2022-ws",
-            "httpupgrade": "/shadowsocks2022-hup",
-            "grpc": "shadowsocks2022-grpc",
+            "ws": "/ss2022-ws",
+            "httpupgrade": "/ss2022-hup",
+            "grpc": "ss2022-grpc",
         },
     }
 
@@ -2153,10 +2246,21 @@ def _build_account_text(
     if proto == "shadowsocks2022" and not resolved_ss2022_key:
         resolved_ss2022_key = _find_ss2022_server_key_in_inbounds()
     links = _build_links(proto, username, credential, domain, resolved_ss2022_key)
+    isp, country = _geo_lookup(ip)
+    proto_disp = _proto_display_label(proto)
+    ws_path = (({
+        "vless": {"ws": "/vless-ws"},
+        "vmess": {"ws": "/vmess-ws"},
+        "trojan": {"ws": "/trojan-ws"},
+        "shadowsocks": {"ws": "/ss-ws"},
+        "shadowsocks2022": {"ws": "/ss2022-ws"},
+    }).get(proto, {}).get("ws") or "/")
     lines = [
         "=== XRAY ACCOUNT INFO ===",
         f"Domain      : {domain}",
         f"IP          : {ip}",
+        f"ISP         : {isp}",
+        f"Country     : {country}",
         f"Username    : {username}",
         f"Protocol    : {proto}",
     ]
@@ -2184,6 +2288,9 @@ def _build_account_text(
         lines.append(f"Speed Limit : ON (DOWN {_fmt_number(speed_down)} Mbps | UP {_fmt_number(speed_up)} Mbps)")
     else:
         lines.append("Speed Limit : OFF")
+    lines.append(f"{proto_disp} Path : {ws_path}")
+    lines.append(f"{proto_disp} Path Alt : {_path_alt_placeholder(ws_path)}")
+    lines.append(f"{proto_disp} Port : 443 & 80")
 
     lines.extend(
         [
@@ -2357,9 +2464,10 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
     status = quota_data.get("status") if isinstance(quota_data.get("status"), dict) else {}
 
     quota_limit = _to_int(quota_data.get("quota_limit"), 0)
-    created_at = str(quota_data.get("created_at") or account_fields.get("Created") or "").strip()[:10]
-    if not created_at:
-        created_at = datetime.utcnow().strftime("%Y-%m-%d")
+    created_at = _normalize_created_display(
+        quota_data.get("created_at") or account_fields.get("Created") or "",
+        date_only=False,
+    )
 
     expired_at = str(quota_data.get("expired_at") or account_fields.get("Valid Until") or "").strip()[:10]
     if not expired_at:

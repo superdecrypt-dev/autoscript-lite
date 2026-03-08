@@ -8,6 +8,10 @@ BADVPN_SERVICE_TEMPLATE="${SETUP_TEMPLATE_SRC_DIR}/systemd/badvpn-udpgw.service"
 BADVPN_BIN_INSTALL_PATH="${BADVPN_BIN_INSTALL_PATH:-/usr/local/bin/badvpn-udpgw}"
 BADVPN_SERVICE_NAME="${BADVPN_SERVICE_NAME:-badvpn-udpgw.service}"
 
+badvpn_runtime_expected() {
+  badvpn_prebuilt_ready
+}
+
 badvpn_arch_label() {
   case "$(uname -m)" in
     x86_64|amd64) echo "amd64" ;;

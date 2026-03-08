@@ -249,13 +249,17 @@ sanity_check() {
     failed=1
   fi
 
-  if systemctl is-active --quiet badvpn-udpgw.service; then
-    ok "check: badvpn-udpgw active"
+  if badvpn_runtime_expected 2>/dev/null; then
+    if systemctl is-active --quiet badvpn-udpgw.service; then
+      ok "check: badvpn-udpgw active"
+    else
+      warn "check: badvpn-udpgw inactive"
+      systemctl status badvpn-udpgw.service --no-pager >&2 || true
+      journalctl -u badvpn-udpgw.service -n 120 --no-pager >&2 || true
+      failed=1
+    fi
   else
-    warn "check: badvpn-udpgw inactive"
-    systemctl status badvpn-udpgw.service --no-pager >&2 || true
-    journalctl -u badvpn-udpgw.service -n 120 --no-pager >&2 || true
-    failed=1
+    warn "check: badvpn-udpgw optional (prebuilt tidak tersedia)"
   fi
 
   if [[ "${edge_provider}" != "none" ]]; then
@@ -320,11 +324,15 @@ sanity_check() {
     warn "check: port 443 not listening"
   fi
 
-  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:7300([[:space:]]|$)'; then
-    ok "check: badvpn 7300 listening"
+  if badvpn_runtime_expected 2>/dev/null; then
+    if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:7300([[:space:]]|$)'; then
+      ok "check: badvpn 7300 listening"
+    else
+      warn "check: badvpn 7300 not listening"
+      failed=1
+    fi
   else
-    warn "check: badvpn 7300 not listening"
-    failed=1
+    warn "check: badvpn 7300 optional (prebuilt tidak tersedia)"
   fi
 
   if [[ "$failed" -ne 0 ]]; then
