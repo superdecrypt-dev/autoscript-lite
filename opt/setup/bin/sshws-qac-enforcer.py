@@ -196,32 +196,144 @@ def active_sessions_from_runtime(username):
   total, _ = runtime_session_stats(username)
   return total
 
+_DROPBEAR_ROWS_CACHE = None
+_DROPBEAR_AUTH_CACHE = None
+
+
+def dropbear_backend_process_rows():
+  global _DROPBEAR_ROWS_CACHE
+  if _DROPBEAR_ROWS_CACHE is not None:
+    return _DROPBEAR_ROWS_CACHE
+  try:
+    res = subprocess.run(
+      ["ps", "-eo", "pid=,ppid=,user=,comm=,args="],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.DEVNULL,
+      text=True,
+      check=False,
+    )
+  except FileNotFoundError:
+    _DROPBEAR_ROWS_CACHE = []
+    return _DROPBEAR_ROWS_CACHE
+  rows = []
+  for line in (res.stdout or "").splitlines():
+    raw = line.strip()
+    if not raw:
+      continue
+    parts = raw.split(None, 4)
+    if len(parts) < 5:
+      continue
+    try:
+      pid = int(parts[0])
+      ppid = int(parts[1])
+    except ValueError:
+      continue
+    rows.append({
+      "pid": pid,
+      "ppid": ppid,
+      "user": parts[2],
+      "comm": parts[3],
+      "args": parts[4],
+    })
+  _DROPBEAR_ROWS_CACHE = rows
+  return rows
+
+
+def active_dropbear_session_pids():
+  rows = dropbear_backend_process_rows()
+  master_pids = set()
+  for row in rows:
+    if row.get("comm") == "dropbear" and "-p 127.0.0.1:22022" in str(row.get("args") or ""):
+      master_pids.add(int(row.get("pid") or 0))
+  if not master_pids:
+    return []
+  session_pids = []
+  for row in rows:
+    if row.get("comm") != "dropbear":
+      continue
+    if int(row.get("ppid") or 0) in master_pids:
+      session_pids.append(int(row.get("pid") or 0))
+  return session_pids
+
+
+def _parse_dropbear_auth_lines(lines):
+  mapping = {}
+  pat = re.compile(r"dropbear\[(\d+)\]: .*auth succeeded for '([^']+)'", re.IGNORECASE)
+  for line in lines:
+    m = pat.search(str(line or ""))
+    if not m:
+      continue
+    try:
+      pid = int(m.group(1))
+    except Exception:
+      continue
+    user = norm_user(m.group(2))
+    if user:
+      mapping[pid] = user
+  return mapping
+
+
+def dropbear_pid_auth_map():
+  global _DROPBEAR_AUTH_CACHE
+  if _DROPBEAR_AUTH_CACHE is not None:
+    return _DROPBEAR_AUTH_CACHE
+  mapping = {}
+  try:
+    res = subprocess.run(
+      ["journalctl", "-u", "sshws-dropbear", "--no-pager", "-n", "2000"],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.DEVNULL,
+      text=True,
+      check=False,
+    )
+    mapping.update(_parse_dropbear_auth_lines((res.stdout or "").splitlines()))
+  except FileNotFoundError:
+    pass
+  if not mapping:
+    try:
+      res = subprocess.run(
+        ["tail", "-n", "5000", "/var/log/auth.log"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+      )
+      mapping.update(_parse_dropbear_auth_lines((res.stdout or "").splitlines()))
+    except FileNotFoundError:
+      pass
+  _DROPBEAR_AUTH_CACHE = mapping
+  return mapping
+
+
+def active_sessions_from_dropbear(username):
+  if not username or not user_exists(username):
+    return 0
+  target = norm_user(username)
+  if not target:
+    return 0
+  pid_map = dropbear_pid_auth_map()
+  count = 0
+  for pid in active_dropbear_session_pids():
+    if pid_map.get(int(pid)) == target:
+      count += 1
+  return count
+
 def active_sessions(username):
   if not username or not user_exists(username):
     return 0
   runtime_count = active_sessions_from_runtime(username)
+  dropbear_count = active_sessions_from_dropbear(username)
   if runtime_count is not None:
-    return int(runtime_count)
-  try:
-    res = subprocess.run(["pgrep", "-u", username, "-x", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-  except FileNotFoundError:
-    return 0
-  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
-  if lines:
-    return len(lines)
-  try:
-    res = subprocess.run(["pgrep", "-u", username, "-f", "dropbear"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-  except FileNotFoundError:
-    return 0
-  lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
-  return len(lines)
+    return max(int(runtime_count), int(dropbear_count))
+  return int(dropbear_count)
 
 def active_login_metric(username):
   if not username or not user_exists(username):
     return 0
   runtime_count, runtime_ip_count = runtime_session_stats(username)
+  dropbear_count = active_sessions_from_dropbear(username)
   if runtime_count is not None:
-    return max(int(runtime_count), int(runtime_ip_count or 0))
+    return max(int(runtime_count), int(runtime_ip_count or 0), int(dropbear_count))
   return active_sessions(username)
 
 def lock_user(username, status=None):
