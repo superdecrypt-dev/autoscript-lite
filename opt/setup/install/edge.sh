@@ -12,6 +12,10 @@ edge_runtime_activate_requested() {
   esac
 }
 
+edge_runtime_should_take_public_ports() {
+  edge_provider_enabled && edge_runtime_activate_requested
+}
+
 edge_provider_selected() {
   printf '%s\n' "${EDGE_PROVIDER:-none}"
 }
@@ -75,6 +79,24 @@ edge_go_verify_dist_binary() {
   [[ -n "${actual}" && "${actual}" == "${expected}" ]]
 }
 
+edge_runtime_preflight_or_die() {
+  if ! edge_provider_enabled; then
+    return 0
+  fi
+
+  case "$(edge_provider_selected)" in
+    go)
+      edge_go_binary_available || die "Binary prebuilt edge-mux belum tersedia untuk provider go."
+      edge_go_verify_dist_binary || die "Checksum binary prebuilt edge-mux gagal atau manifest SHA256SUMS belum siap."
+      ;;
+    haproxy|nginx-stream)
+      if edge_runtime_activate_requested; then
+        die "Provider $(edge_provider_selected) belum siap untuk aktivasi runtime."
+      fi
+      ;;
+  esac
+}
+
 write_edge_runtime_env() {
   if ! edge_provider_supported; then
     die "EDGE_PROVIDER tidak dikenal: $(edge_provider_selected)"
@@ -83,6 +105,7 @@ write_edge_runtime_env() {
   render_setup_template_or_die \
     "config/edge-runtime.env" \
     "/etc/default/edge-runtime" \
+    0644 \
     "EDGE_PROVIDER=$(edge_provider_selected)" \
     "EDGE_ACTIVATE_RUNTIME=${EDGE_ACTIVATE_RUNTIME:-false}" \
     "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \

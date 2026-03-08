@@ -319,6 +319,7 @@ main() {
   install_xray
   setup_xray_geodata_updater
   install_custom_geosite_adblock
+  edge_runtime_preflight_or_die
   write_xray_config
   write_xray_modular_configs
   configure_xray_service_confdir
