@@ -28,7 +28,7 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
 
 3. Sinkronisasi playbook operasional
 - `TESTING_PLAYBOOK.md` kini sinkron dengan:
-  - SSHWS token path `/<token>` dan `/<bebas>/<token>`
+  - SSH WS token path `/<token>` dan `/<bebas>/<token>`
   - smoke Telegram runtime
   - ACL whitelist/non-whitelist
   - hidden dangerous actions
@@ -50,14 +50,14 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
 - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
 - Full E2E modular installer `run.sh -> setup.sh -> manage.sh` live -> PASS
 
-## Rilis 2026-03-07 (SSHWS Token Path + QAC Hardening + Telegram Parity)
+## Rilis 2026-03-07 (SSH WS Token Path + QAC Hardening + Telegram Parity)
 
 ### Ringkasan
-Rilis ini mengubah baseline SSHWS menjadi token path per-user yang fail-close, memperketat QAC SSHWS di runtime nyata, dan mendekatkan parity bot Telegram ke CLI sambil menutup beberapa gap operasional.
+Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, memperketat QAC SSH WS di runtime nyata, dan mendekatkan parity bot Telegram ke CLI sambil menutup beberapa gap operasional.
 
 ### Perubahan Utama
-1. SSHWS token path per-user
-- Jalur resmi SSHWS sekarang:
+1. SSH WS token path per-user
+- Jalur resmi SSH WS sekarang:
   - `/<token>`
   - `/<bebas>/<token>`
 - Token dibuat per-user dan dipakai untuk mengidentifikasi user sejak awal koneksi.
@@ -67,14 +67,14 @@ Rilis ini mengubah baseline SSHWS menjadi token path per-user yang fail-close, m
   - backend internal down -> `502 Bad Gateway`
   - token valid + backend siap -> `101 Switching Protocols`
 
-2. QAC SSHWS runtime lebih ketat
+2. QAC SSH WS runtime lebih ketat
 - `quota` dan `speed limit` menempel ke user dari awal lewat token path.
 - `IP/Login limit` dipindahkan lebih dekat ke admission runtime, bukan hanya menunggu timer.
-- Runtime session SSHWS kini melacak:
+- Runtime session SSH WS kini melacak:
   - `client_ip`
   - `updated_at`
   - heartbeat sesi
-- Session stale dibersihkan agar `Active SSHWS Sessions` dan QAC tidak menghitung ghost session.
+- Session stale dibersihkan agar `Active SSH WS Sessions` dan QAC tidak menghitung ghost session.
 - `manage.sh` dan `analytics.sh` ikut disinkronkan untuk refresh account info, alt path, dan viewer sesi aktif.
 
 3. Bot Telegram parity + hardening
@@ -105,7 +105,7 @@ Rilis ini mengubah baseline SSHWS menjadi token path per-user yang fail-close, m
 ### Hasil Validasi
 - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
 - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
-- Runtime SSHWS:
+- Runtime SSH WS:
   - path tanpa token -> `401`
   - token invalid -> `403`
   - backend down -> `502`
@@ -115,14 +115,14 @@ Rilis ini mengubah baseline SSHWS menjadi token path per-user yang fail-close, m
   - archive terbaru terdeploy
   - smoke runtime PASS
 
-## Rilis 2026-03-06 (SSHWS Autoscript-Stream Mode + Runtime Guard)
+## Rilis 2026-03-06 (SSH WS Autoscript-Stream Mode + Runtime Guard)
 
 ### Ringkasan
-Update ini menyelaraskan perilaku SSHWS ke mode autoscript-stream, lalu menambah guard runtime agar tidak menghasilkan false-positive koneksi saat backend internal tidak siap.
+Update ini menyelaraskan perilaku SSH WS ke mode autoscript-stream, lalu menambah guard runtime agar tidak menghasilkan false-positive koneksi saat backend internal tidak siap.
 
 ### Perubahan Utama
-1. SSHWS full autoscript-stream mode (tanpa `Sec-WebSocket-*` wajib)
-- Proxy SSHWS kini menerima payload autoscript-stream minimal (`Upgrade: websocket`) tanpa framing WebSocket RFC6455.
+1. SSH WS full autoscript-stream mode (tanpa `Sec-WebSocket-*` wajib)
+- Proxy SSH WS kini menerima payload autoscript-stream minimal (`Upgrade: websocket`) tanpa framing WebSocket RFC6455.
 - Respons handshake memakai pola autoscript-stream:
   - `HTTP/1.1 101 Switching Protocols`
   - `Content-Length: 104857600000`
@@ -131,7 +131,7 @@ Update ini menyelaraskan perilaku SSHWS ke mode autoscript-stream, lalu menambah
   - `/?ed=...`
   - `wss://host/path?...`
 
-2. Runtime guard SSHWS (hindari false-positive 101)
+2. Runtime guard SSH WS (hindari false-positive 101)
 - Proxy sekarang membuka koneksi backend (`sshws-stunnel`) terlebih dahulu.
 - Jika backend gagal diakses, proxy mengembalikan `502 Bad Gateway` (bukan `101`).
 - Tujuan: memperjelas troubleshooting saat backend internal down/restart.
@@ -158,7 +158,7 @@ Update ini menyelaraskan perilaku SSHWS ke mode autoscript-stream, lalu menambah
 ### Hasil Validasi
 - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
 - `python3 -m py_compile` untuk script `sshws-proxy` hasil heredoc -> PASS
-- Runtime check SSHWS:
+- Runtime check SSH WS:
   - backend down -> `HTTP/1.1 502 Bad Gateway`
   - backend up -> `HTTP/1.1 101 Switching Protocols`
 - Smoke `manage.sh` (`0` keluar menu) -> PASS

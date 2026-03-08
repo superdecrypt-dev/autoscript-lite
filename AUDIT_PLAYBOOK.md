@@ -52,7 +52,7 @@ Fokus:
 - idempotency langkah install
 - staging/swap file yang aman
 
-### Prioritas 3: SSHWS dan QAC
+### Prioritas 3: SSH WS dan QAC
 - `opt/setup/install/sshws.sh`
 - `opt/setup/bin/sshws-proxy.py`
 - `opt/setup/bin/sshws-qac-enforcer.py`
@@ -154,7 +154,7 @@ PY
 rg -n "source |trusted|resolve_manage_modules_dir|RUN_USE_LOCAL_SOURCE|KEEP_REPO_AFTER_INSTALL" run.sh setup.sh manage.sh opt/setup opt/manage
 ```
 
-### 6.3 Cek jalur runtime SSHWS
+### 6.3 Cek jalur runtime SSH WS
 ```bash
 rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|updated_at" setup.sh opt/setup/install/sshws.sh opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/manage/features/analytics.sh
 ```
@@ -181,7 +181,7 @@ nginx -t
 ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b)'
 ```
 
-Khusus SSHWS:
+Khusus SSH WS:
 
 ```bash
 curl -i -N --http1.1 --max-time 5 -H 'Upgrade: websocket' -H 'Connection: Upgrade' http://<domain>/<token>
@@ -222,10 +222,10 @@ Aturan:
 
 ## 9. Accepted Risk Proyek Ini
 - hardcoded Cloudflare token historis diperlakukan sebagai by design kecuali ada instruksi eksplisit untuk mengubah
-- SSHWS mengikuti konsep autoscript-stream:
+- SSH WS mengikuti konsep autoscript-stream:
   - non-hybrid
   - tanpa `Sec-WebSocket-*` wajib
-- enforcement SSH QAC saat ini berlaku pada jalur SSHWS; SSH native `sshd:22` bukan target traffic enforcement
+- enforcement SSH QAC saat ini berlaku pada jalur SSH WS; SSH native `sshd:22` bukan target traffic enforcement
 
 ## 10. Kapan Harus Patch
 - patch jika finding memengaruhi:

@@ -31,21 +31,21 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `setup.sh` kini menjadi orchestrator tipis
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
     - full E2E modular installer sudah lolos live
-  - SSHWS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
-  - Guardrail audit: konsep SSHWS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
-  - SSHWS kini memakai token path per-user 10 hex chars:
+  - SSH WS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
+  - Guardrail audit: konsep SSH WS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
+  - SSH WS kini memakai token path per-user 10 hex chars:
     - `/<token>`
     - `/<bebas>/<token>`
     - path tanpa token tidak dipakai lagi
-  - SSHWS handshake kini fail-close:
+  - SSH WS handshake kini fail-close:
     - path tanpa token -> `401 Unauthorized`
     - token tidak dikenal -> `403 Forbidden`
     - backend internal down -> `502 Bad Gateway`
     - token valid + backend ready -> `101 Switching Protocols`
-  - QAC SSHWS terbaru:
+  - QAC SSH WS terbaru:
     - quota dan speed limit menempel ke user dari awal lewat token path
     - `IP/Login limit` sekarang dicek sebelum `101`, bukan hanya menunggu timer enforcer
-    - active session SSHWS dihitung dari runtime session files
+    - active session SSH WS dihitung dari runtime session files
     - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
   - `manage.sh` module loader di-hardening:
     - source modul dipilih hanya jika `trusted + lengkap` (semua modul wajib tersedia)
@@ -54,7 +54,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - mewajibkan input masa aktif (hari)
     - menerima `0` sebagai `back` pada prompt masa aktif
   - Scope enforcement SSH perlu dianggap eksplisit:
-    - `quota_used`, quota traffic, IP/login limit, dan speed limit saat ini berlaku pada jalur SSHWS
+    - `quota_used`, quota traffic, IP/login limit, dan speed limit saat ini berlaku pada jalur SSH WS
     - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
     - masa aktif dan manual block tetap berlaku pada akun SSH native
   - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:
@@ -77,7 +77,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
   - `printf "0\n" | timeout 20 bash manage.sh` -> PASS
-  - runtime SSHWS:
+  - runtime SSH WS:
     - path tanpa token -> `HTTP/1.1 401 Unauthorized`
     - token tidak valid -> `HTTP/1.1 403 Forbidden`
     - backend down -> `HTTP/1.1 502 Bad Gateway`
@@ -87,7 +87,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
     - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
   - Validasi playbook terbaru:
-    - `TESTING_PLAYBOOK.md` sudah sinkron dengan SSHWS token path dan pengujian bot Telegram
+    - `TESTING_PLAYBOOK.md` sudah sinkron dengan SSH WS token path dan pengujian bot Telegram
     - `AUDIT_PLAYBOOK.md` sudah sinkron dengan repo modular, bot, dan format audit terbaru
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
@@ -101,11 +101,11 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 8. Split menu bot Telegram antara Xray vs SSH untuk user management dan quota/access control.
 9. Ekspansi parity bot Telegram untuk `SSH`, `Security`, dan `Maintenance`.
 10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
-11. SSHWS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
+11. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.
-- Perubahan SSHWS autoscript-stream, token-path SSHWS, SSHWS QAC enforcement, parity/hardening bot Telegram, modular installer, dan playbook docs sudah commit + push ke `main`.
+- Perubahan SSH WS autoscript-stream, token-path SSH WS, SSH WS QAC enforcement, parity/hardening bot Telegram, modular installer, dan playbook docs sudah commit + push ke `main`.
 - Jangan mengasumsikan working tree kotor; cek kondisi aktual tiap mulai sesi.
 
 ## Prinsip Operasional

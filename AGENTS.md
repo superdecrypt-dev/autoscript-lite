@@ -32,7 +32,7 @@ Area `bot-telegram/` adalah stack bot Telegram standalone (`gateway-py/`, `backe
 - `bash bot-discord/scripts/gate-all.sh local`: gate test bot Discord.
 - `bash bot-telegram/scripts/gate-all.sh`: gate test bot Telegram.
 - `TESTING_PLAYBOOK.md`: SOP pengujian lengkap untuk shell script + bot Discord/Telegram (preflight, smoke, negative, integration, gate).
-- `AUDIT_PLAYBOOK.md`: SOP audit untuk entrypoint, modular installer, SSHWS/QAC, template runtime, dan bot.
+- `AUDIT_PLAYBOOK.md`: SOP audit untuk entrypoint, modular installer, SSH WS/QAC, template runtime, dan bot.
 
 ## Gaya Kode & Konvensi Penamaan
 Gunakan Bash strict mode (`set -euo pipefail`) dan pola defensif yang sudah ada (`ok`, `warn`, `die`). Indentasi utama 2 spasi untuk shell. Nama fungsi `snake_case`, konstanta/env `UPPER_SNAKE_CASE`, nama skrip `kebab-case.sh`. Untuk Python/TypeScript bot, gunakan nama modul yang deskriptif per domain menu (`menu_1_status`, `menu_8_maintenance`, dst).
@@ -40,7 +40,7 @@ Gunakan Bash strict mode (`set -euo pipefail`) dan pola defensif yang sudah ada 
 ## Panduan Testing
 Minimum sebelum merge: syntax check + lint shell + smoke check layanan terkait. Untuk perubahan runtime Xray, verifikasi `systemctl status xray xray-expired xray-quota xray-limit-ip xray-speed --no-pager` dan `xray run -test -confdir /usr/local/etc/xray/conf.d`. Untuk bot Discord, uji `backend-py` health endpoint dan alur `/panel` -> button -> modal di server Discord staging.
 Untuk bot Telegram, uji `backend-py` health endpoint ber-auth secret dan flow `/panel` + `/cleanup`.  
-Untuk SSHWS, verifikasi handshake `101` saat backend siap dan `502` saat backend internal (`sshws-stunnel`) down.  
+Untuk SSH WS, verifikasi handshake `101` saat backend siap dan `502` saat backend internal (`sshws-stunnel`) down.  
 Gunakan `TESTING_PLAYBOOK.md` sebagai sumber langkah testing baku sebelum rilis.
 
 ## Environment Separation (Wajib)
@@ -63,25 +63,25 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - Bot Telegram juga dijaga standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 - Kedua bot diposisikan sebagai pelengkap CLI `manage.sh`, bukan pengganti penuh alur CLI.
 - Target UX bot: profesional, minim teks tidak perlu, dan anti-spam output panjang.
-- SSHWS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib).
+- SSH WS saat ini berjalan pada konsep autoscript-stream (non-hybrid, tanpa `Sec-WebSocket-*` wajib).
 - `setup.sh` harus dipertahankan sebagai orchestrator tipis; implementasi installer baru ditempatkan di `opt/setup/*`.
-- Jalur SSHWS resmi sekarang wajib token path per-user:
+- Jalur SSH WS resmi sekarang wajib token path per-user:
   - `/<token>`
   - `/<bebas>/<token>`
-- Fail-close SSHWS yang harus dipertahankan:
+- Fail-close SSH WS yang harus dipertahankan:
   - tanpa token -> `401`
   - token tidak dikenal -> `403`
   - backend internal tidak siap -> `502`
   - token valid + backend siap -> `101`
-- Baseline audit SSHWS: pertahankan konsep ini sebagai desain resmi; referensi konsep perilaku: `https://github.com/nanotechid/supreme` (tanpa wajib meniru penamaan/struktur repo referensi).
+- Baseline audit SSH WS: pertahankan konsep ini sebagai desain resmi; referensi konsep perilaku: `https://github.com/nanotechid/supreme` (tanpa wajib meniru penamaan/struktur repo referensi).
 - Scope enforcement SSH saat ini harus dianggap by design:
-  - `quota_used`, quota traffic, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS.
+  - `quota_used`, quota traffic, IP/login limit, dan speed limit SSH berlaku pada jalur SSH WS.
   - Login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC.
   - Masa aktif akun dan manual block tetap berlaku pada SSH native.
-- QAC SSHWS terbaru yang perlu dipertahankan:
+- QAC SSH WS terbaru yang perlu dipertahankan:
   - identitas user ditentukan dari token path, bukan infer sesi login
   - `IP/Login limit` dicek sebelum `101`
-  - active session dibaca dari runtime session files SSHWS
+  - active session dibaca dari runtime session files SSH WS
   - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
 - Full E2E modular installer (`run.sh` dengan source lokal repo) sudah lolos live pada `2026-03-08`.
@@ -90,15 +90,15 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
 - SOP audit terpusat di `AUDIT_PLAYBOOK.md`.
 
 ## Aktivitas Terkini (Update 2026-03-08)
-- Fokus sprint terbaru: hardening admission/session tracking SSHWS + sinkronisasi dokumentasi + parity bot Telegram.
+- Fokus sprint terbaru: hardening admission/session tracking SSH WS + sinkronisasi dokumentasi + parity bot Telegram.
 - Refactor modular installer aktif:
   - `setup.sh` turun menjadi orchestrator tipis
   - modul installer aktif di `opt/setup/*`
   - full E2E live untuk jalur modular terbaru sudah PASS
 - Perubahan besar yang sudah dilalui:
-  - SSHWS berpindah ke mode autoscript-stream penuh untuk kompatibilitas payload klien.
-  - SSHWS sekarang memakai token path per-user `/<token>` dan `/<bebas>/<token>`.
-  - Guard runtime SSHWS: tanpa token -> `401`, token tidak valid -> `403`, backend down -> `502`, token valid -> `101`.
+  - SSH WS berpindah ke mode autoscript-stream penuh untuk kompatibilitas payload klien.
+  - SSH WS sekarang memakai token path per-user `/<token>` dan `/<bebas>/<token>`.
+  - Guard runtime SSH WS: tanpa token -> `401`, token tidak valid -> `403`, backend down -> `502`, token valid -> `101`.
   - `Add SSH User` kini wajib input masa aktif (hari) dan mendukung `0` sebagai `back`.
   - Resolver source modul `manage.sh` di-hardening dengan validasi `trusted + lengkap`.
   - Struktur modular `setup.sh` kini aktif dipakai:
@@ -106,7 +106,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
     - `opt/setup/install`
     - `opt/setup/bin`
     - `opt/setup/templates`
-  - QAC SSHWS sekarang lebih ketat:
+  - QAC SSH WS sekarang lebih ketat:
     - user resolve dari token path
     - `IP/Login limit` dicek sebelum handshake sukses
     - active session memakai runtime session files dengan heartbeat/freshness cleanup
@@ -119,7 +119,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
   - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
   - `python3 -m py_compile` heredoc `sshws-proxy` dan `sshws-qac-enforcer` -> PASS
   - smoke `manage.sh` -> PASS
-  - uji SSHWS tokenless/invalid/down/up -> PASS (`401` / `403` / `502` / `101`)
+  - uji SSH WS tokenless/invalid/down/up -> PASS (`401` / `403` / `502` / `101`)
 - Catatan workspace saat handoff ini ditulis:
   - Perubahan utama runtime + docs sudah tercatat commit dan push.
   - Selalu cek `git status --short` sebelum mulai perubahan baru.

@@ -101,7 +101,7 @@ Kriteria lulus:
 Khusus SSH WebSocket (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
 - Saat audit/review, konsep ini dianggap baseline tetap; referensi konsep perilaku: `https://github.com/nanotechid/supreme`.
-- Jalur resmi SSHWS sekarang berbasis token path per-user:
+- Jalur resmi SSH WS sekarang berbasis token path per-user:
   - `/<token>`
   - `/<bebas>/<token>`
 - Siapkan satu akun SSH terkelola lebih dulu, lalu ambil `sshws_token` dari metadata/account info.
@@ -144,8 +144,8 @@ Kriteria lulus:
 - Path token valid `/<token>` dan `/<bebas>/<token>` mengembalikan `101 Switching Protocols`.
 - Path tanpa token mengembalikan `401 Unauthorized`.
 - Token tidak valid mengembalikan `403 Forbidden`.
-- Saat `sshws-dropbear` dimatikan, endpoint SSHWS token-valid mengembalikan `502 Bad Gateway`.
-- Path Xray lain tetap berfungsi dan tidak bentrok dengan route SSHWS token-path.
+- Saat `sshws-dropbear` dimatikan, endpoint SSH WS token-valid mengembalikan `502 Bad Gateway`.
+- Path Xray lain tetap berfungsi dan tidak bentrok dengan route SSH WS token-path.
 
 Khusus runtime bot Telegram (smoke cepat; detail lengkap lihat Bagian 6):
 
@@ -336,7 +336,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 3. Menu `3) SSH Management`
 - `List Managed SSH Users`
 - `View Account Info`
-- `Active SSHWS Sessions`
+- `Active SSH WS Sessions`
 - `SSH WS Service Status`
 
 4. Menu `4) Xray Quota & Access Control`
@@ -362,7 +362,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `Fail2ban Overview`
 
 9. Menu `10) Maintenance`
-- `SSHWS Diagnostics`
+- `SSH WS Diagnostics`
 - `SSH WS Status`
 - `Daemon Status`
 

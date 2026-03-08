@@ -4,7 +4,7 @@
 
 Dokumen ini mendefinisikan desain teknis untuk mendukung:
 
-- `SSHWS`
+- `SSH WS`
 - `SSH SSL/TLS klasik`
 - route HTTP/Xray yang sudah ada
 
@@ -35,7 +35,7 @@ Hanya **satu provider** yang aktif pada satu waktu.
 
 ### In scope
 
-- Multiplex `SSHWS` dan `SSH SSL/TLS klasik` pada domain yang sama.
+- Multiplex `SSH WS` dan `SSH SSL/TLS klasik` pada domain yang sama.
 - Shared public port `80` dan `443`.
 - Provider abstraction `go|haproxy|nginx-stream`.
 - Installer modular untuk provider edge.
@@ -56,9 +56,9 @@ Arsitektur aktif saat ini:
 - `dropbear` internal
 - `xray` diroute di belakang `nginx`
 
-Ini sudah cocok untuk `SSHWS`, tetapi belum cukup untuk:
+Ini sudah cocok untuk `SSH WS`, tetapi belum cukup untuk:
 
-- `SSHWS`
+- `SSH WS`
 - `SSH SSL/TLS klasik`
 - satu domain
 - shared `80/443`
@@ -86,7 +86,7 @@ Target backend default:
 
 Route yang tetap dilayani `nginx-http`:
 
-- `SSHWS`
+- `SSH WS`
 - Xray WS/HUP/gRPC/HTTP route yang sudah ada
 - halaman default/status lain yang sudah ada di layer HTTP
 
@@ -120,7 +120,7 @@ Provider edge menerima semua trafik publik di `:80`.
 
 ### Hasil
 
-- `SSHWS` non-TLS / HTTP WS tetap bisa hidup di `:80`
+- `SSH WS` non-TLS / HTTP WS tetap bisa hidup di `:80`
 - `SSH SSL/TLS klasik` tetap bisa hidup di `:80` sebagai compatibility mode
 
 Catatan:
@@ -142,7 +142,7 @@ Provider edge menerima semua trafik publik di `:443`.
 
 ### Kenapa ini bekerja
 
-- `SSHWS/WSS` biasanya segera mengirim `GET /... HTTP/1.1`
+- `SSH WS/WSS` biasanya segera mengirim `GET /... HTTP/1.1`
 - `SSH klasik` biasanya menunggu banner server, jadi tidak langsung mengirim request HTTP
 
 Timeout awal yang disarankan:
@@ -303,11 +303,11 @@ EDGE_CLASSIC_TLS_ON_80=true
 - listener publik `80/443` harus dipindah
 - mode baru: backend internal HTTP router
 
-### SSHWS
+### SSH WS
 
 - tetap berjalan melalui route HTTP/WebSocket di `nginx-http`
 - tidak perlu diubah menjadi provider edge
-- QAC SSHWS tetap berada di jalur existing
+- QAC SSH WS tetap berada di jalur existing
 
 ### SSH SSL/TLS klasik
 
@@ -316,7 +316,7 @@ EDGE_CLASSIC_TLS_ON_80=true
 
 ### QAC
 
-QAC SSHWS yang sekarang ada **tidak otomatis berlaku** untuk jalur klasik.
+QAC SSH WS yang sekarang ada **tidak otomatis berlaku** untuk jalur klasik.
 
 Kalau nanti jalur klasik juga ingin punya:
 
@@ -337,7 +337,7 @@ maka harus dibuat desain enforcement terpisah.
 7. validasi:
    - `nginx -t`
    - `systemctl is-active edge`
-   - `101` untuk SSHWS
+   - `101` untuk SSH WS
    - handshake TLS klasik ke backend SSH
 
 ## Menu CLI Yang Layak Ditambah Nanti
@@ -387,7 +387,7 @@ Tidak wajib untuk fase desain, tetapi sebaiknya dipersiapkan:
 Minimum test untuk provider aktif:
 
 1. `HTTP` di `:80` tetap masuk ke `nginx-http`
-2. `SSHWS` plaintext di `:80` tetap `101`
+2. `SSH WS` plaintext di `:80` tetap `101`
 3. `TLS klasik` di `:80` masuk ke backend SSH
 4. `WSS` di `:443` tetap `101`
 5. `SSH klasik TLS` di `:443` masuk ke backend SSH

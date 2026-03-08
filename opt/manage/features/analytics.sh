@@ -1267,8 +1267,9 @@ edge_runtime_status_menu() {
   echo "10) Maintenance > Edge Gateway Status"
   hr
 
-  local svc env_file provider active http_port tls_port http_backend ssh_backend detect_timeout tls80
+  local svc haproxy_svc env_file provider active http_port tls_port http_backend ssh_backend detect_timeout tls80
   svc="$(edge_runtime_service_name)"
+  haproxy_svc="haproxy"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
@@ -1294,6 +1295,12 @@ edge_runtime_status_menu() {
     svc_status_line "${svc}"
   else
     warn "${svc} tidak terpasang"
+  fi
+
+  if svc_exists "${haproxy_svc}"; then
+    svc_status_line "${haproxy_svc}"
+  else
+    echo "N/A  - ${haproxy_svc} (not installed)"
   fi
 
   if svc_exists nginx; then
@@ -1655,7 +1662,7 @@ sshws_combined_logs_menu() {
   done
 
   if (( ${#svc_args[@]} == 0 )); then
-    warn "Belum ada service SSHWS yang terpasang."
+    warn "Belum ada service SSH WS yang terpasang."
     hr
     pause
     return 0
@@ -1738,13 +1745,13 @@ sshws_diagnostics_menu() {
 
     hr
     echo "Notes:"
-    echo "  - HTTP 101 menandakan chain SSHWS sehat."
+    echo "  - HTTP 101 menandakan chain SSH WS sehat."
     echo "  - HTTP 502 biasanya berarti backend internal belum siap."
     echo "  - HTTP 301/308 pada port 80 normal jika force-HTTPS aktif."
-    echo "  - HTTP 401/403 biasanya berarti path/token SSHWS belum cocok."
+    echo "  - HTTP 401/403 biasanya berarti path/token SSH WS belum cocok."
     hr
     echo "  1) Refresh"
-    echo "  2) Combined SSHWS Logs"
+    echo "  2) Combined SSH WS Logs"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " choice; then
@@ -2578,28 +2585,58 @@ ssh_qac_traffic_enforcement_ready() {
 
 ssh_qac_traffic_scope_label() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "SSHWS only"
+    echo "SSH WS only"
   else
-    echo "Metadata only (SSHWS not installed)"
+    echo "Metadata only (SSH WS not installed)"
   fi
 }
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Quota/IP-login/speed berlaku pada jalur SSHWS; IP/login dihitung dari sesi aktif dan client IP runtime bila tersedia; native SSH port 22 tidak dihitung atau di-throttle."
+    echo "Quota/IP-login/speed berlaku pada jalur SSH WS; IP/login dihitung dari sesi aktif dan client IP runtime bila tersedia; native SSH port 22 tidak dihitung atau di-throttle."
   else
-    echo "SSHWS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
+    echo "SSH WS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
   fi
 }
 
 ssh_qac_print_scope_notice() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Traffic scope : quota used, IP/login limit, dan speed limit SSH berlaku pada jalur SSHWS."
-    echo "IP/Login calc : memakai sesi aktif dan client IP runtime SSHWS bila tersedia."
+    echo "Traffic scope : quota used, IP/login limit, dan speed limit SSH berlaku pada jalur SSH WS."
+    echo "IP/Login calc : memakai sesi aktif dan client IP runtime SSH WS bila tersedia."
     echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
   else
-    echo "Traffic scope : SSHWS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
+    echo "Traffic scope : SSH WS belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
     echo "Native SSH    : yang benar-benar berlaku saat ini tetap masa aktif dan manual block."
+  fi
+}
+
+edge_runtime_enabled_for_public_ports() {
+  local provider active
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+  [[ "${provider}" != "none" ]] || return 1
+  case "${active}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+  esac
+  return 1
+}
+
+ssh_ws_public_ports_label() {
+  local http_port tls_port
+  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
+  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  if [[ -n "${tls_port}" && -n "${http_port}" ]]; then
+    printf '%s & %s\n' "${tls_port}" "${http_port}"
+  else
+    printf '%s\n' "443 & 80"
+  fi
+}
+
+ssh_ssl_tls_public_ports_label() {
+  if edge_runtime_enabled_for_public_ports; then
+    ssh_ws_public_ports_label
+  else
+    printf '%s\n' "-"
   fi
 }
 
@@ -2627,13 +2664,18 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_token_disp sshws_main_disp
+  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp traffic_scope_disp traffic_scope_note sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_ssl_tls_ports_disp geo
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
+  geo="$(main_info_geo_lookup "${ip}")"
+  isp="${geo%%|*}"
+  country="${geo##*|}"
   [[ -n "${domain}" ]] || domain="-"
   [[ -n "${ip}" ]] || ip="-"
+  [[ -n "${isp}" ]] || isp="-"
+  [[ -n "${country}" ]] || country="-"
   [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d %H:%M')"
   [[ -n "${expired_at}" ]] || expired_at="-"
 
@@ -2713,21 +2755,23 @@ PY
   traffic_scope_note="$(ssh_qac_traffic_scope_line)"
   if sshws_token_valid "${sshws_token}"; then
     sshws_token="${sshws_token,,}"
-    sshws_token_disp="${sshws_token}"
     sshws_path="$(sshws_path_from_token "${sshws_token}")"
     sshws_alt_path="$(sshws_alt_path_from_token "${sshws_token}" 2>/dev/null || true)"
-    sshws_main_disp="${sshws_path} (token: ${sshws_token_disp})"
+    sshws_main_disp="${sshws_path}"
   else
-    sshws_token_disp="-"
     sshws_path="-"
     sshws_alt_path="-"
     sshws_main_disp="-"
   fi
+  sshws_ports_disp="$(ssh_ws_public_ports_label)"
+  ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
 
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
 Domain      : ${domain}
 IP          : ${ip}
+ISP         : ${isp}
+Country     : ${country}
 Username    : ${username}
 Password    : ${password_out}
 Quota Limit : ${quota_limit_disp}
@@ -2736,8 +2780,10 @@ Valid Until : ${valid_until}
 Created     : ${created_disp}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
-SSHWS       : ${sshws_main_disp}
-SSHWS Alt   : ${sshws_alt_path}
+SSH WS      : ${sshws_main_disp}
+SSH WS Alt  : ${sshws_alt_path}
+SSH WS Port : ${sshws_ports_disp}
+SSH SSL/TLS : ${ssh_ssl_tls_ports_disp}
 Traffic Scope : ${traffic_scope_disp}
 Traffic Note  : ${traffic_scope_note}
 
@@ -2758,7 +2804,7 @@ Payload SNI+WS+Proxy (Prefixed):
     GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 
 Catatan:
-    Path SSHWS wajib memakai token per-user. Format yang didukung: /<token> atau /<bebas>/<token>. Payload lama ke path / tanpa token tidak dipakai lagi.
+    Path SSH WS wajib memakai token per-user. Format yang didukung: /<token> atau /<bebas>/<token>. Payload lama ke path / tanpa token tidak dipakai lagi.
 EOF
   then
     return 1
@@ -3986,7 +4032,7 @@ sshws_active_sessions_print_page() {
   fi
   SSHWS_SESSION_PAGE="${page}"
 
-  echo "Active SSHWS sessions: ${total} | page $((page + 1))/${display_pages}"
+  echo "Active SSH WS sessions: ${total} | page $((page + 1))/${display_pages}"
   if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
     echo "Filter: '${SSHWS_SESSION_QUERY}'"
   fi
@@ -3994,7 +4040,7 @@ sshws_active_sessions_print_page() {
   echo
 
   if (( total == 0 )); then
-    echo "Tidak ada sesi SSHWS aktif."
+    echo "Tidak ada sesi SSH WS aktif."
     return 0
   fi
 
@@ -4050,7 +4096,7 @@ sshws_active_session_detail() {
   IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
 
   title
-  echo "3) SSH Management > Active SSHWS Session Detail"
+  echo "3) SSH Management > Active SSH WS Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
   printf "%-16s : %s\n" "Client IP" "${client_ip}"
@@ -4086,7 +4132,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "3) SSH Management > Active SSHWS Sessions"
+    echo "3) SSH Management > Active SSH WS Sessions"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -4156,7 +4202,7 @@ ssh_menu() {
     echo "  5) List Managed SSH Users"
     echo "  6) SSH WS Service Status"
     echo "  7) Restart SSH WS Stack"
-    echo "  8) Active SSHWS Sessions"
+    echo "  8) Active SSH WS Sessions"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -5215,16 +5261,16 @@ ssh_qac_edit_flow() {
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
-    printf "%-${label_w}s : %s\n" "Quota Used (SSHWS)" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used (SSH WS)" "${qu_disp}"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active SSHWS Sessions" "${active_sessions}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSHWS)" "${speed_down}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSHWS)" "${speed_up}"
-    printf "%-${label_w}s : %s\n" "Speed Limit (SSHWS)" "${speed_state}"
+    printf "%-${label_w}s : %s\n" "Active SSH WS Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH WS)" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH WS)" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit (SSH WS)" "${speed_state}"
     printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
     ssh_qac_print_scope_notice
@@ -5232,14 +5278,14 @@ ssh_qac_edit_flow() {
 
     echo "  1) View JSON"
     echo "  2) Set Quota Limit (GB)"
-    echo "  3) Reset Quota Used SSHWS (set 0)"
+    echo "  3) Reset Quota Used SSH WS (set 0)"
     echo "  4) Manual Block/Unblock (toggle)"
     echo "  5) IP/Login Limit Enable/Disable (toggle)"
     echo "  6) Set IP/Login Limit (angka)"
     echo "  7) Unlock IP/Login Lock"
-    echo "  8) Set Speed Download SSHWS (Mbps)"
-    echo "  9) Set Speed Upload SSHWS (Mbps)"
-    echo " 10) Speed Limit SSHWS Enable/Disable (toggle)"
+    echo "  8) Set Speed Download SSH WS (Mbps)"
+    echo "  9) Set Speed Upload SSH WS (Mbps)"
+    echo " 10) Speed Limit SSH WS Enable/Disable (toggle)"
     echo "  0) Kembali"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -5645,7 +5691,7 @@ daemon_status_menu() {
   local sshws_qac_timer="${SSHWS_QAC_ENFORCER_TIMER:-sshws-qac-enforcer.timer}"
 
   local daemons=(
-    "xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy"
+    "xray" "nginx" "haproxy" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy"
     "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}" "${sshws_qac_timer}"
   )
   local d
@@ -5673,7 +5719,7 @@ daemon_status_menu() {
   echo " 10) Restart ${sshws_dropbear_svc}"
   echo " 11) Restart ${sshws_stunnel_svc}"
   echo " 12) Restart ${sshws_proxy_svc}"
-  echo " 13) Restart semua daemon SSHWS (dropbear + stunnel + proxy)"
+  echo " 13) Restart semua daemon SSH WS (dropbear + stunnel + proxy)"
   echo " 14) Lihat log ${sshws_dropbear_svc} (20 baris)"
   echo " 15) Lihat log ${sshws_stunnel_svc} (20 baris)"
   echo " 16) Lihat log ${sshws_proxy_svc} (20 baris)"
