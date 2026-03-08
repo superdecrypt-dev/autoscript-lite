@@ -256,7 +256,7 @@ write_nginx_config() {
     nginx_mode_desc="internal backend $(nginx_internal_backend_addr)"
   else
     nginx_listen_block=$'  listen 80;\n  listen [::]:80;\n  listen 443 ssl;\n  listen [::]:443 ssl;\n\thttp2 on;'
-    nginx_tls_block=$'  ssl_certificate __CERT_DIR__/fullchain.pem;\n  ssl_certificate_key __CERT_DIR__/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;'
+    nginx_tls_block=$'  ssl_certificate '"${CERT_DIR}"$'/fullchain.pem;\n  ssl_certificate_key '"${CERT_DIR}"$'/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;'
     nginx_mode_desc="public 80/443"
   fi
 
