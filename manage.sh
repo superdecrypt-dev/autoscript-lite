@@ -4354,8 +4354,8 @@ PUBLIC_PATHS = {
   "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-  "shadowsocks": {"ws": "/shadowsocks-ws", "httpupgrade": "/shadowsocks-hup", "grpc": "shadowsocks-grpc"},
-  "shadowsocks2022": {"ws": "/shadowsocks2022-ws", "httpupgrade": "/shadowsocks2022-hup", "grpc": "shadowsocks2022-grpc"},
+  "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
+  "shadowsocks2022": {"ws": "/ss2022-ws", "httpupgrade": "/ss2022-hup", "grpc": "ss2022-grpc"},
 }
 SS_METHOD = "aes-128-gcm"
 SS2022_METHOD = "2022-blake3-aes-128-gcm"
@@ -4859,8 +4859,8 @@ PUBLIC_PATHS = {
   "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-  "shadowsocks": {"ws": "/shadowsocks-ws", "httpupgrade": "/shadowsocks-hup", "grpc": "shadowsocks-grpc"},
-  "shadowsocks2022": {"ws": "/shadowsocks2022-ws", "httpupgrade": "/shadowsocks2022-hup", "grpc": "shadowsocks2022-grpc"},
+  "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
+  "shadowsocks2022": {"ws": "/ss2022-ws", "httpupgrade": "/ss2022-hup", "grpc": "ss2022-grpc"},
 }
 SS_METHOD = "aes-128-gcm"
 SS2022_METHOD = "2022-blake3-aes-128-gcm"

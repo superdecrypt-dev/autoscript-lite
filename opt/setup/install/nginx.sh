@@ -63,17 +63,105 @@ nginx_prepare_stream_conf_state() {
 nginx_read_live_map_value() {
   local map_name="$1" route_name="$2"
   [[ -f "${NGINX_CONF}" ]] || return 1
-  sed -nE \
-    '/map \$uri \$'"${map_name}"' \{/,/^}/ s@^[[:space:]]*~\^/'"${route_name}"'\(\?:/\|\$\)[[:space:]]+([^;]+);[[:space:]]*$@\1@p' \
-    "${NGINX_CONF}" | head -n1
+  python3 - "${NGINX_CONF}" "${map_name}" "${route_name}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+conf_path, map_name, route_regex = sys.argv[1:]
+text = Path(conf_path).read_text()
+
+route_candidates = {
+    "(shadowsocks|ss)-ws": [r"\(\?:shadowsocks\|ss\)-ws", r"ss-ws"],
+    "(shadowsocks2022|ss2022)-ws": [r"\(\?:shadowsocks2022\|ss2022\)-ws", r"ss2022-ws"],
+    "(shadowsocks|ss)-hup": [r"\(\?:shadowsocks\|ss\)-hup", r"ss-hup"],
+    "(shadowsocks2022|ss2022)-hup": [r"\(\?:shadowsocks2022\|ss2022\)-hup", r"ss2022-hup"],
+    "(shadowsocks|ss)-grpc": [r"\(\?:shadowsocks\|ss\)-grpc", r"ss-grpc"],
+    "(shadowsocks2022|ss2022)-grpc": [r"\(\?:shadowsocks2022\|ss2022\)-grpc", r"ss2022-grpc"],
+}
+
+block_match = re.search(
+    rf'map \$uri \${re.escape(map_name)} \{{(.*?)^\}}',
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+if not block_match:
+    raise SystemExit(1)
+
+for candidate in route_candidates.get(route_regex, [route_regex]):
+    pattern = re.compile(
+        rf'^\s*~\^/\(\?:\[\^/\]\+/\)\?{candidate}\(\?:/\|\$\)\s+([^;]+);\s*$',
+        re.MULTILINE,
+    )
+    match = pattern.search(block_match.group(1))
+    if match:
+        print(match.group(1))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+nginx_read_live_map_value_first() {
+  local map_name="$1"
+  shift
+  local route_name value
+  for route_name in "$@"; do
+    value="$(nginx_read_live_map_value "${map_name}" "${route_name}" || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 nginx_read_live_grpc_value() {
   local route_name="$1"
   [[ -f "${NGINX_CONF}" ]] || return 1
-  sed -nE \
-    '/map \$uri \$grpc_service_name \{/,/^}/ s@^[[:space:]]*~\^/'"${route_name}"'\(\?:/\|\$\)[[:space:]]+([^;]+);[[:space:]]*$@\1@p' \
-    "${NGINX_CONF}" | head -n1
+  python3 - "${NGINX_CONF}" "${route_name}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+conf_path, route_regex = sys.argv[1:]
+text = Path(conf_path).read_text()
+
+route_candidates = {
+    "(shadowsocks|ss)-grpc": [r"\(\?:shadowsocks\|ss\)-grpc", r"ss-grpc"],
+    "(shadowsocks2022|ss2022)-grpc": [r"\(\?:shadowsocks2022\|ss2022\)-grpc", r"ss2022-grpc"],
+}
+
+block_match = re.search(
+    r'map \$uri \$grpc_service_name \{(.*?)^\}',
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+if not block_match:
+    raise SystemExit(1)
+
+for candidate in route_candidates.get(route_regex, [route_regex]):
+    pattern = re.compile(
+        rf'^\s*~\^/\(\?:\[\^/\]\+/\)\?{candidate}\(\?:/\|\$\)\s+([^;]+);\s*$',
+        re.MULTILINE,
+    )
+    match = pattern.search(block_match.group(1))
+    if match:
+        print(match.group(1))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+nginx_read_live_grpc_value_first() {
+  local route_name value
+  for route_name in "$@"; do
+    value="$(nginx_read_live_grpc_value "${route_name}" || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 nginx_export_if_missing_from_live() {
@@ -97,38 +185,38 @@ nginx_ensure_render_context_or_die() {
   nginx_export_if_missing_from_live P_VLESS_WS "$(nginx_read_live_map_value internal_port 'vless-ws' || true)"
   nginx_export_if_missing_from_live P_VMESS_WS "$(nginx_read_live_map_value internal_port 'vmess-ws' || true)"
   nginx_export_if_missing_from_live P_TROJAN_WS "$(nginx_read_live_map_value internal_port 'trojan-ws' || true)"
-  nginx_export_if_missing_from_live P_SS_WS "$(nginx_read_live_map_value internal_port 'shadowsocks-ws' || true)"
-  nginx_export_if_missing_from_live P_SS2022_WS "$(nginx_read_live_map_value internal_port 'shadowsocks2022-ws' || true)"
+  nginx_export_if_missing_from_live P_SS_WS "$(nginx_read_live_map_value_first internal_port 'ss-ws' '\(\?:shadowsocks\|ss\)-ws' || true)"
+  nginx_export_if_missing_from_live P_SS2022_WS "$(nginx_read_live_map_value_first internal_port 'ss2022-ws' '\(\?:shadowsocks2022\|ss2022\)-ws' || true)"
 
   nginx_export_if_missing_from_live P_VLESS_HUP "$(nginx_read_live_map_value internal_port 'vless-hup' || true)"
   nginx_export_if_missing_from_live P_VMESS_HUP "$(nginx_read_live_map_value internal_port 'vmess-hup' || true)"
   nginx_export_if_missing_from_live P_TROJAN_HUP "$(nginx_read_live_map_value internal_port 'trojan-hup' || true)"
-  nginx_export_if_missing_from_live P_SS_HUP "$(nginx_read_live_map_value internal_port 'shadowsocks-hup' || true)"
-  nginx_export_if_missing_from_live P_SS2022_HUP "$(nginx_read_live_map_value internal_port 'shadowsocks2022-hup' || true)"
+  nginx_export_if_missing_from_live P_SS_HUP "$(nginx_read_live_map_value_first internal_port 'ss-hup' '\(\?:shadowsocks\|ss\)-hup' || true)"
+  nginx_export_if_missing_from_live P_SS2022_HUP "$(nginx_read_live_map_value_first internal_port 'ss2022-hup' '\(\?:shadowsocks2022\|ss2022\)-hup' || true)"
 
   nginx_export_if_missing_from_live P_VLESS_GRPC "$(nginx_read_live_map_value internal_port 'vless-grpc' || true)"
   nginx_export_if_missing_from_live P_VMESS_GRPC "$(nginx_read_live_map_value internal_port 'vmess-grpc' || true)"
   nginx_export_if_missing_from_live P_TROJAN_GRPC "$(nginx_read_live_map_value internal_port 'trojan-grpc' || true)"
-  nginx_export_if_missing_from_live P_SS_GRPC "$(nginx_read_live_map_value internal_port 'shadowsocks-grpc' || true)"
-  nginx_export_if_missing_from_live P_SS2022_GRPC "$(nginx_read_live_map_value internal_port 'shadowsocks2022-grpc' || true)"
+  nginx_export_if_missing_from_live P_SS_GRPC "$(nginx_read_live_map_value_first internal_port 'ss-grpc' '\(\?:shadowsocks\|ss\)-grpc' || true)"
+  nginx_export_if_missing_from_live P_SS2022_GRPC "$(nginx_read_live_map_value_first internal_port 'ss2022-grpc' '\(\?:shadowsocks2022\|ss2022\)-grpc' || true)"
 
   nginx_export_if_missing_from_live I_VLESS_WS "$(nginx_read_live_map_value internal_path 'vless-ws' || true)"
   nginx_export_if_missing_from_live I_VMESS_WS "$(nginx_read_live_map_value internal_path 'vmess-ws' || true)"
   nginx_export_if_missing_from_live I_TROJAN_WS "$(nginx_read_live_map_value internal_path 'trojan-ws' || true)"
-  nginx_export_if_missing_from_live I_SS_WS "$(nginx_read_live_map_value internal_path 'shadowsocks-ws' || true)"
-  nginx_export_if_missing_from_live I_SS2022_WS "$(nginx_read_live_map_value internal_path 'shadowsocks2022-ws' || true)"
+  nginx_export_if_missing_from_live I_SS_WS "$(nginx_read_live_map_value_first internal_path 'ss-ws' '\(\?:shadowsocks\|ss\)-ws' || true)"
+  nginx_export_if_missing_from_live I_SS2022_WS "$(nginx_read_live_map_value_first internal_path 'ss2022-ws' '\(\?:shadowsocks2022\|ss2022\)-ws' || true)"
 
   nginx_export_if_missing_from_live I_VLESS_HUP "$(nginx_read_live_map_value internal_path 'vless-hup' || true)"
   nginx_export_if_missing_from_live I_VMESS_HUP "$(nginx_read_live_map_value internal_path 'vmess-hup' || true)"
   nginx_export_if_missing_from_live I_TROJAN_HUP "$(nginx_read_live_map_value internal_path 'trojan-hup' || true)"
-  nginx_export_if_missing_from_live I_SS_HUP "$(nginx_read_live_map_value internal_path 'shadowsocks-hup' || true)"
-  nginx_export_if_missing_from_live I_SS2022_HUP "$(nginx_read_live_map_value internal_path 'shadowsocks2022-hup' || true)"
+  nginx_export_if_missing_from_live I_SS_HUP "$(nginx_read_live_map_value_first internal_path 'ss-hup' '\(\?:shadowsocks\|ss\)-hup' || true)"
+  nginx_export_if_missing_from_live I_SS2022_HUP "$(nginx_read_live_map_value_first internal_path 'ss2022-hup' '\(\?:shadowsocks2022\|ss2022\)-hup' || true)"
 
   nginx_export_if_missing_from_live I_VLESS_GRPC "$(nginx_read_live_grpc_value 'vless-grpc' || true)"
   nginx_export_if_missing_from_live I_VMESS_GRPC "$(nginx_read_live_grpc_value 'vmess-grpc' || true)"
   nginx_export_if_missing_from_live I_TROJAN_GRPC "$(nginx_read_live_grpc_value 'trojan-grpc' || true)"
-  nginx_export_if_missing_from_live I_SS_GRPC "$(nginx_read_live_grpc_value 'shadowsocks-grpc' || true)"
-  nginx_export_if_missing_from_live I_SS2022_GRPC "$(nginx_read_live_grpc_value 'shadowsocks2022-grpc' || true)"
+  nginx_export_if_missing_from_live I_SS_GRPC "$(nginx_read_live_grpc_value_first 'ss-grpc' '\(\?:shadowsocks\|ss\)-grpc' || true)"
+  nginx_export_if_missing_from_live I_SS2022_GRPC "$(nginx_read_live_grpc_value_first 'ss2022-grpc' '\(\?:shadowsocks2022\|ss2022\)-grpc' || true)"
 
   local required_vars=(
     P_VLESS_WS P_VMESS_WS P_TROJAN_WS P_SS_WS P_SS2022_WS
