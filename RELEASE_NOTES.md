@@ -1,5 +1,44 @@
 # Release Notes
 
+## Rilis 2026-03-08 (Edge Gateway Primary + HAProxy Standby Fallback)
+
+### Ringkasan
+Rilis ini mematangkan topologi edge menjadi:
+
+- `Edge Gateway (go)` sebagai frontend publik utama
+- `HAProxy` sebagai standby fallback
+- `nginx` sebagai backend internal HTTP
+
+### Perubahan Utama
+1. Topologi primary + standby
+- `edge-mux` tetap memegang publik `:80/:443`
+- `haproxy` kini dapat tetap hidup sebagai standby di:
+  - `:18082`
+  - `:18444`
+- `nginx` tetap hidup di backend internal `127.0.0.1:18080`
+
+2. Failover helper operasional
+- helper baru:
+  - `edge-provider-switch haproxy`
+  - `edge-provider-switch go`
+- helper ini digunakan untuk:
+  - promote `HAProxy` ke `80/443`
+  - restore kembali ke `Edge Gateway`
+
+3. Maintenance menu
+- maintenance sekarang punya aksi eksplisit untuk:
+  - failover ke `HAProxy`
+  - restore ke `Edge Gateway (go)`
+
+### Hasil Validasi
+- failover live ke `HAProxy` -> PASS
+- restore live ke `Edge Gateway` -> PASS
+- `HTTP` publik tetap hidup pada dua mode -> PASS
+- `SSH SSL/TLS` dan `SSH WS` tetap tidak regress -> PASS
+
+### Commit
+- perubahan ini akan muncul di riwayat git setelah sinkronisasi repo berikutnya
+
 ## Rilis 2026-03-08 (Edge Gateway Live + SSH Surface Refresh)
 
 ### Ringkasan

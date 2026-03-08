@@ -1259,7 +1259,13 @@ edge_runtime_get_env() {
 }
 
 edge_runtime_service_name() {
-  printf '%s\n' "edge-mux.service"
+  local provider
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  case "${provider}" in
+    haproxy) printf '%s\n' "haproxy" ;;
+    go) printf '%s\n' "edge-mux.service" ;;
+    *) printf '%s\n' "edge-mux.service" ;;
+  esac
 }
 
 edge_runtime_status_menu() {
@@ -1267,9 +1273,9 @@ edge_runtime_status_menu() {
   echo "10) Maintenance > Edge Gateway Status"
   hr
 
-  local svc haproxy_svc env_file provider active http_port tls_port http_backend ssh_backend detect_timeout tls80
+  local svc alt_svc env_file provider active http_port tls_port http_backend ssh_backend ssh_tls_backend detect_timeout tls80
   svc="$(edge_runtime_service_name)"
-  haproxy_svc="haproxy"
+  alt_svc="haproxy"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
@@ -1277,6 +1283,7 @@ edge_runtime_status_menu() {
   tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
+  ssh_tls_backend="$(edge_runtime_get_env EDGE_SSH_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:22443")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
 
@@ -1287,6 +1294,7 @@ edge_runtime_status_menu() {
   echo "TLS port    : ${tls_port}"
   echo "HTTP backend: ${http_backend}"
   echo "SSH backend : ${ssh_backend}"
+  echo "SSH TLS b/e : ${ssh_tls_backend}"
   echo "Detect (ms) : ${detect_timeout}"
   echo "TLS on 80   : ${tls80}"
   hr
@@ -1297,10 +1305,12 @@ edge_runtime_status_menu() {
     warn "${svc} tidak terpasang"
   fi
 
-  if svc_exists "${haproxy_svc}"; then
-    svc_status_line "${haproxy_svc}"
-  else
-    echo "N/A  - ${haproxy_svc} (not installed)"
+  if [[ "${alt_svc}" != "${svc}" ]]; then
+    if svc_exists "${alt_svc}"; then
+      svc_status_line "${alt_svc}"
+    else
+      echo "N/A  - ${alt_svc} (not installed)"
+    fi
   fi
 
   if svc_exists nginx; then
@@ -1365,17 +1375,21 @@ edge_runtime_info_menu() {
   echo "10) Maintenance > Edge Gateway Info"
   hr
 
-  local provider active http_port tls_port http_backend ssh_backend detect_timeout tls80 cert_file key_file
+  local provider active http_port tls_port http_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file fallback_enabled standby_http standby_tls
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
   http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
   tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
+  ssh_tls_backend="$(edge_runtime_get_env EDGE_SSH_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:22443")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   cert_file="$(edge_runtime_get_env EDGE_TLS_CERT_FILE 2>/dev/null || echo "/opt/cert/fullchain.pem")"
   key_file="$(edge_runtime_get_env EDGE_TLS_KEY_FILE 2>/dev/null || echo "/opt/cert/privkey.pem")"
+  fallback_enabled="$(edge_runtime_get_env EDGE_HAPROXY_FALLBACK_ENABLED 2>/dev/null || echo "true")"
+  standby_http="$(edge_runtime_get_env EDGE_HAPROXY_STANDBY_HTTP_PORT 2>/dev/null || echo "18082")"
+  standby_tls="$(edge_runtime_get_env EDGE_HAPROXY_STANDBY_TLS_PORT 2>/dev/null || echo "18444")"
 
   echo "Provider        : ${provider}"
   echo "Runtime Active  : ${active}"
@@ -1383,15 +1397,56 @@ edge_runtime_info_menu() {
   echo "Public TLS      : ${tls_port}"
   echo "HTTP Backend    : ${http_backend}"
   echo "SSH Backend     : ${ssh_backend}"
+  echo "SSH TLS Backend : ${ssh_tls_backend}"
   echo "Detect Timeout  : ${detect_timeout} ms"
   echo "Classic TLS :80 : ${tls80}"
   echo "TLS Cert        : ${cert_file}"
   echo "TLS Key         : ${key_file}"
+  echo "HAProxy Fallback: ${fallback_enabled}"
+  echo "HAProxy Standby : ${standby_http} / ${standby_tls}"
   hr
   echo "Mode ringkas:"
   echo "  - HTTP / WebSocket -> backend HTTP (${http_backend})"
   echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
   echo "  - default gateway aktif hanya satu pada port publik"
+  hr
+  pause
+}
+
+edge_runtime_failover_haproxy_menu() {
+  title
+  echo "10) Maintenance > Failover ke HAProxy"
+  hr
+  if ! have_cmd edge-provider-switch; then
+    warn "edge-provider-switch belum terpasang."
+    hr
+    pause
+    return 0
+  fi
+  if edge-provider-switch haproxy; then
+    ok "Fallback ke HAProxy berhasil."
+  else
+    warn "Fallback ke HAProxy gagal."
+  fi
+  hr
+  pause
+}
+
+edge_runtime_restore_go_menu() {
+  title
+  echo "10) Maintenance > Restore Edge Gateway (go)"
+  hr
+  if ! have_cmd edge-provider-switch; then
+    warn "edge-provider-switch belum terpasang."
+    hr
+    pause
+    return 0
+  fi
+  if edge-provider-switch go; then
+    ok "Restore ke Edge Gateway berhasil."
+  else
+    warn "Restore ke Edge Gateway gagal."
+  fi
   hr
   pause
 }

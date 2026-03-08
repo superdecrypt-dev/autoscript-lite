@@ -189,6 +189,9 @@ source_setup_module "opt/setup/install/observability.sh"
 trap run_exit_cleanups EXIT
 sanity_check() {
   local failed=0
+  local edge_provider edge_active edge_runtime_service
+  edge_provider="${EDGE_PROVIDER:-none}"
+  edge_active="${EDGE_ACTIVATE_RUNTIME:-false}"
 
   # Core services (must be active)
   if systemctl is-active --quiet xray; then
@@ -242,6 +245,25 @@ sanity_check() {
     warn "sanity: sshws-qac-enforcer.timer NOT active"
     systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
     failed=1
+  fi
+
+  if [[ "${edge_provider}" != "none" ]]; then
+    case "${edge_provider}" in
+      haproxy) edge_runtime_service="haproxy" ;;
+      *) edge_runtime_service="edge-mux.service" ;;
+    esac
+    case "${edge_active}" in
+      1|true|TRUE|yes|YES|on|ON)
+        if systemctl is-active --quiet "${edge_runtime_service}"; then
+          ok "sanity: ${edge_runtime_service} active"
+        else
+          warn "sanity: ${edge_runtime_service} NOT active"
+          systemctl status "${edge_runtime_service}" --no-pager >&2 || true
+          journalctl -u "${edge_runtime_service}" -n 120 --no-pager >&2 || true
+          failed=1
+        fi
+        ;;
+    esac
   fi
 
   # Config sanity (non-fatal if tools missing)

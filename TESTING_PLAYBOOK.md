@@ -117,6 +117,23 @@ ss -ltn | rg ':(80|443|18080)\\b'
 Kriteria lulus tambahan:
 - `edge-mux` memegang publik `:80` dan `:443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
+- jika fallback diaktifkan, `haproxy` standby listening di `:18082` dan `:18444`.
+
+Jika topologi primary + standby dipakai, tambahkan juga:
+
+```bash
+systemctl is-active edge-mux haproxy nginx
+ss -ltn | rg ':(80|443|18080|18082|18444)\\b'
+edge-provider-switch haproxy
+printf 'GET / HTTP/1.1\r\nHost: <domain>\r\n\r\n' | timeout 5 nc 127.0.0.1 80 | sed -n '1,2p'
+edge-provider-switch go
+printf 'GET / HTTP/1.1\r\nHost: <domain>\r\n\r\n' | timeout 5 nc 127.0.0.1 80 | sed -n '1,2p'
+```
+
+Kriteria lulus tambahan:
+- saat failover, `haproxy` menjadi frontend publik `80/443`.
+- saat restore, `edge-mux` kembali menjadi frontend publik `80/443`.
+- `nginx` tetap sehat di `127.0.0.1:18080`.
 
 ```bash
 # Handshake check non-TLS root path (curl akan timeout setelah 101 karena tunnel tetap terbuka)

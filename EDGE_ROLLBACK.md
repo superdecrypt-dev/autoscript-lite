@@ -10,6 +10,17 @@ Rollback singkat untuk memindahkan host dari mode `Edge Gateway` kembali ke mode
 - routing publik `80/443` bermasalah
 - perlu kembali cepat ke mode `nginx` publik
 
+## Catatan Sebelum Rollback
+- Jika hanya perlu menjaga layanan tetap hidup, utamakan failover ke `HAProxy`:
+
+```bash
+edge-provider-switch haproxy
+```
+
+- Dokumen ini adalah rollback yang lebih drastis:
+  - `edge-mux` dimatikan
+  - `nginx` kembali menjadi frontend publik
+
 ## Prasyarat
 - salah satu source setup tersedia:
   - `/usr/local/lib/autoscript-setup/setup.sh`
@@ -60,4 +71,10 @@ Hasil yang diharapkan:
 
 ## Catatan
 - Rollback ini tidak mengubah backend SSH klasik `127.0.0.1:22022`.
+- Untuk restore normal ke topologi utama:
+
+```bash
+edge-provider-switch go
+```
+
 - Untuk mengaktifkan lagi edge provider, set kembali `EDGE_PROVIDER=go`, `EDGE_ACTIVATE_RUNTIME=true`, lalu jalankan flow aktivasi edge yang sama seperti saat cutover.

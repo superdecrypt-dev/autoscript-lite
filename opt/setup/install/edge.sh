@@ -5,6 +5,12 @@ EDGE_DIST_DIR="${SCRIPT_DIR}/opt/edge/dist"
 EDGE_DIST_MANIFEST="${EDGE_DIST_DIR}/SHA256SUMS"
 EDGE_BIN="${EDGE_BIN:-/usr/local/bin/edge-mux}"
 EDGE_SERVICE_NAME="${EDGE_SERVICE_NAME:-edge-mux.service}"
+EDGE_HAPROXY_SERVICE_NAME="${EDGE_HAPROXY_SERVICE_NAME:-haproxy.service}"
+EDGE_HAPROXY_CFG="${EDGE_HAPROXY_CFG:-/etc/haproxy/haproxy.cfg}"
+EDGE_HAPROXY_PEM_FILE="${EDGE_HAPROXY_PEM_FILE:-/etc/haproxy/autoscript/edge.pem}"
+EDGE_HAPROXY_FALLBACK_ENABLED="${EDGE_HAPROXY_FALLBACK_ENABLED:-true}"
+EDGE_HAPROXY_STANDBY_HTTP_PORT="${EDGE_HAPROXY_STANDBY_HTTP_PORT:-18082}"
+EDGE_HAPROXY_STANDBY_TLS_PORT="${EDGE_HAPROXY_STANDBY_TLS_PORT:-18444}"
 
 edge_runtime_env_file_trusted() {
   local file="${EDGE_RUNTIME_ENV_FILE}"
@@ -37,7 +43,7 @@ load_persisted_edge_runtime_env() {
 
   while IFS='=' read -r key value; do
     case "${key}" in
-      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_NGINX_HTTP_BACKEND|EDGE_SSH_CLASSIC_BACKEND|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE)
+      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_NGINX_HTTP_BACKEND|EDGE_SSH_CLASSIC_BACKEND|EDGE_SSH_TLS_BACKEND|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE|EDGE_HAPROXY_PEM_FILE|EDGE_HAPROXY_FALLBACK_ENABLED|EDGE_HAPROXY_STANDBY_HTTP_PORT|EDGE_HAPROXY_STANDBY_TLS_PORT)
         value="${value%$'\r'}"
         edge_runtime_set_default_from_persisted "${key}" "${value}"
         ;;
@@ -54,6 +60,13 @@ edge_runtime_activate_requested() {
 
 edge_runtime_should_take_public_ports() {
   edge_provider_enabled && edge_runtime_activate_requested
+}
+
+edge_haproxy_fallback_enabled() {
+  case "${EDGE_HAPROXY_FALLBACK_ENABLED:-false}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 edge_provider_selected() {
@@ -76,11 +89,28 @@ edge_provider_summary() {
   provider="$(edge_provider_selected)"
   case "${provider}" in
     none) printf '%s\n' "disabled" ;;
-    go) printf '%s\n' "go (planned primary provider; scaffold only)" ;;
-    haproxy) printf '%s\n' "haproxy (planned fallback provider; scaffold only)" ;;
+    go) printf '%s\n' "go (active custom provider)" ;;
+    haproxy) printf '%s\n' "haproxy (active fallback provider)" ;;
     nginx-stream) printf '%s\n' "nginx-stream (planned experimental provider; scaffold only)" ;;
     *) printf '%s\n' "invalid:${provider}" ;;
   esac
+}
+
+edge_provider_service_name() {
+  case "$(edge_provider_selected)" in
+    go) printf '%s\n' "${EDGE_SERVICE_NAME}" ;;
+    haproxy) printf '%s\n' "${EDGE_HAPROXY_SERVICE_NAME}" ;;
+    *) return 1 ;;
+  esac
+}
+
+edge_conflicting_provider_services() {
+  local target
+  target="$(edge_provider_service_name 2>/dev/null || true)"
+  for svc in "${EDGE_SERVICE_NAME}" "${EDGE_HAPROXY_SERVICE_NAME}"; do
+    [[ -n "${target}" && "${svc}" == "${target}" ]] && continue
+    printf '%s\n' "${svc}"
+  done
 }
 
 edge_go_arch_suffix() {
@@ -152,10 +182,15 @@ write_edge_runtime_env() {
     "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
     "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
     "EDGE_SSH_CLASSIC_BACKEND=${EDGE_SSH_CLASSIC_BACKEND:-127.0.0.1:22022}" \
+    "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}" \
     "EDGE_HTTP_DETECT_TIMEOUT_MS=${EDGE_HTTP_DETECT_TIMEOUT_MS:-250}" \
     "EDGE_CLASSIC_TLS_ON_80=${EDGE_CLASSIC_TLS_ON_80:-true}" \
     "EDGE_TLS_CERT_FILE=${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}" \
-    "EDGE_TLS_KEY_FILE=${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}"
+    "EDGE_TLS_KEY_FILE=${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}" \
+    "EDGE_HAPROXY_PEM_FILE=${EDGE_HAPROXY_PEM_FILE}" \
+    "EDGE_HAPROXY_FALLBACK_ENABLED=${EDGE_HAPROXY_FALLBACK_ENABLED:-true}" \
+    "EDGE_HAPROXY_STANDBY_HTTP_PORT=${EDGE_HAPROXY_STANDBY_HTTP_PORT:-18082}" \
+    "EDGE_HAPROXY_STANDBY_TLS_PORT=${EDGE_HAPROXY_STANDBY_TLS_PORT:-18444}"
 }
 
 stage_edge_go_provider() {
@@ -177,9 +212,61 @@ stage_edge_go_provider() {
   warn "Provider go sudah di-stage ke ${EDGE_BIN}, tetapi service ${EDGE_SERVICE_NAME} belum diaktifkan."
 }
 
+stage_edge_haproxy_provider() {
+  apt_get_with_lock_retry install -y haproxy || die "Gagal install haproxy."
+  install -d -m 755 "/etc/haproxy/autoscript"
+  umask 077
+  cat "${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}" "${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}" > "${EDGE_HAPROXY_PEM_FILE}" \
+    || die "Gagal membuat PEM bundle haproxy: ${EDGE_HAPROXY_PEM_FILE}"
+  chmod 600 "${EDGE_HAPROXY_PEM_FILE}"
+  chown root:root "${EDGE_HAPROXY_PEM_FILE}" 2>/dev/null || true
+
+  render_setup_template_or_die \
+    "haproxy/haproxy.cfg" \
+    "${EDGE_HAPROXY_CFG}" \
+    0644 \
+    "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \
+    "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
+    "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
+    "EDGE_SSH_CLASSIC_BACKEND=${EDGE_SSH_CLASSIC_BACKEND:-127.0.0.1:22022}" \
+    "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}" \
+    "EDGE_HTTP_DETECT_TIMEOUT_MS=${EDGE_HTTP_DETECT_TIMEOUT_MS:-250}" \
+    "EDGE_HAPROXY_PEM_FILE=${EDGE_HAPROXY_PEM_FILE}"
+
+  haproxy -c -f "${EDGE_HAPROXY_CFG}" >/dev/null 2>&1 || die "Validasi haproxy gagal: ${EDGE_HAPROXY_CFG}"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  warn "Provider haproxy sudah di-stage ke ${EDGE_HAPROXY_CFG}, tetapi service ${EDGE_HAPROXY_SERVICE_NAME} belum diaktifkan."
+}
+
+stage_edge_haproxy_standby_runtime() {
+  local orig_http_port orig_tls_port
+  orig_http_port="${EDGE_PUBLIC_HTTP_PORT:-80}"
+  orig_tls_port="${EDGE_PUBLIC_TLS_PORT:-443}"
+
+  EDGE_PUBLIC_HTTP_PORT="${EDGE_HAPROXY_STANDBY_HTTP_PORT:-18082}" \
+  EDGE_PUBLIC_TLS_PORT="${EDGE_HAPROXY_STANDBY_TLS_PORT:-18444}" \
+    stage_edge_haproxy_provider
+
+  systemctl enable "${EDGE_HAPROXY_SERVICE_NAME}" --now >/dev/null 2>&1 || die "Gagal enable ${EDGE_HAPROXY_SERVICE_NAME} standby"
+  systemctl restart "${EDGE_HAPROXY_SERVICE_NAME}" >/dev/null 2>&1 || die "Gagal restart ${EDGE_HAPROXY_SERVICE_NAME} standby"
+  ok "HAProxy standby aktif di ${EDGE_HAPROXY_STANDBY_HTTP_PORT:-18082}/${EDGE_HAPROXY_STANDBY_TLS_PORT:-18444}"
+
+  EDGE_PUBLIC_HTTP_PORT="${orig_http_port}"
+  EDGE_PUBLIC_TLS_PORT="${orig_tls_port}"
+}
+
 edge_runtime_port_busy() {
   local port="$1"
   ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(^|[:.])${port}$"
+}
+
+edge_runtime_port_owned_only_by_edge() {
+  local port="$1"
+  local lines
+  lines="$(ss -lntpH "( sport = :${port} )" 2>/dev/null || true)"
+  [[ -n "${lines}" ]] || return 1
+  printf '%s\n' "${lines}" | grep -qvE 'users:\(\(("edge-mux"|"haproxy")' && return 1
+  return 0
 }
 
 edge_runtime_activation_preflight() {
@@ -187,25 +274,64 @@ edge_runtime_activation_preflight() {
   http_port="${EDGE_PUBLIC_HTTP_PORT:-80}"
   tls_port="${EDGE_PUBLIC_TLS_PORT:-443}"
 
-  [[ -x "${EDGE_BIN}" ]] || die "Binary edge belum tersedia: ${EDGE_BIN}"
   [[ -s "${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}" ]] || die "TLS cert edge tidak ditemukan: ${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}"
   [[ -s "${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}" ]] || die "TLS key edge tidak ditemukan: ${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}"
 
+  case "$(edge_provider_selected)" in
+    go)
+      [[ -x "${EDGE_BIN}" ]] || die "Binary edge belum tersedia: ${EDGE_BIN}"
+      ;;
+    haproxy)
+      command -v haproxy >/dev/null 2>&1 || die "Binary haproxy belum tersedia."
+      [[ -s "${EDGE_HAPROXY_CFG}" ]] || die "Config haproxy belum tersedia: ${EDGE_HAPROXY_CFG}"
+      haproxy -c -f "${EDGE_HAPROXY_CFG}" >/dev/null 2>&1 || die "Validasi haproxy gagal: ${EDGE_HAPROXY_CFG}"
+      ;;
+  esac
+
   if edge_runtime_port_busy "${http_port}"; then
-    die "Port edge HTTP ${http_port} sedang dipakai. Aktivasi runtime edge belum aman sampai listener publik lama dipindah atau port diganti."
+    edge_runtime_port_owned_only_by_edge "${http_port}" || die "Port edge HTTP ${http_port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
   fi
   if edge_runtime_port_busy "${tls_port}"; then
-    die "Port edge TLS ${tls_port} sedang dipakai. Aktivasi runtime edge belum aman sampai listener publik lama dipindah atau port diganti."
+    edge_runtime_port_owned_only_by_edge "${tls_port}" || die "Port edge TLS ${tls_port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
   fi
 }
 
 activate_edge_provider_runtime() {
+  local target_service svc
+  local -a restore_services=()
+  target_service="$(edge_provider_service_name)" || die "Provider edge tidak punya service runtime."
   edge_runtime_activation_preflight
+
+  while IFS= read -r svc; do
+    [[ -n "${svc}" ]] || continue
+    if systemctl is-active --quiet "${svc}" 2>/dev/null; then
+      restore_services+=("${svc}")
+    fi
+  done < <(edge_conflicting_provider_services)
+
   systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl enable "${EDGE_SERVICE_NAME}" --now >/dev/null 2>&1 || die "Gagal enable ${EDGE_SERVICE_NAME}"
-  systemctl restart "${EDGE_SERVICE_NAME}" >/dev/null 2>&1 || die "Gagal restart ${EDGE_SERVICE_NAME}"
-  systemctl is-active --quiet "${EDGE_SERVICE_NAME}" || die "${EDGE_SERVICE_NAME} tidak aktif setelah start"
-  ok "Edge runtime aktif: ${EDGE_SERVICE_NAME}"
+  for svc in "${restore_services[@]}"; do
+    systemctl disable --now "${svc}" >/dev/null 2>&1 || true
+    systemctl stop "${svc}" >/dev/null 2>&1 || true
+  done
+
+  if ! systemctl enable "${target_service}" --now >/dev/null 2>&1; then
+    warn "Gagal mengaktifkan ${target_service}; mencoba menghidupkan kembali provider sebelumnya."
+    for svc in "${restore_services[@]}"; do
+      systemctl enable "${svc}" --now >/dev/null 2>&1 || true
+    done
+    die "Gagal enable ${target_service}"
+  fi
+  if ! systemctl restart "${target_service}" >/dev/null 2>&1; then
+    warn "Gagal restart ${target_service}; mencoba menghidupkan kembali provider sebelumnya."
+    systemctl stop "${target_service}" >/dev/null 2>&1 || true
+    for svc in "${restore_services[@]}"; do
+      systemctl enable "${svc}" --now >/dev/null 2>&1 || true
+    done
+    die "Gagal restart ${target_service}"
+  fi
+  systemctl is-active --quiet "${target_service}" || die "${target_service} tidak aktif setelah start"
+  ok "Edge runtime aktif: ${target_service}"
 }
 
 install_edge_provider_stack() {
@@ -221,14 +347,24 @@ install_edge_provider_stack() {
   fi
 
   warn "Edge provider dipilih: $(edge_provider_summary)"
+  install_setup_bin_or_die "edge-provider-switch" "/usr/local/bin/edge-provider-switch" 0755
   case "$(edge_provider_selected)" in
     go)
       stage_edge_go_provider
       if edge_runtime_activate_requested; then
         activate_edge_provider_runtime
       fi
+      if edge_haproxy_fallback_enabled; then
+        stage_edge_haproxy_standby_runtime
+      fi
       ;;
-    haproxy|nginx-stream)
+    haproxy)
+      stage_edge_haproxy_provider
+      if edge_runtime_activate_requested; then
+        activate_edge_provider_runtime
+      fi
+      ;;
+    nginx-stream)
       warn "Provider $(edge_provider_selected) masih berupa template desain/scaffold dan belum bisa diaktifkan."
       ;;
   esac

@@ -1794,11 +1794,21 @@ sync_setup_runtime_layout() {
   local fallback_root="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
   local fallback_modules_root="${SETUP_FALLBACK_MODULES_ROOT:-${fallback_root}/opt/setup}"
   local setup_src="${SETUP_MODULES_ROOT:-${SCRIPT_DIR}/opt/setup}"
+  local edge_src="${SCRIPT_DIR}/opt/edge"
+  local fallback_edge_root="${fallback_root}/opt/edge"
 
   [[ -d "${setup_src}" ]] || die "Source modular setup tidak ditemukan: ${setup_src}"
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
 
   sync_tree_atomic "${setup_src}" "${fallback_modules_root}" "modul setup ${fallback_modules_root}"
+  if [[ -d "${edge_src}" ]]; then
+    sync_tree_atomic "${edge_src}" "${fallback_edge_root}" "asset edge ${fallback_edge_root}"
+    find "${fallback_edge_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${fallback_edge_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_edge_root}" -type f -name '*.go' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_edge_root}" -type f -name 'edge-mux-linux-*' -exec chmod 755 {} + 2>/dev/null || true
+    chown -R root:root "${fallback_edge_root}" 2>/dev/null || true
+  fi
   find "${fallback_modules_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${fallback_modules_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
   find "${fallback_modules_root}" -type f -name '*.py' -exec chmod 644 {} + 2>/dev/null || true

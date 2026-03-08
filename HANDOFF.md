@@ -14,6 +14,11 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 
 ## Status Operasional Terkini (2026-03-08)
 - Commit terbaru di `main`:
+  - `f1bf684` — `fix(setup): avoid tty warning in non-interactive runs`
+  - `da09ee0` — `fix(edge): clean dynamic env export`
+  - `ca066dc` — `fix(edge): improve request classification and error handling`
+  - `f191110` — `fix: harden edge persistence and discord deploy`
+  - `609e173` — `fix(nginx): resolve cert path before template render`
   - `562832c` — `feat(ssh): update ssh ws account info and docs`
   - `8e1c990` — `chore(edge): rename user-facing labels to Edge Gateway`
   - `3c0662d` — `feat(edge): add cli maintenance tools and rollback note`
@@ -27,6 +32,13 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `b8e82a6` — `refactor(setup): modularize installer and tune sshws restart`
   - `921a03e` — `chore: drop generated python cache files`
 - Perubahan penting terbaru:
+  - Topologi edge live sekarang diposisikan sebagai:
+    - `edge-mux` aktif di publik `80/443`
+    - `haproxy` standby fallback di `18082/18444`
+    - `nginx` backend internal di `127.0.0.1:18080`
+    - helper failover:
+      - `edge-provider-switch haproxy`
+      - `edge-provider-switch go`
   - Edge Gateway kini aktif live:
     - provider aktif: `go`
     - `edge-mux` memegang publik `80/443`
@@ -36,6 +48,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `Maintenance > Edge Gateway Status`
     - `Maintenance > Restart Edge Gateway`
     - `Maintenance > Edge Gateway Info`
+    - `Maintenance > Failover ke HAProxy`
+    - `Maintenance > Restore Edge Gateway (go)`
   - Refactor modular installer sudah commit + push:
     - `setup.sh` kini menjadi orchestrator tipis
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
@@ -99,6 +113,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `edge-mux.service` -> `active`
     - listener publik di `:80/:443`
     - `nginx` backend di `127.0.0.1:18080`
+    - `haproxy` standby di `:18082/:18444`
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
