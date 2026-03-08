@@ -2443,8 +2443,10 @@ if unit not in ("binary", "decimal"):
   unit = "binary"
 
 created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
+if created:
+  created = created[:10]
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
@@ -2612,8 +2614,10 @@ if unit not in ("binary", "decimal"):
   unit = "binary"
 
 created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
+if created:
+  created = created[:10]
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+  created = datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
@@ -2791,7 +2795,7 @@ ssh_account_info_write() {
   [[ -n "${ip}" ]] || ip="-"
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
-  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d %H:%M')"
+  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d')"
   [[ -n "${expired_at}" ]] || expired_at="-"
 
   quota_limit_disp="$(python3 - <<'PY' "${quota_bytes}"
@@ -3153,21 +3157,21 @@ def norm_created(v):
     s = s[:-1]
   s = s.strip()
   if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-    return s + " 00:00"
+    return s
   if len(s) >= 16 and re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}", s):
-    return s[:16]
+    return s[:10]
   candidates = [s]
   if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
     candidates.append(s + ":00")
   for c in candidates:
     try:
       dt = datetime.fromisoformat(c)
-      return dt.strftime("%Y-%m-%d %H:%M")
+      return dt.strftime("%Y-%m-%d")
     except Exception:
       pass
   m = re.search(r"\d{4}-\d{2}-\d{2}", s)
   if m:
-    return m.group(0) + " 00:00"
+    return m.group(0)
   return "-"
 
 def norm_expired(v):
@@ -3441,7 +3445,7 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
-  created_at="$(date -u '+%Y-%m-%d %H:%M')"
+  created_at="$(date -u '+%Y-%m-%d')"
 
   if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
     warn "Gagal membuat user Linux '${username}'."
@@ -3663,7 +3667,7 @@ ssh_extend_expiry_menu() {
   local created_at
   created_at="$(ssh_user_state_created_at_get "${username}")"
   if [[ -z "${created_at}" ]]; then
-    created_at="$(date -u '+%Y-%m-%d %H:%M')"
+    created_at="$(date -u '+%Y-%m-%d')"
   fi
   if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
     warn "Metadata SSH gagal diperbarui untuk '${username}'."
