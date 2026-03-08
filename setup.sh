@@ -94,6 +94,9 @@ MANAGE_BUNDLE_SHA256="${MANAGE_BUNDLE_SHA256:-${MANAGE_BUNDLE_LOCAL_SHA256}}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
 MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 SETUP_MODULES_ROOT="${SCRIPT_DIR}/opt/setup"
+SETUP_FALLBACK_ROOT="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
+SETUP_FALLBACK_SCRIPT="${SETUP_FALLBACK_SCRIPT:-${SETUP_FALLBACK_ROOT}/setup.sh}"
+SETUP_FALLBACK_MODULES_ROOT="${SETUP_FALLBACK_MODULES_ROOT:-${SETUP_FALLBACK_ROOT}/opt/setup}"
 
 setup_bootstrap_die() {
   echo -e "${RED}[ERROR]${NC} $*" >&2
@@ -171,6 +174,7 @@ source_setup_module "opt/setup/install/domain.sh"
 source_setup_module "opt/setup/install/nginx.sh"
 # shellcheck source=opt/setup/install/edge.sh
 source_setup_module "opt/setup/install/edge.sh"
+load_persisted_edge_runtime_env
 # shellcheck source=opt/setup/install/network.sh
 source_setup_module "opt/setup/install/network.sh"
 # shellcheck source=opt/setup/install/xray.sh
@@ -334,6 +338,7 @@ main() {
   install_sshws_qac_enforcer
   install_management_scripts
   sync_manage_modules_layout
+  sync_setup_runtime_layout
   install_xray_speed_limiter_foundation
   install_observability_alerting
   install_domain_cert_guard

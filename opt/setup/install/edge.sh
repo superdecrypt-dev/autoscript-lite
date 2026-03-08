@@ -1,9 +1,50 @@
 #!/usr/bin/env bash
 
+EDGE_RUNTIME_ENV_FILE="${EDGE_RUNTIME_ENV_FILE:-/etc/default/edge-runtime}"
 EDGE_DIST_DIR="${SCRIPT_DIR}/opt/edge/dist"
 EDGE_DIST_MANIFEST="${EDGE_DIST_DIR}/SHA256SUMS"
 EDGE_BIN="${EDGE_BIN:-/usr/local/bin/edge-mux}"
 EDGE_SERVICE_NAME="${EDGE_SERVICE_NAME:-edge-mux.service}"
+
+edge_runtime_env_file_trusted() {
+  local file="${EDGE_RUNTIME_ENV_FILE}"
+  [[ -f "${file}" && ! -L "${file}" && -r "${file}" ]] || return 1
+
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  local owner mode
+  owner="$(stat -c '%u' "${file}" 2>/dev/null || echo 1)"
+  mode="$(stat -c '%A' "${file}" 2>/dev/null || echo '----------')"
+  [[ "${owner}" == "0" ]] || return 1
+  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  return 0
+}
+
+edge_runtime_set_default_from_persisted() {
+  local key="$1"
+  local value="$2"
+  if [[ -n "${!key+x}" ]]; then
+    return 0
+  fi
+  printf -v "${key}" '%s' "${value}"
+  export "${key}"
+}
+
+load_persisted_edge_runtime_env() {
+  local key value
+  edge_runtime_env_file_trusted || return 0
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_NGINX_HTTP_BACKEND|EDGE_SSH_CLASSIC_BACKEND|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE)
+        value="${value%$'\r'}"
+        edge_runtime_set_default_from_persisted "${key}" "${value}"
+        ;;
+    esac
+  done < "${EDGE_RUNTIME_ENV_FILE}"
+}
 
 edge_runtime_activate_requested() {
   case "${EDGE_ACTIVATE_RUNTIME:-false}" in
@@ -104,7 +145,7 @@ write_edge_runtime_env() {
 
   render_setup_template_or_die \
     "config/edge-runtime.env" \
-    "/etc/default/edge-runtime" \
+    "${EDGE_RUNTIME_ENV_FILE}" \
     0644 \
     "EDGE_PROVIDER=$(edge_provider_selected)" \
     "EDGE_ACTIVATE_RUNTIME=${EDGE_ACTIVATE_RUNTIME:-false}" \

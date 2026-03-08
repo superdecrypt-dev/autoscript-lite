@@ -1789,3 +1789,24 @@ PY
   [[ -n "${tmpdir}" ]] && rm -rf "${tmpdir}" >/dev/null 2>&1 || true
   die "Sinkronisasi modular manage gagal total: bundle gagal/invalid dan source lokal tidak ditemukan (${MANAGE_MODULES_SRC_DIR})."
 }
+
+sync_setup_runtime_layout() {
+  local fallback_root="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
+  local fallback_modules_root="${SETUP_FALLBACK_MODULES_ROOT:-${fallback_root}/opt/setup}"
+  local setup_src="${SETUP_MODULES_ROOT:-${SCRIPT_DIR}/opt/setup}"
+
+  [[ -d "${setup_src}" ]] || die "Source modular setup tidak ditemukan: ${setup_src}"
+  [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
+
+  sync_tree_atomic "${setup_src}" "${fallback_modules_root}" "modul setup ${fallback_modules_root}"
+  find "${fallback_modules_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "${fallback_modules_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
+  find "${fallback_modules_root}" -type f -name '*.py' -exec chmod 644 {} + 2>/dev/null || true
+  chown -R root:root "${fallback_modules_root}" 2>/dev/null || true
+
+  mkdir -p "$(dirname "${SETUP_FALLBACK_SCRIPT}")"
+  install -m 0755 "${SCRIPT_DIR}/setup.sh" "${SETUP_FALLBACK_SCRIPT}"
+  chown root:root "${SETUP_FALLBACK_SCRIPT}" 2>/dev/null || true
+  ok "Fallback modular setup siap di: ${fallback_modules_root}"
+  ok "Fallback script setup siap di: ${SETUP_FALLBACK_SCRIPT}"
+}

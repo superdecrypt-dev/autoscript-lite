@@ -657,7 +657,8 @@ deploy_or_update_files() {
     command_exists "${cmd}" || die "Dependency '${cmd}' belum tersedia. Jalankan menu 2) Install Dependencies."
   done
 
-  local tmp archive checksum_file src_root src_dir archive_ext archive_url_no_query
+  local tmp="" archive checksum_file src_root src_dir archive_ext archive_url_no_query
+  local bot_home_parent stage_dir="" previous_dir=""
   tmp="$(mktemp -d /tmp/bot-discord-src.XXXXXX)"
   archive_url_no_query="${SRC_ARCHIVE_URL%%\?*}"
   archive_ext="tar.gz"
@@ -687,39 +688,65 @@ deploy_or_update_files() {
   fi
   validate_source_tree "${src_dir}"
 
-  mkdir -p "${BOT_HOME}" "${BOT_STATE_DIR}" "${BOT_LOG_DIR}" "${BOT_ENV_DIR}"
+  bot_home_parent="$(dirname "${BOT_HOME}")"
+  mkdir -p "${bot_home_parent}" "${BOT_STATE_DIR}" "${BOT_LOG_DIR}" "${BOT_ENV_DIR}"
+  stage_dir="$(mktemp -d "${bot_home_parent}/.bot-discord.stage.XXXXXX")"
 
-  log "Sync source ke ${BOT_HOME}"
+  log "Sync source ke staging ${stage_dir}"
   rsync -a --delete \
     --exclude '.env' \
     --exclude '.venv' \
     --exclude 'node_modules' \
     --exclude '__pycache__' \
     --exclude '*.pyc' \
-    "${src_dir}/" "${BOT_HOME}/"
+    "${src_dir}/" "${stage_dir}/"
 
   rm -rf "${tmp}" >/dev/null 2>&1 || true
+  tmp=""
 
   log "Install dependency Python backend"
-  if [[ ! -d "${BOT_HOME}/.venv" ]]; then
-    python3 -m venv "${BOT_HOME}/.venv"
+  python3 -m venv "${stage_dir}/.venv"
+  "${stage_dir}/.venv/bin/pip" install --upgrade pip >/dev/null
+  "${stage_dir}/.venv/bin/pip" install -r "${stage_dir}/backend-py/requirements.txt"
+  log "Validasi syntax Python backend"
+  local backend_py_files=()
+  mapfile -t backend_py_files < <(find "${stage_dir}/backend-py/app" -name '*.py')
+  if (( ${#backend_py_files[@]} > 0 )); then
+    python3 -m py_compile "${backend_py_files[@]}"
   fi
-  "${BOT_HOME}/.venv/bin/pip" install --upgrade pip >/dev/null
-  "${BOT_HOME}/.venv/bin/pip" install -r "${BOT_HOME}/backend-py/requirements.txt"
 
   log "Install dependency Node gateway + build"
   (
-    cd "${BOT_HOME}/gateway-ts"
+    cd "${stage_dir}/gateway-ts"
     npm install
     npm run build
   )
 
   ensure_env_file
-  if [[ ! -f "${BOT_HOME}/.env" ]]; then
-    cp "${BOT_ENV_FILE}" "${BOT_HOME}/.env" || true
+  if [[ ! -f "${stage_dir}/.env" ]]; then
+    cp "${BOT_ENV_FILE}" "${stage_dir}/.env" || true
   fi
 
   chmod -R go-rwx "${BOT_ENV_DIR}" || true
+
+  if [[ -e "${BOT_HOME}" ]]; then
+    previous_dir="${bot_home_parent}/.bot-discord.prev.$(date +%Y%m%d%H%M%S)"
+    mv "${BOT_HOME}" "${previous_dir}" || die "Gagal memindahkan instalasi bot lama ke backup: ${BOT_HOME}"
+  fi
+
+  if ! mv "${stage_dir}" "${BOT_HOME}"; then
+    rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+    if [[ -n "${previous_dir}" && -e "${previous_dir}" ]]; then
+      mv "${previous_dir}" "${BOT_HOME}" >/dev/null 2>&1 || true
+    fi
+    die "Gagal mengaktifkan instalasi bot Discord baru."
+  fi
+  stage_dir=""
+
+  if [[ -n "${previous_dir}" && -e "${previous_dir}" ]]; then
+    rm -rf "${previous_dir}" >/dev/null 2>&1 || true
+  fi
+
   ok "Deploy/update bot files selesai."
 }
 

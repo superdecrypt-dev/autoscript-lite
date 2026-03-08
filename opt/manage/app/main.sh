@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 main() {
   need_root
   init_runtime_dirs

@@ -11,24 +11,37 @@ Rollback singkat untuk memindahkan host dari mode `Edge Gateway` kembali ke mode
 - perlu kembali cepat ke mode `nginx` publik
 
 ## Prasyarat
-- repo lokal tersedia di:
-  - `/root/project/autoscript`
+- salah satu source setup tersedia:
+  - `/usr/local/lib/autoscript-setup/setup.sh`
+  - `/root/project/autoscript/setup.sh`
 
 ## Langkah rollback
 Jalankan sebagai `root`:
 
 ```bash
-cd /root/project/autoscript
+if [[ -f /usr/local/lib/autoscript-setup/setup.sh ]]; then
+  SETUP_SCRIPT=/usr/local/lib/autoscript-setup/setup.sh
+elif [[ -f /root/project/autoscript/setup.sh ]]; then
+  SETUP_SCRIPT=/root/project/autoscript/setup.sh
+else
+  echo "setup.sh tidak ditemukan untuk rollback" >&2
+  exit 1
+fi
 
-export EDGE_PROVIDER=go
+export EDGE_PROVIDER=none
 export EDGE_ACTIVATE_RUNTIME=false
 
-source ./setup.sh
+# shellcheck source=/dev/null
+source "${SETUP_SCRIPT}"
 
 write_edge_runtime_env
-write_nginx_config
 
-systemctl disable --now edge-mux.service
+systemctl daemon-reload
+systemctl disable --now edge-mux.service || true
+systemctl stop edge-mux.service 2>/dev/null || true
+
+write_nginx_config
+nginx -t
 systemctl restart nginx
 ```
 
@@ -47,4 +60,4 @@ Hasil yang diharapkan:
 
 ## Catatan
 - Rollback ini tidak mengubah backend SSH klasik `127.0.0.1:22022`.
-- Untuk mengaktifkan lagi edge provider, balikkan `EDGE_ACTIVATE_RUNTIME=true` lalu jalankan flow aktivasi edge yang sama seperti saat cutover.
+- Untuk mengaktifkan lagi edge provider, set kembali `EDGE_PROVIDER=go`, `EDGE_ACTIVATE_RUNTIME=true`, lalu jalankan flow aktivasi edge yang sama seperti saat cutover.
