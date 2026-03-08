@@ -1239,6 +1239,156 @@ wireproxy_restart_menu() {
   pause
 }
 
+edge_runtime_env_file() {
+  printf '%s\n' "/etc/default/edge-runtime"
+}
+
+edge_runtime_get_env() {
+  local key="$1"
+  local env_file
+  env_file="$(edge_runtime_env_file)"
+  [[ -r "${env_file}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[[:space:]]+/, "", $2)
+      sub(/[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }
+  ' "${env_file}"
+}
+
+edge_runtime_service_name() {
+  printf '%s\n' "edge-mux.service"
+}
+
+edge_runtime_status_menu() {
+  title
+  echo "10) Maintenance > Edge Status"
+  hr
+
+  local svc env_file provider active http_port tls_port http_backend ssh_backend detect_timeout tls80
+  svc="$(edge_runtime_service_name)"
+  env_file="$(edge_runtime_env_file)"
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
+  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
+  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
+  detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
+  tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
+
+  echo "Runtime env : ${env_file}"
+  echo "Provider    : ${provider}"
+  echo "Activate    : ${active}"
+  echo "HTTP port   : ${http_port}"
+  echo "TLS port    : ${tls_port}"
+  echo "HTTP backend: ${http_backend}"
+  echo "SSH backend : ${ssh_backend}"
+  echo "Detect (ms) : ${detect_timeout}"
+  echo "TLS on 80   : ${tls80}"
+  hr
+
+  if svc_exists "${svc}"; then
+    svc_status_line "${svc}"
+  else
+    warn "${svc} tidak terpasang"
+  fi
+
+  if svc_exists nginx; then
+    svc_status_line nginx
+  fi
+
+  hr
+  if have_cmd ss; then
+    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${http_port}([[:space:]]|$)"; then
+      log "Public HTTP ${http_port} : LISTENING ✅"
+    else
+      warn "Public HTTP ${http_port} : NOT listening ❌"
+    fi
+    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${tls_port}([[:space:]]|$)"; then
+      log "Public TLS  ${tls_port} : LISTENING ✅"
+    else
+      warn "Public TLS  ${tls_port} : NOT listening ❌"
+    fi
+
+    local backend_http_port backend_ssh_port
+    backend_http_port="${http_backend##*:}"
+    backend_ssh_port="${ssh_backend##*:}"
+    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_http_port}([[:space:]]|$)"; then
+      log "Backend HTTP ${http_backend} : LISTENING ✅"
+    else
+      warn "Backend HTTP ${http_backend} : NOT listening ❌"
+    fi
+    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_ssh_port}([[:space:]]|$)"; then
+      log "Backend SSH  ${ssh_backend} : LISTENING ✅"
+    else
+      warn "Backend SSH  ${ssh_backend} : NOT listening ❌"
+    fi
+  else
+    warn "ss tidak tersedia, skip cek listener edge"
+  fi
+
+  hr
+  pause
+}
+
+edge_runtime_restart_menu() {
+  title
+  echo "10) Maintenance > Restart Edge"
+  hr
+
+  local svc
+  svc="$(edge_runtime_service_name)"
+  if ! svc_exists "${svc}"; then
+    warn "${svc} tidak terpasang."
+    hr
+    pause
+    return 0
+  fi
+
+  svc_restart "${svc}"
+  hr
+  pause
+}
+
+edge_runtime_info_menu() {
+  title
+  echo "10) Maintenance > Edge Provider Info"
+  hr
+
+  local provider active http_port tls_port http_backend ssh_backend detect_timeout tls80 cert_file key_file
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
+  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
+  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
+  detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
+  tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
+  cert_file="$(edge_runtime_get_env EDGE_TLS_CERT_FILE 2>/dev/null || echo "/opt/cert/fullchain.pem")"
+  key_file="$(edge_runtime_get_env EDGE_TLS_KEY_FILE 2>/dev/null || echo "/opt/cert/privkey.pem")"
+
+  echo "Provider        : ${provider}"
+  echo "Runtime Active  : ${active}"
+  echo "Public HTTP     : ${http_port}"
+  echo "Public TLS      : ${tls_port}"
+  echo "HTTP Backend    : ${http_backend}"
+  echo "SSH Backend     : ${ssh_backend}"
+  echo "Detect Timeout  : ${detect_timeout} ms"
+  echo "Classic TLS :80 : ${tls80}"
+  echo "TLS Cert        : ${cert_file}"
+  echo "TLS Key         : ${key_file}"
+  hr
+  echo "Mode ringkas:"
+  echo "  - HTTP / WebSocket -> backend HTTP (${http_backend})"
+  echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
+  echo "  - default provider aktif hanya satu pada port publik"
+  hr
+  pause
+}
+
 sshws_detect_dropbear_port() {
   local fallback="${SSHWS_DROPBEAR_PORT:-22022}"
   local unit_file="/etc/systemd/system/${SSHWS_DROPBEAR_SERVICE}.service"

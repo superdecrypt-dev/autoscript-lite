@@ -17,6 +17,9 @@ maintenance_menu() {
     echo "  9. SSH WS Status (dropbear/stunnel/proxy)"
     echo "  10. Restart SSH WS Stack"
     echo "  11. SSH WS Diagnostics"
+    echo "  12. Edge Status"
+    echo "  13. Restart Edge"
+    echo "  14. Edge Provider Info"
     echo "  0. Kembali"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -35,6 +38,9 @@ maintenance_menu() {
       9) sshws_status_menu ;;
       10) sshws_restart_menu ;;
       11) sshws_diagnostics_menu ;;
+      12) edge_runtime_status_menu ;;
+      13) edge_runtime_restart_menu ;;
+      14) edge_runtime_info_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

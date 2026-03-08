@@ -29,6 +29,7 @@ Hanya **satu provider** yang aktif pada satu waktu.
 - Provider `go` dipasang sebagai **binary prebuilt**, bukan compile di VPS saat setup normal.
 - `nginx` tidak lagi memegang listener publik `80/443` jika edge provider aktif.
 - `nginx` dipindahkan ke backend internal, misalnya `127.0.0.1:18080`.
+- rollback operasional singkat dicatat di [EDGE_ROLLBACK.md](/root/project/autoscript/EDGE_ROLLBACK.md).
 
 ## Scope
 
