@@ -52,10 +52,11 @@ Fokus:
 - idempotency langkah install
 - staging/swap file yang aman
 
-### Prioritas 3: SSH WS dan QAC
+### Prioritas 3: SSH dan QAC
 - `opt/setup/install/sshws.sh`
 - `opt/setup/bin/sshws-proxy.py`
 - `opt/setup/bin/sshws-qac-enforcer.py`
+- `opt/edge/go/*`
 - `opt/manage/features/analytics.sh`
 
 Fokus:
@@ -66,6 +67,11 @@ Fokus:
 - IP/Login limit
 - active session
 - stale session cleanup
+- drift enforcement antara:
+  - `SSH WS`
+  - `SSH Direct`
+  - `SSH SSL/TLS`
+- integrasi `Edge Gateway` terhadap policy SSH
 
 ### Prioritas 4: Runtime Template
 - `opt/setup/templates/nginx/*.conf`
@@ -117,6 +123,9 @@ bash -n opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/ma
 shellcheck -x -S warning opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
 shellcheck -x -S warning opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard
 python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
+go -C opt/edge/go build ./...
+(cd opt/edge/dist && sha256sum -c SHA256SUMS)
+(cd opt/badvpn/dist && sha256sum -c SHA256SUMS)
 ```
 
 Jika fokus bot:
@@ -156,7 +165,9 @@ rg -n "source |trusted|resolve_manage_modules_dir|RUN_USE_LOCAL_SOURCE|KEEP_REPO
 
 ### 6.3 Cek jalur runtime SSH WS
 ```bash
-rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|updated_at" setup.sh opt/setup/install/sshws.sh opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/manage/features/analytics.sh
+rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|updated_at|SSH Direct|SSH SSL/TLS" \
+  setup.sh opt/setup/install/sshws.sh opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py \
+  opt/edge/go opt/manage/features/analytics.sh
 ```
 
 ### 6.4 Cek drift account info/domain sync
@@ -172,13 +183,22 @@ python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bo
 python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 ```
 
+### 6.6 Cek Edge Gateway dan BadVPN
+```bash
+rg -n "EDGE_PROVIDER|edge-mux|SSH Direct|SSH SSL/TLS|badvpn|udpgw|7300" \
+  setup.sh opt/setup/install/edge.sh opt/setup/install/badvpn.sh opt/edge opt/manage README.md HANDOFF.md
+go -C opt/edge/go build ./...
+(cd opt/edge/dist && sha256sum -c SHA256SUMS)
+(cd opt/badvpn/dist && sha256sum -c SHA256SUMS)
+```
+
 ## 7. Audit Runtime (Opsional, Host Live)
 
 ```bash
-systemctl is-active xray nginx sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer
+systemctl is-active xray nginx edge-mux sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer xray-speed xray-observe.timer xray-domain-guard.timer badvpn-udpgw.service
 nginx -t
 /usr/local/bin/xray run -test -confdir /usr/local/etc/xray/conf.d
-ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b)'
+ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:18080\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b|127\\.0\\.0\\.1:7300\\b)'
 ```
 
 Khusus SSH WS:
@@ -193,6 +213,11 @@ Ekspektasi:
 - token invalid -> `403`
 - path tanpa token -> `401`
 - backend down -> `502`
+
+Tambahan host edge aktif:
+- `edge-mux` harus `active`
+- `nginx` harus listen di `127.0.0.1:18080`
+- `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300`
 
 ## 8. Format Hasil Audit
 
@@ -230,6 +255,7 @@ Aturan:
   - `SSH SSL/TLS`
   - `SSH Direct`
 - `sshd:22` native bukan target traffic enforcement
+- `BadVPN UDPGW` diperlakukan sebagai fitur tambahan SSH, bukan sistem akun/protokol terpisah
 
 ## 10. Kapan Harus Patch
 - patch jika finding memengaruhi:
