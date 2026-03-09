@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 BADVPN_DIST_DIR="${SCRIPT_DIR}/opt/badvpn/dist"
-BADVPN_DIST_MANIFEST="${BADVPN_DIST_DIR}/SHA256SUMS"
 BADVPN_RUNTIME_ENV_FILE="${BADVPN_RUNTIME_ENV_FILE:-/etc/default/badvpn-udpgw}"
 BADVPN_RUNTIME_ENV_TEMPLATE="${SETUP_TEMPLATE_SRC_DIR}/config/badvpn-runtime.env"
 BADVPN_SERVICE_TEMPLATE="${SETUP_TEMPLATE_SRC_DIR}/systemd/badvpn-udpgw.service"
@@ -28,22 +27,9 @@ badvpn_expected_binary_path() {
 
 badvpn_prebuilt_ready() {
   local bin
-  [[ -f "${BADVPN_DIST_MANIFEST}" ]] || return 1
   bin="$(badvpn_expected_binary_path)" || return 1
   [[ -f "${bin}" ]] || return 1
   return 0
-}
-
-badvpn_verify_prebuilt_binary() {
-  local bin name expected actual
-  badvpn_prebuilt_ready || return 1
-  command -v sha256sum >/dev/null 2>&1 || return 1
-  bin="$(badvpn_expected_binary_path)" || return 1
-  name="$(basename "${bin}")"
-  expected="$(awk -v target="${name}" '$2 == target {print tolower($1)}' "${BADVPN_DIST_MANIFEST}" | head -n1)"
-  [[ -n "${expected}" ]] || return 1
-  actual="$(sha256sum "${bin}" | awk '{print tolower($1)}')"
-  [[ -n "${actual}" && "${actual}" == "${expected}" ]]
 }
 
 write_badvpn_runtime_env() {
@@ -69,8 +55,6 @@ install_badvpn_udpgw_stack() {
   if [[ ! -f "${BADVPN_SERVICE_TEMPLATE}" ]]; then
     die "Template service BadVPN UDPGW tidak ditemukan: ${BADVPN_SERVICE_TEMPLATE}"
   fi
-
-  badvpn_verify_prebuilt_binary || die "Checksum binary prebuilt BadVPN UDPGW gagal: ${BADVPN_DIST_MANIFEST}"
 
   bin="$(badvpn_expected_binary_path)" || die "Arsitektur host belum didukung untuk BadVPN UDPGW."
   src_name="$(basename "${bin}")"

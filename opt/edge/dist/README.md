@@ -6,7 +6,6 @@ Target yang direncanakan:
 
 - `edge-mux-linux-amd64`
 - `edge-mux-linux-arm64`
-- `SHA256SUMS`
 
 ## Catatan
 

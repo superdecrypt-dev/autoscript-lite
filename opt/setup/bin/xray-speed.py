@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -379,8 +378,8 @@ def build_snapshot(cfg):
     "policies": policies,
   }
   raw = json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode("utf-8")
-  digest = hashlib.sha256(raw).hexdigest()
-  return snapshot, digest
+  signature = raw.decode("utf-8")
+  return snapshot, signature
 
 
 def apply_snapshot(cfg, snapshot, dry_run=False):
@@ -435,16 +434,16 @@ def run_once(cfg_path, dry_run=False):
 
 def run_watch(cfg_path, interval):
   sleep_s = max(2, int(interval))
-  last_digest = ""
+  last_signature = ""
   state_file_fallback = "/var/lib/xray-speed/state.json"
   while True:
     cfg = None
     try:
       cfg = load_config(cfg_path)
-      snapshot, digest = build_snapshot(cfg)
-      if digest != last_digest:
+      snapshot, signature = build_snapshot(cfg)
+      if signature != last_signature:
         apply_snapshot(cfg, snapshot, dry_run=False)
-        last_digest = digest
+        last_signature = signature
     except Exception as e:
       st_file = state_file_fallback
       if isinstance(cfg, dict):

@@ -501,7 +501,9 @@ async function sendServiceNotification(source: "auto" | "test"): Promise<{ ok: b
 
   try {
     await channel.send({ embeds: [buildServiceStatusEmbed(statuses, source)] });
-    channelPolicyStore.markAutoStatusSent(new Date().toISOString());
+    if (source === "auto") {
+      channelPolicyStore.markAutoStatusSent(new Date().toISOString());
+    }
     return { ok: true, message: `Notifikasi terkirim ke <#${channelId}>.` };
   } catch (err) {
     const code = getDiscordErrorCode(err);
@@ -628,12 +630,16 @@ client.once(Events.ClientReady, async (ready) => {
   }
   try {
     const mainMenu = await backend.getMainMenu();
-    const warnings = syncMenusFromBackend(Array.isArray(mainMenu.menus) ? mainMenu.menus : []);
+    const issues = syncMenusFromBackend(Array.isArray(mainMenu.menus) ? mainMenu.menus : []);
     console.log(
       `[gateway] menu sync complete: menus=${MENUS.length}, dangerous_actions_enabled=${Boolean(mainMenu.dangerous_actions_enabled)}.`
     );
-    for (const warning of warnings) {
-      console.warn(`[gateway] menu parity warning: ${warning}`);
+    for (const issue of issues) {
+      console.error(`[gateway] menu parity issue: ${issue}`);
+    }
+    if (issues.length > 0) {
+      console.error("[gateway] startup aborted to avoid serving unsupported local menu schema.");
+      process.exit(1);
     }
   } catch (err) {
     console.error(`[gateway] menu sync failed: ${formatError(err)}`);

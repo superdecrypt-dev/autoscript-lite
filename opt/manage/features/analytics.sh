@@ -437,7 +437,7 @@ cert_openssl_info() {
     warn "Cert tidak ditemukan: ${CERT_FULLCHAIN}"
     return 1
   fi
-  openssl x509 -in "${CERT_FULLCHAIN}" -noout     -subject -issuer -serial -startdate -enddate -fingerprint -sha256 2>/dev/null || return 1
+  openssl x509 -in "${CERT_FULLCHAIN}" -noout     -subject -issuer -serial -startdate -enddate -fingerprint 2>/dev/null || return 1
   return 0
 }
 
@@ -511,6 +511,22 @@ acme_sh_path_get() {
   echo ""
 }
 
+cert_runtime_restart_active_tls_consumers() {
+  local edge_svc=""
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || return 1
+    svc_is_active sshws-stunnel || return 1
+  fi
+  if edge_runtime_enabled_for_public_ports; then
+    edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
+    if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+      systemctl restart "${edge_svc}" >/dev/null 2>&1 || return 1
+      svc_is_active "${edge_svc}" || return 1
+    fi
+  fi
+  return 0
+}
+
 cert_menu_renew() {
   title
   echo "TLS & Cert > Renew Certificate"
@@ -558,13 +574,20 @@ cert_menu_renew() {
     if [[ "${port80_conflict}" == "true" ]]; then
       warn "Terdeteksi konflik port 80. Menghentikan web service sementara untuk retry renew..."
       local -a stopped_services=()
-      local svc
+      local svc edge_svc=""
       for svc in nginx apache2 caddy lighttpd; do
         if svc_exists "${svc}" && svc_is_active "${svc}"; then
           stopped_services+=("${svc}")
           systemctl stop "${svc}" >/dev/null 2>&1 || true
         fi
       done
+      if edge_runtime_enabled_for_public_ports; then
+        edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
+        if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+          stopped_services+=("${edge_svc}")
+          systemctl stop "${edge_svc}" >/dev/null 2>&1 || true
+        fi
+      fi
 
       if "${acme}" --renew -d "${domain}" --force 2>&1; then
         renew_ok="true"
@@ -591,6 +614,9 @@ cert_menu_renew() {
   fi
 
   echo
+  if ! cert_runtime_restart_active_tls_consumers; then
+    warn "Cert berhasil diperbarui, tetapi restart consumer TLS tambahan gagal. Cek sshws-stunnel / edge runtime."
+  fi
   log "Renew certificate selesai (cek expiry untuk memastikan)."
   hr
   pause

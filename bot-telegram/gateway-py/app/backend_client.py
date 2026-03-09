@@ -8,8 +8,11 @@ import httpx
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
+    "1:observe_snapshot": 190.0,
     "7:setup_domain_custom": 420.0,
     "7:setup_domain_cloudflare": 420.0,
+    "7:domain_guard_check": 190.0,
+    "7:domain_guard_renew": 320.0,
     "8:run": 190.0,
     "6:warp_restart": 90.0,
     "6:warp_tier_switch_free": 420.0,
@@ -18,6 +21,8 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     # Backward compatibility for older menu numbering.
     "5:setup_domain_custom": 420.0,
     "5:setup_domain_cloudflare": 420.0,
+    "5:domain_guard_check": 190.0,
+    "5:domain_guard_renew": 320.0,
     "6:run": 190.0,
     "4:warp_restart": 90.0,
     "4:warp_tier_switch_free": 420.0,
@@ -118,6 +123,22 @@ class BackendClient:
             message=str(data.get("message") or ""),
             data=data.get("data") if isinstance(data.get("data"), dict) else {},
         )
+
+    async def get_main_menu(self, timeout: float = 8.0) -> dict:
+        try:
+            async with self._new_client(timeout=timeout) as client:
+                response = await client.get("/api/main-menu")
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text.strip()
+            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
+        except Exception as exc:
+            raise BackendError(_sanitize_text(str(exc))) from exc
+
+        if not isinstance(data, dict):
+            raise BackendError("Response backend main-menu tidak valid.")
+        return data
 
     async def list_user_options(self, proto: str | None = None) -> list[BackendUserOption]:
         params = {"proto": proto} if proto else None

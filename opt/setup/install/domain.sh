@@ -4,11 +4,21 @@
 declare -ag _ACME_RESTORE_SERVICES=()
 declare -gi _ACME_RESTORE_NEEDED=0
 
+acme_append_restore_service() {
+  local candidate="$1"
+  local existing
+  [[ -n "${candidate}" ]] || return 0
+  for existing in "${_ACME_RESTORE_SERVICES[@]}"; do
+    [[ "${existing}" == "${candidate}" ]] && return 0
+  done
+  _ACME_RESTORE_SERVICES+=("${candidate}")
+}
+
 acme_restore_conflicting_services_on_failure() {
   local svc
   [[ "${_ACME_RESTORE_NEEDED:-0}" == "1" ]] || return 0
   for svc in "${_ACME_RESTORE_SERVICES[@]}"; do
-    if systemctl list-unit-files "${svc}.service" >/dev/null 2>&1; then
+    if systemctl show -p LoadState --value "${svc}" 2>/dev/null | grep -qv '^not-found$'; then
       systemctl start "${svc}" >/dev/null 2>&1 || true
     fi
   done
@@ -20,9 +30,72 @@ snapshot_conflicting_services_active() {
   _ACME_RESTORE_SERVICES=()
   for svc in nginx apache2 caddy lighttpd; do
     if systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
-      _ACME_RESTORE_SERVICES+=("${svc}")
+      acme_append_restore_service "${svc}"
     fi
   done
+  if acme_edge_runtime_enabled_for_http80; then
+    svc="$(acme_edge_runtime_service_name)"
+    if [[ -n "${svc}" && "${svc}" != "nginx" ]] && systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
+      acme_append_restore_service "${svc}"
+    fi
+  fi
+}
+
+acme_edge_runtime_service_name() {
+  local provider="${EDGE_PROVIDER:-none}"
+  case "${provider}" in
+    nginx-stream) printf '%s\n' "nginx" ;;
+    go) printf '%s\n' "${EDGE_SERVICE_NAME:-edge-mux.service}" ;;
+    *) return 1 ;;
+  esac
+}
+
+acme_edge_runtime_enabled_for_http80() {
+  local provider active http_port
+  provider="${EDGE_PROVIDER:-none}"
+  active="${EDGE_ACTIVATE_RUNTIME:-false}"
+  http_port="${EDGE_PUBLIC_HTTP_PORT:-80}"
+  [[ "${provider}" != "none" ]] || return 1
+  case "${active}" in
+    1|true|TRUE|yes|YES|on|ON) ;;
+    *) return 1 ;;
+  esac
+  [[ "${http_port}" == "80" ]]
+}
+
+acme_stop_additional_conflicting_services() {
+  local svc=""
+  if acme_edge_runtime_enabled_for_http80; then
+    svc="$(acme_edge_runtime_service_name 2>/dev/null || true)"
+    if [[ -n "${svc}" && "${svc}" != "nginx" ]] && systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
+      systemctl stop "${svc}" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+acme_restart_active_tls_consumers() {
+  local edge_svc
+  if systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || die "Gagal restart sshws-stunnel setelah update cert."
+    systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1 || die "sshws-stunnel tidak active setelah update cert."
+  fi
+  edge_svc="$(acme_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1; then
+    systemctl restart "${edge_svc}" >/dev/null 2>&1 || die "Gagal restart ${edge_svc} setelah update cert."
+    systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1 || die "${edge_svc} tidak active setelah update cert."
+  fi
+}
+
+acme_restore_conflicting_services_after_success() {
+  local svc
+  for svc in "${_ACME_RESTORE_SERVICES[@]}"; do
+    [[ "${svc}" == "nginx" ]] && continue
+    if systemctl show -p LoadState --value "${svc}" 2>/dev/null | grep -qv '^not-found$'; then
+      systemctl start "${svc}" >/dev/null 2>&1 || die "Gagal restore service ${svc} setelah update cert."
+    fi
+  done
+  _ACME_RESTORE_SERVICES=()
+  _ACME_RESTORE_NEEDED=0
 }
 
 rand_email() {
@@ -458,6 +531,7 @@ install_acme_and_issue_cert() {
     snapshot_conflicting_services_active
     _ACME_RESTORE_NEEDED=1
     stop_conflicting_services
+    acme_stop_additional_conflicting_services
   else
     _ACME_RESTORE_SERVICES=()
     _ACME_RESTORE_NEEDED=0
@@ -474,8 +548,8 @@ install_acme_and_issue_cert() {
     acme_tarball="$(mktemp)"
     acme_tmpdir="$(mktemp -d)"
     acme_dns_hook="$(mktemp)"
-    download_file_or_die "${ACME_SH_TARBALL_URL}" "${acme_tarball}" "${ACME_SH_TARBALL_SHA256}" "acme.sh tarball"
-    download_file_or_die "${ACME_SH_DNS_CF_HOOK_URL}" "${acme_dns_hook}" "${ACME_SH_DNS_CF_HOOK_SHA256}" "acme.sh dns_cf hook"
+    download_file_or_die "${ACME_SH_TARBALL_URL}" "${acme_tarball}" "" "acme.sh tarball"
+    download_file_or_die "${ACME_SH_DNS_CF_HOOK_URL}" "${acme_dns_hook}" "" "acme.sh dns_cf hook"
     tar -xzf "${acme_tarball}" -C "${acme_tmpdir}" --strip-components=1 || die "Gagal ekstrak acme.sh tarball."
     [[ -f "${acme_tmpdir}/acme.sh" ]] || die "Tarball acme.sh tidak berisi entry acme.sh."
     install -m 644 "${acme_dns_hook}" "${acme_tmpdir}/dnsapi/dns_cf.sh"
@@ -528,9 +602,10 @@ install_acme_and_issue_cert() {
 
   nginx -t >/dev/null 2>&1 || die "Konfigurasi nginx tidak valid setelah install-cert."
   systemctl restart nginx >/dev/null 2>&1 || die "Gagal restart nginx setelah install-cert."
+  acme_restart_active_tls_consumers
+  acme_restore_conflicting_services_after_success
 
   chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
-  _ACME_RESTORE_NEEDED=0
 
   ok "Cert saved:"
   ok "  - ${CERT_FULLCHAIN}"

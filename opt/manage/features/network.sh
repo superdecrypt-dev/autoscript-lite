@@ -49,15 +49,26 @@ PY
 
 network_state_set() {
   # args: key value
-  local key="$1"
-  local val="$2"
-  local f tmp
+  network_state_set_many "$1" "$2"
+}
+
+network_state_set_many() {
+  # args: key value [key value ...]
+  local f tmp rc
+  if (( $# < 2 || $# % 2 != 0 )); then
+    return 1
+  fi
   f="$(network_state_file)"
-  tmp="${WORK_DIR}/network_state.json.tmp"
+  tmp="$(mktemp "${WORK_DIR}/.network_state.json.tmp.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${tmp}" ]]; then
+    tmp="${WORK_DIR}/network_state.json.tmp.$$"
+  fi
   need_python3
-  python3 - <<'PY' "${f}" "${tmp}" "${key}" "${val}"
+  python3 - <<'PY' "${f}" "${tmp}" "$@"
 import json, os, sys
-path, tmp, key, val = sys.argv[1:5]
+path, tmp, *items = sys.argv[1:]
+if len(items) % 2 != 0:
+  raise SystemExit(2)
 d={}
 try:
   if os.path.exists(path):
@@ -65,12 +76,18 @@ try:
       d=json.load(f) or {}
 except Exception:
   d={}
-d[key]=val
+for i in range(0, len(items), 2):
+  d[items[i]] = items[i + 1]
 with open(tmp,'w',encoding='utf-8') as f:
   json.dump(d,f,ensure_ascii=False,indent=2)
   f.write("\n")
 os.replace(tmp, path)
 PY
+  rc=$?
+  rm -f "${tmp}" 2>/dev/null || true
+  if (( rc != 0 )); then
+    return "${rc}"
+  fi
   chmod 600 "${f}" 2>/dev/null || true
 }
 
@@ -3311,185 +3328,207 @@ warp_tier_switch_free() {
   echo "6) Network > WARP Controls > Switch ke WARP Free"
   hr
 
-  if ! have_cmd wgcf; then
-    warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
-  if ! have_cmd wireproxy; then
-    warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
+  local rc
+  (
+    flock -x 200
 
-  mkdir -p "${WGCF_DIR}"
-  if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]]; then
-    cp -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-account.toml.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
-  fi
-  rm -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-profile.conf" 2>/dev/null || true
-
-  if ! warp_wgcf_register_noninteractive; then
-    hr
-    pause
-    return 0
-  fi
-  if ! warp_wgcf_build_profile free; then
-    hr
-    pause
-    return 0
-  fi
-  if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
-    hr
-    pause
-    return 0
-  fi
-
-  network_state_set "${WARP_TIER_STATE_KEY}" "free"
-  log "WARP tier target di-set: free"
-  if svc_exists wireproxy; then
-    svc_restart wireproxy || true
-  else
-    warn "wireproxy.service tidak terdeteksi"
-  fi
-  hr
-  warp_tier_show_status
-  hr
-  pause
-}
-
-warp_tier_switch_plus() {
-  local saved_key key masked
-  title
-  echo "6) Network > WARP Controls > Switch ke WARP Plus"
-  hr
-
-  if ! have_cmd wgcf; then
-    warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
-  if ! have_cmd wireproxy; then
-    warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
-
-  saved_key="$(warp_plus_license_state_get)"
-  masked="$(warp_plus_license_mask "${saved_key}")"
-  if [[ -n "${saved_key}" ]]; then
-    echo "License tersimpan: ${masked}"
-    read -r -p "Input WARP+ License Key (Enter=pakai tersimpan, atau kembali): " key
-    if is_back_choice "${key}"; then
-      return 0
-    fi
-    key="$(echo "${key}" | tr -d '[:space:]')"
-    [[ -n "${key}" ]] || key="${saved_key}"
-  else
-    read -r -p "Input WARP+ License Key (atau kembali): " key
-    if is_back_choice "${key}"; then
-      return 0
-    fi
-    key="$(echo "${key}" | tr -d '[:space:]')"
-  fi
-
-  if [[ -z "${key}" ]]; then
-    warn "License key WARP+ kosong"
-    hr
-    pause
-    return 0
-  fi
-
-  if ! warp_wgcf_build_profile plus "${key}"; then
-    hr
-    pause
-    return 0
-  fi
-  if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
-    hr
-    pause
-    return 0
-  fi
-
-  network_state_set "${WARP_TIER_STATE_KEY}" "plus"
-  network_state_set "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"
-  log "WARP tier target di-set: plus"
-  if svc_exists wireproxy; then
-    svc_restart wireproxy || true
-  else
-    warn "wireproxy.service tidak terdeteksi"
-  fi
-  hr
-  warp_tier_show_status
-  hr
-  pause
-}
-
-warp_tier_reconnect_regenerate() {
-  local target key
-  title
-  echo "6) Network > WARP Controls > Reconnect/Regenerate"
-  hr
-
-  if ! have_cmd wgcf; then
-    warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
-  if ! have_cmd wireproxy; then
-    warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
-    hr
-    pause
-    return 0
-  fi
-
-  target="$(warp_tier_state_target_get)"
-  if [[ "${target}" != "free" && "${target}" != "plus" ]]; then
-    target="free"
-  fi
-
-  if [[ "${target}" == "plus" ]]; then
-    key="$(warp_plus_license_state_get)"
-    key="$(echo "${key}" | tr -d '[:space:]')"
-    if [[ -z "${key}" ]]; then
-      warn "Target plus aktif, tapi license key kosong. Gunakan menu Switch ke WARP Plus dulu."
+    if ! have_cmd wgcf; then
+      warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
       return 0
     fi
-    if ! warp_wgcf_build_profile plus "${key}"; then
+    if ! have_cmd wireproxy; then
+      warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
       return 0
     fi
-  else
+
+    mkdir -p "${WGCF_DIR}"
+    if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]]; then
+      cp -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-account.toml.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    fi
+    rm -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-profile.conf" 2>/dev/null || true
+
+    if ! warp_wgcf_register_noninteractive; then
+      hr
+      pause
+      return 0
+    fi
     if ! warp_wgcf_build_profile free; then
       hr
       pause
       return 0
     fi
-  fi
+    if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      hr
+      pause
+      return 0
+    fi
 
-  if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+    network_state_set_many "${WARP_TIER_STATE_KEY}" "free"
+    log "WARP tier target di-set: free"
+    if svc_exists wireproxy; then
+      svc_restart wireproxy || true
+    else
+      warn "wireproxy.service tidak terdeteksi"
+    fi
+    hr
+    warp_tier_show_status
     hr
     pause
-    return 0
-  fi
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
+}
 
-  if svc_exists wireproxy; then
-    svc_restart wireproxy || true
-  else
-    warn "wireproxy.service tidak terdeteksi"
-  fi
-  log "Reconnect/regenerate selesai untuk target tier: ${target}"
+warp_tier_switch_plus() {
+  local rc
+  title
+  echo "6) Network > WARP Controls > Switch ke WARP Plus"
   hr
-  warp_tier_show_status
+
+  (
+    local saved_key key masked
+    flock -x 200
+
+    if ! have_cmd wgcf; then
+      warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
+      hr
+      pause
+      return 0
+    fi
+    if ! have_cmd wireproxy; then
+      warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
+      hr
+      pause
+      return 0
+    fi
+
+    saved_key="$(warp_plus_license_state_get)"
+    masked="$(warp_plus_license_mask "${saved_key}")"
+    if [[ -n "${saved_key}" ]]; then
+      echo "License tersimpan: ${masked}"
+      read -r -p "Input WARP+ License Key (Enter=pakai tersimpan, atau kembali): " key
+      if is_back_choice "${key}"; then
+        return 0
+      fi
+      key="$(echo "${key}" | tr -d '[:space:]')"
+      [[ -n "${key}" ]] || key="${saved_key}"
+    else
+      read -r -p "Input WARP+ License Key (atau kembali): " key
+      if is_back_choice "${key}"; then
+        return 0
+      fi
+      key="$(echo "${key}" | tr -d '[:space:]')"
+    fi
+
+    if [[ -z "${key}" ]]; then
+      warn "License key WARP+ kosong"
+      hr
+      pause
+      return 0
+    fi
+
+    if ! warp_wgcf_build_profile plus "${key}"; then
+      hr
+      pause
+      return 0
+    fi
+    if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      hr
+      pause
+      return 0
+    fi
+
+    network_state_set_many \
+      "${WARP_TIER_STATE_KEY}" "plus" \
+      "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"
+    log "WARP tier target di-set: plus"
+    if svc_exists wireproxy; then
+      svc_restart wireproxy || true
+    else
+      warn "wireproxy.service tidak terdeteksi"
+    fi
+    hr
+    warp_tier_show_status
+    hr
+    pause
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
+}
+
+warp_tier_reconnect_regenerate() {
+  local rc
+  title
+  echo "6) Network > WARP Controls > Reconnect/Regenerate"
   hr
-  pause
+
+  (
+    local target key
+    flock -x 200
+
+    if ! have_cmd wgcf; then
+      warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
+      hr
+      pause
+      return 0
+    fi
+    if ! have_cmd wireproxy; then
+      warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
+      hr
+      pause
+      return 0
+    fi
+
+    target="$(warp_tier_state_target_get)"
+    if [[ "${target}" != "free" && "${target}" != "plus" ]]; then
+      target="free"
+    fi
+
+    if [[ "${target}" == "plus" ]]; then
+      key="$(warp_plus_license_state_get)"
+      key="$(echo "${key}" | tr -d '[:space:]')"
+      if [[ -z "${key}" ]]; then
+        warn "Target plus aktif, tapi license key kosong. Gunakan menu Switch ke WARP Plus dulu."
+        hr
+        pause
+        return 0
+      fi
+      if ! warp_wgcf_build_profile plus "${key}"; then
+        hr
+        pause
+        return 0
+      fi
+    else
+      if ! warp_wgcf_build_profile free; then
+        hr
+        pause
+        return 0
+      fi
+    fi
+
+    if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      hr
+      pause
+      return 0
+    fi
+
+    if svc_exists wireproxy; then
+      svc_restart wireproxy || true
+    else
+      warn "wireproxy.service tidak terdeteksi"
+    fi
+    log "Reconnect/regenerate selesai untuk target tier: ${target}"
+    hr
+    warp_tier_show_status
+    hr
+    pause
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
 }
 
 warp_tier_menu() {

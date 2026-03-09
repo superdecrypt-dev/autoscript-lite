@@ -25,7 +25,10 @@ need_cmd() {
 run_gate_1() {
   log "Gate 1: Static & Build"
 
-  python3 -m py_compile $(find "${BOT_DIR}/backend-py/app" -name '*.py')
+  mapfile -t backend_py_files < <(find "${BOT_DIR}/backend-py/app" -name '*.py')
+  if (( ${#backend_py_files[@]} > 0 )); then
+    python3 -m py_compile "${backend_py_files[@]}"
+  fi
 
   python3 - <<'PY'
 import json
@@ -198,12 +201,51 @@ run_gate_3_1() {
 
   lxc exec "${PROD_INSTANCE}" -- bash -lc '
 set -euo pipefail
-source /etc/xray-discord-bot/bot.env
+env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+    /^[[:space:]]*EnvironmentFile=/ {
+      value = substr($0, index($0, "=") + 1)
+      sub(/^-/, "", value)
+      if (value != "") print value
+    }
+  '"'"' | tail -n1)"
+fi
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="/etc/xray-discord-bot/bot.env"
+fi
+source "${env_file}"
 export INTERNAL_SHARED_SECRET
 python3 - <<'"'"'PY'"'"'
 import json, os, urllib.request, urllib.error
-BASE="http://127.0.0.1:8080"
 SECRET=os.environ.get("INTERNAL_SHARED_SECRET","")
+
+def resolve_backend_base_url(default_port: int) -> str:
+    raw_base = (os.environ.get("BACKEND_BASE_URL") or "").strip().rstrip("/")
+    raw_host = (os.environ.get("BACKEND_HOST") or "").strip()
+    raw_port = (os.environ.get("BACKEND_PORT") or "").strip()
+
+    def format_host_for_url(host: str) -> str:
+        if ":" in host and not (host.startswith("[") and host.endswith("]")):
+            return f"[{host}]"
+        return host
+
+    if raw_host or raw_port:
+        host = raw_host or "127.0.0.1"
+        port = raw_port or str(default_port)
+        try:
+            port_num = int(port)
+        except ValueError as exc:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}") from exc
+        if port_num < 1 or port_num > 65535:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}")
+        derived = f"http://{format_host_for_url(host)}:{port_num}"
+        if raw_base and raw_base != derived:
+            raise SystemExit("BACKEND_BASE_URL tidak sinkron dengan BACKEND_HOST/BACKEND_PORT.")
+        return derived
+    return raw_base or f"http://127.0.0.1:{default_port}"
+
+BASE=resolve_backend_base_url(8080)
 
 def get(path, headers=None):
     req=urllib.request.Request(BASE+path, headers=headers or {}, method="GET")
@@ -258,12 +300,51 @@ run_gate_4() {
 
   lxc exec "${STAGING_INSTANCE}" -- bash -lc '
 set -euo pipefail
-source /etc/xray-discord-bot/bot.env
+env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+    /^[[:space:]]*EnvironmentFile=/ {
+      value = substr($0, index($0, "=") + 1)
+      sub(/^-/, "", value)
+      if (value != "") print value
+    }
+  '"'"' | tail -n1)"
+fi
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="/etc/xray-discord-bot/bot.env"
+fi
+source "${env_file}"
 export INTERNAL_SHARED_SECRET
 python3 - <<'"'"'PY'"'"'
 import json, os, urllib.request, urllib.error
-BASE="http://127.0.0.1:8080"
 SECRET=os.environ.get("INTERNAL_SHARED_SECRET","")
+
+def resolve_backend_base_url(default_port: int) -> str:
+    raw_base = (os.environ.get("BACKEND_BASE_URL") or "").strip().rstrip("/")
+    raw_host = (os.environ.get("BACKEND_HOST") or "").strip()
+    raw_port = (os.environ.get("BACKEND_PORT") or "").strip()
+
+    def format_host_for_url(host: str) -> str:
+        if ":" in host and not (host.startswith("[") and host.endswith("]")):
+            return f"[{host}]"
+        return host
+
+    if raw_host or raw_port:
+        host = raw_host or "127.0.0.1"
+        port = raw_port or str(default_port)
+        try:
+            port_num = int(port)
+        except ValueError as exc:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}") from exc
+        if port_num < 1 or port_num > 65535:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}")
+        derived = f"http://{format_host_for_url(host)}:{port_num}"
+        if raw_base and raw_base != derived:
+            raise SystemExit("BACKEND_BASE_URL tidak sinkron dengan BACKEND_HOST/BACKEND_PORT.")
+        return derived
+    return raw_base or f"http://127.0.0.1:{default_port}"
+
+BASE=resolve_backend_base_url(8080)
 
 def request(method, path, payload=None, auth=True):
     headers={"Content-Type":"application/json"}
@@ -305,7 +386,20 @@ run_gate_5() {
   lxc exec "${PROD_INSTANCE}" -- bash -lc '
 set -euo pipefail
 systemctl show xray-discord-gateway -p ActiveState -p SubState -p NRestarts --no-pager
-source /etc/xray-discord-bot/bot.env
+env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+    /^[[:space:]]*EnvironmentFile=/ {
+      value = substr($0, index($0, "=") + 1)
+      sub(/^-/, "", value)
+      if (value != "") print value
+    }
+  '"'"' | tail -n1)"
+fi
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="/etc/xray-discord-bot/bot.env"
+fi
+source "${env_file}"
 export RESP_JSON="$(curl -fsS --max-time 20 -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" -H "User-Agent: xray-discord-gateway/1.0" "https://discord.com/api/v10/applications/${DISCORD_APPLICATION_ID}/guilds/${DISCORD_GUILD_ID}/commands")"
 python3 - <<'"'"'PY'"'"'
 import json, os
@@ -326,12 +420,51 @@ run_gate_6() {
 
   lxc exec "${PROD_INSTANCE}" -- bash -lc '
 set -euo pipefail
-source /etc/xray-discord-bot/bot.env
+env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+    /^[[:space:]]*EnvironmentFile=/ {
+      value = substr($0, index($0, "=") + 1)
+      sub(/^-/, "", value)
+      if (value != "") print value
+    }
+  '"'"' | tail -n1)"
+fi
+if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+  env_file="/etc/xray-discord-bot/bot.env"
+fi
+source "${env_file}"
 export INTERNAL_SHARED_SECRET
 python3 - <<'"'"'PY'"'"'
 import json, os, urllib.request, urllib.error
-BASE="http://127.0.0.1:8080"
 SECRET=os.environ.get("INTERNAL_SHARED_SECRET","")
+
+def resolve_backend_base_url(default_port: int) -> str:
+    raw_base = (os.environ.get("BACKEND_BASE_URL") or "").strip().rstrip("/")
+    raw_host = (os.environ.get("BACKEND_HOST") or "").strip()
+    raw_port = (os.environ.get("BACKEND_PORT") or "").strip()
+
+    def format_host_for_url(host: str) -> str:
+        if ":" in host and not (host.startswith("[") and host.endswith("]")):
+            return f"[{host}]"
+        return host
+
+    if raw_host or raw_port:
+        host = raw_host or "127.0.0.1"
+        port = raw_port or str(default_port)
+        try:
+            port_num = int(port)
+        except ValueError as exc:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}") from exc
+        if port_num < 1 or port_num > 65535:
+            raise SystemExit(f"BACKEND_PORT tidak valid: {port}")
+        derived = f"http://{format_host_for_url(host)}:{port_num}"
+        if raw_base and raw_base != derived:
+            raise SystemExit("BACKEND_BASE_URL tidak sinkron dengan BACKEND_HOST/BACKEND_PORT.")
+        return derived
+    return raw_base or f"http://127.0.0.1:{default_port}"
+
+BASE=resolve_backend_base_url(8080)
 cases=[
   ("1","overview",{}),
   ("1","observe_status",{}),

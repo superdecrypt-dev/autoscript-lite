@@ -57,4 +57,3 @@ Output default:
 
 - `opt/edge/dist/edge-mux-linux-amd64`
 - `opt/edge/dist/edge-mux-linux-arm64`
-- `opt/edge/dist/SHA256SUMS`

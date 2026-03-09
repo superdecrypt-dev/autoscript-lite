@@ -30,11 +30,49 @@ else
   UI_OK=''
 fi
 
+format_host_for_url() {
+  local host="$1"
+  if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
+    printf '[%s]\n' "${host}"
+    return
+  fi
+  printf '%s\n' "${host}"
+}
+
+BOT_HOME_EXPLICIT=0
+[[ -v BOT_HOME ]] && BOT_HOME_EXPLICIT=1
+BOT_ENV_DIR_EXPLICIT=0
+[[ -v BOT_ENV_DIR ]] && BOT_ENV_DIR_EXPLICIT=1
+BOT_ENV_FILE_EXPLICIT=0
+[[ -v BOT_ENV_FILE ]] && BOT_ENV_FILE_EXPLICIT=1
+BOT_STATE_DIR_EXPLICIT=0
+[[ -v BOT_STATE_DIR ]] && BOT_STATE_DIR_EXPLICIT=1
+BOT_LOG_DIR_EXPLICIT=0
+[[ -v BOT_LOG_DIR ]] && BOT_LOG_DIR_EXPLICIT=1
+GATEWAY_RUN_USER_EXPLICIT=0
+[[ -v GATEWAY_RUN_USER ]] && GATEWAY_RUN_USER_EXPLICIT=1
+DISCORD_CHANNEL_POLICY_FILE_EXPLICIT=0
+[[ -v DISCORD_CHANNEL_POLICY_FILE ]] && DISCORD_CHANNEL_POLICY_FILE_EXPLICIT=1
+BACKEND_HOST_EXPLICIT=0
+[[ -v BACKEND_HOST ]] && BACKEND_HOST_EXPLICIT=1
+BACKEND_PORT_EXPLICIT=0
+[[ -v BACKEND_PORT ]] && BACKEND_PORT_EXPLICIT=1
+BACKEND_BASE_URL_EXPLICIT=0
+[[ -v BACKEND_BASE_URL ]] && BACKEND_BASE_URL_EXPLICIT=1
+
 BOT_HOME="${BOT_HOME:-/opt/bot-discord}"
 BOT_ENV_DIR="${BOT_ENV_DIR:-/etc/xray-discord-bot}"
 BOT_ENV_FILE="${BOT_ENV_FILE:-${BOT_ENV_DIR}/bot.env}"
 BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/xray-discord-bot}"
 BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/xray-discord-bot}"
+GATEWAY_RUN_USER="${GATEWAY_RUN_USER:-xray-discord-gateway}"
+DISCORD_CHANNEL_POLICY_FILE="${DISCORD_CHANNEL_POLICY_FILE:-${BOT_STATE_DIR}/channel-policy.json}"
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+BACKEND_PORT="${BACKEND_PORT:-8080}"
+BACKEND_BASE_URL="${BACKEND_BASE_URL:-}"
+if [[ -z "${BACKEND_BASE_URL}" ]]; then
+  BACKEND_BASE_URL="http://$(format_host_for_url "${BACKEND_HOST}"):${BACKEND_PORT}"
+fi
 
 BACKEND_SERVICE="xray-discord-backend"
 GATEWAY_SERVICE="xray-discord-gateway"
@@ -45,9 +83,7 @@ SRC_REPO="${BOT_SOURCE_REPO:-autoscript}"
 SRC_REF="${BOT_SOURCE_REF:-main}"
 SRC_ARCHIVE_DEFAULT_URL="https://github.com/${SRC_OWNER}/${SRC_REPO}/raw/${SRC_REF}/bot_discord.zip"
 SRC_ARCHIVE_URL="${BOT_SOURCE_ARCHIVE_URL:-${SRC_ARCHIVE_DEFAULT_URL}}"
-SRC_ARCHIVE_SHA256="${BOT_SOURCE_ARCHIVE_SHA256:-6097db4a58ecc88e653724460cf9fd45f15802a5d7cc17c307b6f5d1a816bda1}"
-SRC_ARCHIVE_SHA256_URL="${BOT_SOURCE_ARCHIVE_SHA256_URL:-}"
-ALLOW_UNVERIFIED_ARCHIVE="${BOT_ALLOW_UNVERIFIED_ARCHIVE:-0}"
+NODE_MIN_MAJOR="${BOT_NODE_MIN_MAJOR:-18}"
 
 OS_DEPS=(
   curl
@@ -212,6 +248,84 @@ set_env_value() {
   rm -f "$tmp" >/dev/null 2>&1 || true
 }
 
+resolve_persisted_env_file() {
+  local candidate unit
+
+  if [[ -n "${BOT_ENV_FILE:-}" && -f "${BOT_ENV_FILE}" ]]; then
+    printf '%s\n' "${BOT_ENV_FILE}"
+    return
+  fi
+
+  if command_exists systemctl; then
+    for unit in "${GATEWAY_SERVICE}" "${BACKEND_SERVICE}" "${MONITOR_SERVICE}"; do
+      candidate="$(systemctl cat "${unit}" 2>/dev/null | awk '
+        /^[[:space:]]*EnvironmentFile=/ {
+          value = substr($0, index($0, "=") + 1)
+          sub(/^-/, "", value)
+          if (value != "") print value
+        }
+      ' | tail -n1)"
+      if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+        printf '%s\n' "${candidate}"
+        return
+      fi
+    done
+  fi
+}
+
+load_persisted_runtime_config() {
+  local env_file value
+
+  env_file="$(resolve_persisted_env_file || true)"
+  [[ -n "${env_file}" && -f "${env_file}" ]] || return 0
+
+  if (( BOT_ENV_FILE_EXPLICIT == 0 )); then
+    value="$(get_env_value BOT_ENV_FILE "${env_file}")"
+    BOT_ENV_FILE="${value:-${env_file}}"
+  fi
+  if (( BOT_ENV_DIR_EXPLICIT == 0 )); then
+    BOT_ENV_DIR="$(dirname "${BOT_ENV_FILE}")"
+  fi
+  if (( BOT_HOME_EXPLICIT == 0 )); then
+    value="$(get_env_value BOT_HOME "${env_file}")"
+    [[ -n "${value}" ]] && BOT_HOME="${value}"
+  fi
+  if (( BOT_STATE_DIR_EXPLICIT == 0 )); then
+    value="$(get_env_value BOT_STATE_DIR "${env_file}")"
+    [[ -n "${value}" ]] && BOT_STATE_DIR="${value}"
+  fi
+  if (( BOT_LOG_DIR_EXPLICIT == 0 )); then
+    value="$(get_env_value BOT_LOG_DIR "${env_file}")"
+    [[ -n "${value}" ]] && BOT_LOG_DIR="${value}"
+  fi
+  if (( GATEWAY_RUN_USER_EXPLICIT == 0 )); then
+    value="$(get_env_value GATEWAY_RUN_USER "${env_file}")"
+    [[ -n "${value}" ]] && GATEWAY_RUN_USER="${value}"
+  fi
+  if (( DISCORD_CHANNEL_POLICY_FILE_EXPLICIT == 0 )); then
+    value="$(get_env_value DISCORD_CHANNEL_POLICY_FILE "${env_file}")"
+    DISCORD_CHANNEL_POLICY_FILE="${value:-${BOT_STATE_DIR}/channel-policy.json}"
+  fi
+  if (( BACKEND_HOST_EXPLICIT == 0 )); then
+    value="$(get_env_value BACKEND_HOST "${env_file}")"
+    [[ -n "${value}" ]] && BACKEND_HOST="${value}"
+  fi
+  if (( BACKEND_PORT_EXPLICIT == 0 )); then
+    value="$(get_env_value BACKEND_PORT "${env_file}")"
+    [[ -n "${value}" ]] && BACKEND_PORT="${value}"
+  fi
+  if (( BACKEND_BASE_URL_EXPLICIT == 0 )); then
+    value="$(get_env_value BACKEND_BASE_URL "${env_file}")"
+    if [[ -n "${value}" ]]; then
+      BACKEND_BASE_URL="${value}"
+    else
+      BACKEND_BASE_URL="http://$(format_host_for_url "${BACKEND_HOST}"):${BACKEND_PORT}"
+    fi
+  fi
+}
+
+load_persisted_runtime_config
+
 prompt_with_default() {
   local prompt="$1"
   local def="$2"
@@ -292,8 +406,10 @@ prompt_secret_or_back() {
 generate_secret() {
   if command_exists openssl; then
     openssl rand -hex 24
+  elif [[ -r /dev/urandom ]] && command_exists od; then
+    od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
   else
-    date +%s%N | sha256sum | awk '{print $1}'
+    printf '%s%06d\n' "$(date +%s%N)" "$$"
   fi
 }
 
@@ -302,15 +418,21 @@ ensure_env_file() {
 
   if [[ ! -f "${BOT_ENV_FILE}" ]]; then
     cat > "${BOT_ENV_FILE}" <<ENVEOF
+BOT_HOME=${BOT_HOME}
+BOT_ENV_FILE=${BOT_ENV_FILE}
+BOT_STATE_DIR=${BOT_STATE_DIR}
+BOT_LOG_DIR=${BOT_LOG_DIR}
+GATEWAY_RUN_USER=${GATEWAY_RUN_USER}
+DISCORD_CHANNEL_POLICY_FILE=${DISCORD_CHANNEL_POLICY_FILE}
 INTERNAL_SHARED_SECRET=
 DISCORD_BOT_TOKEN=
 DISCORD_APPLICATION_ID=
 DISCORD_GUILD_ID=
 DISCORD_ADMIN_ROLE_IDS=
 DISCORD_ADMIN_USER_IDS=
-BACKEND_BASE_URL=http://127.0.0.1:8080
-BACKEND_HOST=127.0.0.1
-BACKEND_PORT=8080
+BACKEND_BASE_URL=${BACKEND_BASE_URL}
+BACKEND_HOST=${BACKEND_HOST}
+BACKEND_PORT=${BACKEND_PORT}
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
 ENABLE_DANGEROUS_ACTIONS=false
 ENVEOF
@@ -318,6 +440,37 @@ ENVEOF
     ok "File env dibuat: ${BOT_ENV_FILE}"
   else
     chmod 600 "${BOT_ENV_FILE}" || true
+  fi
+
+  if [[ -z "$(get_env_value BOT_HOME "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BOT_HOME "${BOT_HOME}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BOT_ENV_FILE "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BOT_ENV_FILE "${BOT_ENV_FILE}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BOT_STATE_DIR "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BOT_STATE_DIR "${BOT_STATE_DIR}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BOT_LOG_DIR "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BOT_LOG_DIR "${BOT_LOG_DIR}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value GATEWAY_RUN_USER "${BOT_ENV_FILE}")" ]]; then
+    set_env_value GATEWAY_RUN_USER "${GATEWAY_RUN_USER}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value DISCORD_CHANNEL_POLICY_FILE "${BOT_ENV_FILE}")" ]]; then
+    set_env_value DISCORD_CHANNEL_POLICY_FILE "${DISCORD_CHANNEL_POLICY_FILE}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BACKEND_BASE_URL "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BACKEND_BASE_URL "${BACKEND_BASE_URL}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BACKEND_HOST "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BACKEND_HOST "${BACKEND_HOST}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value BACKEND_PORT "${BOT_ENV_FILE}")" ]]; then
+    set_env_value BACKEND_PORT "${BACKEND_PORT}" "${BOT_ENV_FILE}"
+  fi
+  if [[ -z "$(get_env_value COMMANDS_FILE "${BOT_ENV_FILE}")" ]]; then
+    set_env_value COMMANDS_FILE "${BOT_HOME}/shared/commands.json" "${BOT_ENV_FILE}"
   fi
 }
 
@@ -365,6 +518,22 @@ show_service_status() {
   printf "%-24s active=%-10s enabled=%s\n" "${svc}" "${active}" "${enabled}"
 }
 
+ensure_node_runtime_supported() {
+  local raw version major
+
+  command_exists node || die "node tidak tersedia. Install Node.js ${NODE_MIN_MAJOR}+ lalu jalankan ulang."
+  raw="$(node --version 2>/dev/null || true)"
+  version="${raw#v}"
+  major="${version%%.*}"
+
+  if [[ -z "${major}" || ! "${major}" =~ ^[0-9]+$ ]]; then
+    die "Tidak bisa membaca versi node saat ini: ${raw:-unknown}"
+  fi
+  if (( major < NODE_MIN_MAJOR )); then
+    die "Bot Discord membutuhkan Node.js ${NODE_MIN_MAJOR}+; ditemukan ${raw}. Perbarui runtime node lalu jalankan ulang."
+  fi
+}
+
 install_dependencies() {
   need_root
 
@@ -376,6 +545,7 @@ install_dependencies() {
   log "Install dependency OS/runtime..."
   apt-get update -y
   apt-get install -y "${OS_DEPS[@]}"
+  ensure_node_runtime_supported
 
   ok "Dependency berhasil dipasang."
   echo "Versi runtime:"
@@ -463,9 +633,15 @@ configure_env_interactive() {
   set_env_value DISCORD_ADMIN_USER_IDS "${user_ids}" "${staged_env}"
   set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-false}" "${staged_env}"
 
-  set_env_value BACKEND_BASE_URL "http://127.0.0.1:8080" "${staged_env}"
-  set_env_value BACKEND_HOST "127.0.0.1" "${staged_env}"
-  set_env_value BACKEND_PORT "8080" "${staged_env}"
+  set_env_value BOT_HOME "${BOT_HOME}" "${staged_env}"
+  set_env_value BOT_ENV_FILE "${BOT_ENV_FILE}" "${staged_env}"
+  set_env_value BOT_STATE_DIR "${BOT_STATE_DIR}" "${staged_env}"
+  set_env_value BOT_LOG_DIR "${BOT_LOG_DIR}" "${staged_env}"
+  set_env_value GATEWAY_RUN_USER "${GATEWAY_RUN_USER}" "${staged_env}"
+  set_env_value DISCORD_CHANNEL_POLICY_FILE "${DISCORD_CHANNEL_POLICY_FILE}" "${staged_env}"
+  set_env_value BACKEND_BASE_URL "${BACKEND_BASE_URL}" "${staged_env}"
+  set_env_value BACKEND_HOST "${BACKEND_HOST}" "${staged_env}"
+  set_env_value BACKEND_PORT "${BACKEND_PORT}" "${staged_env}"
   set_env_value COMMANDS_FILE "${BOT_HOME}/shared/commands.json" "${staged_env}"
 
   chmod 600 "${staged_env}" || true
@@ -520,9 +696,86 @@ validate_source_tree() {
   local src="$1"
   [[ -d "${src}" ]] || die "Source bot tidak ditemukan: ${src}"
   [[ -f "${src}/gateway-ts/package.json" ]] || die "Source invalid: gateway-ts/package.json tidak ditemukan"
+  [[ -f "${src}/gateway-ts/package-lock.json" ]] || die "Source invalid: gateway-ts/package-lock.json tidak ditemukan"
   [[ -f "${src}/backend-py/requirements.txt" ]] || die "Source invalid: backend-py/requirements.txt tidak ditemukan"
+  [[ -f "${src}/backend-py/requirements.lock.txt" ]] || die "Source invalid: backend-py/requirements.lock.txt tidak ditemukan"
+  [[ -f "${src}/shared/commands.json" ]] || die "Source invalid: shared/commands.json tidak ditemukan"
   [[ -f "${src}/systemd/xray-discord-backend.service.tpl" ]] || die "Source invalid: template backend service tidak ditemukan"
   [[ -f "${src}/systemd/xray-discord-gateway.service.tpl" ]] || die "Source invalid: template gateway service tidak ditemukan"
+}
+
+migrate_channel_policy_state() {
+  local legacy_root="$1"
+  local legacy_file destination
+
+  destination="${DISCORD_CHANNEL_POLICY_FILE}"
+  legacy_file="${legacy_root}/runtime/channel-policy.json"
+
+  [[ -n "${destination}" ]] || return 0
+  [[ -f "${legacy_file}" ]] || return 0
+  [[ ! -e "${destination}" ]] || return 0
+
+  mkdir -p "$(dirname "${destination}")"
+  install -m 600 "${legacy_file}" "${destination}"
+  ok "Migrasi channel policy Discord ke runtime state: ${destination}"
+}
+
+resolve_nologin_shell() {
+  local shell
+  shell="$(command -v nologin 2>/dev/null || true)"
+  [[ -n "${shell}" ]] || shell="/usr/sbin/nologin"
+  printf '%s\n' "${shell}"
+}
+
+gateway_service_group() {
+  id -gn "${GATEWAY_RUN_USER}" 2>/dev/null || true
+}
+
+ensure_gateway_service_user() {
+  local nologin_bin
+  if id -u "${GATEWAY_RUN_USER}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  nologin_bin="$(resolve_nologin_shell)"
+  if getent group "${GATEWAY_RUN_USER}" >/dev/null 2>&1; then
+    useradd --system --gid "${GATEWAY_RUN_USER}" --home-dir "${BOT_STATE_DIR}" --no-create-home --shell "${nologin_bin}" "${GATEWAY_RUN_USER}" >/dev/null 2>&1 \
+      || die "Gagal membuat user service gateway ${GATEWAY_RUN_USER}."
+    return 0
+  fi
+
+  useradd --system --user-group --home-dir "${BOT_STATE_DIR}" --no-create-home --shell "${nologin_bin}" "${GATEWAY_RUN_USER}" >/dev/null 2>&1 \
+    || die "Gagal membuat user service gateway ${GATEWAY_RUN_USER}."
+}
+
+prepare_gateway_runtime_permissions() {
+  local gateway_group policy_dir monitor_log_file monitor_lock_file
+  gateway_group="$(gateway_service_group)"
+  [[ -n "${gateway_group}" ]] || gateway_group="${GATEWAY_RUN_USER}"
+  policy_dir="$(dirname "${DISCORD_CHANNEL_POLICY_FILE}")"
+  monitor_log_file="${BOT_LOG_DIR}/monitor-lite.log"
+  monitor_lock_file="${BOT_LOG_DIR}/monitor-lite.lock"
+
+  install -d -m 750 -o "${GATEWAY_RUN_USER}" -g "${gateway_group}" "${BOT_STATE_DIR}"
+  install -d -m 750 -o "${GATEWAY_RUN_USER}" -g "${gateway_group}" "${BOT_LOG_DIR}"
+  install -d -m 750 -o "${GATEWAY_RUN_USER}" -g "${gateway_group}" "${policy_dir}"
+
+  if [[ -f "${DISCORD_CHANNEL_POLICY_FILE}" ]]; then
+    chown "${GATEWAY_RUN_USER}:${gateway_group}" "${DISCORD_CHANNEL_POLICY_FILE}" || true
+    chmod 640 "${DISCORD_CHANNEL_POLICY_FILE}" || true
+  fi
+  if [[ -f "${monitor_log_file}" ]]; then
+    chown "${GATEWAY_RUN_USER}:${gateway_group}" "${monitor_log_file}" || true
+    chmod 640 "${monitor_log_file}" || true
+  fi
+  if [[ -f "${monitor_lock_file}" ]]; then
+    chown "${GATEWAY_RUN_USER}:${gateway_group}" "${monitor_lock_file}" || true
+    chmod 640 "${monitor_lock_file}" || true
+  fi
+
+  if [[ -n "${gateway_group}" ]]; then
+    chown root:"${gateway_group}" "${BOT_HOME}" "${BOT_HOME}/gateway-ts" >/dev/null 2>&1 || true
+  fi
 }
 
 extract_source_archive() {
@@ -620,35 +873,6 @@ with tarfile.open(archive_path, "r:*") as tf:
 PY
 }
 
-resolve_archive_checksum() {
-  local archive="$1"
-  local checksum_file="$2"
-  local expected actual
-
-  expected="$(echo "${SRC_ARCHIVE_SHA256}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-  if [[ -z "${expected}" && -n "${SRC_ARCHIVE_SHA256_URL}" ]]; then
-    log "Download checksum file: ${SRC_ARCHIVE_SHA256_URL}"
-    if curl -fsSL --connect-timeout 15 --max-time 60 "${SRC_ARCHIVE_SHA256_URL}" -o "${checksum_file}"; then
-      expected="$(awk '{print tolower($1)}' "${checksum_file}" | grep -E '^[0-9a-f]{64}$' | head -n1 || true)"
-    else
-      warn "Checksum file tidak bisa diunduh dari ${SRC_ARCHIVE_SHA256_URL}."
-    fi
-  fi
-
-  if [[ -z "${expected}" ]]; then
-    if [[ "${ALLOW_UNVERIFIED_ARCHIVE}" == "1" ]]; then
-      warn "Checksum source tidak tersedia; lanjut TANPA verifikasi (BOT_ALLOW_UNVERIFIED_ARCHIVE=1)."
-      return 0
-    fi
-    die "Checksum source tidak tersedia. Set BOT_SOURCE_ARCHIVE_SHA256 (disarankan) atau BOT_SOURCE_ARCHIVE_SHA256_URL. Untuk bypass (tidak direkomendasikan), set BOT_ALLOW_UNVERIFIED_ARCHIVE=1."
-  fi
-
-  command_exists sha256sum || die "sha256sum tidak tersedia untuk verifikasi integritas source archive."
-  actual="$(sha256sum "${archive}" | awk '{print tolower($1)}')"
-  [[ "${actual}" == "${expected}" ]] || die "Checksum source archive tidak cocok. expected=${expected}, actual=${actual}"
-  ok "Checksum source archive valid."
-}
-
 deploy_or_update_files() {
   need_root
 
@@ -656,8 +880,9 @@ deploy_or_update_files() {
   for cmd in curl tar rsync python3 npm node; do
     command_exists "${cmd}" || die "Dependency '${cmd}' belum tersedia. Jalankan menu 2) Install Dependencies."
   done
+  ensure_node_runtime_supported
 
-  local tmp="" archive checksum_file src_root src_dir archive_ext archive_url_no_query
+  local tmp="" archive src_root src_dir archive_ext archive_url_no_query
   local bot_home_parent stage_dir="" previous_dir=""
   tmp="$(mktemp -d /tmp/bot-discord-src.XXXXXX)"
   archive_url_no_query="${SRC_ARCHIVE_URL%%\?*}"
@@ -666,11 +891,9 @@ deploy_or_update_files() {
     archive_ext="zip"
   fi
   archive="${tmp}/src.${archive_ext}"
-  checksum_file="${tmp}/src.archive.sha256"
 
   log "Download source archive: ${SRC_ARCHIVE_URL}"
   curl -fsSL --connect-timeout 15 --max-time 180 "${SRC_ARCHIVE_URL}" -o "${archive}" || die "Gagal download archive source."
-  resolve_archive_checksum "${archive}" "${checksum_file}"
 
   log "Extract archive..."
   extract_source_archive "${archive}" "${tmp}"
@@ -699,6 +922,11 @@ deploy_or_update_files() {
     --exclude 'node_modules' \
     --exclude '__pycache__' \
     --exclude '*.pyc' \
+    --filter='+ /runtime/logs/.gitkeep' \
+    --filter='+ /runtime/tmp/.gitkeep' \
+    --filter='- /runtime/logs/***' \
+    --filter='- /runtime/tmp/***' \
+    --filter='- /gateway-ts/dist/***' \
     "${src_dir}/" "${stage_dir}/"
 
   rm -rf "${tmp}" >/dev/null 2>&1 || true
@@ -707,7 +935,7 @@ deploy_or_update_files() {
   log "Install dependency Python backend"
   python3 -m venv "${stage_dir}/.venv"
   "${stage_dir}/.venv/bin/pip" install --upgrade pip >/dev/null
-  "${stage_dir}/.venv/bin/pip" install -r "${stage_dir}/backend-py/requirements.txt"
+  "${stage_dir}/.venv/bin/pip" install -r "${stage_dir}/backend-py/requirements.lock.txt"
   log "Validasi syntax Python backend"
   local backend_py_files=()
   mapfile -t backend_py_files < <(find "${stage_dir}/backend-py/app" -name '*.py')
@@ -718,20 +946,18 @@ deploy_or_update_files() {
   log "Install dependency Node gateway + build"
   (
     cd "${stage_dir}/gateway-ts"
-    npm install
+    npm ci
     npm run build
   )
 
   ensure_env_file
-  if [[ ! -f "${stage_dir}/.env" ]]; then
-    cp "${BOT_ENV_FILE}" "${stage_dir}/.env" || true
-  fi
 
   chmod -R go-rwx "${BOT_ENV_DIR}" || true
 
   if [[ -e "${BOT_HOME}" ]]; then
     previous_dir="${bot_home_parent}/.bot-discord.prev.$(date +%Y%m%d%H%M%S)"
     mv "${BOT_HOME}" "${previous_dir}" || die "Gagal memindahkan instalasi bot lama ke backup: ${BOT_HOME}"
+    migrate_channel_policy_state "${previous_dir}"
   fi
 
   if ! mv "${stage_dir}" "${BOT_HOME}"; then
@@ -768,6 +994,9 @@ install_or_update_systemd() {
   [[ -f "${backend_tpl}" ]] || die "Template tidak ditemukan: ${backend_tpl}"
   [[ -f "${gateway_tpl}" ]] || die "Template tidak ditemukan: ${gateway_tpl}"
 
+  ensure_gateway_service_user
+  prepare_gateway_runtime_permissions
+
   sed \
     -e "s#/opt/bot-discord#${BOT_HOME}#g" \
     -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
@@ -776,12 +1005,14 @@ install_or_update_systemd() {
   sed \
     -e "s#/opt/bot-discord#${BOT_HOME}#g" \
     -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
+    -e "s#User=xray-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
     "${gateway_tpl}" > "${gateway_dst}"
 
   if [[ -f "${monitor_tpl}" ]]; then
     sed \
       -e "s#/opt/bot-discord#${BOT_HOME}#g" \
       -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
+      -e "s#User=xray-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
       "${monitor_tpl}" > "${monitor_dst}"
   fi
 

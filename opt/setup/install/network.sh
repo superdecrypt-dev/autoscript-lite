@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Network/runtime tuning module for setup runtime.
 
+WGCF_RELEASE_TAG="${WGCF_RELEASE_TAG:-v2.2.30}"
+WGCF_RELEASE_VERSION="${WGCF_RELEASE_VERSION:-2.2.30}"
+WIREPROXY_RELEASE_TAG="${WIREPROXY_RELEASE_TAG:-v1.1.2}"
+
 install_fail2ban_aggressive() {
   ok "Aktifkan fail2ban..."
 
@@ -199,23 +203,34 @@ get_arch() {
   esac
 }
 
-github_latest_asset_url() {
-  # $1 = owner/repo, $2 = asset name contains (substring)
-  python3 - "$1" "$2" <<'PY'
-import json, sys, urllib.request
-repo = sys.argv[1]
-match = sys.argv[2]
-url = f"https://api.github.com/repos/{repo}/releases/latest"
-req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-with urllib.request.urlopen(req, timeout=30) as r:
-  data = json.loads(r.read().decode("utf-8"))
-for a in data.get("assets", []):
-  name = a.get("name", "")
-  if match in name:
-    print(a.get("browser_download_url", ""))
-    sys.exit(0)
-sys.exit(1)
-PY
+wgcf_asset_name() {
+  case "$(get_arch)" in
+    amd64) printf '%s\n' "wgcf_${WGCF_RELEASE_VERSION}_linux_amd64" ;;
+    arm64) printf '%s\n' "wgcf_${WGCF_RELEASE_VERSION}_linux_arm64" ;;
+    armv7) printf '%s\n' "wgcf_${WGCF_RELEASE_VERSION}_linux_armv7" ;;
+    *) return 1 ;;
+  esac
+}
+
+wgcf_asset_url() {
+  local asset
+  asset="$(wgcf_asset_name)" || return 1
+  printf 'https://github.com/ViRb3/wgcf/releases/download/%s/%s\n' "${WGCF_RELEASE_TAG}" "${asset}"
+}
+
+wireproxy_asset_name() {
+  case "$(get_arch)" in
+    amd64) printf '%s\n' "wireproxy_linux_amd64.tar.gz" ;;
+    arm64) printf '%s\n' "wireproxy_linux_arm64.tar.gz" ;;
+    armv7) printf '%s\n' "wireproxy_linux_arm.tar.gz" ;;
+    *) return 1 ;;
+  esac
+}
+
+wireproxy_asset_url() {
+  local asset
+  asset="$(wireproxy_asset_name)" || return 1
+  printf 'https://github.com/windtf/wireproxy/releases/download/%s/%s\n' "${WIREPROXY_RELEASE_TAG}" "${asset}"
 }
 
 install_wgcf() {
@@ -225,18 +240,12 @@ install_wgcf() {
   fi
 
   ok "Pasang wgcf..."
-  local arch match url
-  arch="$(get_arch)"
-
-  case "$arch" in
-    amd64) match="linux_amd64" ;;
-    arm64) match="linux_arm64" ;;
-    armv7) match="linux_armv7" ;;
-  esac
-
-  url="$(github_latest_asset_url "ViRb3/wgcf" "$match")" || die "Gagal mengambil URL release wgcf."
-  curl -fsSL "$url" -o /usr/local/bin/wgcf || die "Gagal download wgcf."
-  chmod +x /usr/local/bin/wgcf
+  local url tmp
+  url="$(wgcf_asset_url)" || die "Asset wgcf belum tersedia untuk arsitektur host ini."
+  tmp="$(mktemp)"
+  download_file_or_die "${url}" "${tmp}" "" "wgcf ${WGCF_RELEASE_TAG}"
+  install -m 0755 "${tmp}" /usr/local/bin/wgcf
+  rm -f "${tmp}" >/dev/null 2>&1 || true
   ok "wgcf siap."
 }
 
@@ -247,21 +256,12 @@ install_wireproxy() {
   fi
 
   ok "Pasang wireproxy..."
-  local arch match url tmpdir tgz bin
-  arch="$(get_arch)"
-
-  case "$arch" in
-    amd64) match="wireproxy_linux_amd64.tar.gz" ;;
-    arm64) match="wireproxy_linux_arm64.tar.gz" ;;
-    armv7) match="wireproxy_linux_arm.tar.gz" ;;
-  esac
-
-  # NOTE: release assets tersedia di whyvl/wireproxy
-  url="$(github_latest_asset_url "whyvl/wireproxy" "$match")" || die "Gagal mengambil URL release wireproxy."
+  local url tmpdir tgz bin
+  url="$(wireproxy_asset_url)" || die "Asset wireproxy belum tersedia untuk arsitektur host ini."
   tmpdir="$(mktemp -d)"
   tgz="${tmpdir}/wireproxy.tar.gz"
 
-  curl -fsSL "$url" -o "$tgz" || die "Gagal download wireproxy."
+  download_file_or_die "${url}" "${tgz}" "" "wireproxy ${WIREPROXY_RELEASE_TAG}"
   tar -xzf "$tgz" -C "$tmpdir" >/dev/null 2>&1 || die "Gagal extract wireproxy."
   bin="$(find "$tmpdir" -type f -name wireproxy -print -quit)"
   [[ -n "${bin:-}" && -f "$bin" ]] || die "Binary wireproxy tidak ditemukan setelah extract."
@@ -390,4 +390,3 @@ enable_cron_service() {
 
   ok "cron aktif."
 }
-

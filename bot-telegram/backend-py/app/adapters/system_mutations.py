@@ -1,7 +1,5 @@
 import base64
-from functools import lru_cache
 import grp
-import hashlib
 import ipaddress
 import json
 import os
@@ -18,8 +16,9 @@ import urllib.parse
 import urllib.error
 import urllib.request
 import uuid
+import zlib
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..utils.locks import file_lock
@@ -57,8 +56,9 @@ XRAY_DOMAIN_FILE = Path("/etc/xray/domain")
 CERT_DIR = Path("/opt/cert")
 CERT_FULLCHAIN = CERT_DIR / "fullchain.pem"
 CERT_PRIVKEY = CERT_DIR / "privkey.pem"
+EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
 WORK_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot")) / "tmp"
-ROUTING_LOCK_FILE = "/var/lock/xray-routing.lock"
+ROUTING_LOCK_FILE = "/run/autoscript/locks/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
 PROTOCOLS = XRAY_PROTOCOLS
 SS_METHOD = "aes-128-gcm"
@@ -74,7 +74,8 @@ QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 BALANCER_EGRESS_TAG = "egress-balance"
 BALANCER_ALLOWED_STRATEGIES = {"random", "roundRobin", "leastPing", "leastLoad"}
 DEFAULT_EGRESS_PORTS = {"1-65535", "0-65535"}
-DNS_LOCK_FILE = "/var/lock/xray-dns.lock"
+DNS_LOCK_FILE = "/run/autoscript/locks/xray-dns.lock"
+WARP_LOCK_FILE = "/run/autoscript/locks/xray-warp.lock"
 DNS_QUERY_STRATEGY_ALLOWED = {"UseIP", "UseIPv4", "UseIPv6", "PreferIPv4", "PreferIPv6"}
 DNS_RESTART_TIMEOUT_SEC = 8
 DNS_ROLLBACK_RESTART_TIMEOUT_SEC = 5
@@ -97,6 +98,8 @@ CLOUDFLARE_API_TOKEN = os.getenv(
 PROVIDED_ROOT_DOMAINS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
+    "vyxara1.qzz.io",
+    "vyxara2.qzz.io",
 )
 ACME_SH_INSTALL_REF = os.getenv("ACME_SH_INSTALL_REF", "f39d066ced0271d87790dc426556c1e02a88c91b").strip()
 ACME_SH_TARBALL_URL = f"https://codeload.github.com/acmesh-official/acme.sh/tar.gz/{ACME_SH_INSTALL_REF}"
@@ -154,6 +157,42 @@ def _service_is_active(name: str) -> bool:
         return False
     state = out.splitlines()[-1].strip() if out else ""
     return state == "active"
+
+
+def _edge_runtime_get_env(key: str) -> str:
+    try:
+        if not EDGE_RUNTIME_ENV_FILE.exists():
+            return ""
+        for line in EDGE_RUNTIME_ENV_FILE.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text or text.startswith("#") or "=" not in text:
+                continue
+            env_key, env_value = text.split("=", 1)
+            if env_key.strip() == key:
+                return env_value.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _edge_runtime_service_name() -> str:
+    provider = _edge_runtime_get_env("EDGE_PROVIDER").strip().lower()
+    if provider == "nginx-stream":
+        return "nginx"
+    if provider == "go":
+        return "edge-mux.service"
+    return ""
+
+
+def _edge_runtime_uses_public_http_port_80() -> bool:
+    provider = _edge_runtime_get_env("EDGE_PROVIDER").strip().lower()
+    active = _edge_runtime_get_env("EDGE_ACTIVATE_RUNTIME").strip().lower()
+    http_port = _edge_runtime_get_env("EDGE_PUBLIC_HTTP_PORT").strip() or "80"
+    if provider in {"", "none"}:
+        return False
+    if active not in {"1", "true", "yes", "on", "y"}:
+        return False
+    return http_port == "80"
 
 
 def _restart_and_wait(name: str, timeout_sec: int = 20) -> bool:
@@ -283,6 +322,50 @@ def _write_text_atomic(path: Path, content: str) -> None:
             pass
 
 
+def _write_bytes_atomic(path: Path, payload: bytes) -> tuple[bool, str]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = None
+    try:
+        previous = path.stat()
+    except Exception:
+        previous = None
+    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=path.suffix or ".bin", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as wf:
+            wf.write(payload)
+            wf.flush()
+            os.fsync(wf.fileno())
+        os.replace(tmp, path)
+        if previous is not None:
+            try:
+                os.chmod(path, previous.st_mode & 0o777)
+            except Exception:
+                pass
+            try:
+                os.chown(path, previous.st_uid, previous.st_gid)
+            except Exception:
+                pass
+        if path.parent == XRAY_CONFDIR:
+            try:
+                os.chmod(path, 0o640)
+            except Exception:
+                pass
+            try:
+                xray_gid = grp.getgrnam("xray").gr_gid
+                os.chown(path, 0, xray_gid)
+            except Exception:
+                pass
+    except Exception as exc:
+        return False, f"Gagal menulis file {path}: {exc}"
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+    return True, "ok"
+
+
 def _chmod_600(path: Path) -> None:
     try:
         path.chmod(0o600)
@@ -312,6 +395,39 @@ def _ensure_runtime_dirs() -> None:
         WORK_DIR,
     ]:
         p.mkdir(parents=True, exist_ok=True)
+
+
+def _safe_extract_tarball(archive_path: Path, dest_dir: Path) -> tuple[bool, str]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    base_real = dest_dir.resolve()
+    try:
+        with tarfile.open(archive_path, "r:gz") as tf:
+            for member in tf.getmembers():
+                raw_name = str(member.name or "")
+                if "\x00" in raw_name:
+                    return False, "Tar acme.sh mengandung path NUL byte."
+                norm = PurePosixPath(raw_name)
+                if norm.is_absolute() or ".." in norm.parts:
+                    return False, f"Tar acme.sh mengandung path tidak aman: {raw_name}"
+                if raw_name in {"", "."}:
+                    continue
+                target = (base_real / norm).resolve()
+                if target != base_real and base_real not in target.parents:
+                    return False, f"Tar acme.sh keluar dari direktori tujuan: {raw_name}"
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    return False, f"Tar acme.sh mengandung entry tidak didukung: {raw_name}"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = tf.extractfile(member)
+                if extracted is None:
+                    return False, f"Gagal membaca entry tar acme.sh: {raw_name}"
+                with extracted, open(target, "wb") as dst:
+                    shutil.copyfileobj(extracted, dst)
+        return True, "ok"
+    except Exception as exc:
+        return False, f"Gagal extract acme.sh tarball: {exc}"
 
 
 def _to_int(v: Any, default: int = 0) -> int:
@@ -381,41 +497,10 @@ def _detect_public_ipv4() -> str:
     return "0.0.0.0"
 
 
-@lru_cache(maxsize=64)
-def _geo_lookup_cached(raw: str) -> tuple[str, str]:
-    if not raw:
-        return "-", "-"
-    try:
-        with urllib.request.urlopen(f"https://ipwho.is/{raw}", timeout=2) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except Exception:
-        return "-", "-"
-    if not isinstance(payload, dict) or not bool(payload.get("success")):
-        return "-", "-"
-    isp = str(((payload.get("connection") or {}).get("isp")) or payload.get("isp") or "-").strip() or "-"
-    country = str(payload.get("country") or "-").strip() or "-"
-    return isp, country
-
-
 def _geo_lookup(ip: str) -> tuple[str, str]:
-    raw = str(ip or "").strip()
-    if not raw:
-        return "-", "-"
-    try:
-        addr = ipaddress.ip_address(raw)
-    except Exception:
-        return "-", "-"
-    if (
-        addr.version != 4
-        or addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_unspecified
-        or addr.is_reserved
-    ):
-        return "-", "-"
-    return _geo_lookup_cached(raw)
+    # Keep account rendering local-only; avoid third-party lookups from bot actions.
+    del ip
+    return "-", "-"
 
 
 def _detect_domain() -> str:
@@ -446,11 +531,16 @@ def _network_state_get(key: str) -> str:
 
 
 def _network_state_set(key: str, value: str) -> None:
+    _network_state_set_many({key: value})
+
+
+def _network_state_set_many(values: dict[str, str]) -> None:
     payload: dict[str, Any] = {}
     ok, raw = _read_json(NETWORK_STATE_FILE)
     if ok and isinstance(raw, dict):
         payload = raw
-    payload[str(key)] = str(value)
+    for key, value in values.items():
+        payload[str(key)] = str(value)
     _write_json_atomic(NETWORK_STATE_FILE, payload)
     _chmod_600(NETWORK_STATE_FILE)
 
@@ -2685,7 +2775,7 @@ def _speed_policy_upsert(proto: str, username: str, down_mbit: float, up_mbit: f
             mark = existing_mark
         else:
             size = SPEED_MARK_MAX - SPEED_MARK_MIN + 1
-            seed = int(hashlib.sha256(email.encode("utf-8")).hexdigest()[:8], 16)
+            seed = zlib.crc32(email.encode("utf-8")) & 0xFFFFFFFF
             start = SPEED_MARK_MIN + (seed % size)
             mark = -1
             for i in range(size):
@@ -3965,8 +4055,10 @@ def _download_file(url: str, dest: Path, timeout: int = 60) -> tuple[bool, str]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             data = resp.read()
-        _write_text_atomic(dest, data.decode("utf-8", errors="ignore")) if url.endswith(".sh") else dest.write_bytes(data)
-        if not url.endswith(".sh"):
+        ok_write, msg_write = _write_bytes_atomic(dest, data)
+        if not ok_write:
+            return False, msg_write
+        if url.endswith(".sh"):
             try:
                 os.chmod(dest, 0o700)
             except Exception:
@@ -3995,22 +4087,28 @@ def _ensure_acme_installed() -> tuple[bool, str]:
     src_dir: Path | None = None
     try:
         tgz = tmpdir / "acme.tar.gz"
-        ok_dl, _ = _download_file(ACME_SH_TARBALL_URL, tgz, timeout=120)
+        ok_dl, _ = _download_file(
+            ACME_SH_TARBALL_URL,
+            tgz,
+            timeout=120,
+        )
         if ok_dl:
-            try:
-                with tarfile.open(tgz, "r:gz") as tf:
-                    tf.extractall(tmpdir)
-                for d in tmpdir.iterdir():
-                    if d.is_dir() and d.name.startswith("acme.sh-"):
-                        src_dir = d
-                        break
-            except Exception:
-                src_dir = None
+            ok_extract, msg_extract = _safe_extract_tarball(tgz, tmpdir)
+            if not ok_extract:
+                return False, msg_extract
+            for d in tmpdir.iterdir():
+                if d.is_dir() and d.name.startswith("acme.sh-"):
+                    src_dir = d
+                    break
 
         if src_dir is None:
             src_dir = tmpdir / "acme-single"
             src_dir.mkdir(parents=True, exist_ok=True)
-            ok_script, msg_script = _download_file(ACME_SH_SCRIPT_URL, src_dir / "acme.sh", timeout=120)
+            ok_script, msg_script = _download_file(
+                ACME_SH_SCRIPT_URL,
+                src_dir / "acme.sh",
+                timeout=120,
+            )
             if not ok_script:
                 return False, msg_script
 
@@ -4047,7 +4145,11 @@ def _ensure_dns_cf_hook() -> tuple[bool, str]:
     if hook.exists() and hook.stat().st_size > 0:
         return True, "ok"
     hook.parent.mkdir(parents=True, exist_ok=True)
-    ok_dl, msg_dl = _download_file(ACME_SH_DNS_CF_HOOK_URL, hook, timeout=120)
+    ok_dl, msg_dl = _download_file(
+        ACME_SH_DNS_CF_HOOK_URL,
+        hook,
+        timeout=120,
+    )
     if not ok_dl:
         return False, msg_dl
     try:
@@ -4066,6 +4168,16 @@ def _stop_conflicting_services() -> list[str]:
             stopped.append(svc)
         if _service_exists(svc):
             _run_cmd(["systemctl", "stop", svc], timeout=25)
+    edge_svc = _edge_runtime_service_name()
+    if (
+        _edge_runtime_uses_public_http_port_80()
+        and edge_svc
+        and edge_svc != "nginx"
+        and _service_exists(edge_svc)
+        and _service_is_active(edge_svc)
+    ):
+        stopped.append(edge_svc)
+        _run_cmd(["systemctl", "stop", edge_svc], timeout=25)
     return stopped
 
 
@@ -4073,6 +4185,27 @@ def _restore_services(services: list[str]) -> None:
     for svc in services:
         if _service_exists(svc):
             _run_cmd(["systemctl", "start", svc], timeout=25)
+
+
+def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> tuple[bool, str]:
+    skipped = skipped_services or set()
+    targets = ["sshws-stunnel"]
+    edge_svc = _edge_runtime_service_name()
+    if edge_svc and edge_svc != "nginx":
+        targets.append(edge_svc)
+
+    failures: list[str] = []
+    for svc in targets:
+        if svc in skipped:
+            continue
+        if not _service_exists(svc) or not _service_is_active(svc):
+            continue
+        ok_restart, out_restart = _run_cmd(["systemctl", "restart", svc], timeout=30)
+        if not ok_restart or not _service_is_active(svc):
+            failures.append(f"{svc}: {out_restart}")
+    if failures:
+        return False, "\n".join(failures)
+    return True, "ok"
 
 
 def _cf_api(method: str, endpoint: str, payload: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any] | str]:
@@ -4326,7 +4459,7 @@ def _issue_cert_dns_cf_wildcard(domain: str, root_domain: str, zone_id: str, acc
             "--fullchain-file",
             str(CERT_FULLCHAIN),
             "--reloadcmd",
-            "systemctl restart nginx || true",
+            "/bin/true",
         ],
         timeout=180,
         env=env,
@@ -4374,7 +4507,7 @@ def _issue_cert_standalone(domain: str) -> tuple[bool, str]:
             "--fullchain-file",
             str(CERT_FULLCHAIN),
             "--reloadcmd",
-            "systemctl restart nginx || true",
+            "/bin/true",
         ],
         timeout=120,
     )
@@ -4439,6 +4572,9 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
         ok_ng, ng_msg = _apply_nginx_domain(domain_n)
         if not ok_ng:
             return False, title, ng_msg
+        ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
+        if not ok_tls:
+            return False, title, f"Restart consumer TLS gagal:\n{tls_msg}"
         completed = True
     except Exception as exc:
         return False, title, f"Setup domain custom gagal: {exc}"
@@ -4541,6 +4677,9 @@ def op_domain_setup_cloudflare(
         ok_ng, ng_msg = _apply_nginx_domain(domain_final)
         if not ok_ng:
             return False, title, ng_msg
+        ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
+        if not ok_tls:
+            return False, title, f"Restart consumer TLS gagal:\n{tls_msg}"
         completed = True
     except Exception as exc:
         return False, title, f"Setup Cloudflare wizard gagal: {exc}"
@@ -4803,38 +4942,39 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
     if shutil.which("wireproxy") is None:
         return False, title, "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
 
-    WGCF_DIR.mkdir(parents=True, exist_ok=True)
-    account_file = WGCF_DIR / "wgcf-account.toml"
-    profile_file = WGCF_DIR / "wgcf-profile.conf"
-    if account_file.exists():
+    with file_lock(WARP_LOCK_FILE):
+        WGCF_DIR.mkdir(parents=True, exist_ok=True)
+        account_file = WGCF_DIR / "wgcf-account.toml"
+        profile_file = WGCF_DIR / "wgcf-profile.conf"
+        if account_file.exists():
+            try:
+                backup = WGCF_DIR / f"wgcf-account.toml.bak.{int(time.time())}"
+                shutil.copy2(account_file, backup)
+            except Exception:
+                pass
         try:
-            backup = WGCF_DIR / f"wgcf-account.toml.bak.{int(time.time())}"
-            shutil.copy2(account_file, backup)
+            if account_file.exists():
+                account_file.unlink()
+            if profile_file.exists():
+                profile_file.unlink()
         except Exception:
             pass
-    try:
-        if account_file.exists():
-            account_file.unlink()
-        if profile_file.exists():
-            profile_file.unlink()
-    except Exception:
-        pass
 
-    ok_reg, msg_reg = _warp_wgcf_register_noninteractive()
-    if not ok_reg:
-        return False, title, msg_reg
+        ok_reg, msg_reg = _warp_wgcf_register_noninteractive()
+        if not ok_reg:
+            return False, title, msg_reg
 
-    ok_build, profile_or_err = _warp_wgcf_build_profile("free")
-    if not ok_build:
-        return False, title, profile_or_err
+        ok_build, profile_or_err = _warp_wgcf_build_profile("free")
+        if not ok_build:
+            return False, title, profile_or_err
 
-    ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
-    if not ok_apply:
-        return False, title, msg_apply
+        ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
+        if not ok_apply:
+            return False, title, msg_apply
 
-    _network_state_set(WARP_TIER_STATE_KEY, "free")
-    if not _restart_and_wait("wireproxy", timeout_sec=30):
-        return False, title, "wireproxy tidak aktif setelah apply profile free."
+        _network_state_set_many({WARP_TIER_STATE_KEY: "free"})
+        if not _restart_and_wait("wireproxy", timeout_sec=30):
+            return False, title, "wireproxy tidak aktif setelah apply profile free."
 
     msg = (
         "Switch tier ke free berhasil.\n"
@@ -4852,24 +4992,29 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
     if shutil.which("wireproxy") is None:
         return False, title, "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
 
-    key = str(license_key or "").strip()
-    if not key:
-        key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
-    if not key:
-        return False, title, "License key WARP+ kosong."
+    with file_lock(WARP_LOCK_FILE):
+        key = str(license_key or "").strip()
+        if not key:
+            key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
+        if not key:
+            return False, title, "License key WARP+ kosong."
 
-    ok_build, profile_or_err = _warp_wgcf_build_profile("plus", key)
-    if not ok_build:
-        return False, title, profile_or_err
+        ok_build, profile_or_err = _warp_wgcf_build_profile("plus", key)
+        if not ok_build:
+            return False, title, profile_or_err
 
-    ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
-    if not ok_apply:
-        return False, title, msg_apply
+        ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
+        if not ok_apply:
+            return False, title, msg_apply
 
-    _network_state_set(WARP_TIER_STATE_KEY, "plus")
-    _network_state_set(WARP_PLUS_LICENSE_STATE_KEY, key)
-    if not _restart_and_wait("wireproxy", timeout_sec=30):
-        return False, title, "wireproxy tidak aktif setelah apply profile plus."
+        _network_state_set_many(
+            {
+                WARP_TIER_STATE_KEY: "plus",
+                WARP_PLUS_LICENSE_STATE_KEY: key,
+            }
+        )
+        if not _restart_and_wait("wireproxy", timeout_sec=30):
+            return False, title, "wireproxy tidak aktif setelah apply profile plus."
 
     msg = (
         "Switch tier ke plus berhasil.\n"
@@ -4886,27 +5031,28 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
     if shutil.which("wireproxy") is None:
         return False, title, "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
 
-    target = _warp_tier_target_get()
-    if target not in {"free", "plus"}:
-        target = "free"
+    with file_lock(WARP_LOCK_FILE):
+        target = _warp_tier_target_get()
+        if target not in {"free", "plus"}:
+            target = "free"
 
-    if target == "plus":
-        key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
-        if not key:
-            return False, title, "Target plus aktif, tetapi license key kosong."
-        ok_build, profile_or_err = _warp_wgcf_build_profile("plus", key)
-    else:
-        ok_build, profile_or_err = _warp_wgcf_build_profile("free")
+        if target == "plus":
+            key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
+            if not key:
+                return False, title, "Target plus aktif, tetapi license key kosong."
+            ok_build, profile_or_err = _warp_wgcf_build_profile("plus", key)
+        else:
+            ok_build, profile_or_err = _warp_wgcf_build_profile("free")
 
-    if not ok_build:
-        return False, title, profile_or_err
+        if not ok_build:
+            return False, title, profile_or_err
 
-    ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
-    if not ok_apply:
-        return False, title, msg_apply
+        ok_apply, msg_apply = _warp_wireproxy_apply_profile(Path(profile_or_err))
+        if not ok_apply:
+            return False, title, msg_apply
 
-    if not _restart_and_wait("wireproxy", timeout_sec=30):
-        return False, title, "wireproxy tidak aktif setelah reconnect/regenerate."
+        if not _restart_and_wait("wireproxy", timeout_sec=30):
+            return False, title, "wireproxy tidak aktif setelah reconnect/regenerate."
 
     msg = f"Reconnect/regenerate selesai untuk target: {target}\n- Apply: {msg_apply}\n\n{_warp_tier_status_message()}"
     return True, title, msg

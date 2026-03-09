@@ -12,7 +12,7 @@ import {
 } from "discord.js";
 
 import type { BackendClient } from "../api_client";
-import { getSingleFieldSelectConfig } from "../constants/action_selects";
+import { type ActionSingleSelectConfig, getSingleFieldSelectConfig, withSingleFieldSelectOptions } from "../constants/action_selects";
 import { isXrayProtocol, shouldUseProtocolSelect, XRAY_PROTOCOLS } from "../constants/protocols";
 import { findAction, findMenu, isKnownDisabledAction } from "../router";
 import type { MenuActionDef } from "../views/types";
@@ -130,10 +130,30 @@ function buildProtocolSelectView(menuId: string, actionId: string) {
   };
 }
 
-function buildSingleFieldSelectView(menuId: string, actionId: string) {
+async function resolveSingleFieldSelectConfig(
+  backend: BackendClient,
+  menuId: string,
+  actionId: string
+): Promise<ActionSingleSelectConfig | null> {
+  const config = getSingleFieldSelectConfig(menuId, actionId);
+  if (menuId !== "5" || actionId !== "setup_domain_cloudflare") {
+    return config;
+  }
+  try {
+    const rootOptions = await backend.listDomainRootOptions();
+    const roots = rootOptions
+      .map((item) => String(item.root_domain || "").trim())
+      .filter((value) => Boolean(value));
+    return withSingleFieldSelectOptions(config, roots);
+  } catch {
+    return config;
+  }
+}
+
+async function buildSingleFieldSelectView(menuId: string, actionId: string, backend: BackendClient) {
   const menu = findMenu(menuId);
   const action = findAction(menuId, actionId);
-  const cfg = getSingleFieldSelectConfig(menuId, actionId);
+  const cfg = await resolveSingleFieldSelectConfig(backend, menuId, actionId);
   const title = menu ? `${menu.id}) ${menu.label}` : "Network Controls";
   const actionLabel = action?.label || actionId;
   if (!cfg) {
@@ -282,7 +302,7 @@ export async function handleButton(interaction: ButtonInteraction, backend: Back
       await interaction.update(buildProtocolSelectView(menuId, actionId));
       return true;
     }
-    const singleSelectView = buildSingleFieldSelectView(menuId, actionId);
+    const singleSelectView = await buildSingleFieldSelectView(menuId, actionId, backend);
     if (singleSelectView) {
       await interaction.update(singleSelectView);
       return true;

@@ -37,18 +37,34 @@ load_env_file() {
   fi
 }
 
+format_host_for_url() {
+  local host="$1"
+  if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
+    printf '[%s]\n' "${host}"
+    return
+  fi
+  printf '%s\n' "${host}"
+}
+
 wait_backend_ready() {
   local host="${BACKEND_HOST:-127.0.0.1}"
   local port="${BACKEND_PORT:-8080}"
-  local url="http://${host}:${port}/health"
+  local url
+  local -a curl_args=(-fsS)
+  url="http://$(format_host_for_url "${host}"):${port}/health"
 
   if ! command -v curl >/dev/null 2>&1; then
     sleep 2
     return 0
   fi
 
+  if [[ -n "${INTERNAL_SHARED_SECRET:-}" ]]; then
+    curl_args+=(-H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}")
+  fi
+  curl_args+=("${url}")
+
   for _ in $(seq 1 40); do
-    if curl -fsS "${url}" >/dev/null 2>&1; then
+    if curl "${curl_args[@]}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.5
@@ -94,7 +110,7 @@ else
       python3 -m venv .venv
     fi
     . .venv/bin/activate
-    pip install -r backend-py/requirements.txt >/dev/null
+    pip install -r backend-py/requirements.lock.txt >/dev/null
     cd backend-py
     uvicorn app.main:app --host "${BACKEND_HOST:-127.0.0.1}" --port "${BACKEND_PORT:-8080}" >"${BACKEND_LOG}" 2>&1 &
     echo $! >"${BACKEND_PID_FILE}"

@@ -13,7 +13,8 @@ Tujuan utamanya:
 Status saat ini:
 - desain: **siap**
 - scaffold repo: **siap**
-- runtime live: **belum diaktifkan**
+- binary prebuilt: **sudah ada di repo**
+- runtime live: **aktif via setup dan sudah tervalidasi**
 
 ## Posisi Fitur
 
@@ -54,7 +55,6 @@ opt/badvpn/
     README.md
     badvpn-udpgw-linux-amd64
     badvpn-udpgw-linux-arm64
-    SHA256SUMS
 ```
 
 Integrasi setup:
@@ -93,12 +93,11 @@ Default awal yang disarankan:
 
 1. deteksi arsitektur host (`amd64` / `arm64`)
 2. pilih binary prebuilt yang cocok dari `opt/badvpn/dist/`
-3. verifikasi checksum dengan `SHA256SUMS`
-4. install ke `/usr/local/bin/badvpn-udpgw`
-5. render env runtime
-6. render unit `systemd`
-7. enable/start service
-8. expose status di CLI
+3. install ke `/usr/local/bin/badvpn-udpgw`
+4. render env runtime
+5. render unit `systemd`
+6. enable/start service
+7. expose status di CLI
 
 ## Surface CLI yang Diinginkan
 
@@ -132,17 +131,20 @@ v1 **tidak** mencakup:
 - scaffold repo
 
 ### Tahap 2
+- Status: selesai.
 - isi `opt/badvpn/dist/` dengan binary prebuilt
 - implement `opt/setup/install/badvpn.sh`
 - implement service `systemd`
 
 ### Tahap 3
+- Status: selesai.
 - integrasi ke `setup.sh`
 - integrasi ke `manage`
 - status/restart di maintenance
 - info port di `SSH ACCOUNT INFO`
 
 ### Tahap 4
+- Status: selesai untuk baseline saat ini.
 - testing live
 - update docs/playbook
 

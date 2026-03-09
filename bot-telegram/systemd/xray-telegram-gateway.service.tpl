@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=xray-telegram-gateway
 WorkingDirectory=/opt/bot-telegram/gateway-py
 EnvironmentFile=/etc/xray-telegram-bot/bot.env
 ExecStart=/opt/bot-telegram/.venv/bin/python -m app.main

@@ -7,12 +7,52 @@ export PATH
 
 BACKEND_SERVICE="${BACKEND_SERVICE:-xray-telegram-backend}"
 GATEWAY_SERVICE="${GATEWAY_SERVICE:-xray-telegram-gateway}"
-BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://127.0.0.1:8080}"
-BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-${BACKEND_BASE_URL%/}/health}"
+BACKEND_HOST="${BACKEND_HOST:-}"
+BACKEND_PORT="${BACKEND_PORT:-}"
 INTERNAL_SHARED_SECRET="${INTERNAL_SHARED_SECRET:-}"
+BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/xray-telegram-bot}"
 BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/xray-telegram-bot}"
 BOT_MONITOR_LOG_FILE="${BOT_MONITOR_LOG_FILE:-${BOT_LOG_DIR}/monitor-lite.log}"
 BOT_MONITOR_MAX_LINES="${BOT_MONITOR_MAX_LINES:-1000}"
+BOT_MONITOR_LOCK_FILE="${BOT_MONITOR_LOCK_FILE:-${BOT_LOG_DIR}/monitor-lite.lock}"
+
+format_host_for_url() {
+  local host="$1"
+  if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
+    printf '[%s]\n' "${host}"
+    return
+  fi
+  printf '%s\n' "${host}"
+}
+
+resolve_backend_base_url() {
+  local default_port="$1"
+  local raw_base="${BACKEND_BASE_URL:-}"
+  local raw_host="${BACKEND_HOST:-}"
+  local raw_port="${BACKEND_PORT:-}"
+
+  if [[ -n "${raw_host}" || -n "${raw_port}" ]]; then
+    local host="${raw_host:-127.0.0.1}"
+    local port="${raw_port:-${default_port}}"
+    local derived
+    if [[ ! "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+      echo "[monitor] BACKEND_PORT tidak valid: ${port}" >&2
+      exit 1
+    fi
+    derived="http://$(format_host_for_url "${host}"):${port}"
+    if [[ -n "${raw_base}" && "${raw_base%/}" != "${derived}" ]]; then
+      echo "[monitor] BACKEND_BASE_URL tidak sinkron dengan BACKEND_HOST/BACKEND_PORT." >&2
+      exit 1
+    fi
+    printf '%s\n' "${derived}"
+    return
+  fi
+
+  printf '%s\n' "${raw_base:-http://127.0.0.1:${default_port}}"
+}
+
+BACKEND_BASE_URL="$(resolve_backend_base_url 8081)"
+BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-${BACKEND_BASE_URL%/}/health}"
 
 QUIET=0
 if [[ "${1:-}" == "-q" || "${1:-}" == "--quiet" ]]; then
@@ -20,7 +60,8 @@ if [[ "${1:-}" == "-q" || "${1:-}" == "--quiet" ]]; then
 fi
 
 if command -v flock >/dev/null 2>&1; then
-  exec 9>"/run/xray-telegram-monitor.lock"
+  mkdir -p "${BOT_LOG_DIR}"
+  exec 9>"${BOT_MONITOR_LOCK_FILE}"
   flock -n 9 || exit 0
 fi
 

@@ -10,7 +10,7 @@ LOCAL_ENV_FILE = BOT_ROOT / ".env"
 
 # In local development, allow reading bot-telegram/.env without overriding
 # variables that were already injected by systemd/environment.
-if LOCAL_ENV_FILE.exists():
+if not os.getenv("BOT_ENV_FILE") and LOCAL_ENV_FILE.exists():
     load_dotenv(LOCAL_ENV_FILE, override=False)
 
 
@@ -44,11 +44,15 @@ class Settings:
 _SETTINGS: Settings | None = None
 
 
+def _bot_home() -> Path:
+    raw = (os.getenv("BOT_HOME") or "").strip()
+    if raw:
+        return Path(raw)
+    return BOT_ROOT
+
+
 def _default_commands_file() -> str:
-    local_commands = BOT_ROOT / "shared" / "commands.json"
-    if local_commands.exists():
-        return str(local_commands)
-    return "/opt/bot-telegram/shared/commands.json"
+    return str(_bot_home() / "shared" / "commands.json")
 
 
 def get_settings() -> Settings:
@@ -57,7 +61,7 @@ def get_settings() -> Settings:
         _SETTINGS = Settings(
             internal_shared_secret=os.getenv("INTERNAL_SHARED_SECRET", "").strip(),
             backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
-            backend_port=_get_port("BACKEND_PORT", 8080),
+            backend_port=_get_port("BACKEND_PORT", 8081),
             commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
             enable_dangerous_actions=_get_bool("ENABLE_DANGEROUS_ACTIONS", False),
         )

@@ -13,9 +13,11 @@ import {
 
 import type { BackendClient } from "../api_client";
 import {
+  type ActionSingleSelectConfig,
   encodeSingleSelectPreset,
   getSingleFieldSelectConfig,
   shouldSelectContinueToModal,
+  withSingleFieldSelectOptions,
 } from "../constants/action_selects";
 import { isXrayProtocol, shouldUseProtocolSelect, shouldUseUsernameSelect } from "../constants/protocols";
 import { findAction, isKnownDisabledAction } from "../router";
@@ -86,10 +88,30 @@ function buildUsernameSelectView(menuId: string, actionId: string, proto: string
   };
 }
 
-function buildSingleFieldSelectView(menuId: string, actionId: string, proto = "", username = "") {
+async function resolveSingleFieldSelectConfig(
+  backend: BackendClient,
+  menuId: string,
+  actionId: string
+): Promise<ActionSingleSelectConfig | null> {
+  const config = getSingleFieldSelectConfig(menuId, actionId);
+  if (menuId !== "5" || actionId !== "setup_domain_cloudflare") {
+    return config;
+  }
+  try {
+    const rootOptions = await backend.listDomainRootOptions();
+    const roots = rootOptions
+      .map((item) => String(item.root_domain || "").trim())
+      .filter((value) => Boolean(value));
+    return withSingleFieldSelectOptions(config, roots);
+  } catch {
+    return config;
+  }
+}
+
+async function buildSingleFieldSelectView(menuId: string, actionId: string, backend: BackendClient, proto = "", username = "") {
   const action = findAction(menuId, actionId);
   const actionLabel = action?.label || actionId;
-  const cfg = getSingleFieldSelectConfig(menuId, actionId);
+  const cfg = await resolveSingleFieldSelectConfig(backend, menuId, actionId);
   if (!cfg) {
     return null;
   }
@@ -163,7 +185,7 @@ export async function handleSelect(interaction: StringSelectMenuInteraction, bac
   const hasUsernameField = action.modal.fields.some((field) => field.id === "username");
   const needsProtocolSelect = shouldUseProtocolSelect(menuId, actionId, hasProtoField);
   const needsUsernameSelect = shouldUseUsernameSelect(actionId, hasUsernameField);
-  const singleFieldSelectCfg = getSingleFieldSelectConfig(menuId, actionId);
+  const singleFieldSelectCfg = await resolveSingleFieldSelectConfig(backend, menuId, actionId);
 
   if (fieldId === "proto") {
     if (!needsProtocolSelect) {
@@ -195,7 +217,7 @@ export async function handleSelect(interaction: StringSelectMenuInteraction, bac
     if (singleFieldSelectCfg && singleFieldSelectCfg.fieldId !== "proto") {
       const hasSingleField = action.modal.fields.some((field) => field.id === singleFieldSelectCfg.fieldId);
       if (hasSingleField) {
-        const singleSelectView = buildSingleFieldSelectView(menuId, actionId, protoRaw);
+        const singleSelectView = await buildSingleFieldSelectView(menuId, actionId, backend, protoRaw);
         if (singleSelectView) {
           await interaction.update(singleSelectView);
           return true;
@@ -351,7 +373,13 @@ export async function handleSelect(interaction: StringSelectMenuInteraction, bac
   if (singleFieldSelectCfg && fieldId !== singleFieldSelectCfg.fieldId) {
     const hasSingleField = action.modal.fields.some((field) => field.id === singleFieldSelectCfg.fieldId);
     if (hasSingleField && singleFieldSelectCfg.fieldId !== "proto" && singleFieldSelectCfg.fieldId !== "username") {
-      const singleSelectView = buildSingleFieldSelectView(menuId, actionId, needsProtocolSelect ? protoFromId : "", selectedUsername);
+      const singleSelectView = await buildSingleFieldSelectView(
+        menuId,
+        actionId,
+        backend,
+        needsProtocolSelect ? protoFromId : "",
+        selectedUsername
+      );
       if (singleSelectView) {
         await interaction.update(singleSelectView);
         return true;

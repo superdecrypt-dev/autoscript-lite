@@ -73,26 +73,15 @@ ACME_DEFAULT_CA="${ACME_DEFAULT_CA:-letsencrypt}"
 XRAY_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh"
 ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
 ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
-XRAY_INSTALL_SCRIPT_SHA256="${XRAY_INSTALL_SCRIPT_SHA256:-7f70c95f6b418da8b4f4883343d602964915e28748993870fd554383afdbe555}"
-ACME_SH_TARBALL_SHA256="${ACME_SH_TARBALL_SHA256:-3be27ab630d5dd53439a46e56cbe77d998b788c3f0a3eb6b95cdd77e074389a9}"
-ACME_SH_DNS_CF_HOOK_SHA256="${ACME_SH_DNS_CF_HOOK_SHA256:-9628ee8238cb3f9cfa1b1a985c0e9593436a3e4f8a9d65a6f775b981be9e76c8}"
 CUSTOM_GEOSITE_URL="${CUSTOM_GEOSITE_URL:-https://github.com/superdecrypt-dev/custom-geosite-xray/raw/main/custom.dat}"
-CUSTOM_GEOSITE_SHA256="${CUSTOM_GEOSITE_SHA256:-}"
 XRAY_ASSET_DIR="/usr/local/share/xray"
 CUSTOM_GEOSITE_DEST="${XRAY_ASSET_DIR}/custom.dat"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-EDGE_PROVIDER="${EDGE_PROVIDER:-go}"
-EDGE_ACTIVATE_RUNTIME="${EDGE_ACTIVATE_RUNTIME:-true}"
 SETUP_BIN_SRC_DIR="${SCRIPT_DIR}/opt/setup/bin"
 SETUP_TEMPLATE_SRC_DIR="${SCRIPT_DIR}/opt/setup/templates"
 MANAGE_MODULES_SRC_DIR="${SCRIPT_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
 MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
-MANAGE_BUNDLE_LOCAL_SHA256=""
-if [[ -z "${MANAGE_BUNDLE_SHA256:-}" ]] && [[ -f "${SCRIPT_DIR}/manage_bundle.zip" ]] && command -v sha256sum >/dev/null 2>&1; then
-  MANAGE_BUNDLE_LOCAL_SHA256="$(sha256sum "${SCRIPT_DIR}/manage_bundle.zip" | awk '{print tolower($1)}')"
-fi
-MANAGE_BUNDLE_SHA256="${MANAGE_BUNDLE_SHA256:-${MANAGE_BUNDLE_LOCAL_SHA256}}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
 MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 SETUP_MODULES_ROOT="${SCRIPT_DIR}/opt/setup"
@@ -177,6 +166,9 @@ source_setup_module "opt/setup/install/nginx.sh"
 # shellcheck source=opt/setup/install/edge.sh
 source_setup_module "opt/setup/install/edge.sh"
 load_persisted_edge_runtime_env
+# Precedence: env eksplisit > env runtime tersimpan > default first install.
+EDGE_PROVIDER="${EDGE_PROVIDER:-go}"
+EDGE_ACTIVATE_RUNTIME="${EDGE_ACTIVATE_RUNTIME:-true}"
 # shellcheck source=opt/setup/install/badvpn.sh
 source_setup_module "opt/setup/install/badvpn.sh"
 # shellcheck source=opt/setup/install/network.sh

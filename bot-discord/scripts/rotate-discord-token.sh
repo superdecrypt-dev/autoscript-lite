@@ -1,16 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILES=(
-  "/etc/xray-discord-bot/bot.env"
-  "/opt/bot-discord/.env"
-)
-
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "[rotate-token] ERROR: command tidak ditemukan: $1" >&2
     exit 1
   }
+}
+
+list_env_files() {
+  local candidate
+
+  for candidate in "${BOT_ENV_FILE:-}" "${DISCORD_ENV_FILE:-}"; do
+    [[ -n "${candidate}" ]] && printf '%s\n' "${candidate}"
+  done
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl cat xray-discord-gateway 2>/dev/null | awk '
+      /^[[:space:]]*EnvironmentFile=/ {
+        value = substr($0, index($0, "=") + 1)
+        sub(/^-/, "", value)
+        if (value != "") print value
+      }
+    '
+  fi
+
+  printf '%s\n' "/etc/xray-discord-bot/bot.env"
 }
 
 is_probably_discord_token() {
@@ -58,13 +73,13 @@ main() {
 
   local found=0
   local f
-  for f in "${ENV_FILES[@]}"; do
+  while IFS= read -r f; do
     if [[ -f "${f}" ]]; then
       upsert_env_key "${f}" "DISCORD_BOT_TOKEN" "${token}"
       echo "[rotate-token] updated: ${f}"
       found=1
     fi
-  done
+  done < <(list_env_files)
 
   (( found == 1 )) || {
     echo "[rotate-token] ERROR: env file tidak ditemukan." >&2

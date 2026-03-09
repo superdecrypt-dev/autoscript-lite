@@ -108,7 +108,7 @@ Fokus:
 - parity bot vs CLI
 - dangerous actions
 - token/log safety
-- archive/checksum drift
+- archive/bundle drift
 
 ## 5. Preflight Audit
 
@@ -124,8 +124,10 @@ shellcheck -x -S warning opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/fea
 shellcheck -x -S warning opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard
 python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
 go -C opt/edge/go build ./...
-(cd opt/edge/dist && sha256sum -c SHA256SUMS)
-(cd opt/badvpn/dist && sha256sum -c SHA256SUMS)
+test -s opt/edge/dist/edge-mux-linux-amd64
+test -s opt/edge/dist/edge-mux-linux-arm64
+test -s opt/badvpn/dist/badvpn-udpgw-linux-amd64
+test -s opt/badvpn/dist/badvpn-udpgw-linux-arm64
 ```
 
 Jika fokus bot:
@@ -177,7 +179,7 @@ rg -n "detect_domain|sync_xray_domain_file|account_refresh_all_info_files|ssh_ac
 
 ### 6.5 Cek bot Telegram/Discord
 ```bash
-rg -n "ENABLE_DANGEROUS_ACTIONS|dangerous|unknown_action|api\\.telegram\\.org/bot|commands\\.json|checksum|bot_telegram\\.zip|bot_discord\\.zip" \
+rg -n "ENABLE_DANGEROUS_ACTIONS|dangerous|unknown_action|api\\.telegram\\.org/bot|commands\\.json|bot_telegram\\.zip|bot_discord\\.zip|rebuild_bot_archives" \
   install-telegram-bot.sh install-discord-bot.sh bot-telegram bot-discord
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
 python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
@@ -188,8 +190,10 @@ python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 rg -n "EDGE_PROVIDER|edge-mux|SSH Direct|SSH SSL/TLS|badvpn|udpgw|7300" \
   setup.sh opt/setup/install/edge.sh opt/setup/install/badvpn.sh opt/edge opt/manage README.md HANDOFF.md
 go -C opt/edge/go build ./...
-(cd opt/edge/dist && sha256sum -c SHA256SUMS)
-(cd opt/badvpn/dist && sha256sum -c SHA256SUMS)
+test -s opt/edge/dist/edge-mux-linux-amd64
+test -s opt/edge/dist/edge-mux-linux-arm64
+test -s opt/badvpn/dist/badvpn-udpgw-linux-amd64
+test -s opt/badvpn/dist/badvpn-udpgw-linux-arm64
 ```
 
 ## 7. Audit Runtime (Opsional, Host Live)

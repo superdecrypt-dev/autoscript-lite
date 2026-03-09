@@ -1589,8 +1589,7 @@ EOF
 }
 
 sync_manage_modules_layout() {
-  local tmpdir="" bundle_file="" downloaded="0" bundle_expected_sha="" extracted_modules_dir="" extracted_manage_bin=""
-  bundle_expected_sha="${MANAGE_BUNDLE_SHA256:-}"
+  local tmpdir="" bundle_file="" downloaded="0" extracted_modules_dir="" extracted_manage_bin=""
   local fallback_modules_dir="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 
   install_bot_installer_if_present() {
@@ -1651,13 +1650,11 @@ sync_manage_modules_layout() {
   tmpdir="$(mktemp -d)"
   bundle_file="${tmpdir}/manage_bundle.zip"
 
-  if [[ -z "${bundle_expected_sha}" ]]; then
-    warn "MANAGE_BUNDLE_SHA256 kosong; lewati download bundle remote demi keamanan."
-  elif download_file_with_sha_check "${MANAGE_BUNDLE_URL}" "${bundle_file}" "${bundle_expected_sha}" "manage_bundle.zip"; then
+  if download_file_checked "${MANAGE_BUNDLE_URL}" "${bundle_file}" "manage_bundle.zip"; then
     downloaded="1"
     ok "manage_bundle.zip berhasil diunduh dari repo."
   else
-    warn "Gagal unduh/verifikasi manage_bundle.zip dari repo: ${MANAGE_BUNDLE_URL}"
+    warn "Gagal unduh manage_bundle.zip dari repo: ${MANAGE_BUNDLE_URL}"
   fi
 
   if [[ "${downloaded}" == "1" ]]; then

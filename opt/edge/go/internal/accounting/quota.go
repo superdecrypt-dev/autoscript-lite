@@ -24,25 +24,33 @@ type SSHQuotaConfig struct {
 
 var authLineRe = regexp.MustCompile(`(?:Password )?auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)
 
-func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort int, totalBytes uint64) {
-	if localPort <= 0 || totalBytes == 0 {
+func RecordSSHQuota(logger *log.Logger, cfg SSHQuotaConfig, username string, localPort int, totalBytes uint64) {
+	if totalBytes == 0 {
 		return
 	}
-	username, err := ResolveSSHUsernameByLocalPort(cfg.DropbearUnit, localPort)
-	if err != nil {
-		logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
-		return
+	resolved := normalizeUser(username)
+	if resolved == "" && localPort > 0 {
+		var err error
+		resolved, err = ResolveSSHUsernameByLocalPort(cfg.DropbearUnit, localPort)
+		if err != nil {
+			logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
+			return
+		}
 	}
-	if username == "" {
+	if resolved == "" {
 		logger.Printf("edge-mux quota resolve empty port=%d", localPort)
 		return
 	}
-	if err := addQuotaUsed(cfg.StateRoot, username, totalBytes); err != nil {
-		logger.Printf("edge-mux quota update failed user=%s bytes=%d: %v", username, totalBytes, err)
+	if err := addQuotaUsed(cfg.StateRoot, resolved, totalBytes); err != nil {
+		logger.Printf("edge-mux quota update failed user=%s bytes=%d: %v", resolved, totalBytes, err)
 		return
 	}
-	logger.Printf("edge-mux quota updated user=%s bytes=%d port=%d", username, totalBytes, localPort)
+	logger.Printf("edge-mux quota updated user=%s bytes=%d port=%d", resolved, totalBytes, localPort)
 	triggerEnforcer(logger, cfg.EnforcerPath)
+}
+
+func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort int, totalBytes uint64) {
+	RecordSSHQuota(logger, cfg, "", localPort, totalBytes)
 }
 
 func ResolveSSHUsernameByLocalPort(unit string, localPort int) (string, error) {

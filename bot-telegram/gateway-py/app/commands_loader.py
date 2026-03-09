@@ -43,16 +43,28 @@ class CommandCatalog:
         self._menu_map = {m.id: m for m in self.menus}
 
     @classmethod
-    def load(cls, commands_file: str) -> "CommandCatalog":
-        payload = json.loads(Path(commands_file).read_text(encoding="utf-8"))
+    def from_payload(cls, payload: object) -> "CommandCatalog":
+        data = payload if isinstance(payload, dict) else {}
         menus: list[MenuSpec] = []
-        for raw_menu in payload.get("menus", []):
+        raw_menus = data.get("menus")
+        if not isinstance(raw_menus, list):
+            raw_menus = []
+
+        for raw_menu in raw_menus:
+            if not isinstance(raw_menu, dict):
+                continue
             menu_id = str(raw_menu.get("id", "")).strip()
             if not menu_id:
                 continue
 
             actions: list[ActionSpec] = []
-            for raw_action in raw_menu.get("actions", []):
+            raw_actions = raw_menu.get("actions")
+            if not isinstance(raw_actions, list):
+                raw_actions = []
+
+            for raw_action in raw_actions:
+                if not isinstance(raw_action, dict):
+                    continue
                 action_id = str(raw_action.get("id", "")).strip()
                 if not action_id:
                     continue
@@ -61,7 +73,13 @@ class CommandCatalog:
                 raw_modal = raw_action.get("modal")
                 if isinstance(raw_modal, dict):
                     fields: list[FieldSpec] = []
-                    for raw_field in raw_modal.get("fields", []):
+                    raw_fields = raw_modal.get("fields")
+                    if not isinstance(raw_fields, list):
+                        raw_fields = []
+
+                    for raw_field in raw_fields:
+                        if not isinstance(raw_field, dict):
+                            continue
                         field_id = str(raw_field.get("id", "")).strip()
                         if not field_id:
                             continue
@@ -99,6 +117,11 @@ class CommandCatalog:
             )
 
         return cls(menus)
+
+    @classmethod
+    def load(cls, commands_file: str) -> "CommandCatalog":
+        payload = json.loads(Path(commands_file).read_text(encoding="utf-8"))
+        return cls.from_payload(payload)
 
     def get_menu(self, menu_id: str) -> MenuSpec | None:
         return self._menu_map.get(menu_id)

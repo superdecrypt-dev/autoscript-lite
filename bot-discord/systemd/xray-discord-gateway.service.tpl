@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=xray-discord-gateway
 WorkingDirectory=/opt/bot-discord/gateway-ts
 EnvironmentFile=/etc/xray-discord-bot/bot.env
 ExecStart=/usr/bin/node /opt/bot-discord/gateway-ts/dist/index.js

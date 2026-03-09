@@ -10,7 +10,7 @@ LOCAL_ENV_FILE = BOT_ROOT / ".env"
 
 # In local development, allow reading bot-discord/.env without overriding
 # variables that were already injected by systemd/environment.
-if LOCAL_ENV_FILE.exists():
+if not os.getenv("BOT_ENV_FILE") and LOCAL_ENV_FILE.exists():
     load_dotenv(LOCAL_ENV_FILE, override=False)
 
 
@@ -33,11 +33,15 @@ class Settings:
 _SETTINGS: Settings | None = None
 
 
+def _bot_home() -> Path:
+    raw = (os.getenv("BOT_HOME") or "").strip()
+    if raw:
+        return Path(raw)
+    return BOT_ROOT
+
+
 def _default_commands_file() -> str:
-    local_commands = BOT_ROOT / "shared" / "commands.json"
-    if local_commands.exists():
-        return str(local_commands)
-    return "/opt/bot-discord/shared/commands.json"
+    return str(_bot_home() / "shared" / "commands.json")
 
 
 def get_settings() -> Settings:

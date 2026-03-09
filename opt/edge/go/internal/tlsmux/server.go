@@ -22,7 +22,9 @@ func NewServer(cfg runtime.Config) (*Server, error) {
 		tlsConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{cert},
-			NextProtos:   []string{"http/1.1"},
+			// Public TLS must advertise h2 so gRPC clients keep HTTP/2 all the way
+			// through edge termination before nginx proxies the internal gRPC hop.
+			NextProtos: []string{"h2", "http/1.1"},
 		},
 	}, nil
 }

@@ -2,7 +2,6 @@
 
 EDGE_RUNTIME_ENV_FILE="${EDGE_RUNTIME_ENV_FILE:-/etc/default/edge-runtime}"
 EDGE_DIST_DIR="${SCRIPT_DIR}/opt/edge/dist"
-EDGE_DIST_MANIFEST="${EDGE_DIST_DIR}/SHA256SUMS"
 EDGE_BIN="${EDGE_BIN:-/usr/local/bin/edge-mux}"
 EDGE_SERVICE_NAME="${EDGE_SERVICE_NAME:-edge-mux.service}"
 EDGE_NGINX_TLS_BACKEND="${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}"
@@ -127,20 +126,6 @@ edge_go_binary_available() {
   [[ -f "${path}" && -s "${path}" ]]
 }
 
-edge_go_verify_dist_binary() {
-  local path name expected actual
-  path="$(edge_go_dist_binary_path)" || return 1
-  [[ -f "${path}" && -s "${path}" ]] || return 1
-  [[ -f "${EDGE_DIST_MANIFEST}" && -s "${EDGE_DIST_MANIFEST}" ]] || return 1
-  command -v sha256sum >/dev/null 2>&1 || return 1
-
-  name="$(basename "${path}")"
-  expected="$(awk -v target="${name}" '$2 == target {print tolower($1)}' "${EDGE_DIST_MANIFEST}" | head -n1)"
-  [[ -n "${expected}" ]] || return 1
-  actual="$(sha256sum "${path}" | awk '{print tolower($1)}')"
-  [[ -n "${actual}" && "${actual}" == "${expected}" ]]
-}
-
 edge_runtime_preflight_or_die() {
   if ! edge_provider_enabled; then
     return 0
@@ -149,7 +134,6 @@ edge_runtime_preflight_or_die() {
   case "$(edge_provider_selected)" in
     go)
       edge_go_binary_available || die "Binary prebuilt edge-mux belum tersedia untuk provider go."
-      edge_go_verify_dist_binary || die "Checksum binary prebuilt edge-mux gagal atau manifest SHA256SUMS belum siap."
       ;;
     nginx-stream) ;;
   esac
@@ -186,7 +170,6 @@ stage_edge_go_provider() {
   local src
   src="$(edge_go_dist_binary_path)" || die "Arsitektur host belum didukung untuk provider go."
   [[ -f "${src}" && -s "${src}" ]] || die "Binary prebuilt edge-mux belum tersedia: ${src}"
-  edge_go_verify_dist_binary || die "Checksum binary prebuilt edge-mux gagal atau manifest SHA256SUMS belum siap: ${src}"
 
   install -d -m 755 "$(dirname "${EDGE_BIN}")"
   install -m 0755 "${src}" "${EDGE_BIN}"

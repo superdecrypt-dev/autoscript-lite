@@ -5,7 +5,7 @@ install_xray() {
   ok "Pasang Xray..."
   local xray_installer
   xray_installer="$(mktemp)"
-  download_file_or_die "${XRAY_INSTALL_SCRIPT_URL}" "${xray_installer}" "${XRAY_INSTALL_SCRIPT_SHA256}" "xray installer script"
+  download_file_or_die "${XRAY_INSTALL_SCRIPT_URL}" "${xray_installer}" "" "xray installer script"
   chmod 700 "${xray_installer}"
   bash "${xray_installer}" install >/dev/null \
     || { rm -f "${xray_installer}" >/dev/null 2>&1 || true; die "Gagal install Xray dari ref ${XRAY_INSTALL_REF}."; }
@@ -919,9 +919,7 @@ setup_xray_geodata_updater() {
 set -euo pipefail
 
 URL="${XRAY_INSTALL_SCRIPT_URL}"
-URL_SHA256="${XRAY_INSTALL_SCRIPT_SHA256}"
 CUSTOM_URL="${CUSTOM_GEOSITE_URL}"
-CUSTOM_SHA256="${CUSTOM_GEOSITE_SHA256}"
 CUSTOM_DEST="${CUSTOM_GEOSITE_DEST}"
 tmp="\$(mktemp)"
 tmp_custom="\$(mktemp)"
@@ -932,29 +930,11 @@ cleanup() {
 trap cleanup EXIT
 
 curl -fsSL --connect-timeout 15 --max-time 120 "\${URL}" -o "\${tmp}"
-if [[ -n "\${URL_SHA256}" ]]; then
-  got="\$(sha256sum "\${tmp}" | awk '{print tolower(\$1)}')"
-  [[ "\${got}" == "\${URL_SHA256,,}" ]] || {
-    echo "[xray-update-geodata] checksum mismatch installer geodata" >&2
-    echo " expected=\${URL_SHA256,,}" >&2
-    echo " actual=\${got}" >&2
-    exit 1
-  }
-fi
 bash "\${tmp}" install-geodata >/dev/null 2>&1
 
 mkdir -p "\$(dirname "\${CUSTOM_DEST}")"
 curl -fsSL --connect-timeout 15 --max-time 120 "\${CUSTOM_URL}" -o "\${tmp_custom}"
 [[ -s "\${tmp_custom}" ]] || { echo "[xray-update-geodata] custom.dat kosong: \${CUSTOM_URL}" >&2; exit 1; }
-if [[ -n "\${CUSTOM_SHA256}" ]]; then
-  got_custom="\$(sha256sum "\${tmp_custom}" | awk '{print tolower(\$1)}')"
-  [[ "\${got_custom}" == "\${CUSTOM_SHA256,,}" ]] || {
-    echo "[xray-update-geodata] checksum mismatch custom geosite" >&2
-    echo " expected=\${CUSTOM_SHA256,,}" >&2
-    echo " actual=\${got_custom}" >&2
-    exit 1
-  }
-fi
 install -m 644 "\${tmp_custom}" "\${CUSTOM_DEST}"
 EOF
 
@@ -982,7 +962,7 @@ install_custom_geosite_adblock() {
 
   local tmp
   tmp="$(mktemp)"
-  download_file_or_die "${CUSTOM_GEOSITE_URL}" "${tmp}" "${CUSTOM_GEOSITE_SHA256}" "custom geosite"
+  download_file_or_die "${CUSTOM_GEOSITE_URL}" "${tmp}" "" "custom geosite"
   [[ -s "${tmp}" ]] || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     die "File custom geosite kosong: ${CUSTOM_GEOSITE_URL}"

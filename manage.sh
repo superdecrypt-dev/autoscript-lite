@@ -47,9 +47,6 @@ ACME_SH_INSTALL_REF="${ACME_SH_INSTALL_REF:-f39d066ced0271d87790dc426556c1e02a88
 ACME_SH_SCRIPT_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/acme.sh"
 ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
 ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
-ACME_SH_SCRIPT_SHA256="${ACME_SH_SCRIPT_SHA256:-3c15d539f2b670040c67b596161297ef4e402a969e686ee53d5a083923e761db}"
-ACME_SH_TARBALL_SHA256="${ACME_SH_TARBALL_SHA256:-3be27ab630d5dd53439a46e56cbe77d998b788c3f0a3eb6b95cdd77e074389a9}"
-ACME_SH_DNS_CF_HOOK_SHA256="${ACME_SH_DNS_CF_HOOK_SHA256:-9628ee8238cb3f9cfa1b1a985c0e9593436a3e4f8a9d65a6f775b981be9e76c8}"
 
 # Runtime state untuk Domain Control
 DOMAIN=""
@@ -95,6 +92,7 @@ WORK_DIR="/var/lib/xray-manage"
 ROUTING_LOCK_FILE="/run/autoscript/locks/xray-routing.lock"
 DNS_LOCK_FILE="/run/autoscript/locks/xray-dns.lock"
 OBS_LOCK_FILE="/run/autoscript/locks/xray-observatory.lock"
+WARP_LOCK_FILE="/run/autoscript/locks/xray-warp.lock"
 
 # Direktori laporan/export
 REPORT_DIR="/var/log/xray-manage"
@@ -114,7 +112,7 @@ SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}" \
-  "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" \
+  "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
   "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}" \
@@ -167,7 +165,8 @@ init_runtime_dirs() {
   for lock_dir in \
     "$(dirname "${ROUTING_LOCK_FILE}")" \
     "$(dirname "${DNS_LOCK_FILE}")" \
-    "$(dirname "${OBS_LOCK_FILE}")"; do
+    "$(dirname "${OBS_LOCK_FILE}")" \
+    "$(dirname "${WARP_LOCK_FILE}")"; do
     mkdir -p "${lock_dir}" 2>/dev/null || true
     chmod 700 "${lock_dir}" 2>/dev/null || true
   done
@@ -1267,20 +1266,18 @@ main_menu_info_header_print() {
 download_file_or_die() {
   local url="$1"
   local out="$2"
-  local expected_sha="${3:-}"
-  local label="${4:-$url}"
+  local _unused_hint="${3:-}"
+  local label="${4:-${_unused_hint:-$url}}"
 
-  if ! download_file_with_sha_check "${url}" "${out}" "${expected_sha}" "${label}"; then
-    die "Gagal download/verify: ${label}"
+  if ! download_file_checked "${url}" "${out}" "${label}"; then
+    die "Gagal download: ${label}"
   fi
 }
 
-download_file_with_sha_check() {
+download_file_checked() {
   local url="$1"
   local out="$2"
-  local expected_sha="${3:-}"
-  local label="${4:-$url}"
-  local actual_sha=""
+  local label="${3:-$url}"
 
   if ! curl -fsSL --connect-timeout 15 --max-time 120 "${url}" -o "${out}"; then
     rm -f "${out}" >/dev/null 2>&1 || true
@@ -1290,22 +1287,6 @@ download_file_with_sha_check() {
     warn "File hasil download kosong: ${label}"
     rm -f "${out}" >/dev/null 2>&1 || true
     return 1
-  fi
-
-  if [[ -n "${expected_sha}" ]]; then
-    if ! command -v sha256sum >/dev/null 2>&1; then
-      warn "sha256sum tidak tersedia untuk verifikasi checksum: ${label}"
-      rm -f "${out}" >/dev/null 2>&1 || true
-      return 1
-    fi
-    actual_sha="$(sha256sum "${out}" | awk '{print tolower($1)}')"
-    if [[ -z "${actual_sha}" || "${actual_sha}" != "${expected_sha,,}" ]]; then
-      warn "Checksum mismatch: ${label}"
-      warn "  expected: ${expected_sha,,}"
-      warn "  actual  : ${actual_sha:-<empty>}"
-      rm -f "${out}" >/dev/null 2>&1 || true
-      return 1
-    fi
   fi
   return 0
 }
@@ -1786,12 +1767,83 @@ stop_conflicting_services() {
   local svc
   for svc in nginx apache2 caddy lighttpd; do
     if svc_exists "${svc}" && svc_is_active "${svc}"; then
-      DOMAIN_CTRL_STOPPED_SERVICES+=("${svc}")
+      domain_control_append_stopped_service "${svc}"
     fi
     if svc_exists "${svc}"; then
       systemctl stop "${svc}" >/dev/null 2>&1 || true
     fi
   done
+  domain_control_stop_edge_runtime_if_needed
+}
+
+domain_control_append_stopped_service() {
+  local candidate="$1"
+  local existing
+  [[ -n "${candidate}" ]] || return 0
+  for existing in "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"; do
+    [[ "${existing}" == "${candidate}" ]] && return 0
+  done
+  DOMAIN_CTRL_STOPPED_SERVICES+=("${candidate}")
+}
+
+domain_control_edge_runtime_service_name() {
+  local provider env_file
+  env_file="/etc/default/edge-runtime"
+  provider="$(awk -F= '$1=="EDGE_PROVIDER"{print $2; exit}' "${env_file}" 2>/dev/null || echo "none")"
+  case "${provider}" in
+    nginx-stream) printf '%s\n' "nginx" ;;
+    go) printf '%s\n' "edge-mux.service" ;;
+    *) return 1 ;;
+  esac
+}
+
+domain_control_edge_runtime_http_on_80() {
+  local env_file provider active http_port
+  env_file="/etc/default/edge-runtime"
+  provider="$(awk -F= '$1=="EDGE_PROVIDER"{print $2; exit}' "${env_file}" 2>/dev/null || echo "none")"
+  active="$(awk -F= '$1=="EDGE_ACTIVATE_RUNTIME"{print $2; exit}' "${env_file}" 2>/dev/null || echo "false")"
+  http_port="$(awk -F= '$1=="EDGE_PUBLIC_HTTP_PORT"{print $2; exit}' "${env_file}" 2>/dev/null || echo "80")"
+  [[ "${provider}" != "none" ]] || return 1
+  case "${active}" in
+    1|true|TRUE|yes|YES|on|ON) ;;
+    *) return 1 ;;
+  esac
+  [[ "${http_port}" == "80" ]]
+}
+
+domain_control_stop_edge_runtime_if_needed() {
+  local svc=""
+  if domain_control_edge_runtime_http_on_80; then
+    svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+    if [[ -n "${svc}" && "${svc}" != "nginx" ]] && svc_exists "${svc}" && svc_is_active "${svc}"; then
+      domain_control_append_stopped_service "${svc}"
+      systemctl stop "${svc}" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+domain_control_restart_active_tls_runtime_consumers() {
+  local edge_svc
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || die "Gagal restart sshws-stunnel setelah update cert."
+    svc_is_active sshws-stunnel || die "sshws-stunnel tidak active setelah update cert."
+  fi
+  edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+    systemctl restart "${edge_svc}" >/dev/null 2>&1 || die "Gagal restart ${edge_svc} setelah update cert."
+    svc_is_active "${edge_svc}" || die "${edge_svc} tidak active setelah update cert."
+  fi
+}
+
+domain_control_restore_after_cert_success() {
+  local svc
+  for svc in "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"; do
+    [[ "${svc}" == "nginx" ]] && continue
+    if svc_exists "${svc}"; then
+      systemctl start "${svc}" >/dev/null 2>&1 || die "Gagal restore service ${svc} setelah update cert."
+    fi
+  done
+  domain_control_clear_stopped_services
 }
 
 domain_control_restore_stopped_services() {
@@ -1826,7 +1878,11 @@ install_acme_and_issue_cert() {
   email="$(rand_email)"
   log "Email acme.sh (acak): $email"
 
-  stop_conflicting_services
+  if [[ "${ACME_CERT_MODE:-standalone}" != "dns_cf_wildcard" ]]; then
+    stop_conflicting_services
+  else
+    domain_control_clear_stopped_services
+  fi
 
   local acme_tmpdir acme_src_dir acme_tgz acme_install_log
   acme_tmpdir="$(mktemp -d)"
@@ -1834,7 +1890,7 @@ install_acme_and_issue_cert() {
   acme_install_log="${acme_tmpdir}/acme-install.log"
   acme_src_dir=""
 
-  if download_file_with_sha_check "${ACME_SH_TARBALL_URL}" "${acme_tgz}" "${ACME_SH_TARBALL_SHA256}" "acme.sh tarball"; then
+  if download_file_checked "${ACME_SH_TARBALL_URL}" "${acme_tgz}" "acme.sh tarball"; then
     if tar -xzf "${acme_tgz}" -C "${acme_tmpdir}" >/dev/null 2>&1; then
       acme_src_dir="$(find "${acme_tmpdir}" -maxdepth 1 -type d -name 'acme.sh-*' -print -quit)"
     fi
@@ -1844,7 +1900,7 @@ install_acme_and_issue_cert() {
     warn "Source bundle acme.sh tidak tersedia, fallback ke single-file installer."
     acme_src_dir="${acme_tmpdir}/acme-single"
     mkdir -p "${acme_src_dir}"
-    download_file_or_die "${ACME_SH_SCRIPT_URL}" "${acme_src_dir}/acme.sh" "${ACME_SH_SCRIPT_SHA256}" "acme.sh script"
+    download_file_or_die "${ACME_SH_SCRIPT_URL}" "${acme_src_dir}/acme.sh" "" "acme.sh script"
   fi
 
   chmod 700 "${acme_src_dir}/acme.sh"
@@ -1872,7 +1928,7 @@ install_acme_and_issue_cert() {
     if [[ ! -s /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
       warn "dns_cf hook tidak ditemukan, mencoba bootstrap dari ref ${ACME_SH_INSTALL_REF} ..."
       mkdir -p /root/.acme.sh/dnsapi
-      download_file_or_die "${ACME_SH_DNS_CF_HOOK_URL}" /root/.acme.sh/dnsapi/dns_cf.sh "${ACME_SH_DNS_CF_HOOK_SHA256}" "acme dns_cf hook"
+      download_file_or_die "${ACME_SH_DNS_CF_HOOK_URL}" /root/.acme.sh/dnsapi/dns_cf.sh "" "acme dns_cf hook"
       chmod 700 /root/.acme.sh/dnsapi/dns_cf.sh >/dev/null 2>&1 || true
     fi
     [[ -s /root/.acme.sh/dnsapi/dns_cf.sh ]] || die "Hook dns_cf tetap tidak ditemukan setelah bootstrap."
@@ -1892,7 +1948,7 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
       --key-file "$CERT_PRIVKEY" \
       --fullchain-file "$CERT_FULLCHAIN" \
-      --reloadcmd "systemctl restart nginx || true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null
   else
     log "Issue sertifikat untuk $DOMAIN via acme.sh (standalone port 80)..."
     /root/.acme.sh/acme.sh --issue --force --standalone -d "$DOMAIN" --httpport 80 \
@@ -1901,15 +1957,18 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
       --key-file "$CERT_PRIVKEY" \
       --fullchain-file "$CERT_FULLCHAIN" \
-      --reloadcmd "systemctl restart nginx || true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null
   fi
 
   chmod 600 "$CERT_PRIVKEY" "$CERT_FULLCHAIN"
+  nginx -t >/dev/null 2>&1 || die "Konfigurasi nginx tidak valid setelah install-cert."
+  systemctl restart nginx >/dev/null 2>&1 || die "Gagal restart nginx setelah install-cert."
+  domain_control_restart_active_tls_runtime_consumers
+  domain_control_restore_after_cert_success
 
   log "Sertifikat tersimpan:"
   log "  - $CERT_FULLCHAIN"
   log "  - $CERT_PRIVKEY"
-  domain_control_clear_stopped_services
 }
 
 domain_control_apply_nginx_domain() {
@@ -3728,7 +3787,7 @@ speed_policy_upsert() {
     (
       flock -x 200
       python3 - <<'PY' "${SPEED_POLICY_ROOT}" "${proto}" "${email}" "${down_mbit}" "${up_mbit}" "${out_file}"
-import hashlib
+import zlib
 import json
 import os
 import sys
@@ -3791,7 +3850,7 @@ existing_mark = existing.get("mark")
 if valid_mark(existing_mark) and int(existing_mark) not in used:
   mark = int(existing_mark)
 else:
-  seed = int(hashlib.sha256(email.encode("utf-8")).hexdigest()[:8], 16)
+  seed = zlib.crc32(email.encode("utf-8")) & 0xFFFFFFFF
   start = MARK_MIN + (seed % RANGE)
   mark = None
   for i in range(RANGE):

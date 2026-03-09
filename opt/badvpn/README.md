@@ -5,8 +5,8 @@ Direktori ini disediakan untuk asset prebuilt `badvpn-udpgw`.
 Status saat ini:
 - desain: siap
 - scaffold: siap
-- binary prebuilt: belum dimasukkan
-- runtime live: belum diaktifkan
+- binary prebuilt: sudah ada di repo
+- runtime live: sudah didukung via `setup.sh` dan tervalidasi di rilis baseline
 
 Target struktur:
 
@@ -17,7 +17,6 @@ opt/badvpn/
     README.md
     badvpn-udpgw-linux-amd64
     badvpn-udpgw-linux-arm64
-    SHA256SUMS
 ```
 
 Distribusi yang dipilih:

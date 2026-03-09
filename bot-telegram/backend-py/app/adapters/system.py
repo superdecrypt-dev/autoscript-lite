@@ -564,7 +564,6 @@ def op_tls_info() -> tuple[bool, str, str]:
             "-startdate",
             "-enddate",
             "-fingerprint",
-            "-sha256",
         ],
         timeout=10,
     )

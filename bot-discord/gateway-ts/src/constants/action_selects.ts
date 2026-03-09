@@ -11,6 +11,13 @@ export interface ActionSingleSelectConfig {
   options: readonly ActionSingleSelectOption[];
 }
 
+const ROOT_DOMAIN_FALLBACK_VALUES = [
+  "vyxara1.web.id",
+  "vyxara2.web.id",
+  "vyxara1.qzz.io",
+  "vyxara2.qzz.io",
+] as const;
+
 const NETWORK_SINGLE_SELECTS: Record<string, ActionSingleSelectConfig> = {
   set_egress_mode: {
     fieldId: "mode",
@@ -115,15 +122,41 @@ export function getSingleFieldSelectConfig(menuId: string, actionId: string): Ac
       fieldId: "root_domain",
       title: "Cloudflare Root Domain",
       placeholder: "Pilih root domain Cloudflare",
-      options: [
-        { label: "vyxara1.web.id", value: "vyxara1.web.id", description: "Root domain 1" },
-        { label: "vyxara2.web.id", value: "vyxara2.web.id", description: "Root domain 2" },
-        { label: "vyxara1.qzz.io", value: "vyxara1.qzz.io", description: "Root domain 3" },
-        { label: "vyxara2.qzz.io", value: "vyxara2.qzz.io", description: "Root domain 4" },
-      ],
+      options: ROOT_DOMAIN_FALLBACK_VALUES.map((value, idx) => ({
+        label: value,
+        value,
+        description: `Root domain ${idx + 1}`,
+      })),
     };
   }
   return null;
+}
+
+export function withSingleFieldSelectOptions(
+  config: ActionSingleSelectConfig | null,
+  values: readonly string[]
+): ActionSingleSelectConfig | null {
+  if (!config) {
+    return null;
+  }
+  const normalizedValues = Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim())
+        .filter((value) => Boolean(value))
+    )
+  );
+  if (normalizedValues.length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    options: normalizedValues.map((value, idx) => ({
+      label: value,
+      value,
+      description: `Root domain ${idx + 1}`,
+    })),
+  };
 }
 
 export function shouldSelectContinueToModal(menuId: string, actionId: string): boolean {

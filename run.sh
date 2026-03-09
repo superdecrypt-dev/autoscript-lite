@@ -16,9 +16,6 @@ export PATH
 # -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_USE_LOCAL_SOURCE="${RUN_USE_LOCAL_SOURCE:-0}"
-EDGE_PROVIDER="${EDGE_PROVIDER:-go}"
-EDGE_ACTIVATE_RUNTIME="${EDGE_ACTIVATE_RUNTIME:-true}"
-export EDGE_PROVIDER EDGE_ACTIVATE_RUNTIME
 REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript.git}"
 REPO_DIR="${REPO_DIR:-/opt/autoscript}"
 if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
@@ -55,8 +52,6 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/templates/config/badvpn-runtime.env"
   "opt/setup/templates/systemd/edge-mux.service"
   "opt/setup/templates/systemd/badvpn-udpgw.service"
-  "opt/edge/dist/SHA256SUMS"
-  "opt/badvpn/dist/SHA256SUMS"
   "opt/manage/features/network.sh"
   "opt/manage/features/analytics.sh"
   "opt/manage/menus/maintenance_menu.sh"

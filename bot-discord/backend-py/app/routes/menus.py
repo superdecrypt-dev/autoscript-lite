@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
-from ..adapters import system
+from ..adapters import system, system_mutations
 from ..auth import verify_shared_secret
 from ..config import get_settings
 from ..schemas import ActionRequest, ActionResponse
@@ -97,6 +97,14 @@ def get_user_options(proto: str | None = None) -> dict:
 
     return {
         "users": [{"proto": p, "username": u} for p, u in records],
+    }
+
+
+@router.get("/api/domain/root-options", dependencies=[Depends(verify_shared_secret)])
+def get_domain_root_options() -> dict:
+    roots = system_mutations.list_provided_root_domains()
+    return {
+        "roots": [{"root_domain": item} for item in roots],
     }
 
 

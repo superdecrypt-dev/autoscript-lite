@@ -17,10 +17,6 @@ command -v go >/dev/null 2>&1 || {
   echo "go toolchain tidak ditemukan di PATH" >&2
   exit 1
 }
-command -v sha256sum >/dev/null 2>&1 || {
-  echo "sha256sum tidak ditemukan di PATH" >&2
-  exit 1
-}
 
 mkdir -p "${DIST_DIR}"
 mkdir -p "${GO_BUILD_CACHE}"
@@ -47,10 +43,5 @@ build_one() {
 for target in "${TARGETS[@]}"; do
   build_one "${target}"
 done
-
-(
-  cd "${DIST_DIR}"
-  sha256sum ${OUT_BASE}-* > SHA256SUMS
-)
 
 echo "[done] dist ready at ${DIST_DIR}"

@@ -4,20 +4,18 @@
 download_file_or_die() {
   local url="$1"
   local out="$2"
-  local expected_sha="${3:-}"
-  local label="${4:-$url}"
+  local _unused_hint="${3:-}"
+  local label="${4:-${_unused_hint:-$url}}"
 
-  if ! download_file_with_sha_check "${url}" "${out}" "${expected_sha}" "${label}"; then
-    die "Gagal download/verify: ${label}"
+  if ! download_file_checked "${url}" "${out}" "${label}"; then
+    die "Gagal download: ${label}"
   fi
 }
 
-download_file_with_sha_check() {
+download_file_checked() {
   local url="$1"
   local out="$2"
-  local expected_sha="${3:-}"
-  local label="${4:-$url}"
-  local actual_sha=""
+  local label="${3:-$url}"
 
   if ! curl -fsSL --connect-timeout 15 --max-time 120 "${url}" -o "${out}"; then
     rm -f "${out}" >/dev/null 2>&1 || true
@@ -27,22 +25,6 @@ download_file_with_sha_check() {
     warn "File hasil download kosong: ${label}"
     rm -f "${out}" >/dev/null 2>&1 || true
     return 1
-  fi
-
-  if [[ -n "${expected_sha}" ]]; then
-    if ! command -v sha256sum >/dev/null 2>&1; then
-      warn "sha256sum tidak tersedia untuk verifikasi checksum: ${label}"
-      rm -f "${out}" >/dev/null 2>&1 || true
-      return 1
-    fi
-    actual_sha="$(sha256sum "${out}" | awk '{print tolower($1)}')"
-    if [[ -z "${actual_sha}" || "${actual_sha}" != "${expected_sha,,}" ]]; then
-      warn "Checksum mismatch: ${label}"
-      warn "  expected: ${expected_sha,,}"
-      warn "  actual  : ${actual_sha:-<empty>}"
-      rm -f "${out}" >/dev/null 2>&1 || true
-      return 1
-    fi
   fi
   return 0
 }

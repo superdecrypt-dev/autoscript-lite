@@ -10,8 +10,7 @@ Rilis ini menambahkan `badvpn-udpgw` sebagai fitur tambahan untuk ekosistem SSH.
 - Binary resmi proyek sekarang tersedia di repo:
   - `opt/badvpn/dist/badvpn-udpgw-linux-amd64`
   - `opt/badvpn/dist/badvpn-udpgw-linux-arm64`
-  - `opt/badvpn/dist/SHA256SUMS`
-- Installer memilih binary sesuai arsitektur dan memverifikasi checksum sebelum install.
+- Installer memilih binary sesuai arsitektur lalu memasangnya langsung dari bundle repo.
 
 2. Integrasi setup modular
 - `setup.sh` sekarang memasang:
@@ -321,7 +320,7 @@ Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, 
   - `Maintenance`
 - Action dangerous sekarang otomatis disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`.
 - Logging gateway Telegram di-hardening agar URL Bot API yang memuat token tidak lagi masuk ke journal baru.
-- Archive `bot_telegram.zip` dan checksum installer disegarkan agar deploy konsisten.
+- Archive `bot_telegram.zip` disegarkan agar deploy bawaan tetap konsisten.
 
 ### Commit
 - `18df265` — `fix(sshws): track client ip for qac enforcement`
@@ -521,7 +520,7 @@ Rilis ini menambahkan dukungan multi-user untuk Shadowsocks dan Shadowsocks 2022
 - Tujuan: menjaga kompatibilitas domain fronting dan mengurangi noise konfigurasi yang tidak dipakai default.
 
 3. Stabilitas installer Telegram (hasil temuan E2E)
-- Default checksum `bot_telegram.zip` diperbarui agar sesuai artefak terbaru.
+- Archive default `bot_telegram.zip` diperbarui agar sesuai artefak terbaru.
 - Default env Telegram backend dipindah ke `127.0.0.1:8081` agar tidak bentrok dengan Discord backend `127.0.0.1:8080`.
 - Template systemd Telegram backend tidak lagi hardcode port, melainkan memakai `${BACKEND_HOST}` dan `${BACKEND_PORT}`.
 

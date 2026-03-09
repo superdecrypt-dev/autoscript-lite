@@ -43,7 +43,5 @@ berjalan pada:
 
 - source provider `go` ada di `opt/edge/go`
 - binary prebuilt disimpan di `opt/edge/dist`
-- manifest checksum:
-  - `opt/edge/dist/SHA256SUMS`
 - script build lokal:
   - [build-edge-mux.sh](/root/project/autoscript/opt/edge/scripts/build-edge-mux.sh)

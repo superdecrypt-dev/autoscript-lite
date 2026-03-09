@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
+User=xray-discord-gateway
 EnvironmentFile=/etc/xray-discord-bot/bot.env
 ExecStart=/opt/bot-discord/scripts/monitor-lite.sh --quiet
-

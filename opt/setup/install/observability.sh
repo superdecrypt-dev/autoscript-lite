@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Observability, guard, and log maintenance module for setup runtime.
 
+ensure_env_assignment_present() {
+  local file="$1"
+  local key="$2"
+  local assignment="$3"
+  [[ -n "${file}" && -n "${key}" && -n "${assignment}" ]] || return 1
+  touch "${file}" >/dev/null 2>&1 || return 1
+  if ! grep -Eq "^${key}=" "${file}" 2>/dev/null; then
+    printf '%s\n' "${assignment}" >> "${file}" || return 1
+  fi
+}
+
 setup_logrotate() {
   ok "Pasang logrotate..."
 
@@ -26,7 +37,8 @@ install_observability_alerting() {
   mkdir -p "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}"
   chmod 700 "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}" || true
 
-  cat > "${OBS_CONFIG_FILE}" <<'EOF'
+  if [[ ! -f "${OBS_CONFIG_FILE}" ]]; then
+    cat > "${OBS_CONFIG_FILE}" <<'EOF'
 # URL webhook opsional. Jika kosong, alert hanya ditulis ke log lokal.
 ALERT_WEBHOOK_URL=""
 # Batas warning masa berlaku cert (hari).
@@ -36,6 +48,12 @@ ALERT_ONLY_ON_CHANGE=1
 # Jika 1, mismatch DNS->IP asal diabaikan bila resolve ke IP Cloudflare (proxied).
 ALLOW_CLOUDFLARE_PROXY_MISMATCH=1
 EOF
+  else
+    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALERT_WEBHOOK_URL" 'ALERT_WEBHOOK_URL=""'
+    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "CERT_WARN_DAYS" 'CERT_WARN_DAYS=14'
+    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALERT_ONLY_ON_CHANGE" 'ALERT_ONLY_ON_CHANGE=1'
+    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALLOW_CLOUDFLARE_PROXY_MISMATCH" 'ALLOW_CLOUDFLARE_PROXY_MISMATCH=1'
+  fi
   chmod 600 "${OBS_CONFIG_FILE}" || true
 
   install_setup_bin_or_die "xray-observe" "/usr/local/bin/xray-observe" 0755
@@ -68,7 +86,8 @@ install_domain_cert_guard() {
   mkdir -p "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}"
   chmod 700 "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}" || true
 
-  cat > "${DOMAIN_GUARD_CONFIG_FILE}" <<'EOF'
+  if [[ ! -f "${DOMAIN_GUARD_CONFIG_FILE}" ]]; then
+    cat > "${DOMAIN_GUARD_CONFIG_FILE}" <<'EOF'
 # Warning jika cert <= nilai ini (hari)
 CERT_WARN_DAYS=14
 # Jika renew-if-needed dipanggil, renewal dipicu jika cert <= nilai ini (hari)
@@ -78,6 +97,12 @@ AUTO_RENEW=0
 # Jika 1, mismatch DNS->IP asal diabaikan bila resolve ke IP Cloudflare (proxied).
 ALLOW_CLOUDFLARE_PROXY_MISMATCH=1
 EOF
+  else
+    ensure_env_assignment_present "${DOMAIN_GUARD_CONFIG_FILE}" "CERT_WARN_DAYS" 'CERT_WARN_DAYS=14'
+    ensure_env_assignment_present "${DOMAIN_GUARD_CONFIG_FILE}" "RENEW_BELOW_DAYS" 'RENEW_BELOW_DAYS=7'
+    ensure_env_assignment_present "${DOMAIN_GUARD_CONFIG_FILE}" "AUTO_RENEW" 'AUTO_RENEW=0'
+    ensure_env_assignment_present "${DOMAIN_GUARD_CONFIG_FILE}" "ALLOW_CLOUDFLARE_PROXY_MISMATCH" 'ALLOW_CLOUDFLARE_PROXY_MISMATCH=1'
+  fi
   chmod 600 "${DOMAIN_GUARD_CONFIG_FILE}" || true
 
   install_setup_bin_or_die "xray-domain-guard" "/usr/local/bin/xray-domain-guard" 0755

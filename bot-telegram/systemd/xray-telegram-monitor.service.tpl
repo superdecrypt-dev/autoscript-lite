@@ -5,6 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
+User=xray-telegram-gateway
 EnvironmentFile=/etc/xray-telegram-bot/bot.env
 ExecStart=/opt/bot-telegram/scripts/monitor-lite.sh --quiet

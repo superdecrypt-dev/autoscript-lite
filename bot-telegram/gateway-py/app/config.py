@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 BOT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_ENV_FILE = BOT_ROOT / ".env"
 
-if LOCAL_ENV_FILE.exists():
+if not os.getenv("BOT_ENV_FILE") and LOCAL_ENV_FILE.exists():
     load_dotenv(LOCAL_ENV_FILE, override=False)
 
 
@@ -92,10 +92,15 @@ def _require_env(name: str) -> str:
 
 
 def _default_commands_file() -> str:
-    local_commands = BOT_ROOT / "shared" / "commands.json"
-    if local_commands.exists():
-        return str(local_commands)
-    return "/opt/bot-telegram/shared/commands.json"
+    raw = (os.getenv("BOT_HOME") or "").strip()
+    bot_home = Path(raw) if raw else BOT_ROOT
+    return str(bot_home / "shared" / "commands.json")
+
+
+def _format_host_for_url(host: str) -> str:
+    if ":" in host and not host.startswith("[") and not host.endswith("]"):
+        return f"[{host}]"
+    return host
 
 
 def _normalize_backend_base_url(raw: str) -> str:
@@ -118,6 +123,22 @@ def _normalize_backend_base_url(raw: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, "", "", "")).rstrip("/")
 
 
+def _resolve_backend_base_url(default_port: int) -> str:
+    raw_base_url = (os.getenv("BACKEND_BASE_URL") or "").strip()
+    raw_host = (os.getenv("BACKEND_HOST") or "").strip()
+    raw_port = (os.getenv("BACKEND_PORT") or "").strip()
+
+    if raw_host or raw_port:
+        host = raw_host or "127.0.0.1"
+        port = _parse_int("BACKEND_PORT", default_port, 1, 65535)
+        derived = _normalize_backend_base_url(f"http://{_format_host_for_url(host)}:{port}")
+        if raw_base_url and _normalize_backend_base_url(raw_base_url) != derived:
+            raise RuntimeError("BACKEND_BASE_URL tidak sinkron dengan BACKEND_HOST/BACKEND_PORT.")
+        return derived
+
+    return _normalize_backend_base_url(raw_base_url or f"http://127.0.0.1:{default_port}")
+
+
 def load_config() -> AppConfig:
     admin_chat_ids = _parse_id_set("TELEGRAM_ADMIN_CHAT_IDS", os.getenv("TELEGRAM_ADMIN_CHAT_IDS"))
     admin_user_ids = _parse_id_set("TELEGRAM_ADMIN_USER_IDS", os.getenv("TELEGRAM_ADMIN_USER_IDS"))
@@ -130,7 +151,7 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         token=_require_env("TELEGRAM_BOT_TOKEN"),
-        backend_base_url=_normalize_backend_base_url(os.getenv("BACKEND_BASE_URL") or "http://127.0.0.1:8080"),
+        backend_base_url=_resolve_backend_base_url(8081),
         shared_secret=_require_env("INTERNAL_SHARED_SECRET"),
         commands_file=(os.getenv("COMMANDS_FILE") or _default_commands_file()).strip(),
         admin_chat_ids=admin_chat_ids,

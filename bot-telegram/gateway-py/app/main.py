@@ -1,6 +1,8 @@
 from __future__ import annotations
+import asyncio
 import io
 import logging
+import os
 import re
 import socket
 import time
@@ -66,6 +68,8 @@ DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
+    "vyxara1.qzz.io",
+    "vyxara2.qzz.io",
 )
 FORM_CHOICE_MANUAL_VALUE = "__manual_input__"
 FORM_CHOICE_SKIP_VALUE = "__skip_optional__"
@@ -94,17 +98,24 @@ KEY_PENDING_DELETE_PICK = "pending_delete_pick"
 KEY_PENDING_UPLOAD_RESTORE = "pending_upload_restore"
 KEY_LAST_ACTION_TS = "last_action_ts"
 KEY_LAST_CLEANUP_TS = "last_cleanup_ts"
+PENDING_STATE_KEYS = (
+    KEY_PENDING_FORM,
+    KEY_PENDING_CONFIRM,
+    KEY_PENDING_DELETE_PICK,
+    KEY_PENDING_UPLOAD_RESTORE,
+)
+PENDING_OTHER_CHAT_TEXT = "Sesi aktif ada di chat lain. Lanjutkan dari chat asal atau mulai ulang dengan /panel."
 BOT_ROOT = Path(__file__).resolve().parents[2]
+BOT_HOME = Path((os.getenv("BOT_HOME") or "").strip() or str(BOT_ROOT))
+BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot"))
 UPLOAD_RESTORE_MAX_BYTES = 20 * 1024 * 1024
 UPLOAD_RESTORE_DIRS = (
-    Path("/var/lib/xray-telegram-bot/tmp/uploads"),
-    Path("/opt/bot-telegram/runtime/tmp/uploads"),
-    BOT_ROOT / "runtime" / "tmp" / "uploads",
+    BOT_STATE_DIR / "tmp" / "uploads",
+    BOT_HOME / "runtime" / "tmp" / "uploads",
 )
 DOWNLOAD_LOCAL_ALLOW_DIRS = (
-    Path("/var/lib/xray-telegram-bot/backups/archives"),
-    Path("/opt/bot-telegram/runtime/backups/archives"),
-    BOT_ROOT / "runtime" / "backups" / "archives",
+    BOT_STATE_DIR / "backups" / "archives",
+    BOT_HOME / "runtime" / "backups" / "archives",
 )
 
 
@@ -210,6 +221,56 @@ def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(KEY_PENDING_CONFIRM, None)
     context.user_data.pop(KEY_PENDING_DELETE_PICK, None)
     context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
+
+
+def _chat_scope_id(chat_id: int | str | None) -> str:
+    return str(chat_id or "").strip()
+
+
+def _store_pending_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    key: str,
+    pending: dict,
+    chat_id: int | str | None,
+) -> dict:
+    state = dict(pending)
+    state["origin_chat_id"] = _chat_scope_id(chat_id)
+    context.user_data[key] = state
+    return state
+
+
+def _get_pending_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    key: str,
+    chat_id: int | str | None,
+) -> tuple[dict | None, str]:
+    pending = context.user_data.get(key)
+    if not isinstance(pending, dict):
+        return None, ""
+
+    current_chat_id = _chat_scope_id(chat_id)
+    origin_chat_id = _chat_scope_id(pending.get("origin_chat_id"))
+    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
+        return None, PENDING_OTHER_CHAT_TEXT
+
+    if current_chat_id and not origin_chat_id:
+        pending = _store_pending_state(context, key, pending, current_chat_id)
+    return pending, ""
+
+
+def _has_pending_state_in_other_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int | str | None) -> bool:
+    current_chat_id = _chat_scope_id(chat_id)
+    if not current_chat_id:
+        return False
+
+    for key in PENDING_STATE_KEYS:
+        pending = context.user_data.get(key)
+        if not isinstance(pending, dict):
+            continue
+        origin_chat_id = _chat_scope_id(pending.get("origin_chat_id"))
+        if origin_chat_id and origin_chat_id != current_chat_id:
+            return True
+    return False
 
 
 def _fmt_size(num: int) -> str:
@@ -579,12 +640,17 @@ async def _show_delete_user_list_picker(
 
     page_max = ((len(usernames) - 1) // DELETE_PICK_PAGE_SIZE)
     page = max(0, min(page, page_max))
-    context.user_data[KEY_PENDING_DELETE_PICK] = {
-        "menu_id": menu_id,
-        "proto": proto,
-        "users": usernames,
-        "page": page,
-    }
+    _store_pending_state(
+        context,
+        KEY_PENDING_DELETE_PICK,
+        {
+            "menu_id": menu_id,
+            "proto": proto,
+            "users": usernames,
+            "page": page,
+        },
+        chat_id,
+    )
     await _send_or_edit(
         query=query,
         chat_id=chat_id,
@@ -793,7 +859,7 @@ async def _render_pending_choice_prompt(
     page_max = _choice_total_pages(choice_options) - 1
     page = max(0, min(int(pending.get("choice_page", 0)), page_max))
     pending["choice_page"] = page
-    context.user_data[KEY_PENDING_FORM] = pending
+    _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
 
     await _send_or_edit(
         query=query,
@@ -1047,7 +1113,7 @@ async def _prompt_next_form_field(
     pending.pop("manual_entry", None)
     pending["choice_options"] = _serialize_choice_options(choice_with_manual)
     pending["choice_page"] = 0
-    context.user_data[KEY_PENDING_FORM] = pending
+    _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
     await _render_pending_choice_prompt(
         runtime=runtime,
         context=context,
@@ -1113,7 +1179,7 @@ async def _submit_pending_form_value(
             pending.pop("choice_options", None)
             pending.pop("choice_page", None)
             pending["manual_entry"] = True
-            context.user_data[KEY_PENDING_FORM] = pending
+            _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
             text = _manual_input_prompt(menu, action, field, idx + 1, len(action.modal.fields))
             markup = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}")]]
@@ -1167,7 +1233,7 @@ async def _submit_pending_form_value(
     pending["index"] = next_idx
     pending.pop("choice_options", None)
     pending.pop("choice_page", None)
-    context.user_data[KEY_PENDING_FORM] = pending
+    _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
 
     if pending["index"] < len(action.modal.fields):
         await _prompt_next_form_field(runtime=runtime, context=context, chat_id=chat_id, pending=pending, query=query)
@@ -1176,11 +1242,16 @@ async def _submit_pending_form_value(
     context.user_data.pop(KEY_PENDING_FORM, None)
 
     if action.confirm:
-        context.user_data[KEY_PENDING_CONFIRM] = {
-            "menu_id": menu_id,
-            "action_id": action_id,
-            "params": params,
-        }
+        _store_pending_state(
+            context,
+            KEY_PENDING_CONFIRM,
+            {
+                "menu_id": menu_id,
+                "action_id": action_id,
+                "params": params,
+            },
+            chat_id,
+        )
         if query is not None:
             await _send_or_edit(
                 query=query,
@@ -1227,14 +1298,16 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.effective_message.reply_text(reason)
         return
 
-    pending_upload = context.user_data.get(KEY_PENDING_UPLOAD_RESTORE)
-    if not isinstance(pending_upload, dict):
-        return
-
     msg = update.effective_message
     chat = update.effective_chat
     doc = msg.document if msg else None
     if msg is None or chat is None or doc is None:
+        return
+
+    pending_upload, pending_upload_err = _get_pending_state(context, KEY_PENDING_UPLOAD_RESTORE, chat.id if chat else None)
+    if pending_upload is None:
+        if pending_upload_err:
+            await msg.reply_text(pending_upload_err)
         return
 
     name = str(doc.file_name or "").strip()
@@ -1278,11 +1351,16 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     params = {"upload_path": str(upload_path)}
     context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
-    context.user_data[KEY_PENDING_CONFIRM] = {
-        "menu_id": menu_id,
-        "action_id": action_id,
-        "params": params,
-    }
+    _store_pending_state(
+        context,
+        KEY_PENDING_CONFIRM,
+        {
+            "menu_id": menu_id,
+            "action_id": action_id,
+            "params": params,
+        },
+        chat.id,
+    )
 
     confirm_msg = (
         f"<b>Konfirmasi: {html.escape(menu.label)} · {html.escape(action.label)}</b>\n\n"
@@ -1304,15 +1382,28 @@ async def on_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text(reason)
         return
 
-    pending_upload = context.user_data.get(KEY_PENDING_UPLOAD_RESTORE)
-    if isinstance(pending_upload, dict):
+    pending_upload, pending_upload_err = _get_pending_state(
+        context,
+        KEY_PENDING_UPLOAD_RESTORE,
+        update.effective_chat.id if update.effective_chat else None,
+    )
+    if pending_upload is not None:
         await update.effective_message.reply_text(
             "Sesi restore upload aktif. Kirim file backup .tar.gz atau tekan Batal."
         )
         return
+    if pending_upload_err:
+        await update.effective_message.reply_text(pending_upload_err)
+        return
 
-    pending = context.user_data.get(KEY_PENDING_FORM)
-    if not isinstance(pending, dict):
+    pending, pending_err = _get_pending_state(
+        context,
+        KEY_PENDING_FORM,
+        update.effective_chat.id if update.effective_chat else None,
+    )
+    if pending is None:
+        if pending_err:
+            await update.effective_message.reply_text(pending_err)
         return
 
     await _submit_pending_form_value(
@@ -1346,6 +1437,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = str(update.effective_user.id) if update.effective_user else ""
 
     if data == "noop":
+        return
+
+    if _has_pending_state_in_other_chat(context, chat_id):
+        await query.answer(PENDING_OTHER_CHAT_TEXT, show_alert=True)
         return
 
     if data == "h":
@@ -1383,8 +1478,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith(f"pfp{CALLBACK_SEP}"):
-        pending = context.user_data.get(KEY_PENDING_FORM)
-        if not isinstance(pending, dict):
+        pending, pending_err = _get_pending_state(context, KEY_PENDING_FORM, chat_id)
+        if pending is None:
+            if pending_err:
+                await query.answer(pending_err, show_alert=True)
+                return
             await query.answer("Sesi input tidak aktif.", show_alert=True)
             return
         choice_options = _pending_choice_options(pending)
@@ -1396,7 +1494,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         page_max = _choice_total_pages(choice_options) - 1
         page = max(0, min(page, page_max))
         pending["choice_page"] = page
-        context.user_data[KEY_PENDING_FORM] = pending
+        _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
         await _render_pending_choice_prompt(
             runtime=runtime,
             context=context,
@@ -1407,8 +1505,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith(f"pfc{CALLBACK_SEP}"):
-        pending = context.user_data.get(KEY_PENDING_FORM)
-        if not isinstance(pending, dict):
+        pending, pending_err = _get_pending_state(context, KEY_PENDING_FORM, chat_id)
+        if pending is None:
+            if pending_err:
+                await query.answer(pending_err, show_alert=True)
+                return
             await query.answer("Sesi input tidak aktif.", show_alert=True)
             return
         choice_options = _pending_choice_options(pending)
@@ -1465,8 +1566,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith(f"dup_page{CALLBACK_SEP}"):
-        state = context.user_data.get(KEY_PENDING_DELETE_PICK)
-        if not isinstance(state, dict):
+        state, state_err = _get_pending_state(context, KEY_PENDING_DELETE_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
             await query.answer("Sesi pemilihan user tidak aktif.", show_alert=True)
             return
         proto = str(state.get("proto") or "").strip().lower()
@@ -1480,7 +1584,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
         page = max(0, min(page, page_max))
         state["page"] = page
-        context.user_data[KEY_PENDING_DELETE_PICK] = state
+        _store_pending_state(context, KEY_PENDING_DELETE_PICK, state, chat_id)
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1491,8 +1595,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith(f"dup_user{CALLBACK_SEP}"):
-        state = context.user_data.get(KEY_PENDING_DELETE_PICK)
-        if not isinstance(state, dict):
+        state, state_err = _get_pending_state(context, KEY_PENDING_DELETE_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
             await query.answer("Sesi pemilihan user tidak aktif.", show_alert=True)
             return
         proto = str(state.get("proto") or "").strip().lower()
@@ -1519,11 +1626,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "proto": proto,
             "username": username,
         }
-        context.user_data[KEY_PENDING_CONFIRM] = {
-            "menu_id": menu_id,
-            "action_id": "delete_user",
-            "params": params,
-        }
+        _store_pending_state(
+            context,
+            KEY_PENDING_CONFIRM,
+            {
+                "menu_id": menu_id,
+                "action_id": "delete_user",
+                "params": params,
+            },
+            chat_id,
+        )
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1534,8 +1646,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "rc":
-        pending = context.user_data.get(KEY_PENDING_CONFIRM)
-        if not isinstance(pending, dict):
+        pending, pending_err = _get_pending_state(context, KEY_PENDING_CONFIRM, chat_id)
+        if pending is None:
+            if pending_err:
+                await query.answer(pending_err, show_alert=True)
+                return
             await query.answer("Tidak ada aksi yang menunggu konfirmasi.", show_alert=True)
             return
 
@@ -1641,10 +1756,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         if menu_id == BACKUP_MENU_ID and action_id == "restore_from_upload":
-            context.user_data[KEY_PENDING_UPLOAD_RESTORE] = {
-                "menu_id": menu_id,
-                "action_id": action_id,
-            }
+            _store_pending_state(
+                context,
+                KEY_PENDING_UPLOAD_RESTORE,
+                {
+                    "menu_id": menu_id,
+                    "action_id": action_id,
+                },
+                chat_id,
+            )
             await _send_or_edit(
                 query=query,
                 chat_id=chat_id,
@@ -1662,28 +1782,38 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         if action.mode == "modal" and action.modal and len(action.modal.fields) > 0:
-            context.user_data[KEY_PENDING_FORM] = {
-                "menu_id": menu_id,
-                "action_id": action_id,
-                "index": 0,
-                "params": {},
-            }
+            pending_form = _store_pending_state(
+                context,
+                KEY_PENDING_FORM,
+                {
+                    "menu_id": menu_id,
+                    "action_id": action_id,
+                    "index": 0,
+                    "params": {},
+                },
+                chat_id,
+            )
             await _prompt_next_form_field(
                 runtime=runtime,
                 context=context,
                 chat_id=chat_id,
-                pending=context.user_data[KEY_PENDING_FORM],
+                pending=pending_form,
                 query=query,
             )
             return
 
         params: dict[str, str] = {}
         if action.confirm:
-            context.user_data[KEY_PENDING_CONFIRM] = {
-                "menu_id": menu_id,
-                "action_id": action_id,
-                "params": params,
-            }
+            _store_pending_state(
+                context,
+                KEY_PENDING_CONFIRM,
+                {
+                    "menu_id": menu_id,
+                    "action_id": action_id,
+                    "params": params,
+                },
+                chat_id,
+            )
             await _send_or_edit(
                 query=query,
                 chat_id=chat_id,
@@ -1724,6 +1854,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer("Interaksi tidak dikenali. Jalankan /panel lagi.", show_alert=True)
 
 
+def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
+    try:
+        main_menu = asyncio.run(backend.get_main_menu())
+    except BackendError as exc:
+        raise RuntimeError(f"Sinkronisasi menu backend gagal: {exc}") from exc
+
+    menus = main_menu.get("menus") if isinstance(main_menu, dict) else None
+    if not isinstance(menus, list):
+        raise RuntimeError("Sinkronisasi menu backend gagal: payload menus tidak valid.")
+
+    catalog = CommandCatalog.from_payload({"menus": menus})
+    LOGGER.info(
+        "Backend menu sync complete: menus=%s dangerous_actions_enabled=%s",
+        len(catalog.menus),
+        bool(main_menu.get("dangerous_actions_enabled")) if isinstance(main_menu, dict) else False,
+    )
+    return catalog
+
+
 async def post_init(application: Application) -> None:
     runtime = application.bot_data.get("runtime")
     if isinstance(runtime, Runtime):
@@ -1748,8 +1897,8 @@ def main() -> None:
     _configure_logging()
 
     config = load_config()
-    catalog = CommandCatalog.load(config.commands_file)
     backend = BackendClient(config.backend_base_url, config.shared_secret)
+    catalog = _load_catalog_from_backend_or_die(backend)
 
     runtime = Runtime(
         config=config,
