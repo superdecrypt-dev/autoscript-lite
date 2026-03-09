@@ -297,7 +297,15 @@ install_edge_provider_stack() {
     return 0
   fi
 
-  warn "Edge provider: $(edge_provider_summary)"
+  case "$(edge_provider_selected)" in
+    go)
+      ok "Edge provider aktif: go"
+      ;;
+    nginx-stream)
+      warn "Edge provider: $(edge_provider_summary)"
+      warn "Lihat: /root/project/autoscript/EDGE_PROVIDER_DESIGN.md"
+      ;;
+  esac
   install_setup_bin_or_die "edge-provider-switch" "/usr/local/bin/edge-provider-switch" 0755
   case "$(edge_provider_selected)" in
     go)
@@ -317,6 +325,5 @@ install_edge_provider_stack() {
   if ! edge_runtime_activate_requested; then
     warn "Edge belum diaktifkan. Set EDGE_ACTIVATE_RUNTIME=true bila ingin mengaktifkan."
   fi
-  warn "Lihat: /root/project/autoscript/EDGE_PROVIDER_DESIGN.md"
   return 0
 }
