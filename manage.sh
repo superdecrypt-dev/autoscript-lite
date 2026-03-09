@@ -1230,7 +1230,8 @@ main_info_cache_refresh() {
 
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp
-  local vless_count vmess_count trojan_count ss_count ss2022_count
+  local vless_count vmess_count trojan_count ss_count ss2022_count ssh_count
+  local edge_icon ws_icon nginx_icon xray_icon
 
   main_info_cache_refresh
 
@@ -1248,6 +1249,11 @@ main_menu_info_header_print() {
   trojan_count="$(account_count_by_proto "trojan")"
   ss_count="$(account_count_by_proto "shadowsocks")"
   ss2022_count="$(account_count_by_proto "shadowsocks2022")"
+  ssh_count="$(ssh_account_count)"
+  edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
+  ws_icon="$(service_status_icon "${SSHWS_PROXY_SERVICE}")"
+  nginx_icon="$(service_status_icon "nginx")"
+  xray_icon="$(service_status_icon "xray")"
 
   printf "%-11s : %s\n" "SYSTEM OS" "${os}"
   printf "%-11s : %s\n" "RAM" "${ram}"
@@ -1259,7 +1265,9 @@ main_menu_info_header_print() {
   printf "%-11s : %s\n" "TLS EXPIRED" "${tls}"
   printf "%-11s : %s\n" "WARP STATUS" "${warp}"
   hr
-  echo "ACCOUNTS: VLESS=${vless_count} | VMESS=${vmess_count} | TROJAN=${trojan_count} | SS=${ss_count} | SS2022=${ss2022_count}"
+  echo "ACCOUNTS: VLESS=${vless_count} | VMESS=${vmess_count} | TROJAN=${trojan_count} | SS=${ss_count} | SS2022=${ss2022_count} | SSH=${ssh_count}"
+  echo
+  echo "SERVICES: Edge Mux ${edge_icon} | WS Proxy ${ws_icon} | Nginx ${nginx_icon} | Xray ${xray_icon}"
   hr
 }
 
@@ -2238,7 +2246,7 @@ title() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear || true
   fi
-  echo -e "${UI_BOLD}${UI_ACCENT}Xray Control Panel${UI_RESET}"
+  echo -e "${UI_BOLD}${UI_ACCENT}Control Panel${UI_RESET}"
   echo -e "${UI_MUTED}Host: $(hostname) | Script: ${0##*/}${UI_RESET}"
   hr
 }
@@ -2285,6 +2293,48 @@ svc_exists() {
   local load
   load="$(systemctl show -p LoadState --value "${svc}" 2>/dev/null || true)"
   [[ -n "${load}" && "${load}" != "not-found" ]]
+}
+
+service_status_icon() {
+  local svc="${1:-}"
+  if [[ -z "${svc}" ]]; then
+    printf '⛔\n'
+    return 0
+  fi
+  if svc_exists "${svc}" && svc_is_active "${svc}"; then
+    printf '✅\n'
+  else
+    printf '⛔\n'
+  fi
+}
+
+main_menu_edge_service_name() {
+  local provider active
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+  if [[ "${active}" != "true" ]]; then
+    printf '%s\n' "edge-mux.service"
+    return 0
+  fi
+  case "${provider}" in
+    nginx-stream) printf '%s\n' "nginx" ;;
+    go) printf '%s\n' "edge-mux.service" ;;
+    *) printf '%s\n' "edge-mux.service" ;;
+  esac
+}
+
+ssh_account_count() {
+  local count="0"
+  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
+    ssh_state_dirs_prepare >/dev/null 2>&1 || true
+  fi
+  [[ -d "${SSH_USERS_STATE_DIR}" ]] || {
+    printf '0\n'
+    return 0
+  }
+  count="$(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' 2>/dev/null | wc -l | tr -d '[:space:]')"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count="0"
+  printf '%s\n' "${count}"
 }
 
 svc_status_line() {

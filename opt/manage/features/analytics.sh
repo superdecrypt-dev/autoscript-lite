@@ -2781,18 +2781,6 @@ ssh_qac_traffic_scope_line() {
   fi
 }
 
-ssh_qac_print_scope_notice() {
-  if ssh_qac_traffic_enforcement_ready; then
-    echo "Traffic scope : quota used, speed limit, dan IP/Login limit berlaku sebagai satu sistem SSH."
-    echo "Edge surface  : berlaku lintas SSH WS, SSH SSL/TLS, dan SSH Direct."
-    echo "Client IP     : distinct client IP runtime tersedia paling lengkap pada jalur SSH WS."
-    echo "Native SSH    : login via sshd/port 22 tidak menambah quota_used dan tidak terkena throttle speed."
-  else
-    echo "Traffic scope : SSH runtime belum terpasang; quota used, IP/login limit, dan speed limit SSH masih metadata."
-    echo "Native SSH    : yang benar-benar berlaku saat ini tetap masa aktif dan manual block."
-  fi
-}
-
 edge_runtime_enabled_for_public_ports() {
   local provider active
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -3352,8 +3340,6 @@ ssh_add_user_menu() {
     echo "3) SSH Users > Add User"
     hr
     ssh_add_user_header_render header_page
-    hr
-    ssh_qac_print_scope_notice
     hr
 
     if ! read -r -p "Username SSH (atau next/previous/kembali): " username; then
@@ -5568,8 +5554,6 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
     printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
-    ssh_qac_print_scope_notice
-    hr
 
     echo "  1) View JSON"
     echo "  2) Set Quota (GB)"
@@ -5844,8 +5828,6 @@ ssh_quota_menu() {
     hr
 
     ssh_qac_enforce_now_warn || true
-    ssh_qac_print_scope_notice
-    hr
     ssh_qac_collect_files
     ssh_qac_build_view_indexes
     ssh_qac_print_table_page "${SSH_QAC_PAGE}"
