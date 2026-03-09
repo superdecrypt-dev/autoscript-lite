@@ -1199,7 +1199,7 @@ wireproxy_status_menu() {
   pid="$(systemctl show -p MainPID --value wireproxy 2>/dev/null || true)"
   if [[ -n "${pid}" && "${pid}" != "0" ]]; then
     log "PID       : ${pid}"
-    uptime_str="$(ps -o etime= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+    uptime_str="$(process_uptime_pretty "${pid}" || true)"
     [[ -n "${uptime_str}" ]] && log "Uptime    : ${uptime_str}"
   fi
 
@@ -1313,12 +1313,55 @@ edge_runtime_service_name() {
   esac
 }
 
+format_elapsed_seconds_pretty() {
+  local total="${1:-0}"
+  local days hours mins secs rem
+  [[ "${total}" =~ ^[0-9]+$ ]] || return 1
+
+  days=$(( total / 86400 ))
+  rem=$(( total % 86400 ))
+  hours=$(( rem / 3600 ))
+  rem=$(( rem % 3600 ))
+  mins=$(( rem / 60 ))
+  secs=$(( rem % 60 ))
+
+  if (( days > 0 )); then
+    printf '%d-%02d:%02d:%02d\n' "${days}" "${hours}" "${mins}" "${secs}"
+  else
+    printf '%02d:%02d:%02d\n' "${hours}" "${mins}" "${secs}"
+  fi
+}
+
+process_uptime_pretty() {
+  local pid="${1:-}"
+  local started_at now_ts start_ts elapsed
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  (( pid > 0 )) || return 1
+
+  started_at="$(ps -o lstart= -p "${pid}" 2>/dev/null | sed -e 's/^[[:space:]]*//' || true)"
+  [[ -n "${started_at}" ]] || return 1
+
+  now_ts="$(date +%s 2>/dev/null || true)"
+  start_ts="$(date -d "${started_at}" +%s 2>/dev/null || true)"
+  [[ "${now_ts}" =~ ^[0-9]+$ && "${start_ts}" =~ ^[0-9]+$ ]] || return 1
+  (( now_ts >= start_ts )) || return 1
+
+  elapsed=$(( now_ts - start_ts ))
+  format_elapsed_seconds_pretty "${elapsed}"
+}
+
+edge_runtime_tls_backend_required() {
+  local provider="${1:-}"
+  local active="${2:-false}"
+  [[ "${active}" == "true" && "${provider}" == "nginx-stream" ]]
+}
+
 edge_runtime_status_menu() {
   title
   echo "10) Maintenance > Edge Gateway Status"
   hr
 
-  local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80
+  local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -1331,6 +1374,11 @@ edge_runtime_status_menu() {
   ssh_tls_backend="$(edge_runtime_get_env EDGE_SSH_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:22443")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
+  if edge_runtime_tls_backend_required "${provider}" "${active}"; then
+    tls_backend_required="true"
+  else
+    tls_backend_required="false"
+  fi
 
   echo "Runtime env : ${env_file}"
   echo "Provider    : ${provider}"
@@ -1338,7 +1386,11 @@ edge_runtime_status_menu() {
   echo "HTTP port   : ${http_port}"
   echo "TLS port    : ${tls_port}"
   echo "HTTP backend: ${http_backend}"
-  echo "HTTPS b/e   : ${http_tls_backend}"
+  if [[ "${tls_backend_required}" == "true" ]]; then
+    echo "HTTPS b/e   : ${http_tls_backend}"
+  else
+    echo "HTTPS b/e   : ${http_tls_backend} (unused)"
+  fi
   echo "SSH backend : ${ssh_backend}"
   echo "SSH TLS b/e : ${ssh_tls_backend}"
   echo "Detect (ms) : ${detect_timeout}"
@@ -1370,17 +1422,21 @@ edge_runtime_status_menu() {
 
     local backend_http_port backend_http_tls_port backend_ssh_port
     backend_http_port="${http_backend##*:}"
-    backend_http_tls_port="${http_tls_backend##*:}"
     backend_ssh_port="${ssh_backend##*:}"
     if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_http_port}([[:space:]]|$)"; then
       log "Backend HTTP ${http_backend} : LISTENING ✅"
     else
       warn "Backend HTTP ${http_backend} : NOT listening ❌"
     fi
-    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_http_tls_port}([[:space:]]|$)"; then
-      log "Backend HTTPS ${http_tls_backend} : LISTENING ✅"
+    if [[ "${tls_backend_required}" == "true" ]]; then
+      backend_http_tls_port="${http_tls_backend##*:}"
+      if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_http_tls_port}([[:space:]]|$)"; then
+        log "Backend HTTPS ${http_tls_backend} : LISTENING ✅"
+      else
+        warn "Backend HTTPS ${http_tls_backend} : NOT listening ❌"
+      fi
     else
-      warn "Backend HTTPS ${http_tls_backend} : NOT listening ❌"
+      log "Backend HTTPS ${http_tls_backend} : unused for provider ${provider} ✅"
     fi
     if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_ssh_port}([[:space:]]|$)"; then
       log "Backend SSH  ${ssh_backend} : LISTENING ✅"

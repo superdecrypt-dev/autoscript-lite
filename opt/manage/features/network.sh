@@ -118,6 +118,23 @@ is_readonly_geosite_domain() {
   esac
 }
 
+routing_custom_domain_entry_valid() {
+  local ent="${1:-}"
+  ent="$(echo "${ent}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  [[ -n "${ent}" ]] || return 1
+
+  if [[ "${ent}" =~ ^geosite:[a-z0-9._:-]+$ ]]; then
+    return 0
+  fi
+
+  # Accept plain domains / wildcard domains and reject obvious garbage such as "5".
+  if [[ "${ent}" =~ ^(\*\.)?[a-z0-9][a-z0-9._-]*\.[a-z0-9._-]+$ ]] && [[ "${ent}" != *..* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 xray_routing_readonly_geosite_rule_print() {
   # Menampilkan rule geosite template (readonly) dari 30-routing.json
   # Rule ini dibuat oleh setup_modular.sh dan TIDAK boleh diedit dari menu.
@@ -3022,6 +3039,11 @@ warp_domain_geosite_menu() {
           pause
           continue
         fi
+        if ! routing_custom_domain_entry_valid "${ent}"; then
+          warn "Entry harus berupa geosite:nama atau domain yang valid."
+          pause
+          continue
+        fi
         if is_readonly_geosite_domain "${ent}"; then
           warn "Readonly geosite tidak boleh diubah dari menu ini: ${ent}"
           pause
@@ -3133,6 +3155,33 @@ warp_live_tier_get() {
     off) echo "off" ;;
     *) echo "unknown" ;;
   esac
+}
+
+warp_tier_target_effective_get() {
+  local target live
+  target="$(warp_tier_state_target_get)"
+  if [[ "${target}" == "free" || "${target}" == "plus" ]]; then
+    echo "${target}"
+    return 0
+  fi
+
+  live="$(warp_live_tier_get)"
+  case "${live}" in
+    free|plus)
+      echo "${live}"
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+warp_tier_state_seed_from_live() {
+  local target
+  target="$(warp_tier_target_effective_get)"
+  if [[ "${target}" == "free" || "${target}" == "plus" ]]; then
+    network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1 || true
+  fi
 }
 
 warp_wireproxy_socks_block_get() {
@@ -3303,10 +3352,11 @@ warp_wgcf_build_profile() {
 
 warp_tier_show_status() {
   local target live svc_state license_raw license_masked
-  target="$(warp_tier_state_target_get)"
+  target="$(warp_tier_target_effective_get)"
   live="$(warp_live_tier_get)"
   license_raw="$(warp_plus_license_state_get)"
   license_masked="$(warp_plus_license_mask "${license_raw}")"
+  warp_tier_state_seed_from_live
   if svc_exists wireproxy; then
     svc_state="$(svc_state wireproxy)"
   else
@@ -3483,10 +3533,11 @@ warp_tier_reconnect_regenerate() {
       return 0
     fi
 
-    target="$(warp_tier_state_target_get)"
+    target="$(warp_tier_target_effective_get)"
     if [[ "${target}" != "free" && "${target}" != "plus" ]]; then
       target="free"
     fi
+    network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1 || true
 
     if [[ "${target}" == "plus" ]]; then
       key="$(warp_plus_license_state_get)"
@@ -3689,6 +3740,11 @@ PY
         fi
         if [[ "${ent}" == "regexp:^$" ]]; then
           warn "Entry reserved"
+          pause
+          continue
+        fi
+        if ! routing_custom_domain_entry_valid "${ent}"; then
+          warn "Entry harus berupa geosite:nama atau domain yang valid."
           pause
           continue
         fi

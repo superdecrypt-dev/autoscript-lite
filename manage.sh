@@ -4596,7 +4596,7 @@ lines.append(f"Quota Limit : {quota_gb_disp} GB")
 lines.append(f"Expired     : {days} days")
 lines.append(f"Valid Until : {expired_at}")
 lines.append(f"Created     : {created_at}")
-lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_enabled else ""))
+lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
 if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
@@ -4920,23 +4920,24 @@ else:
 expired_at = str(meta.get("expired_at") or existing.get("Valid Until") or "").strip()
 expired_at = expired_at[:10] if expired_at else "-"
 
-days = parse_days_from_text(existing.get("Expired", ""))
-if days is None:
-  d_created = parse_date_only(created_at)
-  d_expired = parse_date_only(expired_at)
-  if d_created and d_expired:
-    days = max(0, (d_expired - d_created).days)
-  elif d_expired:
-    days = max(0, (d_expired - date.today()).days)
-  else:
-    days = 0
+d_expired = parse_date_only(expired_at)
+if d_expired:
+  days = max(0, (d_expired - date.today()).days)
+else:
+  days = parse_days_from_text(existing.get("Expired", ""))
+  if days is None:
+    d_created = parse_date_only(created_at)
+    if d_created and d_expired:
+      days = max(0, (d_expired - d_created).days)
+    else:
+      days = 0
 
 if "ip_limit_enabled" in status:
   ip_enabled = bool(status.get("ip_limit_enabled"))
   ip_limit_int = to_int(status.get("ip_limit"), 0)
 else:
   ip_enabled, ip_limit_int = parse_ip_line(existing.get("IP Limit", ""))
-if not ip_enabled:
+if ip_limit_int < 0:
   ip_limit_int = 0
 
 if "speed_limit_enabled" in status or "speed_down_mbit" in status or "speed_up_mbit" in status:
@@ -5111,7 +5112,7 @@ lines.append(f"Quota Limit : {quota_gb_disp} GB")
 lines.append(f"Expired     : {days} days")
 lines.append(f"Valid Until : {expired_at}")
 lines.append(f"Created     : {created_at}")
-lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_enabled else ""))
+lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
 if speed_enabled:
   lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
@@ -5855,18 +5856,7 @@ PY
     return 0
   fi
 
-  # Update account txt (baris Valid Until)
-  # BUG-18 fix: use atomic write via tmp file instead of sed -i (which is not atomic)
-  if [[ -f "${acc_file}" ]]; then
-    local acc_tmp
-    acc_tmp="${WORK_DIR}/account_update.$$.tmp"
-    if sed "s|^Valid Until :.*|Valid Until : ${new_expiry}|" "${acc_file}" > "${acc_tmp}" 2>/dev/null; then
-      mv -f "${acc_tmp}" "${acc_file}" || sed -i "s|^Valid Until :.*|Valid Until : ${new_expiry}|" "${acc_file}" 2>/dev/null || true
-    else
-      rm -f "${acc_tmp}" 2>/dev/null || true
-    fi
-    chmod 600 "${acc_file}" 2>/dev/null || true
-  fi
+  account_info_refresh_warn "${proto}" "${username}" || true
 
   # Re-add user ke xray inbounds jika sudah dihapus oleh xray-expired daemon
   # BUG-09 fix: fetch existing_protos immediately before attempting re-add to reduce
@@ -6313,8 +6303,8 @@ try:
   ip_lim=to_int(st.get("ip_limit"), 0)
 except Exception:
   ip_lim=0
-ip_lim = ip_lim if ip_en else 0
-
+if ip_lim < 0:
+  ip_lim = 0
 lr=str(st.get("lock_reason") or "").strip().lower()
 reason="-"
 if st.get("manual_block") or lr == "manual":
@@ -6919,6 +6909,7 @@ quota_edit_flow() {
           pause
           continue
         fi
+        account_info_refresh_warn "${proto}" "${speed_username}" || true
         log "Quota limit diubah: ${gb_num} GB"
         pause
         ;;
