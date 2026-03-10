@@ -1,0 +1,415 @@
+package observability
+
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
+)
+
+type sampleKey struct {
+	name   string
+	labels string
+}
+
+type ListenerSnapshot struct {
+	HTTPAddr             string
+	TLSAddr              string
+	MetricsAddr          string
+	HTTPUp               bool
+	TLSUp                bool
+	MetricsUp            bool
+	TLSCertSubject       string
+	TLSCertNotBefore     string
+	TLSCertNotAfter      string
+	TLSAdvertisedALPN    []string
+	TLSMinVersion        string
+	TLSCertExpiresUnix   int64
+	TLSCertValidFromUnix int64
+}
+
+type LastRouteSnapshot struct {
+	SeenAtUnix int64  `json:"seen_at_unix"`
+	Surface    string `json:"surface"`
+	Route      string `json:"route"`
+	Backend    string `json:"backend"`
+	Host       string `json:"host,omitempty"`
+	Path       string `json:"path,omitempty"`
+	ALPN       string `json:"alpn,omitempty"`
+	SNI        string `json:"sni,omitempty"`
+}
+
+type StatusSnapshot struct {
+	OK                        bool               `json:"ok"`
+	Provider                  string             `json:"provider"`
+	StartedAt                 string             `json:"started_at"`
+	UptimeSeconds             int64              `json:"uptime_seconds"`
+	PublicHTTPListen          string             `json:"public_http_listen"`
+	PublicTLSListen           string             `json:"public_tls_listen"`
+	MetricsListen             string             `json:"metrics_listen"`
+	HTTPBackend               string             `json:"http_backend"`
+	SSHBackend                string             `json:"ssh_backend"`
+	OpenVPNBackend            string             `json:"openvpn_backend"`
+	MetricsEnabled            bool               `json:"metrics_enabled"`
+	ClassicTLSOn80            bool               `json:"classic_tls_on_80"`
+	OpenVPNTCPEnabled         bool               `json:"openvpn_tcp_enabled"`
+	OpenVPNTLSEnabled         bool               `json:"openvpn_ssl_enabled"`
+	AcceptProxyProtocol       bool               `json:"accept_proxy_protocol"`
+	TrustedProxyCIDRs         []string           `json:"trusted_proxy_cidrs"`
+	DetectTimeoutMilliseconds int64              `json:"detect_timeout_milliseconds"`
+	TLSHandshakeTimeoutMS     int64              `json:"tls_handshake_timeout_milliseconds"`
+	MaxConnections            int                `json:"max_connections"`
+	MaxConnectionsPerIP       int                `json:"max_connections_per_ip"`
+	AcceptRatePerIP           int                `json:"accept_rate_limit_per_ip"`
+	AcceptRateWindowSeconds   int64              `json:"accept_rate_window_seconds"`
+	ReloadSuccess             uint64             `json:"reload_success"`
+	LastReloadUnix            int64              `json:"last_reload_unix"`
+	ActiveConnectionsTotal    int64              `json:"active_connections_total"`
+	ActiveConnectionsSurface  map[string]int64   `json:"active_connections_by_surface"`
+	ListenerUp                map[string]bool    `json:"listener_up"`
+	TLSCertificateSubject     string             `json:"tls_certificate_subject"`
+	TLSCertificateNotBefore   string             `json:"tls_certificate_not_before"`
+	TLSCertificateNotAfter    string             `json:"tls_certificate_not_after"`
+	TLSAdvertisedALPN         []string           `json:"tls_advertised_alpn"`
+	TLSMinVersion             string             `json:"tls_min_version"`
+	LastRoute                 *LastRouteSnapshot `json:"last_route,omitempty"`
+}
+
+type Collector struct {
+	startedAt time.Time
+
+	mu              sync.Mutex
+	counters        map[sampleKey]uint64
+	activeTotal     int64
+	activeBySurface map[string]int64
+	reloadSuccess   uint64
+	lastReloadUnix  int64
+	lastRoute       *LastRouteSnapshot
+}
+
+func NewCollector(startedAt time.Time) *Collector {
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	return &Collector{
+		startedAt:       startedAt.UTC(),
+		counters:        make(map[sampleKey]uint64),
+		activeBySurface: make(map[string]int64),
+	}
+}
+
+func (c *Collector) TrackConnection(surface string) func() {
+	c.mu.Lock()
+	c.counters[sampleKey{name: "edge_mux_connections_accepted_total", labels: labels("surface", surface)}]++
+	c.activeTotal++
+	c.activeBySurface[surface]++
+	c.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.activeTotal > 0 {
+				c.activeTotal--
+			}
+			current := c.activeBySurface[surface]
+			switch {
+			case current <= 1:
+				delete(c.activeBySurface, surface)
+			default:
+				c.activeBySurface[surface] = current - 1
+			}
+		})
+	}
+}
+
+func (c *Collector) ObserveReject(surface, reason string) {
+	c.incCounter("edge_mux_connections_rejected_total", labels("surface", surface, "reason", reason))
+}
+
+func (c *Collector) ObserveIngressWrapError(surface string) {
+	c.incCounter("edge_mux_ingress_wrap_errors_total", labels("surface", surface))
+}
+
+func (c *Collector) ObserveReadInitialError(surface string) {
+	c.incCounter("edge_mux_read_initial_errors_total", labels("surface", surface))
+}
+
+func (c *Collector) ObserveDetect(surface string, class detect.InitialClass) {
+	c.incCounter("edge_mux_detect_classifications_total", labels("surface", surface, "class", detectClassName(class)))
+}
+
+func (c *Collector) ObserveTLSHandshakeFailure(surface string) {
+	c.incCounter("edge_mux_tls_handshake_failures_total", labels("surface", surface))
+}
+
+func (c *Collector) ObserveBackendDialFailure(backend, context string) {
+	c.incCounter("edge_mux_backend_dial_failures_total", labels("backend", backend, "context", context))
+}
+
+func (c *Collector) ObserveBridgeBytes(context string, leftToRight, rightToLeft uint64) {
+	if leftToRight > 0 {
+		c.addCounter("edge_mux_bridge_bytes_total", labels("context", context, "direction", "client_to_backend"), leftToRight)
+	}
+	if rightToLeft > 0 {
+		c.addCounter("edge_mux_bridge_bytes_total", labels("context", context, "direction", "backend_to_client"), rightToLeft)
+	}
+}
+
+func (c *Collector) ObserveBridgeError(context string) {
+	c.incCounter("edge_mux_bridge_errors_total", labels("context", context))
+}
+
+func (c *Collector) ObserveRouteDecision(surface, route, backend, host, path, alpn, sni string) {
+	route = fallback(route, "unknown")
+	backend = fallback(backend, "unknown")
+	alpn = fallback(alpn, "none")
+	c.incCounter("edge_mux_route_decisions_total", labels("surface", surface, "route", route, "backend", backend, "alpn", alpn))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastRoute = &LastRouteSnapshot{
+		SeenAtUnix: time.Now().Unix(),
+		Surface:    truncate(surface, 64),
+		Route:      truncate(route, 64),
+		Backend:    truncate(backend, 32),
+		Host:       truncate(host, 255),
+		Path:       truncate(path, 255),
+		ALPN:       truncate(alpn, 32),
+		SNI:        truncate(sni, 255),
+	}
+}
+
+func (c *Collector) ObserveReloadFailure(stage string) {
+	c.incCounter("edge_mux_reload_total", labels("result", "failure", "stage", stage))
+}
+
+func (c *Collector) ObserveReloadSuccess() {
+	now := time.Now().Unix()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counters[sampleKey{name: "edge_mux_reload_total", labels: labels("result", "success", "stage", "apply")}]++
+	c.reloadSuccess++
+	c.lastReloadUnix = now
+}
+
+func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot) StatusSnapshot {
+	c.mu.Lock()
+	activeBySurface := make(map[string]int64, len(c.activeBySurface))
+	for key, value := range c.activeBySurface {
+		activeBySurface[key] = value
+	}
+	reloadSuccess := c.reloadSuccess
+	lastReloadUnix := c.lastReloadUnix
+	activeTotal := c.activeTotal
+	startedAt := c.startedAt
+	var lastRoute *LastRouteSnapshot
+	if c.lastRoute != nil {
+		clone := *c.lastRoute
+		lastRoute = &clone
+	}
+	c.mu.Unlock()
+
+	return StatusSnapshot{
+		OK:                        listeners.HTTPUp && listeners.TLSUp,
+		Provider:                  cfg.Provider,
+		StartedAt:                 startedAt.Format(time.RFC3339),
+		UptimeSeconds:             int64(time.Since(startedAt).Seconds()),
+		PublicHTTPListen:          listeners.HTTPAddr,
+		PublicTLSListen:           listeners.TLSAddr,
+		MetricsListen:             listeners.MetricsAddr,
+		HTTPBackend:               cfg.HTTPBackendAddr(),
+		SSHBackend:                cfg.SSHBackendAddr(),
+		OpenVPNBackend:            cfg.OVPNBackendAddr(),
+		MetricsEnabled:            cfg.MetricsEnabled,
+		ClassicTLSOn80:            cfg.ClassicTLSOn80,
+		OpenVPNTCPEnabled:         cfg.OpenVPNTCPEnabled,
+		OpenVPNTLSEnabled:         cfg.OpenVPNTLSEnabled,
+		AcceptProxyProtocol:       cfg.AcceptProxyProtocol,
+		TrustedProxyCIDRs:         append([]string(nil), cfg.TrustedProxyCIDRs...),
+		DetectTimeoutMilliseconds: int64(cfg.DetectTimeout / time.Millisecond),
+		TLSHandshakeTimeoutMS:     int64(cfg.TLSHandshakeTimeout / time.Millisecond),
+		MaxConnections:            cfg.MaxConnections,
+		MaxConnectionsPerIP:       cfg.MaxConnectionsPerIP,
+		AcceptRatePerIP:           cfg.AcceptRatePerIP,
+		AcceptRateWindowSeconds:   int64(cfg.AcceptRateWindow / time.Second),
+		ReloadSuccess:             reloadSuccess,
+		LastReloadUnix:            lastReloadUnix,
+		ActiveConnectionsTotal:    activeTotal,
+		ActiveConnectionsSurface:  activeBySurface,
+		ListenerUp: map[string]bool{
+			"http":    listeners.HTTPUp,
+			"tls":     listeners.TLSUp,
+			"metrics": listeners.MetricsUp,
+		},
+		TLSCertificateSubject:   listeners.TLSCertSubject,
+		TLSCertificateNotBefore: listeners.TLSCertNotBefore,
+		TLSCertificateNotAfter:  listeners.TLSCertNotAfter,
+		TLSAdvertisedALPN:       append([]string(nil), listeners.TLSAdvertisedALPN...),
+		TLSMinVersion:           listeners.TLSMinVersion,
+		LastRoute:               lastRoute,
+	}
+}
+
+func (c *Collector) RenderPrometheus(cfg runtime.Config, listeners ListenerSnapshot) []byte {
+	c.mu.Lock()
+	counterKeys := make([]sampleKey, 0, len(c.counters))
+	for key := range c.counters {
+		counterKeys = append(counterKeys, key)
+	}
+	sort.Slice(counterKeys, func(i, j int) bool {
+		if counterKeys[i].name == counterKeys[j].name {
+			return counterKeys[i].labels < counterKeys[j].labels
+		}
+		return counterKeys[i].name < counterKeys[j].name
+	})
+	counterValues := make([]uint64, len(counterKeys))
+	for i, key := range counterKeys {
+		counterValues[i] = c.counters[key]
+	}
+	activeTotal := c.activeTotal
+	activeKeys := make([]string, 0, len(c.activeBySurface))
+	for key := range c.activeBySurface {
+		activeKeys = append(activeKeys, key)
+	}
+	sort.Strings(activeKeys)
+	activeValues := make([]int64, len(activeKeys))
+	for i, key := range activeKeys {
+		activeValues[i] = c.activeBySurface[key]
+	}
+	reloadSuccess := c.reloadSuccess
+	lastReloadUnix := c.lastReloadUnix
+	startedAt := c.startedAt
+	var lastRoute *LastRouteSnapshot
+	if c.lastRoute != nil {
+		clone := *c.lastRoute
+		lastRoute = &clone
+	}
+	c.mu.Unlock()
+
+	var out bytes.Buffer
+	writeSample(&out, "edge_mux_up", "", 1)
+	writeSample(&out, "edge_mux_start_time_unix", "", startedAt.Unix())
+	writeSample(&out, "edge_mux_uptime_seconds", "", int64(time.Since(startedAt).Seconds()))
+	writeSample(&out, "edge_mux_metrics_enabled", "", boolInt(cfg.MetricsEnabled))
+	writeSample(&out, "edge_mux_classic_tls_on_80", "", boolInt(cfg.ClassicTLSOn80))
+	writeSample(&out, "edge_mux_openvpn_tcp_enabled", "", boolInt(cfg.OpenVPNTCPEnabled))
+	writeSample(&out, "edge_mux_openvpn_ssl_enabled", "", boolInt(cfg.OpenVPNTLSEnabled))
+	writeSample(&out, "edge_mux_accept_proxy_protocol", "", boolInt(cfg.AcceptProxyProtocol))
+	writeSample(&out, "edge_mux_max_connections", "", cfg.MaxConnections)
+	writeSample(&out, "edge_mux_max_connections_per_ip", "", cfg.MaxConnectionsPerIP)
+	writeSample(&out, "edge_mux_accept_rate_limit_per_ip", "", cfg.AcceptRatePerIP)
+	writeSample(&out, "edge_mux_accept_rate_window_seconds", "", int64(cfg.AcceptRateWindow/time.Second))
+	writeSample(&out, "edge_mux_detect_timeout_milliseconds", "", int64(cfg.DetectTimeout/time.Millisecond))
+	writeSample(&out, "edge_mux_tls_handshake_timeout_milliseconds", "", int64(cfg.TLSHandshakeTimeout/time.Millisecond))
+	writeSample(&out, "edge_mux_tls_certificate_valid_from_unix", "", listeners.TLSCertValidFromUnix)
+	writeSample(&out, "edge_mux_tls_certificate_expires_unix", "", listeners.TLSCertExpiresUnix)
+	writeSample(&out, "edge_mux_reload_success_total", "", reloadSuccess)
+	writeSample(&out, "edge_mux_last_reload_unix", "", lastReloadUnix)
+	writeSample(&out, "edge_mux_connections_active_total", "", activeTotal)
+	writeSample(&out, "edge_mux_listener_up", labels("surface", "http"), boolInt(listeners.HTTPUp))
+	writeSample(&out, "edge_mux_listener_up", labels("surface", "tls"), boolInt(listeners.TLSUp))
+	writeSample(&out, "edge_mux_listener_up", labels("surface", "metrics"), boolInt(listeners.MetricsUp))
+	for i, surface := range activeKeys {
+		writeSample(&out, "edge_mux_connections_active", labels("surface", surface), activeValues[i])
+	}
+	if lastRoute != nil && lastRoute.SeenAtUnix > 0 {
+		writeSample(&out, "edge_mux_last_route_seen_unix", labels("surface", lastRoute.Surface, "route", lastRoute.Route, "backend", lastRoute.Backend, "alpn", fallback(lastRoute.ALPN, "none")), lastRoute.SeenAtUnix)
+	}
+	for i, key := range counterKeys {
+		writeSample(&out, key.name, key.labels, counterValues[i])
+	}
+	return out.Bytes()
+}
+
+func (c *Collector) incCounter(name, labelSet string) {
+	c.addCounter(name, labelSet, 1)
+}
+
+func (c *Collector) addCounter(name, labelSet string, value uint64) {
+	if value == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counters[sampleKey{name: name, labels: labelSet}] += value
+}
+
+func detectClassName(class detect.InitialClass) string {
+	switch class {
+	case detect.ClassHTTP:
+		return "http"
+	case detect.ClassTLSClientHello:
+		return "tls_client_hello"
+	case detect.ClassSSH:
+		return "ssh"
+	case detect.ClassOpenVPN:
+		return "openvpn"
+	case detect.ClassTimeout:
+		return "timeout"
+	case detect.ClassPossibleHTTP:
+		return "possible_http"
+	default:
+		return "unknown"
+	}
+}
+
+func labels(pairs ...string) string {
+	if len(pairs) == 0 {
+		return ""
+	}
+	var parts []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		key := strings.TrimSpace(pairs[i])
+		if key == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(`%s="%s"`, key, escapeLabelValue(pairs[i+1])))
+	}
+	return strings.Join(parts, ",")
+}
+
+func escapeLabelValue(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, "\n", `\n`, `"`, `\"`)
+	return replacer.Replace(value)
+}
+
+func writeSample(out *bytes.Buffer, name, labelSet string, value any) {
+	if out == nil || name == "" {
+		return
+	}
+	if labelSet == "" {
+		fmt.Fprintf(out, "%s %v\n", name, value)
+		return
+	}
+	fmt.Fprintf(out, "%s{%s} %v\n", name, labelSet, value)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func truncate(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}
+
+func fallback(value, alt string) string {
+	if strings.TrimSpace(value) == "" {
+		return alt
+	}
+	return value
+}

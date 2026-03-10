@@ -5,6 +5,9 @@ Direktori ini menyiapkan fondasi provider edge untuk skenario:
 - `SSH WS`
 - `SSH SSL/TLS`
 - route HTTP/Xray yang sudah ada
+- rencana `OpenVPN TCP`
+- rencana `OpenVPN SSL/TLS`
+- rencana `OpenVPN WS`
 
 berjalan pada:
 

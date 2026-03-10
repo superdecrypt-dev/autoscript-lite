@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,57 +11,160 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/abuse"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/accounting"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/ingress"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/observability"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/proxy"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/routing"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/tlsmux"
 )
 
+type flagOverrides struct {
+	httpListen  string
+	tlsListen   string
+	httpBackend string
+	sshBackend  string
+	ovpnBackend string
+	certFile    string
+	keyFile     string
+	timeoutMs   int
+}
+
 func main() {
-	cfg, err := runtime.LoadConfig()
+	overrides := parseFlagOverrides()
+	loadConfig := func() (runtime.Config, error) {
+		cfg, err := runtime.LoadConfig()
+		if err != nil {
+			return runtime.Config{}, err
+		}
+		overrides.Apply(&cfg)
+		if err := cfg.Validate(); err != nil {
+			return runtime.Config{}, err
+		}
+		return cfg, nil
+	}
+
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("edge-mux config error: %v", err)
 	}
 
-	overrideFromFlags(&cfg)
-
-	if err := cfg.Validate(); err != nil {
-		log.Fatalf("edge-mux validate error: %v", err)
-	}
-
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s http_backend=%s ssh_backend=%s timeout=%s classic_tls_on_80=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
+		cfg.MetricsAddr(),
+		cfg.MetricsEnabled,
 		cfg.HTTPBackendAddr(),
 		cfg.SSHBackendAddr(),
+		cfg.OVPNBackendAddr(),
 		cfg.DetectTimeout,
+		cfg.TLSHandshakeTimeout,
 		cfg.ClassicTLSOn80,
+		cfg.MaxConnections,
+		cfg.MaxConnectionsPerIP,
+		cfg.AcceptRatePerIP,
+		cfg.AcceptRateWindow,
+		cfg.AcceptProxyProtocol,
 	)
+
+	live := runtime.NewLive(cfg)
+	tlsState, err := newTLSState(cfg)
+	if err != nil {
+		log.Fatalf("edge-mux tls init error: %v", err)
+	}
+
+	httpListener, err := newReloadableListener(cfg.HTTPListenAddr())
+	if err != nil {
+		log.Fatalf("edge-mux http listen error: %v", err)
+	}
+	tlsListener, err := newReloadableListener(cfg.TLSListenAddr())
+	if err != nil {
+		_ = httpListener.Close()
+		log.Fatalf("edge-mux tls listen error: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	defer signal.Stop(hupCh)
+
+	go func() {
+		<-ctx.Done()
+		_ = httpListener.Close()
+		_ = tlsListener.Close()
+	}()
+
+	logger.Printf("edge-mux http listener ready on %s", httpListener.Addr())
+	logger.Printf("edge-mux tls listener ready on %s", tlsListener.Addr())
+
+	guard := abuse.NewGuard()
+	collector := observability.NewCollector(time.Now())
+	var metricsServer *observability.Server
+	listenerState := func() observability.ListenerSnapshot {
+		snapshot := observability.ListenerSnapshot{
+			HTTPAddr: httpListener.Addr(),
+			TLSAddr:  tlsListener.Addr(),
+			HTTPUp:   httpListener.Addr() != "",
+			TLSUp:    tlsListener.Addr() != "",
+		}
+		if metricsServer != nil {
+			snapshot.MetricsAddr = metricsServer.Addr()
+			snapshot.MetricsUp = metricsServer.Active()
+		}
+		if currentTLS := tlsState.Current(); currentTLS != nil {
+			diag := currentTLS.Diagnostics()
+			snapshot.TLSCertSubject = diag.CertificateSubject
+			snapshot.TLSCertNotBefore = diag.CertificateNotBefore.Format(time.RFC3339)
+			snapshot.TLSCertNotAfter = diag.CertificateNotAfter.Format(time.RFC3339)
+			snapshot.TLSAdvertisedALPN = diag.AdvertisedALPN
+			snapshot.TLSMinVersion = diag.MinVersion
+			snapshot.TLSCertValidFromUnix = diag.CertificateNotBefore.Unix()
+			snapshot.TLSCertExpiresUnix = diag.CertificateNotAfter.Unix()
+		}
+		return snapshot
+	}
+	metricsServer = observability.NewServer(logger, collector, live.Config, listenerState)
+	if err := metricsServer.Configure(cfg); err != nil {
+		_ = httpListener.Close()
+		_ = tlsListener.Close()
+		log.Fatalf("edge-mux metrics init error: %v", err)
+	}
+	defer func() {
+		_ = metricsServer.Close()
+	}()
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	start := func(name string, fn func(context.Context) error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
 				errCh <- errors.New(name + ": " + err.Error())
 			}
 		}()
 	}
 
-	start("http-listener", func(ctx context.Context) error { return serveHTTPMux(ctx, logger, cfg) })
-	start("tls-listener", func(ctx context.Context) error { return serveTLSMux(ctx, logger, cfg) })
+	start("http-listener", func(ctx context.Context) error {
+		return serveHTTPMux(ctx, logger, live, tlsState, httpListener, guard, collector)
+	})
+	start("tls-listener", func(ctx context.Context) error {
+		return serveTLSMux(ctx, logger, live, tlsState, tlsListener, guard, collector)
+	})
+	start("reload-loop", func(ctx context.Context) error {
+		return handleReloads(ctx, logger, live, tlsState, httpListener, tlsListener, metricsServer, collector, loadConfig, hupCh)
+	})
 
 	select {
 	case <-ctx.Done():
@@ -73,110 +177,289 @@ func main() {
 	wg.Wait()
 }
 
-func overrideFromFlags(cfg *runtime.Config) {
-	var (
-		httpListen  = flag.String("http-listen", "", "public HTTP listen address")
-		tlsListen   = flag.String("tls-listen", "", "public TLS listen address")
-		httpBackend = flag.String("http-backend", "", "internal HTTP backend address")
-		sshBackend  = flag.String("ssh-backend", "", "internal SSH classic backend address")
-		certFile    = flag.String("cert-file", "", "TLS certificate file")
-		keyFile     = flag.String("key-file", "", "TLS key file")
-		timeoutMs   = flag.Int("detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
-	)
+func parseFlagOverrides() flagOverrides {
+	var overrides flagOverrides
+	flag.StringVar(&overrides.httpListen, "http-listen", "", "public HTTP listen address")
+	flag.StringVar(&overrides.tlsListen, "tls-listen", "", "public TLS listen address")
+	flag.StringVar(&overrides.httpBackend, "http-backend", "", "internal HTTP backend address")
+	flag.StringVar(&overrides.sshBackend, "ssh-backend", "", "internal SSH classic backend address")
+	flag.StringVar(&overrides.ovpnBackend, "ovpn-backend", "", "internal OpenVPN TCP backend address")
+	flag.StringVar(&overrides.certFile, "cert-file", "", "TLS certificate file")
+	flag.StringVar(&overrides.keyFile, "key-file", "", "TLS key file")
+	flag.IntVar(&overrides.timeoutMs, "detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
 	flag.Parse()
+	return overrides
+}
 
-	if *httpListen != "" {
-		cfg.PublicHTTPAddr = *httpListen
+func (o flagOverrides) Apply(cfg *runtime.Config) {
+	if cfg == nil {
+		return
 	}
-	if *tlsListen != "" {
-		cfg.PublicTLSAddr = *tlsListen
+	if o.httpListen != "" {
+		cfg.PublicHTTPAddr = o.httpListen
 	}
-	if *httpBackend != "" {
-		cfg.HTTPBackend = *httpBackend
+	if o.tlsListen != "" {
+		cfg.PublicTLSAddr = o.tlsListen
 	}
-	if *sshBackend != "" {
-		cfg.SSHBackend = *sshBackend
+	if o.httpBackend != "" {
+		cfg.HTTPBackend = o.httpBackend
 	}
-	if *certFile != "" {
-		cfg.TLSCertFile = *certFile
+	if o.sshBackend != "" {
+		cfg.SSHBackend = o.sshBackend
 	}
-	if *keyFile != "" {
-		cfg.TLSKeyFile = *keyFile
+	if o.ovpnBackend != "" {
+		cfg.OVPNBackend = o.ovpnBackend
 	}
-	if *timeoutMs > 0 {
-		cfg.DetectTimeout = time.Duration(*timeoutMs) * time.Millisecond
+	if o.certFile != "" {
+		cfg.TLSCertFile = o.certFile
+	}
+	if o.keyFile != "" {
+		cfg.TLSKeyFile = o.keyFile
+	}
+	if o.timeoutMs > 0 {
+		cfg.DetectTimeout = time.Duration(o.timeoutMs) * time.Millisecond
 	}
 }
 
-func serveHTTPMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) error {
-	var tlsServer *tlsmux.Server
-	if cfg.ClassicTLSOn80 {
-		var err error
-		tlsServer, err = tlsmux.NewServer(cfg)
-		if err != nil {
-			return err
-		}
-	}
-
-	ln, err := net.Listen("tcp", cfg.HTTPListenAddr())
-	if err != nil {
-		return err
-	}
-	defer ln.Close()
-
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
-
-	logger.Printf("edge-mux http listener ready on %s", cfg.HTTPListenAddr())
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		go handleHTTPPortConn(logger, cfg, tlsServer, conn)
-	}
+type tlsState struct {
+	current atomic.Pointer[tlsmux.Server]
 }
 
-func serveTLSMux(ctx context.Context, logger *log.Logger, cfg runtime.Config) error {
+func newTLSState(cfg runtime.Config) (*tlsState, error) {
+	state := &tlsState{}
+	if err := state.Reload(cfg); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func (s *tlsState) Current() *tlsmux.Server {
+	if s == nil {
+		return nil
+	}
+	return s.current.Load()
+}
+
+func (s *tlsState) Reload(cfg runtime.Config) error {
+	if s == nil {
+		return nil
+	}
 	server, err := tlsmux.NewServer(cfg)
 	if err != nil {
 		return err
 	}
+	s.current.Store(server)
+	return nil
+}
 
-	ln, err := net.Listen("tcp", cfg.TLSListenAddr())
+type reloadableListener struct {
+	mu   sync.RWMutex
+	ln   net.Listener
+	addr string
+}
+
+func newReloadableListener(addr string) (*reloadableListener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return &reloadableListener{ln: ln, addr: addr}, nil
+}
+
+func (l *reloadableListener) Addr() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.addr
+}
+
+func (l *reloadableListener) current() net.Listener {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.ln
+}
+
+func (l *reloadableListener) Accept(ctx context.Context) (net.Conn, error) {
+	for {
+		ln := l.current()
+		if ln == nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, net.ErrClosed
+		}
+		conn, err := ln.Accept()
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if ln != l.current() {
+			continue
+		}
+		return nil, err
+	}
+}
+
+func (l *reloadableListener) Swap(addr string) error {
+	if addr == l.Addr() {
+		return nil
+	}
+	newLn, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	l.mu.Lock()
+	oldLn := l.ln
+	l.ln = newLn
+	l.addr = addr
+	l.mu.Unlock()
+	if oldLn != nil {
+		_ = oldLn.Close()
+	}
+	return nil
+}
 
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
+func (l *reloadableListener) Close() error {
+	l.mu.Lock()
+	oldLn := l.ln
+	l.ln = nil
+	l.addr = ""
+	l.mu.Unlock()
+	if oldLn != nil {
+		return oldLn.Close()
+	}
+	return nil
+}
 
-	logger.Printf("edge-mux tls listener ready on %s", cfg.TLSListenAddr())
-
+func handleReloads(
+	ctx context.Context,
+	logger *log.Logger,
+	live *runtime.Live,
+	tlsLive *tlsState,
+	httpListener *reloadableListener,
+	tlsListener *reloadableListener,
+	metricsServer *observability.Server,
+	collector *observability.Collector,
+	loadConfig func() (runtime.Config, error),
+	hupCh <-chan os.Signal,
+) error {
 	for {
-		conn, err := ln.Accept()
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-hupCh:
+		}
+
+		oldCfg := live.Config()
+		newCfg, err := loadConfig()
+		if err != nil {
+			collector.ObserveReloadFailure("config")
+			logger.Printf("edge-mux reload rejected: %v", err)
+			continue
+		}
+		if err := tlsLive.Reload(newCfg); err != nil {
+			collector.ObserveReloadFailure("tls")
+			logger.Printf("edge-mux reload tls failed: %v", err)
+			continue
+		}
+		if err := httpListener.Swap(newCfg.HTTPListenAddr()); err != nil {
+			collector.ObserveReloadFailure("http_listener")
+			logger.Printf("edge-mux reload http listener failed addr=%s: %v", newCfg.HTTPListenAddr(), err)
+			_ = tlsLive.Reload(oldCfg)
+			continue
+		}
+		if err := tlsListener.Swap(newCfg.TLSListenAddr()); err != nil {
+			collector.ObserveReloadFailure("tls_listener")
+			logger.Printf("edge-mux reload tls listener failed addr=%s: %v", newCfg.TLSListenAddr(), err)
+			_ = httpListener.Swap(oldCfg.HTTPListenAddr())
+			_ = tlsLive.Reload(oldCfg)
+			continue
+		}
+		live.Set(newCfg)
+		if err := metricsServer.Configure(newCfg); err != nil {
+			collector.ObserveReloadFailure("metrics")
+			logger.Printf("edge-mux reload metrics reconfigure failed addr=%s: %v", newCfg.MetricsAddr(), err)
+		}
+		collector.ObserveReloadSuccess()
+		logger.Printf(
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			newCfg.HTTPListenAddr(),
+			newCfg.TLSListenAddr(),
+			newCfg.MetricsAddr(),
+			newCfg.MetricsEnabled,
+			newCfg.HTTPBackendAddr(),
+			newCfg.SSHBackendAddr(),
+			newCfg.OVPNBackendAddr(),
+			newCfg.DetectTimeout,
+			newCfg.TLSHandshakeTimeout,
+			newCfg.ClassicTLSOn80,
+		)
+	}
+}
+
+func serveHTTPMux(
+	ctx context.Context,
+	logger *log.Logger,
+	live *runtime.Live,
+	tlsLive *tlsState,
+	listener *reloadableListener,
+	guard *abuse.Guard,
+	collector *observability.Collector,
+) error {
+	for {
+		conn, err := listener.Accept(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		go handleTLSPortConn(logger, cfg, server, conn)
+		cfg := live.Config()
+		wrapped, err := ingress.Wrap(conn, cfg.AcceptProxyProtocol, cfg.TrustedProxyCIDRs, cfg.DetectTimeout)
+		if err != nil {
+			collector.ObserveIngressWrapError("http-port")
+			logger.Printf("edge-mux ingress wrap failed surface=http-port remote=%s err=%v", safeRemote(conn), err)
+			_ = conn.Close()
+			continue
+		}
+		go handleHTTPPortConn(logger, cfg, tlsLive.Current(), guard, collector, wrapped)
 	}
 }
 
-func bridgeToBackend(logger *log.Logger, cfg runtime.Config, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
+func serveTLSMux(
+	ctx context.Context,
+	logger *log.Logger,
+	live *runtime.Live,
+	tlsLive *tlsState,
+	listener *reloadableListener,
+	guard *abuse.Guard,
+	collector *observability.Collector,
+) error {
+	for {
+		conn, err := listener.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		cfg := live.Config()
+		wrapped, err := ingress.Wrap(conn, cfg.AcceptProxyProtocol, cfg.TrustedProxyCIDRs, cfg.DetectTimeout)
+		if err != nil {
+			collector.ObserveIngressWrapError("tls-port")
+			logger.Printf("edge-mux ingress wrap failed surface=tls-port remote=%s err=%v", safeRemote(conn), err)
+			_ = conn.Close()
+			continue
+		}
+		go handleTLSPortConn(logger, cfg, tlsLive.Current(), guard, collector, wrapped)
+	}
+}
+
+func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
 	backend, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
+		collector.ObserveBackendDialFailure(backendLabel(cfg, target), contextLabel)
 		logger.Printf("edge-mux backend dial failed target=%s context=%s: %v", target, contextLabel, err)
 		if sendHTTP502 {
 			_ = writeHTTPError(left, 502, "Bad Gateway")
@@ -187,55 +470,80 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, left net.Conn, targ
 
 	var stats proxy.BridgeStats
 	if target == cfg.SSHBackendAddr() {
-		quotaCfg := accounting.SSHQuotaConfig{
-			StateRoot:    cfg.SSHQuotaRoot,
-			DropbearUnit: cfg.SSHDropbearUnit,
-			EnforcerPath: cfg.SSHQACEnforcer,
-		}
+		quotaCfg := sshQuotaConfig(cfg)
 		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
 			speedCtl := accounting.NewSSHSpeedController(logger, quotaCfg, tcpAddr.Port)
 			speedCtl.Start()
 			defer speedCtl.Stop()
+			sessionTracker := accounting.NewSSHRuntimeSessionTracker(logger, quotaCfg, tcpAddr.Port, safeRemote(left), contextLabel, func() string {
+				return speedCtl.Username()
+			})
+			if sessionTracker != nil {
+				sessionTracker.Start()
+				defer sessionTracker.Stop()
+			}
 			stats, err = proxy.BridgeWithStatsAndOptions(left, backend, leftPrefix, nil, proxy.BridgeOptions{
 				LeftToRight: speedCtl.UploadLimiter(),
 				RightToLeft: speedCtl.DownloadLimiter(),
 			})
+			collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
 			speedCtl.WaitForReady(stats.LeftToRight + stats.RightToLeft)
 			accounting.RecordSSHQuota(logger, quotaCfg, speedCtl.Username(), tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
 			if err != nil {
+				collector.ObserveBridgeError(contextLabel)
 				logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
 			}
 			return
 		}
 	}
-	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
+
+	var sessionTracker *accounting.SSHRuntimeSessionTracker
 	if target == cfg.SSHBackendAddr() {
-		quotaCfg := accounting.SSHQuotaConfig{
-			StateRoot:    cfg.SSHQuotaRoot,
-			DropbearUnit: cfg.SSHDropbearUnit,
-			EnforcerPath: cfg.SSHQACEnforcer,
+		quotaCfg := sshQuotaConfig(cfg)
+		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
+			sessionTracker = accounting.NewSSHRuntimeSessionTracker(logger, quotaCfg, tcpAddr.Port, safeRemote(left), contextLabel, nil)
+			if sessionTracker != nil {
+				sessionTracker.Start()
+				defer sessionTracker.Stop()
+			}
 		}
+	}
+
+	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
+	collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
+	if target == cfg.SSHBackendAddr() {
+		quotaCfg := sshQuotaConfig(cfg)
 		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
 			accounting.RecordSSHQuotaByLocalPort(logger, quotaCfg, tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
 		}
 	}
 	if err != nil {
+		collector.ObserveBridgeError(contextLabel)
 		logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
 	}
 }
 
-func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, conn net.Conn) {
+func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, conn net.Conn) {
 	defer conn.Close()
+	release, ok := admitConn(logger, guard, collector, cfg, conn, "http-port")
+	if !ok {
+		return
+	}
+	defer release()
 
 	initial, class, err := detect.ReadInitial(conn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
+		collector.ObserveReadInitialError("http-port")
 		logger.Printf("edge-mux http read initial failed from %s: %v", safeRemote(conn), err)
 		return
 	}
+	collector.ObserveDetect("http-port", class)
 
 	switch class {
 	case detect.ClassHTTP:
-		bridgeToBackend(logger, cfg, conn, cfg.HTTPBackendAddr(), initial, "http-port:http", true)
+		decision := decideHTTPRoute(cfg, "http-port", initial, "", "")
+		collector.ObserveRouteDecision("http-port", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassTLSClientHello:
 		if !cfg.ClassicTLSOn80 || tlsServer == nil {
@@ -244,87 +552,242 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		}
 		tlsConn, err := tlsServer.AcceptBufferedTLSConn(conn, initial)
 		if err != nil {
+			collector.ObserveTLSHandshakeFailure("http-port")
 			logger.Printf("edge-mux tls-on-80 handshake failed: %v", err)
 			return
 		}
 		defer tlsConn.Close()
-		bridgeToBackend(logger, cfg, tlsConn, cfg.SSHBackendAddr(), nil, "http-port:ssh-ssl-tls", false)
+		handleTLSPayloadConn(logger, cfg, collector, tlsConn, "http-inner")
+		return
+	case detect.ClassOpenVPN:
+		if cfg.OpenVPNTCPEnabled {
+			collector.ObserveRouteDecision("http-port", "openvpn-tcp", "openvpn", "", "", "", "")
+			bridgeToBackend(logger, cfg, collector, conn, cfg.OVPNBackendAddr(), initial, "http-port:openvpn-tcp", false)
+			return
+		}
+		collector.ObserveRouteDecision("http-port", "openvpn-disabled", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:openvpn-disabled", false)
 		return
 	case detect.ClassSSH:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
+		collector.ObserveRouteDecision("http-port", "ssh-direct", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
+		collector.ObserveRouteDecision("http-port", "ssh-direct-timeout", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
+		collector.ObserveRouteDecision("http-port", "ssh-direct-unknown", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
 	}
 }
 
-func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, conn net.Conn) {
+func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, conn net.Conn) {
 	defer conn.Close()
+	release, ok := admitConn(logger, guard, collector, cfg, conn, "tls-port")
+	if !ok {
+		return
+	}
+	defer release()
 
 	initial, class, err := detect.ReadInitial(conn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
+		collector.ObserveReadInitialError("tls-port")
 		logger.Printf("edge-mux public tls/raw read initial failed from %s: %v", safeRemote(conn), err)
 		return
 	}
+	collector.ObserveDetect("tls-port", class)
 
 	switch class {
 	case detect.ClassTLSClientHello:
+		if server == nil {
+			logger.Printf("edge-mux tls server unavailable for %s", safeRemote(conn))
+			return
+		}
 		tlsConn, err := server.AcceptBufferedTLSConn(conn, initial)
 		if err != nil {
+			collector.ObserveTLSHandshakeFailure("tls-port")
 			logger.Printf("edge-mux tls handshake failed from %s: %v", safeRemote(conn), err)
 			return
 		}
 		defer tlsConn.Close()
-		handleTLSPayloadConn(logger, cfg, tlsConn)
+		handleTLSPayloadConn(logger, cfg, collector, tlsConn, "tls-inner")
 		return
 	case detect.ClassHTTP:
-		bridgeToBackend(logger, cfg, conn, cfg.HTTPBackendAddr(), initial, "tls-port:http-plaintext", true)
+		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "")
+		collector.ObserveRouteDecision("tls-port-plaintext", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux tls port timed out with partial plaintext http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
+	case detect.ClassOpenVPN:
+		if cfg.OpenVPNTCPEnabled {
+			collector.ObserveRouteDecision("tls-port", "openvpn-tcp", "openvpn", "", "", "", "")
+			bridgeToBackend(logger, cfg, collector, conn, cfg.OVPNBackendAddr(), initial, "tls-port:openvpn-tcp", false)
+			return
+		}
+		collector.ObserveRouteDecision("tls-port", "openvpn-disabled", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:openvpn-disabled", false)
+		return
 	case detect.ClassSSH:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
+		collector.ObserveRouteDecision("tls-port", "ssh-direct", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
+		collector.ObserveRouteDecision("tls-port", "ssh-direct-timeout", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
 		return
 	default:
-		bridgeToBackend(logger, cfg, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
+		collector.ObserveRouteDecision("tls-port", "ssh-direct-unknown", "ssh", "", "", "", "")
+		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
 		return
 	}
 }
 
-func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, tlsConn net.Conn) {
+func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, tlsConn net.Conn, surface string) {
 	initial, class, err := detect.ReadInitial(tlsConn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
+		collector.ObserveReadInitialError(surface)
 		logger.Printf("edge-mux tls read initial failed from %s: %v", safeRemote(tlsConn), err)
 		return
 	}
+	collector.ObserveDetect(surface, class)
+	alpn := negotiatedALPN(tlsConn)
+	sni := negotiatedSNI(tlsConn)
 	target := cfg.SSHBackendAddr()
 	sendHTTP502 := false
+	contextLabel := fmt.Sprintf("%s:default", surface)
 	switch class {
 	case detect.ClassHTTP:
-		target = cfg.HTTPBackendAddr()
+		decision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
+		collector.ObserveRouteDecision(surface, decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		target = decision.Backend
 		sendHTTP502 = true
+		contextLabel = decision.Context
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
 		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
 		return
+	case detect.ClassOpenVPN:
+		if cfg.OpenVPNTLSEnabled {
+			target = cfg.OVPNBackendAddr()
+			contextLabel = fmt.Sprintf("%s:openvpn-ssl", surface)
+			collector.ObserveRouteDecision(surface, "openvpn-ssl", "openvpn", "", "", alpn, sni)
+			break
+		}
+		target = cfg.SSHBackendAddr()
+		contextLabel = fmt.Sprintf("%s:openvpn-disabled", surface)
+		collector.ObserveRouteDecision(surface, "openvpn-disabled", "ssh", "", "", alpn, sni)
+		break
 	case detect.ClassTimeout:
 		target = cfg.SSHBackendAddr()
+		contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
+		collector.ObserveRouteDecision(surface, "ssh-timeout", "ssh", "", "", alpn, sni)
 	case detect.ClassSSH:
 		target = cfg.SSHBackendAddr()
+		contextLabel = fmt.Sprintf("%s:ssh", surface)
+		collector.ObserveRouteDecision(surface, "ssh", "ssh", "", "", alpn, sni)
+	default:
+		contextLabel = fmt.Sprintf("%s:unknown", surface)
+		collector.ObserveRouteDecision(surface, "unknown", backendLabel(cfg, target), "", "", alpn, sni)
 	}
-	bridgeToBackend(logger, cfg, tlsConn, target, initial, "tls-port:tls-inner", sendHTTP502)
+	bridgeToBackend(logger, cfg, collector, tlsConn, target, initial, contextLabel, sendHTTP502)
+}
+
+func admitConn(logger *log.Logger, guard *abuse.Guard, collector *observability.Collector, cfg runtime.Config, conn net.Conn, surface string) (func(), bool) {
+	if guard == nil {
+		return collector.TrackConnection(surface), true
+	}
+	ip, release, err := guard.Acquire(cfg, conn.RemoteAddr())
+	if err == nil {
+		if release == nil {
+			release = func() {}
+		}
+		trackRelease := collector.TrackConnection(surface)
+		return func() {
+			trackRelease()
+			release()
+		}, true
+	}
+	if errors.Is(err, abuse.ErrRejected) {
+		collector.ObserveReject(surface, "abuse")
+		logger.Printf("edge-mux connection rejected surface=%s remote=%s ip=%s", surface, safeRemote(conn), ip)
+		return nil, false
+	}
+	collector.ObserveReject(surface, "guard_error")
+	logger.Printf("edge-mux connection guard failed surface=%s remote=%s ip=%s err=%v", surface, safeRemote(conn), ip, err)
+	return nil, false
+}
+
+func backendLabel(cfg runtime.Config, target string) string {
+	switch target {
+	case cfg.HTTPBackendAddr():
+		return "http"
+	case cfg.SSHBackendAddr():
+		return "ssh"
+	case cfg.OVPNBackendAddr():
+		return "openvpn"
+	default:
+		return "other"
+	}
+}
+
+type httpRouteDecision struct {
+	Backend string
+	Context string
+	Route   string
+	Host    string
+	Path    string
+	ALPN    string
+	SNI     string
+}
+
+func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, sni string) httpRouteDecision {
+	decision := httpRouteDecision{
+		Backend: cfg.HTTPBackendAddr(),
+		Route:   "http-other",
+		ALPN:    alpn,
+		SNI:     sni,
+	}
+	if req, ok := routing.ParseHTTPRequest(initial); ok {
+		decision.Route = routing.RouteLabel(req, alpn)
+		decision.Host = req.Host
+		decision.Path = req.Path
+	} else if alpn == "h2" {
+		decision.Route = "http2"
+	}
+	decision.Context = fmt.Sprintf("%s:http:%s", surface, decision.Route)
+	return decision
+}
+
+func negotiatedALPN(conn net.Conn) string {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		return tlsConn.ConnectionState().NegotiatedProtocol
+	}
+	return ""
+}
+
+func negotiatedSNI(conn net.Conn) string {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		return tlsConn.ConnectionState().ServerName
+	}
+	return ""
+}
+
+func sshQuotaConfig(cfg runtime.Config) accounting.SSHQuotaConfig {
+	return accounting.SSHQuotaConfig{
+		StateRoot:        cfg.SSHQuotaRoot,
+		DropbearUnit:     cfg.SSHDropbearUnit,
+		EnforcerPath:     cfg.SSHQACEnforcer,
+		SessionRoot:      cfg.SSHSessionRoot,
+		SessionHeartbeat: cfg.SSHSessionHeartbeat,
+	}
 }
 
 func safeRemote(conn net.Conn) string {

@@ -22,6 +22,9 @@ maintenance_menu() {
     echo "  14) Edge Gateway Info"
     echo "  15) BadVPN UDPGW Status"
     echo "  16) Restart BadVPN UDPGW"
+    echo "  17) OpenVPN Status"
+    echo "  18) Restart OpenVPN Core"
+    echo "  19) Restart OpenVPN WS Proxy"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -45,6 +48,9 @@ maintenance_menu() {
       14) edge_runtime_info_menu ;;
       15) badvpn_status_menu ;;
       16) badvpn_restart_menu ;;
+      17) openvpn_status_menu "10) Maintenance > OpenVPN Status" ;;
+      18) openvpn_restart_core_menu "10) Maintenance > Restart OpenVPN Core" ;;
+      19) openvpn_restart_ws_menu "10) Maintenance > Restart OpenVPN WS Proxy" ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

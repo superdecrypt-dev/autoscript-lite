@@ -179,6 +179,8 @@ source_setup_module "opt/setup/install/xray.sh"
 source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
+# shellcheck source=opt/setup/install/openvpn.sh
+source_setup_module "opt/setup/install/openvpn.sh"
 # shellcheck source=opt/setup/install/observability.sh
 source_setup_module "opt/setup/install/observability.sh"
 
@@ -378,6 +380,7 @@ main() {
   fi
   install_sshws_stack
   install_sshws_qac_enforcer
+  install_openvpn_stack
   install_badvpn_udpgw_stack
   install_management_scripts
   sync_manage_modules_layout

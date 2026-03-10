@@ -36,11 +36,35 @@ Binary `edge-mux` akan:
 - parse env/config runtime
 - listener publik `:80`
 - listener publik `:443`
+- endpoint observability lokal-only `127.0.0.1:9910`
 - TLS termination di `:443`
 - klasifikasi awal:
   - HTTP/WebSocket -> backend HTTP internal
   - non-HTTP / timeout singkat -> backend SSH klasik
+- route decision berbasis `Host/path/ALPN/SNI`
 - bridge stream dasar dua arah
+- hot reload `cert/config` via `SIGHUP`
+- hardening anti-abuse dasar
+- parity session SSH untuk jalur direct/TLS
+
+## Endpoint Lokal
+
+Saat `EDGE_METRICS_ENABLED=true`, `edge-mux` akan membuka endpoint lokal-only:
+
+- `/health`
+- `/status`
+- `/metrics`
+
+`/status` sekarang juga memuat:
+
+- info cert TLS aktif
+- ALPN yang diiklankan
+- listener runtime
+- route decision terakhir yang terlihat
+
+Default listen:
+
+- `127.0.0.1:9910`
 
 ## Yang Belum
 

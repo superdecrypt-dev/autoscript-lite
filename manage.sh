@@ -7264,6 +7264,7 @@ MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MANAGE_REQUIRED_MODULES=(
   "features/network.sh"
   "features/analytics.sh"
+  "features/openvpn.sh"
   "menus/maintenance_menu.sh"
   "menus/main_menu.sh"
   "app/main.sh"

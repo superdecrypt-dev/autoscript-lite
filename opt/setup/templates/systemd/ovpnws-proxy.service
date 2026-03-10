@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenVPN websocket proxy service
+After=network-online.target __OVPN_TCP_SERVICE_NAME__
+Requires=__OVPN_TCP_SERVICE_NAME__
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-__OPENVPN_RUNTIME_ENV_FILE__
+ExecStart=/usr/local/bin/ovpnws-proxy --listen-host __OVPNWS_PROXY_BIND__ --listen-port __OVPNWS_PROXY_PORT__ --backend-host 127.0.0.1 --backend-port __OVPN_TCP_PORT__ --path __OVPNWS_PATH__ --token-root __OVPN_CLIENTS_DIR__ --handshake-timeout __OVPNWS_HANDSHAKE_TIMEOUT__
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

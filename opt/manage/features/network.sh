@@ -4477,6 +4477,7 @@ network_menu() {
     echo "  4) DNS Editor"
     echo "  5) Checks"
     echo "  6) Adblock"
+    echo "  7) OpenVPN"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -4490,6 +4491,51 @@ network_menu() {
       4) dns_addons_menu ;;
       5) network_diagnostics_menu ;;
       6) adblock_menu ;;
+      7) openvpn_menu ;;
+      0|kembali|k|back|b) break ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+openvpn_menu() {
+  while true; do
+    local client_count default_client
+    client_count="$(openvpn_client_count_value 2>/dev/null || echo "0")"
+    default_client="$(openvpn_default_client_name_value 2>/dev/null || echo "staging")"
+    title
+    echo "6) Network > OpenVPN"
+    hr
+    echo "Managed Clients : ${client_count}"
+    echo "Default Client  : ${default_client}"
+    hr
+    echo "  1) Status"
+    echo "  2) List Clients"
+    echo "  3) Add Client"
+    echo "  4) Delete Client"
+    echo "  5) Refresh Client Files"
+    echo "  6) Client Files"
+    echo "  7) Restart Core"
+    echo "  8) Restart WS Proxy"
+    echo "  9) Core Log"
+    echo "  10) WS Proxy Log"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
+    case "${c}" in
+      1) openvpn_status_menu "6) Network > OpenVPN > Status" ;;
+      2) openvpn_list_clients_menu ;;
+      3) openvpn_add_client_menu ;;
+      4) openvpn_delete_client_menu ;;
+      5) openvpn_export_client_files_menu ;;
+      6) openvpn_demo_files_show "6) Network > OpenVPN > Client Files" ;;
+      7) openvpn_restart_core_menu "6) Network > OpenVPN > Restart Core" ;;
+      8) openvpn_restart_ws_menu "6) Network > OpenVPN > Restart WS Proxy" ;;
+      9) daemon_log_tail_show "ovpn-tcp.service" 40 ;;
+      10) daemon_log_tail_show "ovpnws-proxy.service" 40 ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

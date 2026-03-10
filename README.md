@@ -12,6 +12,12 @@ Bot standalone tersedia di `bot-discord/` dan `bot-telegram/`.
 bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/run.sh)
 ```
 
+### Quick Install OpenVPN Edge
+```bash
+OVPN_ENABLE_TCP=true OVPN_ENABLE_SSL=true OVPN_ENABLE_WS=true \
+bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/run.sh)
+```
+
 ## Komponen
 - `run.sh`: bootstrap installer
 - `setup.sh`: orchestrator provisioning awal
@@ -49,6 +55,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - SSH SSL/TLS di `80/443`
 - SSH Direct di `80/443`
 - BadVPN UDPGW tersedia untuk ekosistem SSH di `127.0.0.1:7300`
+- OpenVPN `TCP`, `SSL/TLS`, dan `WS` tersedia secara opt-in di atas Edge Gateway
+- Artefak demo OpenVPN sekarang ikut menulis paket klien resmi:
+  - `*-tcp.ovpn`
+  - `*-tcp-run.sh`
+  - `*-ssl.ovpn` + `*-ssl-helper.py` + `*-ssl-run.sh`
+  - `*-ws.ovpn` + `*-ws-helper.py` + `*-ws-run.sh`
 - SSH WS token path per-user: `/<token>` atau `/<bebas>/<token>`
 - SSH QAC berlaku sebagai satu sistem SSH pada:
   - `SSH WS`
@@ -76,8 +88,10 @@ install-discord-bot
 install-telegram-bot
 edge-provider-switch go
 edge-provider-switch nginx-stream
+OVPN_ENABLE_TCP=true OVPN_ENABLE_SSL=true OVPN_ENABLE_WS=true bash run.sh
 ```
 
 ## Dokumen Lanjutan
 - `TESTING_PLAYBOOK.md`: SOP pengujian
 - `AUDIT_PLAYBOOK.md`: SOP audit dan prioritas review
+- `EDGE_PROVIDER_DESIGN.md`: desain teknis Edge Gateway

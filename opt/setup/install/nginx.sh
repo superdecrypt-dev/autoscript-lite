@@ -436,6 +436,8 @@ write_nginx_config() {
     "DOMAIN=${DOMAIN}"
     "CERT_DIR=${CERT_DIR}"
     "SSHWS_PROXY_PORT=${SSHWS_PROXY_PORT}"
+    "OVPNWS_PROXY_PORT=${OVPNWS_PROXY_PORT:-21195}"
+    "OVPN_DOWNLOADS_DIR=${OVPN_DOWNLOADS_DIR:-/var/lib/openvpn/downloads}"
     "NGINX_LISTEN_BLOCK=${nginx_listen_block}"
     "NGINX_TLS_BLOCK=${nginx_tls_block}"
   )

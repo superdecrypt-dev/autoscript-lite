@@ -1273,10 +1273,29 @@ badvpn_runtime_env_file() {
   printf '%s\n' "/etc/default/badvpn-udpgw"
 }
 
+openvpn_runtime_env_file() {
+  printf '%s\n' "/etc/default/openvpn-runtime"
+}
+
 badvpn_runtime_get_env() {
   local key="$1"
   local env_file
   env_file="$(badvpn_runtime_env_file)"
+  [[ -r "${env_file}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[[:space:]]+/, "", $2)
+      sub(/[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }
+  ' "${env_file}"
+}
+
+openvpn_runtime_get_env() {
+  local key="$1"
+  local env_file
+  env_file="$(openvpn_runtime_env_file)"
   [[ -r "${env_file}" ]] || return 1
   awk -F= -v key="${key}" '
     $1 == key {
@@ -1301,6 +1320,42 @@ edge_runtime_get_env() {
       exit
     }
   ' "${env_file}"
+}
+
+edge_runtime_metrics_enabled() {
+  local value
+  value="$(edge_runtime_get_env EDGE_METRICS_ENABLED 2>/dev/null || true)"
+  value="${value:-true}"
+  case "${value,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+edge_runtime_metrics_listen() {
+  local value
+  value="$(edge_runtime_get_env EDGE_METRICS_LISTEN 2>/dev/null || true)"
+  printf '%s\n' "${value:-127.0.0.1:9910}"
+}
+
+edge_runtime_metrics_url() {
+  local listen path host port
+  path="${1:-/metrics}"
+  listen="$(edge_runtime_metrics_listen)"
+  if [[ "${listen}" == *:* ]]; then
+    host="${listen%:*}"
+    port="${listen##*:}"
+    if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
+      listen="[${host}]:${port}"
+    fi
+  fi
+  printf 'http://%s%s\n' "${listen}" "${path}"
+}
+
+edge_runtime_metrics_fetch() {
+  local path="${1:-/metrics}"
+  have_cmd curl || return 1
+  curl -fsS --max-time 2 "$(edge_runtime_metrics_url "${path}")" 2>/dev/null
 }
 
 edge_runtime_service_name() {
@@ -1362,12 +1417,16 @@ edge_runtime_status_menu() {
   hr
 
   local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
+  local metrics_enabled metrics_listen health_text status_json metrics_text runtime_ok runtime_active runtime_reload runtime_last_reload runtime_listener_http runtime_listener_tls runtime_listener_metrics runtime_proxy_proto
+  local runtime_tls_subject runtime_tls_not_after runtime_tls_alpn runtime_last_route
+  local metric_accept_http metric_accept_tls metric_rejected_total
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
   http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
   tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  metrics_listen="$(edge_runtime_metrics_listen)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
@@ -1379,12 +1438,18 @@ edge_runtime_status_menu() {
   else
     tls_backend_required="false"
   fi
+  if edge_runtime_metrics_enabled; then
+    metrics_enabled="true"
+  else
+    metrics_enabled="false"
+  fi
 
   echo "Runtime env : ${env_file}"
   echo "Provider    : ${provider}"
   echo "Activate    : ${active}"
   echo "HTTP port   : ${http_port}"
   echo "TLS port    : ${tls_port}"
+  echo "Metrics     : ${metrics_enabled} (${metrics_listen})"
   echo "HTTP backend: ${http_backend}"
   if [[ "${tls_backend_required}" == "true" ]]; then
     echo "HTTPS b/e   : ${http_tls_backend}"
@@ -1405,6 +1470,124 @@ edge_runtime_status_menu() {
 
   if svc_exists nginx; then
     svc_status_line nginx
+  fi
+
+  if [[ "${metrics_enabled}" == "true" ]]; then
+    hr
+    echo "Runtime observability:"
+    if health_text="$(edge_runtime_metrics_fetch /health | tr -d '\r' | head -n1)"; then
+      log "Health ${metrics_listen} : ${health_text} ✅"
+    else
+      warn "Health ${metrics_listen} : unavailable ❌"
+    fi
+
+    if status_json="$(edge_runtime_metrics_fetch /status)"; then
+      if have_cmd python3; then
+        local parsed
+        parsed="$(
+          python3 - "${status_json}" <<'PY' 2>/dev/null || true
+import json
+import sys
+from datetime import datetime
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(0)
+
+def out(key, value):
+    print(f"{key}={value}")
+
+listeners = data.get("listener_up") or {}
+last_reload = "-"
+try:
+    ts = int(data.get("last_reload_unix") or 0)
+    if ts > 0:
+        last_reload = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+except Exception:
+    pass
+
+out("ok", "true" if data.get("ok") else "false")
+out("active", int(data.get("active_connections_total") or 0))
+out("reload_success", int(data.get("reload_success") or 0))
+out("last_reload", last_reload)
+out("listener_http", "up" if listeners.get("http") else "down")
+out("listener_tls", "up" if listeners.get("tls") else "down")
+out("listener_metrics", "up" if listeners.get("metrics") else "down")
+out("accept_proxy_protocol", "true" if data.get("accept_proxy_protocol") else "false")
+out("tls_subject", str(data.get("tls_certificate_subject") or "-"))
+out("tls_not_after", str(data.get("tls_certificate_not_after") or "-"))
+out("tls_alpn", ",".join(data.get("tls_advertised_alpn") or []) or "-")
+last_route = data.get("last_route") or {}
+if last_route:
+    out(
+        "last_route",
+        f"{last_route.get('surface') or '-'} | {last_route.get('route') or '-'} | {last_route.get('backend') or '-'} | "
+        f"host={last_route.get('host') or '-'} path={last_route.get('path') or '-'} alpn={last_route.get('alpn') or '-'} sni={last_route.get('sni') or '-'}"
+    )
+else:
+    out("last_route", "-")
+PY
+        )"
+        runtime_ok="-"
+        runtime_active="-"
+        runtime_reload="-"
+        runtime_last_reload="-"
+        runtime_listener_http="-"
+        runtime_listener_tls="-"
+        runtime_listener_metrics="-"
+        runtime_proxy_proto="-"
+        runtime_tls_subject="-"
+        runtime_tls_not_after="-"
+        runtime_tls_alpn="-"
+        runtime_last_route="-"
+        while IFS='=' read -r key value; do
+          case "${key}" in
+            ok) runtime_ok="${value}" ;;
+            active) runtime_active="${value}" ;;
+            reload_success) runtime_reload="${value}" ;;
+            last_reload) runtime_last_reload="${value}" ;;
+            listener_http) runtime_listener_http="${value}" ;;
+            listener_tls) runtime_listener_tls="${value}" ;;
+            listener_metrics) runtime_listener_metrics="${value}" ;;
+            accept_proxy_protocol) runtime_proxy_proto="${value}" ;;
+            tls_subject) runtime_tls_subject="${value}" ;;
+            tls_not_after) runtime_tls_not_after="${value}" ;;
+            tls_alpn) runtime_tls_alpn="${value}" ;;
+            last_route) runtime_last_route="${value}" ;;
+          esac
+        done <<< "${parsed}"
+
+        echo "Runtime OK  : ${runtime_ok}"
+        echo "Active conn : ${runtime_active}"
+        echo "Reload ok   : ${runtime_reload}"
+        echo "Last reload : ${runtime_last_reload}"
+        echo "Proxy proto : ${runtime_proxy_proto}"
+        echo "TLS cert    : ${runtime_tls_subject}"
+        echo "TLS expire  : ${runtime_tls_not_after}"
+        echo "ALPN        : ${runtime_tls_alpn}"
+        echo "Listeners   : http=${runtime_listener_http} tls=${runtime_listener_tls} metrics=${runtime_listener_metrics}"
+        echo "Last route  : ${runtime_last_route}"
+      else
+        warn "python3 tidak tersedia, skip parsing /status edge"
+      fi
+    else
+      warn "Status ${metrics_listen} : unavailable ❌"
+    fi
+
+    if metrics_text="$(edge_runtime_metrics_fetch /metrics)"; then
+      metric_accept_http="$(printf '%s\n' "${metrics_text}" | awk '$1 ~ /^edge_mux_connections_accepted_total\{surface="http-port"\}$/ {print $2; exit}')"
+      metric_accept_tls="$(printf '%s\n' "${metrics_text}" | awk '$1 ~ /^edge_mux_connections_accepted_total\{surface="tls-port"\}$/ {print $2; exit}')"
+      metric_rejected_total="$(printf '%s\n' "${metrics_text}" | awk '$1 ~ /^edge_mux_connections_rejected_total\{/ {sum+=$2} END{print sum+0}')"
+      echo "Accepted    : http=${metric_accept_http:-0} tls=${metric_accept_tls:-0}"
+      echo "Rejected    : ${metric_rejected_total:-0}"
+    else
+      warn "Metrics ${metrics_listen} : unavailable ❌"
+    fi
+  else
+    hr
+    echo "Runtime observability:"
+    echo "Metrics     : disabled"
   fi
 
   hr
@@ -1570,6 +1753,413 @@ badvpn_restart_menu() {
   fi
 
   svc_restart "${svc}"
+  hr
+  pause
+}
+
+openvpn_value_is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+openvpn_clients_dir_value() {
+  openvpn_runtime_get_env OVPN_CLIENTS_DIR 2>/dev/null || echo "/etc/openvpn/clients"
+}
+
+openvpn_downloads_dir_value() {
+  openvpn_runtime_get_env OVPN_DOWNLOADS_DIR 2>/dev/null || echo "/var/lib/openvpn/downloads"
+}
+
+openvpn_default_client_name_value() {
+  openvpn_runtime_get_env OVPN_DEFAULT_CLIENT_NAME 2>/dev/null || echo "autoscript"
+}
+
+openvpnws_token_valid() {
+  local token="${1:-}"
+  [[ "${token}" =~ ^[A-Fa-f0-9]{10}$ ]]
+}
+
+openvpn_download_token_valid() {
+  local token="${1:-}"
+  [[ "${token}" =~ ^[A-Fa-f0-9]{16}$ ]]
+}
+
+openvpn_client_state_path_value() {
+  local name="${1:-}"
+  printf '%s/%s.json\n' "$(openvpn_clients_dir_value)" "${name}"
+}
+
+openvpn_client_state_token_get() {
+  local name="${1:-}"
+  local state_file
+  state_file="$(openvpn_client_state_path_value "${name}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json
+import re
+import sys
+
+path = sys.argv[1]
+token = ""
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+  if isinstance(data, dict):
+    token = str(data.get("ovpnws_token") or "").strip()
+except Exception:
+  token = ""
+
+if re.fullmatch(r"[A-Fa-f0-9]{10}", token):
+  print(token.lower())
+else:
+  print("")
+PY
+}
+
+openvpn_client_state_download_token_get() {
+  local name="${1:-}"
+  local state_file
+  state_file="$(openvpn_client_state_path_value "${name}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json
+import re
+import sys
+
+path = sys.argv[1]
+token = ""
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+  if isinstance(data, dict):
+    token = str(data.get("download_token") or "").strip()
+except Exception:
+  token = ""
+
+if re.fullmatch(r"[A-Fa-f0-9]{16}", token):
+  print(token.lower())
+else:
+  print("")
+PY
+}
+
+openvpn_runtime_ws_prefix_value() {
+  local path
+  path="$(openvpn_runtime_get_env OVPNWS_PATH 2>/dev/null || echo "/")"
+  path="${path%%\?*}"
+  path="${path%%\#*}"
+  path="/${path#/}"
+  path="${path%/}"
+  [[ -n "${path}" ]] || path="/"
+  if [[ "${path}" == "/openvpn-ws" ]]; then
+    path="/"
+  fi
+  printf '%s\n' "${path}"
+}
+
+openvpnws_path_from_token() {
+  local token="${1:-}"
+  local prefix
+  openvpnws_token_valid "${token}" || return 1
+  prefix="$(openvpn_runtime_ws_prefix_value)"
+  if [[ "${prefix}" == "/" ]]; then
+    printf '/%s\n' "${token,,}"
+  else
+    printf '%s/%s\n' "${prefix}" "${token,,}"
+  fi
+}
+
+openvpnws_alt_path_from_token() {
+  local token="${1:-}"
+  local prefix
+  openvpnws_token_valid "${token}" || return 1
+  prefix="$(openvpn_runtime_ws_prefix_value)"
+  if [[ "${prefix}" == "/" ]]; then
+    printf '/bebas/%s\n' "${token,,}"
+  else
+    printf '%s/bebas/%s\n' "${prefix}" "${token,,}"
+  fi
+}
+
+openvpn_download_path_from_token() {
+  local token="${1:-}"
+  openvpn_download_token_valid "${token}" || return 1
+  printf '/ovpn/%s.zip\n' "${token,,}"
+}
+
+openvpn_bundle_path_value() {
+  local name="${1:-}"
+  [[ "${name}" =~ ^[a-z0-9][a-z0-9._-]{0,31}$ ]] || return 1
+  printf '%s/%s.zip\n' "$(openvpn_downloads_dir_value)" "${name}"
+}
+
+openvpn_bundle_url_value() {
+  local name="${1:-}"
+  local host
+  [[ "${name}" =~ ^[a-z0-9][a-z0-9._-]{0,31}$ ]] || return 1
+  host="$(detect_domain)"
+  [[ -n "${host}" ]] || host="$(detect_public_ip_ipapi)"
+  [[ -n "${host}" ]] || return 1
+  printf 'https://%s/ovpn/%s.zip\n' "${host}" "${name}"
+}
+
+openvpn_demo_profile_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-tcp.ovpn"
+}
+
+openvpn_demo_ssl_profile_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-ssl.ovpn"
+}
+
+openvpn_demo_ws_profile_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-ws.ovpn"
+}
+
+openvpn_demo_ssl_run_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-ssl-run.sh"
+}
+
+openvpn_demo_tcp_run_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-tcp-run.sh"
+}
+
+openvpn_demo_ws_run_path() {
+  local dir name
+  dir="$(openvpn_clients_dir_value)"
+  name="$(openvpn_default_client_name_value)"
+  printf '%s\n' "${dir}/${name}-ws-run.sh"
+}
+
+openvpn_status_menu() {
+  local breadcrumb="${1:-OpenVPN Status}"
+  title
+  echo "${breadcrumb}"
+  hr
+
+  local env_file core_svc ws_svc tcp_enabled ssl_enabled ws_enabled
+  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count
+  env_file="$(openvpn_runtime_env_file)"
+  core_svc="ovpn-tcp.service"
+  ws_svc="ovpnws-proxy.service"
+  tcp_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_TCP 2>/dev/null || echo "false")"
+  ssl_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_SSL 2>/dev/null || echo "false")"
+  ws_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_WS 2>/dev/null || echo "false")"
+  tcp_bind="$(openvpn_runtime_get_env OVPN_TCP_BIND 2>/dev/null || echo "127.0.0.1")"
+  tcp_port="$(openvpn_runtime_get_env OVPN_TCP_PORT 2>/dev/null || echo "21194")"
+  ws_bind="$(openvpn_runtime_get_env OVPNWS_PROXY_BIND 2>/dev/null || echo "127.0.0.1")"
+  ws_port="$(openvpn_runtime_get_env OVPNWS_PROXY_PORT 2>/dev/null || echo "21195")"
+  ws_path="$(openvpn_runtime_ws_prefix_value)"
+  clients_dir="$(openvpn_clients_dir_value)"
+  downloads_dir="$(openvpn_downloads_dir_value)"
+  default_name="$(openvpn_default_client_name_value)"
+  default_profile="$(openvpn_demo_profile_path)"
+  default_ssl_profile="$(openvpn_demo_ssl_profile_path)"
+  default_ws_profile="$(openvpn_demo_ws_profile_path)"
+  default_token="$(openvpn_client_state_token_get "${default_name}")"
+  default_download_url="$(openvpn_bundle_url_value "${default_name}" 2>/dev/null || true)"
+  default_download_file="$(openvpn_bundle_path_value "${default_name}" 2>/dev/null || true)"
+  default_ws_path="-"
+  default_ws_alt_path="-"
+  client_count="$(openvpn_client_count_value 2>/dev/null || echo "0")"
+  if openvpnws_token_valid "${default_token}"; then
+    default_ws_path="$(openvpnws_path_from_token "${default_token}" 2>/dev/null || true)"
+    default_ws_alt_path="$(openvpnws_alt_path_from_token "${default_token}" 2>/dev/null || true)"
+    if [[ "${default_ws_alt_path}" == /bebas/* ]]; then
+      default_ws_alt_path="/<bebas>/${default_token}"
+    fi
+  fi
+
+  echo "Runtime env : ${env_file}"
+  echo "Modes       : TCP=${tcp_enabled} | SSL/TLS=${ssl_enabled} | WS=${ws_enabled}"
+  echo "Core b/e    : ${tcp_bind}:${tcp_port}"
+  echo "WS proxy    : ${ws_bind}:${ws_port}"
+  echo "WS prefix   : ${ws_path}"
+  echo "Clients dir : ${clients_dir}"
+  echo "ZIP dir     : ${downloads_dir}"
+  echo "Managed     : ${client_count} client(s)"
+  echo "Default     : ${default_name}"
+  echo "WS Token    : ${default_token:-"-"}"
+  echo "ZIP URL     : ${default_download_url:-"-"}"
+  echo "WS Path     : ${default_ws_path}"
+  echo "WS Path Alt : ${default_ws_alt_path}"
+  echo "TCP File    : ${default_profile}"
+  echo "SSL File    : ${default_ssl_profile}"
+  echo "WS File     : ${default_ws_profile}"
+  echo "ZIP File    : ${default_download_file:-"-"}"
+  hr
+
+  if svc_exists "${core_svc}"; then
+    svc_status_line "${core_svc}"
+  else
+    warn "${core_svc} tidak terpasang"
+  fi
+
+  if svc_exists "${ws_svc}"; then
+    svc_status_line "${ws_svc}"
+  elif openvpn_value_is_true "${ws_enabled}"; then
+    warn "${ws_svc} belum terpasang padahal mode WS aktif"
+  else
+    log "${ws_svc} : disabled"
+  fi
+
+  hr
+  if have_cmd ss; then
+    if ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])${tcp_bind//./\\.}:${tcp_port}([[:space:]]|$)"; then
+      log "OpenVPN core ${tcp_bind}:${tcp_port} : LISTENING ✅"
+    else
+      warn "OpenVPN core ${tcp_bind}:${tcp_port} : NOT listening ❌"
+    fi
+    if openvpn_value_is_true "${ws_enabled}"; then
+      if ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])${ws_bind//./\\.}:${ws_port}([[:space:]]|$)"; then
+        log "OVPN WS proxy ${ws_bind}:${ws_port} : LISTENING ✅"
+      else
+        warn "OVPN WS proxy ${ws_bind}:${ws_port} : NOT listening ❌"
+      fi
+    fi
+  else
+    warn "ss tidak tersedia, skip cek port OpenVPN"
+  fi
+
+  hr
+  if [[ -f "${default_profile}" ]]; then
+    log "Default TCP file : ${default_profile}"
+    [[ -f "${default_ssl_profile}" ]] && log "Default SSL file : ${default_ssl_profile}"
+    [[ -f "${default_ws_profile}" ]] && log "Default WS file  : ${default_ws_profile}"
+  else
+    warn "File default client belum tersedia: ${default_profile}"
+  fi
+  echo "Catatan     : file utama untuk injector adalah profile *.ovpn atau paket ZIP."
+  echo "              ZIP memuat tiga profile: *-tcp.ovpn, *-ssl.ovpn, dan *-ws.ovpn."
+  echo "              OVPN WS tetap memakai token path saat koneksi dijalankan."
+  hr
+  pause
+}
+
+openvpn_restart_core_menu() {
+  local breadcrumb="${1:-OpenVPN > Restart Core}"
+  title
+  echo "${breadcrumb}"
+  hr
+  local svc="ovpn-tcp.service"
+  if ! svc_exists "${svc}"; then
+    warn "${svc} tidak ditemukan."
+    hr
+    pause
+    return 0
+  fi
+  svc_restart "${svc}"
+  hr
+  pause
+}
+
+openvpn_restart_ws_menu() {
+  local breadcrumb="${1:-OpenVPN > Restart WS Proxy}"
+  title
+  echo "${breadcrumb}"
+  hr
+  local svc="ovpnws-proxy.service"
+  if ! svc_exists "${svc}"; then
+    warn "${svc} tidak ditemukan."
+    hr
+    pause
+    return 0
+  fi
+  svc_restart "${svc}"
+  hr
+  pause
+}
+
+openvpn_demo_files_show() {
+  local breadcrumb="${1:-OpenVPN > Client Files}"
+  title
+  echo "${breadcrumb}"
+  hr
+
+  local clients_dir default_name
+  clients_dir="$(openvpn_clients_dir_value)"
+  default_name="$(openvpn_default_client_name_value)"
+  echo "Clients dir : ${clients_dir}"
+  hr
+
+  if [[ ! -d "${clients_dir}" ]]; then
+    warn "Direktori client OpenVPN belum tersedia."
+    hr
+    pause
+    return 0
+  fi
+
+  local found="false" row="" name cn created token allowed remote tcp_file ssl_file ws_file download_url download_file main_path alt_path marker
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    found="true"
+    IFS='|' read -r name cn created token allowed <<<"${row}"
+    tcp_file="${clients_dir}/${name}-tcp.ovpn"
+    ssl_file="${clients_dir}/${name}-ssl.ovpn"
+    ws_file="${clients_dir}/${name}-ws.ovpn"
+    download_url="$(openvpn_bundle_url_value "${name}" 2>/dev/null || true)"
+    download_file="$(openvpn_bundle_path_value "${name}" 2>/dev/null || true)"
+    remote="$(grep -E '^remote ' "${tcp_file}" 2>/dev/null | head -n1 || true)"
+    main_path="-"
+    alt_path="-"
+    if openvpnws_token_valid "${token}"; then
+      main_path="$(openvpnws_path_from_token "${token}" 2>/dev/null || true)"
+      alt_path="$(openvpnws_alt_path_from_token "${token}" 2>/dev/null || true)"
+      if [[ "${alt_path}" == /bebas/* ]]; then
+        alt_path="/<bebas>/${token}"
+      fi
+    fi
+    marker=""
+    if [[ "${name}" == "${default_name}" ]]; then
+      marker=" (default)"
+    fi
+    echo "Client   : ${name}${marker}"
+    echo "CN       : ${cn}"
+    echo "Created  : ${created}"
+    echo "Access   : ${allowed}"
+    [[ -n "${remote}" ]] && echo "Remote   : ${remote}"
+    echo "ZIP URL  : ${download_url:-"-"}"
+    echo "WS       : ${main_path} | alt ${alt_path}"
+    [[ -f "${tcp_file}" ]] && echo "TCP OVPN : ${tcp_file}"
+    [[ -f "${ssl_file}" ]] && echo "SSL OVPN : ${ssl_file}"
+    [[ -f "${ws_file}" ]] && echo "WS OVPN  : ${ws_file}"
+    [[ -f "${download_file}" ]] && echo "ZIP File : ${download_file}"
+    echo
+  done < <(openvpn_client_rows)
+
+  if [[ "${found}" != "true" ]]; then
+    warn "Belum ada client OpenVPN terkelola di ${clients_dir}"
+  fi
+
+  echo "Hint:"
+  echo "  - Paket ZIP     : gunakan URL ZIP untuk membagikan semua profile sekaligus"
+  echo "  - File utama untuk injector adalah profile *.ovpn"
+  echo "  - TCP      : gunakan file *-tcp.ovpn"
+  echo "  - SSL/TLS  : gunakan file *-ssl.ovpn"
+  echo "  - WS       : gunakan file *-ws.ovpn"
   hr
   pause
 }

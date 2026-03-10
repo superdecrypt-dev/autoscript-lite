@@ -2,6 +2,7 @@ package detect
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ const (
 	ClassHTTP
 	ClassTLSClientHello
 	ClassSSH
+	ClassOpenVPN
 	ClassTimeout
 	ClassPossibleHTTP
 )
@@ -32,6 +34,11 @@ var httpMethods = [][]byte{
 	[]byte("CONNECT "),
 	[]byte("PRI * HTTP/2.0"),
 }
+
+var (
+	proxyV1Prefix = []byte("PROXY ")
+	proxyV2Prefix = []byte{'\r', '\n', '\r', '\n', 0x00, '\r', '\n', 'Q', 'U', 'I', 'T', '\n'}
+)
 
 func IsHTTP(b []byte) bool {
 	trimmed := bytes.TrimLeft(b, "\r\n\t ")
@@ -68,6 +75,29 @@ func IsSSHBanner(b []byte) bool {
 	return bytes.HasPrefix(trimmed, []byte("SSH-"))
 }
 
+func IsOpenVPNPacket(b []byte) bool {
+	if len(b) < 3 {
+		return false
+	}
+	if bytes.HasPrefix(b, proxyV1Prefix) {
+		return false
+	}
+	if len(b) >= len(proxyV2Prefix) && bytes.HasPrefix(b, proxyV2Prefix) {
+		return false
+	}
+	packetLen := int(binary.BigEndian.Uint16(b[:2]))
+	if packetLen < 1 || packetLen > 4096 {
+		return false
+	}
+	opcode := int(b[2] >> 3)
+	switch opcode {
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9:
+		return true
+	default:
+		return false
+	}
+}
+
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
@@ -91,6 +121,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassTLSClientHello, nil
 			case IsSSHBanner(current):
 				return current, ClassSSH, nil
+			case IsOpenVPNPacket(current):
+				return current, ClassOpenVPN, nil
 			case IsPossibleHTTPPrefix(current):
 				continue
 			default:
@@ -120,6 +152,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassTLSClientHello, nil
 				case IsSSHBanner(current):
 					return current, ClassSSH, nil
+				case IsOpenVPNPacket(current):
+					return current, ClassOpenVPN, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -137,6 +171,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassTLSClientHello, nil
 	case IsSSHBanner(current):
 		return current, ClassSSH, nil
+	case IsOpenVPNPacket(current):
+		return current, ClassOpenVPN, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:

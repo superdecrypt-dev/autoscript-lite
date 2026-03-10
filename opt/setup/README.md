@@ -25,6 +25,17 @@ Prinsip:
   - `install/badvpn.sh`
   - `templates/systemd/badvpn-udpgw.service`
   - `templates/config/badvpn-runtime.env`
+- Tambahan aktif (opt-in via env runtime):
+  - `install/openvpn.sh`
+  - `bin/ovpnws-proxy.py`
+  - `templates/systemd/ovpn-tcp.service`
+  - `templates/systemd/ovpnws-proxy.service`
+  - `templates/config/openvpn-runtime.env`
+  - `templates/config/openvpn/server-tcp.conf`
+  - `templates/config/openvpn/client-tunnel-helper-tls.py`
+  - `templates/config/openvpn/client-tunnel-helper-ws.py`
+  - `templates/config/openvpn/client-run-wrapper-tcp.sh`
+  - `templates/config/openvpn/client-run-wrapper.sh`
 - `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
 - `install/badvpn.sh` sekarang sudah dipakai untuk jalur `BadVPN UDPGW`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
@@ -47,6 +58,7 @@ opt/setup/
     badvpn.sh
     domain.sh
     edge.sh
+    openvpn.sh
     nginx.sh
     xray.sh
     sshws.sh
@@ -55,6 +67,7 @@ opt/setup/
     management.sh
   templates/
     README.md
+    config/openvpn/
   bin/
     README.md
 ```
@@ -86,14 +99,16 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
    - target modul: `install/xray.sh`
 10. `install_sshws_stack`, `install_sshws_qac_enforcer`
    - target modul: `install/sshws.sh`
-11. `install_xray_speed_limiter_foundation`
+11. `install_openvpn_stack`
+   - target modul: `install/openvpn.sh`
+12. `install_xray_speed_limiter_foundation`
     - target modul: `install/xray.sh`
-12. `install_observability_alerting`, `install_domain_cert_guard`
+13. `install_observability_alerting`, `install_domain_cert_guard`
     - target modul: `install/observability.sh`
-13. `install_management_scripts`, `sync_manage_modules_layout`,
+14. `install_management_scripts`, `sync_manage_modules_layout`,
     `install_bot_installer_if_present`
     - target modul: `install/management.sh`
-14. `setup_logrotate`, `sanity_check`, `cleanup`
+15. `setup_logrotate`, `sanity_check`, `cleanup`
     - target modul: `install/bootstrap.sh`, `install/observability.sh`
 
 ## Tahapan Refactor

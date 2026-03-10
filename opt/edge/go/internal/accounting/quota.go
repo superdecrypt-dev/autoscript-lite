@@ -17,9 +17,11 @@ import (
 )
 
 type SSHQuotaConfig struct {
-	StateRoot    string
-	DropbearUnit string
-	EnforcerPath string
+	StateRoot        string
+	DropbearUnit     string
+	EnforcerPath     string
+	SessionRoot      string
+	SessionHeartbeat time.Duration
 }
 
 var authLineRe = regexp.MustCompile(`(?:Password )?auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)

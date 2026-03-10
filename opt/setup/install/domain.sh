@@ -81,7 +81,11 @@ acme_restart_active_tls_consumers() {
   fi
   edge_svc="$(acme_edge_runtime_service_name 2>/dev/null || true)"
   if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1; then
-    systemctl restart "${edge_svc}" >/dev/null 2>&1 || die "Gagal restart ${edge_svc} setelah update cert."
+    if systemctl reload "${edge_svc}" >/dev/null 2>&1; then
+      :
+    else
+      systemctl restart "${edge_svc}" >/dev/null 2>&1 || die "Gagal reload/restart ${edge_svc} setelah update cert."
+    fi
     systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1 || die "${edge_svc} tidak active setelah update cert."
   fi
 }

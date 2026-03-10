@@ -4200,9 +4200,11 @@ def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> 
             continue
         if not _service_exists(svc) or not _service_is_active(svc):
             continue
-        ok_restart, out_restart = _run_cmd(["systemctl", "restart", svc], timeout=30)
-        if not ok_restart or not _service_is_active(svc):
-            failures.append(f"{svc}: {out_restart}")
+        ok_reload, out_reload = _run_cmd(["systemctl", "reload", svc], timeout=30)
+        if not ok_reload:
+            ok_reload, out_reload = _run_cmd(["systemctl", "restart", svc], timeout=30)
+        if not ok_reload or not _service_is_active(svc):
+            failures.append(f"{svc}: {out_reload}")
     if failures:
         return False, "\n".join(failures)
     return True, "ok"
