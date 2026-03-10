@@ -147,6 +147,12 @@ openvpn_client_name_valid() {
   [[ "${name}" =~ ^[a-z0-9][a-z0-9._-]{0,31}$ ]]
 }
 
+openvpn_client_state_exists() {
+  local name="${1:-}"
+  openvpn_client_name_valid "${name}" || return 1
+  [[ -s "$(openvpn_client_state_path_value "${name}")" ]]
+}
+
 openvpn_client_state_read_field() {
   local name="${1:-}"
   local field="${2:-}"
@@ -193,6 +199,74 @@ openvpn_client_created_at_get() {
   fi
 }
 
+openvpn_client_expired_at_get() {
+  local name="${1:-}"
+  local expired
+  expired="$(openvpn_client_state_read_field "${name}" "expired_at" 2>/dev/null || true)"
+  if [[ -n "${expired}" ]]; then
+    printf '%s\n' "${expired}"
+  else
+    printf '%s\n' "-"
+  fi
+}
+
+openvpn_core_service_name_manage() {
+  printf '%s\n' "ovpn-tcp.service"
+}
+
+openvpn_server_conf_manage() {
+  openvpn_runtime_get_env OVPN_SERVER_CONF 2>/dev/null || echo "/etc/openvpn/server/ovpn-tcp.conf"
+}
+
+openvpn_manage_ready_reason() {
+  local pki_dir ca_file ca_key tls_crypt_file core_svc server_conf
+  if ! have_cmd python3; then
+    printf '%s\n' "python3 belum terpasang."
+    return 0
+  fi
+  if ! have_cmd openssl; then
+    printf '%s\n' "openssl belum terpasang."
+    return 0
+  fi
+  if ! have_cmd openvpn; then
+    printf '%s\n' "binary openvpn belum terpasang."
+    return 0
+  fi
+  core_svc="$(openvpn_core_service_name_manage)"
+  if ! svc_exists "${core_svc}"; then
+    printf '%s\n' "${core_svc} belum terpasang."
+    return 0
+  fi
+  server_conf="$(openvpn_server_conf_manage)"
+  [[ -f "${server_conf}" ]] || {
+    printf '%s\n' "config server OpenVPN belum ada di ${server_conf}."
+    return 0
+  }
+  pki_dir="$(openvpn_pki_dir_value)"
+  ca_file="$(openvpn_ca_file_value)"
+  ca_key="${pki_dir}/ca.key"
+  tls_crypt_file="$(openvpn_tls_crypt_file_value)"
+  [[ -f "${ca_file}" ]] || {
+    printf '%s\n' "CA OpenVPN belum ada di ${ca_file}."
+    return 0
+  }
+  [[ -f "${ca_key}" ]] || {
+    printf '%s\n' "CA key OpenVPN belum ada di ${ca_key}."
+    return 0
+  }
+  [[ -f "${tls_crypt_file}" ]] || {
+    printf '%s\n' "tls-crypt key OpenVPN belum ada di ${tls_crypt_file}."
+    return 0
+  }
+  return 1
+}
+
+openvpn_manage_is_ready() {
+  local reason=""
+  reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
+  [[ -z "${reason}" ]]
+}
+
 openvpn_client_download_token_get() {
   local name="${1:-}"
   local token
@@ -202,6 +276,31 @@ openvpn_client_download_token_get() {
   else
     printf '\n'
   fi
+}
+
+openvpn_expiry_is_active_manage() {
+  local expired_at="${1:-}"
+  [[ -z "${expired_at}" || "${expired_at}" == "-" ]] && return 0
+  need_python3
+  python3 - <<'PY' "${expired_at}" 2>/dev/null
+from datetime import date, datetime
+import re
+import sys
+
+raw = str(sys.argv[1] or "").strip()
+if not raw or raw == "-":
+  raise SystemExit(0)
+
+candidate = raw[:10]
+if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+  raise SystemExit(0)
+
+expiry = datetime.strptime(candidate, "%Y-%m-%d").date()
+today = date.today()
+# Samakan perilaku dengan intuisi operator SSH: tanggal expiry masih aktif
+# sepanjang hari itu, dan baru dianggap expired mulai hari berikutnya.
+raise SystemExit(0 if expiry >= today else 1)
+PY
 }
 
 openvpn_client_generate_cn() {
@@ -342,11 +441,89 @@ payload.update({
   "client_name": client_name,
   "client_cn": cn,
   "created_at": created,
+  "expired_at": str(payload.get("expired_at") or "-").strip()[:10] or "-",
   "ovpnws_token": token,
   "download_token": download_token,
 })
 save_json(state_file, payload)
 print(token)
+PY
+}
+
+openvpn_client_state_set_dates() {
+  local name="${1:-}"
+  local created_at="${2:-}"
+  local expired_at="${3:-}"
+  local state_file clients_dir
+  openvpn_client_name_valid "${name}" || return 1
+  state_file="$(openvpn_client_state_path_value "${name}")"
+  clients_dir="$(openvpn_clients_dir_value)"
+  install -d -m 700 "${clients_dir}" 2>/dev/null || true
+  need_python3
+  python3 - <<'PY' "${clients_dir}" "${state_file}" "${name}" "${created_at}" "${expired_at}"
+import datetime
+import json
+import os
+import re
+import sys
+import tempfile
+
+clients_dir, state_file, client_name, created_at, expired_at = sys.argv[1:6]
+
+def load_json(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      data = json.load(f)
+    if isinstance(data, dict):
+      return data
+  except Exception:
+    pass
+  return {}
+
+def save_json(path, payload):
+  dirn = os.path.dirname(path) or "."
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(payload, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+def norm_date(value, fallback="-"):
+  text = str(value or "").strip()
+  if not text or text == "-":
+    return fallback
+  match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+  if match:
+    return match.group(0)
+  return fallback
+
+payload = load_json(state_file)
+client_cn = str(payload.get("client_cn") or client_name).strip() or client_name
+created = norm_date(created_at, fallback=norm_date(payload.get("created_at"), fallback=datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")))
+expired = norm_date(expired_at, fallback=norm_date(payload.get("expired_at"), fallback="-"))
+
+payload.update({
+  "managed_by": str(payload.get("managed_by") or "autoscript-manage"),
+  "protocol": "openvpn",
+  "client_name": client_name,
+  "client_cn": client_cn,
+  "created_at": created,
+  "expired_at": expired,
+})
+save_json(state_file, payload)
 PY
 }
 
@@ -366,6 +543,47 @@ openvpn_client_allow_cn() {
     printf 'push-reset\n'
   } > "${file}"
   chmod 644 "${file}" 2>/dev/null || true
+}
+
+openvpn_client_access_sync_manage() {
+  local name="${1:-}"
+  local client_cn expired_at file
+  openvpn_client_name_valid "${name}" || return 1
+  openvpn_client_state_exists "${name}" || return 1
+  client_cn="$(openvpn_client_cn_get "${name}")"
+  expired_at="$(openvpn_client_expired_at_get "${name}")"
+  file="$(openvpn_client_ccd_path_for_cn "${client_cn}")"
+  if openvpn_expiry_is_active_manage "${expired_at}"; then
+    openvpn_client_allow_cn "${client_cn}" || return 1
+  else
+    rm -f "${file}" >/dev/null 2>&1 || true
+  fi
+}
+
+openvpn_client_access_sync_all_manage() {
+  local row name
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    IFS='|' read -r name _ <<<"${row}"
+    [[ -n "${name}" ]] || continue
+    openvpn_client_access_sync_manage "${name}" >/dev/null 2>&1 || true
+  done < <(openvpn_client_rows)
+}
+
+openvpn_expiry_sync_now_warn() {
+  local name="${1:-}"
+  if [[ -n "${name}" ]]; then
+    if ! openvpn_client_access_sync_manage "${name}"; then
+      warn "Sinkronisasi akses OpenVPN belum sepenuhnya berhasil untuk '${name}'."
+      return 1
+    fi
+    return 0
+  fi
+  if ! openvpn_client_access_sync_all_manage; then
+    warn "Sinkronisasi akses OpenVPN belum sepenuhnya berhasil."
+    return 1
+  fi
+  return 0
 }
 
 openvpn_client_artifacts_remove() {
@@ -388,6 +606,15 @@ openvpn_client_artifacts_remove() {
     "$(openvpn_account_info_file "${name}")" \
     "$(openvpn_client_state_path_value "${name}")" \
     "${bundle_file}" >/dev/null 2>&1 || true
+}
+
+openvpn_client_delete_manage() {
+  local name="${1:-}"
+  local client_cn=""
+  openvpn_client_name_valid "${name}" || return 1
+  client_cn="$(openvpn_client_cn_get "${name}")"
+  [[ -n "${client_cn}" ]] && rm -f "$(openvpn_client_ccd_path_for_cn "${client_cn}")" >/dev/null 2>&1 || true
+  openvpn_client_artifacts_remove "${name}"
 }
 
 openvpn_client_issue_certificate_manage() {
@@ -925,7 +1152,7 @@ openvpn_client_render_artifacts_manage() {
 
 openvpn_account_info_refresh() {
   local name="${1:-}"
-  local info_file account_dir token download_url download_file ws_path ws_alt_path cn created domain ip remote_port
+  local info_file account_dir token download_url download_file ws_path ws_alt_path cn created expired access domain ip remote_port
   info_file="$(openvpn_account_info_file "${name}")"
   account_dir="$(openvpn_account_dir_value)"
   token="$(openvpn_client_state_token_get "${name}")"
@@ -942,6 +1169,12 @@ openvpn_account_info_refresh() {
   fi
   cn="$(openvpn_client_cn_get "${name}")"
   created="$(openvpn_client_created_at_get "${name}")"
+  expired="$(openvpn_client_expired_at_get "${name}")"
+  if [[ -f "$(openvpn_client_ccd_path_for_cn "${cn}")" ]]; then
+    access="yes"
+  else
+    access="no"
+  fi
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
   remote_port="$(openvpn_client_public_port_manage)"
@@ -954,6 +1187,8 @@ openvpn_account_info_refresh() {
     printf '%-12s : %s\n' "Client Name" "${name}"
     printf '%-12s : %s\n' "Client CN" "${cn}"
     printf '%-12s : %s\n' "Created" "${created}"
+    printf '%-12s : %s\n' "Expired" "${expired:-"-"}"
+    printf '%-12s : %s\n' "Access" "${access}"
     printf '%-12s : %s\n' "TCP Remote" "${domain:-$ip}:${remote_port}"
     printf '%-12s : %s\n' "SSL Remote" "${domain:-$ip}:443"
     printf '%-12s : %s\n' "WS Remote" "${domain:-$ip}:443"
@@ -997,6 +1232,7 @@ for entry in os.listdir(clients_dir):
   path = os.path.join(clients_dir, entry)
   name = entry[:-5]
   created = "-"
+  expired = "-"
   token = ""
   cn = name
   try:
@@ -1004,14 +1240,15 @@ for entry in os.listdir(clients_dir):
       data = json.load(f)
     if isinstance(data, dict):
       created = str(data.get("created_at") or "-").strip() or "-"
+      expired = str(data.get("expired_at") or "-").strip()[:10] or "-"
       token = str(data.get("ovpnws_token") or "").strip().lower()
       cn = str(data.get("client_cn") or name).strip() or name
   except Exception:
     pass
   allowed = "yes" if os.path.exists(os.path.join(ccd_dir, cn)) else "no"
-  rows.append((name.lower(), name, cn, created, token, allowed))
-for _, name, cn, created, token, allowed in sorted(rows):
-  print("|".join([name, cn, created, token, allowed]))
+  rows.append((name.lower(), name, cn, created, expired, token, allowed))
+for _, name, cn, created, expired, token, allowed in sorted(rows):
+  print("|".join([name, cn, created, expired, token, allowed]))
 PY
 }
 
@@ -1022,293 +1259,4 @@ openvpn_client_count_value() {
     count=$((count + 1))
   done < <(openvpn_client_rows)
   printf '%s\n' "${count}"
-}
-
-openvpn_add_client_header_render() {
-  local -n _page_ref="$1"
-  local page_size=5
-  local -a rows=()
-  local row
-  while IFS= read -r row; do
-    [[ -n "${row}" ]] || continue
-    rows+=("${row}")
-  done < <(openvpn_client_rows)
-
-  local total="${#rows[@]}"
-  echo "Daftar client OpenVPN terdaftar (maks 5 baris):"
-  if (( total == 0 )); then
-    echo "  (Belum ada client OpenVPN terkelola)"
-    echo "  Input nama client baru untuk lanjut."
-    return 0
-  fi
-
-  local pages=$(( (total + page_size - 1) / page_size ))
-  local page="${_page_ref:-0}"
-  if (( page < 0 )); then
-    page=0
-  fi
-  if (( page >= pages )); then
-    page=$((pages - 1))
-  fi
-  _page_ref="${page}"
-
-  local start=$((page * page_size))
-  local end=$((start + page_size))
-  if (( end > total )); then
-    end="${total}"
-  fi
-
-  printf "%-4s %-18s %-24s %-12s %-7s\n" "No" "Name" "Client CN" "Created" "Access"
-  printf "%-4s %-18s %-24s %-12s %-7s\n" "----" "------------------" "------------------------" "------------" "-------"
-
-  local i name cn created token allowed
-  for ((i=start; i<end; i++)); do
-    IFS='|' read -r name cn created token allowed <<<"${rows[$i]}"
-    printf "%-4s %-18s %-24s %-12s %-7s\n" "$((i + 1))" "${name}" "${cn}" "${created}" "${allowed}"
-  done
-
-  echo "Halaman: $((page + 1))/${pages} | Total: ${total}"
-  if (( pages > 1 )); then
-    echo "Navigasi: ketik next/previous sebelum input nama client."
-  fi
-}
-
-openvpn_pick_managed_client() {
-  local __out_var="$1"
-  local -a rows=()
-  local row
-  while IFS= read -r row; do
-    [[ -n "${row}" ]] || continue
-    rows+=("${row}")
-  done < <(openvpn_client_rows)
-
-  if (( ${#rows[@]} == 0 )); then
-    warn "Belum ada client OpenVPN terkelola."
-    return 1
-  fi
-
-  local i row_name row_cn row_created row_token row_allowed
-  printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "No" "Name" "Client CN" "Created" "WS Token" "Access"
-  printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "----" "------------------" "------------------------" "------------" "----------" "-------"
-  for i in "${!rows[@]}"; do
-    IFS='|' read -r row_name row_cn row_created row_token row_allowed <<<"${rows[$i]}"
-    printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "$((i + 1))" "${row_name}" "${row_cn}" "${row_created}" "${row_token:-"-"}" "${row_allowed}"
-  done
-
-  local pick
-  if ! read -r -p "Pilih client (NO, atau kembali): " pick; then
-    echo
-    return 1
-  fi
-  if is_back_choice "${pick}"; then
-    return 1
-  fi
-  if [[ ! "${pick}" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#rows[@]} )); then
-    warn "Pilihan tidak valid."
-    return 1
-  fi
-
-  local selected_name=""
-  IFS='|' read -r selected_name _ <<<"${rows[$((pick - 1))]}"
-  printf -v "${__out_var}" '%s' "${selected_name}"
-  return 0
-}
-
-openvpn_add_client_menu() {
-  local header_page=0
-  local name
-  while true; do
-    title
-    echo "6) Network > OpenVPN > Add Client"
-    hr
-    openvpn_add_client_header_render header_page
-    hr
-    if ! read -r -p "Nama client OpenVPN (atau next/previous/kembali): " name; then
-      echo
-      return 0
-    fi
-    if is_back_choice "${name}"; then
-      return 0
-    fi
-    case "${name,,}" in
-      next|n)
-        header_page=$((header_page + 1))
-        continue
-        ;;
-      previous|prev|p)
-        header_page=$((header_page - 1))
-        continue
-        ;;
-    esac
-    name="${name,,}"
-    break
-  done
-
-  if ! openvpn_client_name_valid "${name}"; then
-    warn "Nama client tidak valid. Gunakan huruf kecil/angka/._- (maks 32 char)."
-    pause
-    return 0
-  fi
-  if [[ -e "$(openvpn_client_state_path_value "${name}")" || -e "$(openvpn_client_profile_path_value "${name}")" ]]; then
-    warn "Client '${name}' sudah ada."
-    pause
-    return 0
-  fi
-
-  local client_cn=""
-  client_cn="$(openvpn_client_generate_cn "${name}" 2>/dev/null || true)"
-  if [[ -z "${client_cn}" ]]; then
-    warn "Gagal membuat Client CN unik untuk '${name}'."
-    pause
-    return 0
-  fi
-
-  if ! openvpn_client_issue_certificate_manage "${name}" "${client_cn}"; then
-    openvpn_client_add_rollback "${name}" "${client_cn}" "Gagal membuat sertifikat OpenVPN untuk '${name}'."
-    pause
-    return 0
-  fi
-
-  if ! openvpn_client_state_upsert "${name}" "${client_cn}" >/dev/null; then
-    openvpn_client_add_rollback "${name}" "${client_cn}" "Gagal menulis state OpenVPN untuk '${name}'."
-    pause
-    return 0
-  fi
-
-  if ! openvpn_client_allow_cn "${client_cn}"; then
-    openvpn_client_add_rollback "${name}" "${client_cn}" "Gagal membuat allowlist OpenVPN untuk '${name}'."
-    pause
-    return 0
-  fi
-
-  if ! openvpn_client_render_artifacts_manage "${name}"; then
-    openvpn_client_add_rollback "${name}" "${client_cn}" "Gagal membuat file client OpenVPN untuk '${name}'."
-    pause
-    return 0
-  fi
-
-  openvpn_account_info_refresh "${name}" || true
-
-  log "Client OpenVPN berhasil dibuat: ${name}"
-  title
-  echo "Add OpenVPN client sukses ✅"
-  hr
-  cat "$(openvpn_account_info_file "${name}")" 2>/dev/null || true
-  hr
-  pause
-}
-
-openvpn_delete_client_menu() {
-  title
-  echo "6) Network > OpenVPN > Delete Client"
-  hr
-
-  local name client_cn ask_rc=0
-  if ! openvpn_pick_managed_client name; then
-    pause
-    return 0
-  fi
-  client_cn="$(openvpn_client_cn_get "${name}")"
-
-  if ! confirm_yn_or_back "Hapus client OpenVPN '${name}' sekarang?"; then
-    ask_rc=$?
-    if (( ask_rc == 2 )); then
-      return 0
-    fi
-    warn "Dibatalkan."
-    pause
-    return 0
-  fi
-
-  rm -f "$(openvpn_client_ccd_path_for_cn "${client_cn}")" >/dev/null 2>&1 || true
-  openvpn_client_artifacts_remove "${name}"
-  if svc_exists "ovpn-tcp.service"; then
-    systemctl restart "ovpn-tcp.service" >/dev/null 2>&1 || true
-  fi
-  log "Client OpenVPN '${name}' dihapus."
-  pause
-}
-
-openvpn_list_clients_menu() {
-  local -a rows=()
-  local row
-  while IFS= read -r row; do
-    [[ -n "${row}" ]] || continue
-    rows+=("${row}")
-  done < <(openvpn_client_rows)
-
-  title
-  echo "6) Network > OpenVPN > List Clients"
-  hr
-  if (( ${#rows[@]} == 0 )); then
-    warn "Belum ada client OpenVPN terkelola."
-    hr
-    pause
-    return 0
-  fi
-
-  printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "No" "Name" "Client CN" "Created" "WS Token" "Access"
-  printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "----" "------------------" "------------------------" "------------" "----------" "-------"
-  local i name cn created token allowed
-  for i in "${!rows[@]}"; do
-    IFS='|' read -r name cn created token allowed <<<"${rows[$i]}"
-    printf "%-4s %-18s %-24s %-12s %-10s %-7s\n" "$((i + 1))" "${name}" "${cn}" "${created}" "${token:-"-"}" "${allowed}"
-  done
-  hr
-  echo "Ketik nomor untuk lihat OPENVPN ACCOUNT INFO."
-  echo "0/back untuk kembali."
-  hr
-
-  local pick
-  if ! read -r -p "Pilih: " pick; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${pick}"; then
-    return 0
-  fi
-  if [[ ! "${pick}" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#rows[@]} )); then
-    warn "Pilihan tidak valid."
-    pause
-    return 0
-  fi
-
-  IFS='|' read -r name _ <<<"${rows[$((pick - 1))]}"
-  openvpn_account_info_refresh "${name}" || true
-  title
-  echo "6) Network > OpenVPN > OPENVPN ACCOUNT INFO"
-  hr
-  echo "Client : ${name}"
-  echo "File   : $(openvpn_account_info_file "${name}")"
-  hr
-  cat "$(openvpn_account_info_file "${name}")" 2>/dev/null || warn "OPENVPN ACCOUNT INFO tidak ditemukan."
-  hr
-  pause
-}
-
-openvpn_export_client_files_menu() {
-  title
-  echo "6) Network > OpenVPN > Refresh Client Files"
-  hr
-
-  local name
-  if ! openvpn_pick_managed_client name; then
-    pause
-    return 0
-  fi
-
-  if ! openvpn_client_render_artifacts_manage "${name}"; then
-    warn "Gagal refresh file client OpenVPN untuk '${name}'."
-    pause
-    return 0
-  fi
-  openvpn_account_info_refresh "${name}" || true
-
-  log "File client OpenVPN direfresh untuk '${name}'."
-  title
-  echo "Refresh OpenVPN client files ✅"
-  hr
-  cat "$(openvpn_account_info_file "${name}")" 2>/dev/null || true
-  hr
-  pause
 }

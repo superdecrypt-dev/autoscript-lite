@@ -3,6 +3,8 @@
 OPENVPN_RUNTIME_ENV_FILE="${OPENVPN_RUNTIME_ENV_FILE:-/etc/default/openvpn-runtime}"
 OVPN_TCP_SERVICE_NAME="${OVPN_TCP_SERVICE_NAME:-ovpn-tcp.service}"
 OVPNWS_PROXY_SERVICE_NAME="${OVPNWS_PROXY_SERVICE_NAME:-ovpnws-proxy.service}"
+OPENVPN_EXPIRED_SERVICE_NAME="${OPENVPN_EXPIRED_SERVICE_NAME:-openvpn-expired.service}"
+OPENVPN_EXPIRED_TIMER_NAME="${OPENVPN_EXPIRED_TIMER_NAME:-openvpn-expired.timer}"
 OVPN_ENABLE_TCP_WAS_SET="${OVPN_ENABLE_TCP+x}"
 OVPN_ENABLE_SSL_WAS_SET="${OVPN_ENABLE_SSL+x}"
 OVPN_ENABLE_WS_WAS_SET="${OVPN_ENABLE_WS+x}"
@@ -929,6 +931,7 @@ stage_openvpn_scaffold_assets() {
   validate_openvpn_ports_config
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk ovpnws-proxy."
   install_setup_bin_or_die "ovpnws-proxy.py" "/usr/local/bin/ovpnws-proxy" 0755
+  install_setup_bin_or_die "openvpn-expired" "/usr/local/bin/openvpn-expired" 0755
   write_openvpn_runtime_env
   render_openvpn_server_config
 
@@ -952,12 +955,25 @@ stage_openvpn_scaffold_assets() {
     "OVPNWS_HANDSHAKE_TIMEOUT=${OVPNWS_HANDSHAKE_TIMEOUT}" \
     "OVPN_TCP_SERVICE_NAME=${OVPN_TCP_SERVICE_NAME}"
 
+  render_setup_template_or_die \
+    "systemd/openvpn-expired.service" \
+    "/etc/systemd/system/${OPENVPN_EXPIRED_SERVICE_NAME}" \
+    0644 \
+    "OPENVPN_RUNTIME_ENV_FILE=${OPENVPN_RUNTIME_ENV_FILE}" \
+    "OVPN_TCP_SERVICE_NAME=${OVPN_TCP_SERVICE_NAME}"
+
+  render_setup_template_or_die \
+    "systemd/openvpn-expired.timer" \
+    "/etc/systemd/system/${OPENVPN_EXPIRED_TIMER_NAME}" \
+    0644 \
+    "OPENVPN_EXPIRED_SERVICE_NAME=${OPENVPN_EXPIRED_SERVICE_NAME}"
+
   systemctl daemon-reload >/dev/null 2>&1 || true
   ok "OpenVPN scaffold siap:"
   ok "  - env    : ${OPENVPN_RUNTIME_ENV_FILE}"
   ok "  - config : ${OVPN_SERVER_CONF}"
-  ok "  - unit   : ${OVPN_TCP_SERVICE_NAME}, ${OVPNWS_PROXY_SERVICE_NAME}"
-  ok "  - binary : /usr/local/bin/ovpnws-proxy"
+  ok "  - unit   : ${OVPN_TCP_SERVICE_NAME}, ${OVPNWS_PROXY_SERVICE_NAME}, ${OPENVPN_EXPIRED_SERVICE_NAME}, ${OPENVPN_EXPIRED_TIMER_NAME}"
+  ok "  - binary : /usr/local/bin/ovpnws-proxy, /usr/local/bin/openvpn-expired"
 }
 
 install_openvpn_stack() {
@@ -986,6 +1002,12 @@ install_openvpn_stack() {
     openvpn_service_enable_start_checked "${OVPNWS_PROXY_SERVICE_NAME}" || die "Gagal mengaktifkan ${OVPNWS_PROXY_SERVICE_NAME}"
   else
     systemctl disable --now "${OVPNWS_PROXY_SERVICE_NAME}" >/dev/null 2>&1 || true
+  fi
+
+  if systemctl enable --now "${OPENVPN_EXPIRED_TIMER_NAME}" >/dev/null 2>&1; then
+    systemctl start "${OPENVPN_EXPIRED_SERVICE_NAME}" >/dev/null 2>&1 || true
+  else
+    warn "Gagal mengaktifkan ${OPENVPN_EXPIRED_TIMER_NAME}. Sinkronisasi expiry OpenVPN mungkin tidak otomatis."
   fi
 
   ok "OpenVPN stack aktif."

@@ -1961,7 +1961,7 @@ openvpn_status_menu() {
   hr
 
   local env_file core_svc ws_svc tcp_enabled ssl_enabled ws_enabled
-  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count
+  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible
   env_file="$(openvpn_runtime_env_file)"
   core_svc="ovpn-tcp.service"
   ws_svc="ovpnws-proxy.service"
@@ -1979,12 +1979,37 @@ openvpn_status_menu() {
   default_profile="$(openvpn_demo_profile_path)"
   default_ssl_profile="$(openvpn_demo_ssl_profile_path)"
   default_ws_profile="$(openvpn_demo_ws_profile_path)"
-  default_token="$(openvpn_client_state_token_get "${default_name}")"
-  default_download_url="$(openvpn_bundle_url_value "${default_name}" 2>/dev/null || true)"
-  default_download_file="$(openvpn_bundle_path_value "${default_name}" 2>/dev/null || true)"
+  default_token="-"
+  default_download_url="-"
+  default_download_file="-"
   default_ws_path="-"
   default_ws_alt_path="-"
   client_count="$(openvpn_client_count_value 2>/dev/null || echo "0")"
+  runtime_ready="false"
+  runtime_reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
+  if [[ -z "${runtime_reason}" ]]; then
+    runtime_ready="true"
+  fi
+  default_visible="false"
+  if openvpn_client_state_exists "${default_name}" \
+    || [[ -f "${default_profile}" || -f "${default_ssl_profile}" || -f "${default_ws_profile}" ]]; then
+    default_visible="true"
+  fi
+  if [[ "${default_visible}" == "true" ]]; then
+    default_token="$(openvpn_client_state_token_get "${default_name}")"
+    default_download_file="$(openvpn_bundle_path_value "${default_name}" 2>/dev/null || true)"
+    if [[ -f "${default_download_file}" ]]; then
+      default_download_url="$(openvpn_bundle_url_value "${default_name}" 2>/dev/null || true)"
+    else
+      default_download_file="-"
+      default_download_url="-"
+    fi
+  else
+    default_name="-"
+    default_profile="-"
+    default_ssl_profile="-"
+    default_ws_profile="-"
+  fi
   if openvpnws_token_valid "${default_token}"; then
     default_ws_path="$(openvpnws_path_from_token "${default_token}" 2>/dev/null || true)"
     default_ws_alt_path="$(openvpnws_alt_path_from_token "${default_token}" 2>/dev/null || true)"
@@ -1994,6 +2019,10 @@ openvpn_status_menu() {
   fi
 
   echo "Runtime env : ${env_file}"
+  echo "Runtime OK  : ${runtime_ready}"
+  if [[ -n "${runtime_reason}" ]]; then
+    echo "Runtime Why : ${runtime_reason}"
+  fi
   echo "Modes       : TCP=${tcp_enabled} | SSL/TLS=${ssl_enabled} | WS=${ws_enabled}"
   echo "Core b/e    : ${tcp_bind}:${tcp_port}"
   echo "WS proxy    : ${ws_bind}:${ws_port}"
@@ -2050,7 +2079,13 @@ openvpn_status_menu() {
     [[ -f "${default_ssl_profile}" ]] && log "Default SSL file : ${default_ssl_profile}"
     [[ -f "${default_ws_profile}" ]] && log "Default WS file  : ${default_ws_profile}"
   else
-    warn "File default client belum tersedia: ${default_profile}"
+    if [[ "${default_visible}" == "true" ]]; then
+      warn "File default client belum tersedia: ${default_profile}"
+    elif [[ -n "${runtime_reason}" ]]; then
+      warn "Default client belum tersedia karena runtime OpenVPN belum siap."
+    else
+      warn "Default client belum tersedia."
+    fi
   fi
   echo "Catatan     : file utama untuk injector adalah profile *.ovpn atau paket ZIP."
   echo "              ZIP memuat tiga profile: *-tcp.ovpn, *-ssl.ovpn, dan *-ws.ovpn."
@@ -2112,11 +2147,11 @@ openvpn_demo_files_show() {
     return 0
   fi
 
-  local found="false" row="" name cn created token allowed remote tcp_file ssl_file ws_file download_url download_file main_path alt_path marker
+  local found="false" row="" name cn created expired token allowed remote tcp_file ssl_file ws_file download_url download_file main_path alt_path marker
   while IFS= read -r row; do
     [[ -n "${row}" ]] || continue
     found="true"
-    IFS='|' read -r name cn created token allowed <<<"${row}"
+    IFS='|' read -r name cn created expired token allowed <<<"${row}"
     tcp_file="${clients_dir}/${name}-tcp.ovpn"
     ssl_file="${clients_dir}/${name}-ssl.ovpn"
     ws_file="${clients_dir}/${name}-ws.ovpn"
@@ -2139,6 +2174,7 @@ openvpn_demo_files_show() {
     echo "Client   : ${name}${marker}"
     echo "CN       : ${cn}"
     echo "Created  : ${created}"
+    echo "Expired  : ${expired}"
     echo "Access   : ${allowed}"
     [[ -n "${remote}" ]] && echo "Remote   : ${remote}"
     echo "ZIP URL  : ${download_url:-"-"}"
@@ -2207,8 +2243,9 @@ sshws_detect_proxy_port() {
 }
 
 sshws_status_menu() {
+  local breadcrumb="${1:-10) Maintenance > SSH WS Status}"
   title
-  echo "10) Maintenance > SSH WS Status"
+  echo "${breadcrumb}"
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -2251,8 +2288,9 @@ sshws_status_menu() {
 }
 
 sshws_restart_menu() {
+  local breadcrumb="${1:-10) Maintenance > Restart SSH WS}"
   title
-  echo "10) Maintenance > Restart SSH WS"
+  echo "${breadcrumb}"
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -2975,6 +3013,28 @@ try:
   with open(path, "r", encoding="utf-8") as f:
     d = json.load(f)
   print(str(d.get("created_at") or "").strip())
+except Exception:
+  print("")
+PY
+}
+
+ssh_user_state_expired_at_get() {
+  local username="${1:-}"
+  local state_file
+  ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_resolve_file "${username}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    d = json.load(f)
+  print(str(d.get("expired_at") or "").strip()[:10])
 except Exception:
   print("")
 PY
@@ -3874,6 +3934,233 @@ for _, username, created, expired in rows:
 PY
 }
 
+ssh_ovpn_user_rows() {
+  ssh_state_dirs_prepare
+  local ovpn_clients_dir ccd_dir
+  ovpn_clients_dir="$(openvpn_clients_dir_value 2>/dev/null || echo "/etc/openvpn/clients")"
+  ccd_dir="$(openvpn_ccd_dir_value 2>/dev/null || echo "/etc/openvpn/server/ccd")"
+  need_python3
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${ovpn_clients_dir}" "${ccd_dir}" 2>/dev/null || true
+import json
+import os
+import pwd
+import re
+import sys
+
+ssh_root, ovpn_root, ccd_root = sys.argv[1:4]
+
+def norm_username(raw):
+  text = str(raw or "").strip()
+  if text.endswith("@ssh"):
+    text = text[:-4]
+  if "@" in text:
+    text = text.split("@", 1)[0]
+  return text
+
+def norm_date(value):
+  text = str(value or "").strip()
+  if not text or text == "-":
+    return "-"
+  match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+  return match.group(0) if match else "-"
+
+def user_exists(name):
+  try:
+    pwd.getpwnam(name)
+    return True
+  except KeyError:
+    return False
+  except Exception:
+    return False
+
+ssh_map = {}
+if os.path.isdir(ssh_root):
+  for entry in os.listdir(ssh_root):
+    if entry.startswith(".") or not entry.endswith(".json"):
+      continue
+    name = norm_username(entry[:-5])
+    if not name:
+      continue
+    payload = {}
+    try:
+      with open(os.path.join(ssh_root, entry), "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+      if isinstance(loaded, dict):
+        payload = loaded
+    except Exception:
+      payload = {}
+    meta_user = norm_username(payload.get("username") or name) or name
+    ssh_map[meta_user] = {
+      "created": norm_date(payload.get("created_at")),
+      "expired": norm_date(payload.get("expired_at")),
+      "system": "ok" if user_exists(meta_user) else "missing",
+    }
+
+ovpn_map = {}
+if os.path.isdir(ovpn_root):
+  for entry in os.listdir(ovpn_root):
+    if entry.startswith(".") or not entry.endswith(".json"):
+      continue
+    path = os.path.join(ovpn_root, entry)
+    name = norm_username(entry[:-5])
+    if not name:
+      continue
+    payload = {}
+    try:
+      with open(path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+      if isinstance(loaded, dict):
+        payload = loaded
+    except Exception:
+      payload = {}
+    client_name = norm_username(payload.get("client_name") or name) or name
+    client_cn = str(payload.get("client_cn") or client_name).strip() or client_name
+    token = str(payload.get("ovpnws_token") or "").strip().lower()
+    access = "yes" if os.path.exists(os.path.join(ccd_root, client_cn)) else "no"
+    ovpn_map[client_name] = {
+      "created": norm_date(payload.get("created_at")),
+      "expired": norm_date(payload.get("expired_at")),
+      "client_cn": client_cn,
+      "token": token if re.fullmatch(r"[a-f0-9]{10}", token) else "-",
+      "access": access,
+    }
+
+names = sorted(set(ssh_map) | set(ovpn_map), key=str.lower)
+for name in names:
+  ssh = ssh_map.get(name)
+  ovpn = ovpn_map.get(name)
+  if ssh and ovpn:
+    pair = "paired"
+  elif ssh:
+    pair = "ssh-only"
+  else:
+    pair = "ovpn-only"
+  created = (ssh or {}).get("created") or (ovpn or {}).get("created") or "-"
+  if not created:
+    created = "-"
+  expired = "-"
+  for value in ((ssh or {}).get("expired"), (ovpn or {}).get("expired")):
+    if value and value != "-":
+      expired = value
+      break
+  ssh_state = (ssh or {}).get("system") if ssh else "-"
+  ovpn_state = "yes" if ovpn else "-"
+  access = (ovpn or {}).get("access") if ovpn else "-"
+  client_cn = (ovpn or {}).get("client_cn") or "-"
+  token = (ovpn or {}).get("token") or "-"
+  print("|".join([name, pair, ssh_state, ovpn_state, access, created, expired, client_cn, token]))
+PY
+}
+
+ssh_ovpn_find_user_row() {
+  local username="${1:-}"
+  local row
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    if [[ "${row%%|*}" == "${username}" ]]; then
+      printf '%s\n' "${row}"
+      return 0
+    fi
+  done < <(ssh_ovpn_user_rows)
+  return 1
+}
+
+ssh_ovpn_user_has_ssh_side() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 1
+  ssh_state_dirs_prepare
+  [[ -f "$(ssh_user_state_file "${username}")" \
+    || -f "$(ssh_user_state_compat_file "${username}")" \
+    || -f "$(ssh_account_info_file "${username}")" \
+    || -f "${SSH_ACCOUNT_DIR}/${username}.txt" ]]
+}
+
+ssh_ovpn_user_has_ovpn_side() {
+  local username="${1:-}"
+  openvpn_client_state_exists "${username}"
+}
+
+ssh_ovpn_user_has_linux_account() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 1
+  id "${username}" >/dev/null 2>&1
+}
+
+ssh_ovpn_openvpn_side_ensure() {
+  local username="${1:-}"
+  local created_at="${2:-}"
+  local expired_at="${3:-}"
+  local existing_state="false"
+  local client_cn=""
+  if [[ -z "${username}" ]]; then
+    return 1
+  fi
+  if openvpn_client_state_exists "${username}"; then
+    existing_state="true"
+    client_cn="$(openvpn_client_cn_get "${username}")"
+  else
+    client_cn="$(openvpn_client_generate_cn "${username}" 2>/dev/null || true)"
+    if [[ -z "${client_cn}" ]]; then
+      warn "Gagal membuat Client CN OpenVPN unik untuk '${username}'."
+      return 1
+    fi
+    if ! openvpn_client_issue_certificate_manage "${username}" "${client_cn}"; then
+      openvpn_client_add_rollback "${username}" "${client_cn}" ""
+      return 1
+    fi
+    if ! openvpn_client_state_upsert "${username}" "${client_cn}" >/dev/null; then
+      openvpn_client_add_rollback "${username}" "${client_cn}" ""
+      warn "Gagal menulis state OpenVPN untuk '${username}'."
+      return 1
+    fi
+  fi
+
+  if ! openvpn_client_state_set_dates "${username}" "${created_at}" "${expired_at}"; then
+    if [[ "${existing_state}" != "true" ]]; then
+      openvpn_client_add_rollback "${username}" "${client_cn}" ""
+    fi
+    warn "Gagal menyimpan expiry OpenVPN untuk '${username}'."
+    return 1
+  fi
+
+  if ! openvpn_client_access_sync_manage "${username}"; then
+    if [[ "${existing_state}" != "true" ]]; then
+      openvpn_client_add_rollback "${username}" "${client_cn}" ""
+    fi
+    warn "Gagal menyinkronkan akses OpenVPN untuk '${username}'."
+    return 1
+  fi
+
+  if ! openvpn_client_render_artifacts_manage "${username}"; then
+    if [[ "${existing_state}" != "true" ]]; then
+      openvpn_client_add_rollback "${username}" "${client_cn}" ""
+    fi
+    warn "Gagal membuat file client OpenVPN untuk '${username}'."
+    return 1
+  fi
+
+  openvpn_account_info_refresh "${username}" || true
+  openvpn_expiry_sync_now_warn "${username}" || true
+  return 0
+}
+
+ssh_ovpn_username_duplicate_reason() {
+  local username="${1:-}"
+  local reason=""
+  if reason="$(ssh_username_duplicate_reason "${username}")"; then
+    printf '%s\n' "${reason}"
+    return 0
+  fi
+  if openvpn_client_state_exists "${username}" \
+    || [[ -f "$(openvpn_client_profile_path_value "${username}")" ]] \
+    || [[ -f "$(openvpn_account_info_file "${username}")" ]] \
+    || [[ -f "$(openvpn_client_bundle_path_value "${username}" 2>/dev/null || true)" ]]; then
+    printf "Username '%s' sudah terdaftar pada metadata OpenVPN managed.\n" "${username}"
+    return 0
+  fi
+  return 1
+}
+
 ssh_add_user_header_render() {
   local -n _page_ref="$1"
   local page_size=5
@@ -3882,12 +4169,12 @@ ssh_add_user_header_render() {
   while IFS= read -r row; do
     [[ -n "${row}" ]] || continue
     rows+=("${row}")
-  done < <(ssh_managed_users_lines)
+  done < <(ssh_ovpn_user_rows)
 
   local total="${#rows[@]}"
-  echo "Daftar akun SSH terdaftar (maks 5 baris):"
+  echo "Daftar akun SSH & OVPN terdaftar (maks 5 baris):"
   if (( total == 0 )); then
-    echo "  (Belum ada akun SSH terkelola)"
+    echo "  (Belum ada akun SSH/OVPN terkelola)"
     echo "  Input username baru untuk lanjut."
     return 0
   fi
@@ -3908,13 +4195,13 @@ ssh_add_user_header_render() {
     end="${total}"
   fi
 
-  printf "%-4s %-20s %-16s %-10s\n" "No" "Username" "Created" "Expired"
-  printf "%-4s %-20s %-16s %-10s\n" "----" "--------------------" "----------------" "----------"
+  printf "%-4s %-18s %-10s %-6s %-6s %-10s\n" "No" "Username" "Pair" "SSH" "OVPN" "Expired"
+  printf "%-4s %-18s %-10s %-6s %-6s %-10s\n" "----" "------------------" "----------" "------" "------" "----------"
 
-  local i username created expired
+  local i username pair ssh_state ovpn_state access created expired client_cn token
   for ((i=start; i<end; i++)); do
-    IFS='|' read -r username created expired <<<"${rows[$i]}"
-    printf "%-4s %-20s %-16s %-10s\n" "$((i + 1))" "${username}" "${created}" "${expired}"
+    IFS='|' read -r username pair ssh_state ovpn_state access created expired client_cn token <<<"${rows[$i]}"
+    printf "%-4s %-18s %-10s %-6s %-6s %-10s\n" "$((i + 1))" "${username}" "${pair}" "${ssh_state}" "${ovpn_state}" "${expired}"
   done
 
   echo "Halaman: $((page + 1))/${pages} | Total: ${total}"
@@ -3923,16 +4210,111 @@ ssh_add_user_header_render() {
   fi
 }
 
+ssh_ovpn_pick_user() {
+  local -n _out_ref="$1"
+  local -a rows=()
+  local row
+  _out_ref=""
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    rows+=("${row}")
+  done < <(ssh_ovpn_user_rows)
+
+  if (( ${#rows[@]} == 0 )); then
+    warn "Belum ada akun SSH/OVPN terkelola."
+    return 1
+  fi
+
+  printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "No" "Username" "Pair" "SSH" "OVPN" "Access" "Expired"
+  printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "----" "------------------" "----------" "------" "------" "-------" "----------"
+  local i username pair ssh_state ovpn_state access created expired client_cn token
+  for i in "${!rows[@]}"; do
+    IFS='|' read -r username pair ssh_state ovpn_state access created expired client_cn token <<<"${rows[$i]}"
+    printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "$((i + 1))" "${username}" "${pair}" "${ssh_state}" "${ovpn_state}" "${access}" "${expired}"
+  done
+
+  local pick
+  while true; do
+    if ! read -r -p "Pilih akun (NO, atau kembali): " pick; then
+      echo
+      return 1
+    fi
+    if is_back_choice "${pick}"; then
+      return 1
+    fi
+    [[ "${pick}" =~ ^[0-9]+$ ]] || { warn "Input harus angka."; continue; }
+    if (( pick < 1 || pick > ${#rows[@]} )); then
+      warn "Di luar range."
+      continue
+    fi
+    IFS='|' read -r _out_ref _ <<<"${rows[$((pick - 1))]}"
+    return 0
+  done
+}
+
+ssh_ovpn_account_info_show() {
+  local username="${1:-}"
+  local breadcrumb="${2:-3) SSH & OVPN User > ACCOUNT INFO}"
+  local row pair ssh_state ovpn_state access created expired client_cn token
+  row="$(ssh_ovpn_find_user_row "${username}" 2>/dev/null || true)"
+  if [[ -z "${row}" ]]; then
+    warn "Akun '${username}' tidak ditemukan."
+    pause
+    return 0
+  fi
+  IFS='|' read -r username pair ssh_state ovpn_state access created expired client_cn token <<<"${row}"
+
+  if ssh_ovpn_user_has_ssh_side "${username}"; then
+    ssh_account_info_refresh_warn "${username}" || true
+  fi
+  if ssh_ovpn_user_has_ovpn_side "${username}"; then
+    openvpn_account_info_refresh "${username}" || true
+  fi
+
+  title
+  echo "${breadcrumb}"
+  hr
+  printf "%-12s : %s\n" "Username" "${username}"
+  printf "%-12s : %s\n" "Pair" "${pair}"
+  printf "%-12s : %s\n" "SSH" "${ssh_state}"
+  printf "%-12s : %s\n" "OVPN" "${ovpn_state}"
+  printf "%-12s : %s\n" "Access" "${access}"
+  printf "%-12s : %s\n" "Expired" "${expired}"
+  if [[ "${client_cn}" != "-" ]]; then
+    printf "%-12s : %s\n" "Client CN" "${client_cn}"
+  fi
+  if [[ "${token}" != "-" ]]; then
+    printf "%-12s : %s\n" "WS Token" "${token}"
+  fi
+  hr
+  if [[ -f "$(ssh_account_info_file "${username}")" ]]; then
+    cat "$(ssh_account_info_file "${username}")"
+    hr
+  else
+    warn "SSH ACCOUNT INFO tidak tersedia untuk '${username}'."
+    hr
+  fi
+  if ssh_ovpn_user_has_ovpn_side "${username}" && [[ -f "$(openvpn_account_info_file "${username}")" ]]; then
+    cat "$(openvpn_account_info_file "${username}")"
+    hr
+    echo "Catatan : password hanya berlaku untuk SSH. OpenVPN memakai profile/ZIP."
+  else
+    warn "OPENVPN ACCOUNT INFO tidak tersedia untuk '${username}'."
+  fi
+  hr
+  pause
+}
+
 ssh_add_user_menu() {
   local username qf acc_file header_page=0
   while true; do
     title
-    echo "3) SSH Users > Add User"
+    echo "3) SSH & OVPN User > Add User"
     hr
     ssh_add_user_header_render header_page
     hr
 
-    if ! read -r -p "Username SSH (atau next/previous/kembali): " username; then
+    if ! read -r -p "Username SSH & OVPN (atau next/previous/kembali): " username; then
       echo
       return 0
     fi
@@ -3959,7 +4341,7 @@ ssh_add_user_menu() {
     return 0
   fi
   local dup_reason=""
-  if dup_reason="$(ssh_username_duplicate_reason "${username}")"; then
+  if dup_reason="$(ssh_ovpn_username_duplicate_reason "${username}")"; then
     warn "${dup_reason}"
     pause
     return 0
@@ -4172,14 +4554,41 @@ ssh_add_user_menu() {
     return 0
   fi
 
-  log "Akun SSH berhasil dibuat: ${username}"
+  local pair_status="paired"
+  local ovpn_notice=""
+  local ovpn_ready_reason=""
+  if openvpn_manage_is_ready; then
+    if ! ssh_ovpn_openvpn_side_ensure "${username}" "${created_at}" "${expired_at}"; then
+      pair_status="ssh-only"
+      ovpn_notice="Sisi OpenVPN belum berhasil dibuat. Akun tetap dibuat sebagai SSH-only."
+    fi
+  else
+    pair_status="ssh-only"
+    ovpn_ready_reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
+    ovpn_notice="OpenVPN belum siap: ${ovpn_ready_reason:-runtime belum siap}. Akun dibuat sebagai SSH-only."
+  fi
+
+  if [[ "${pair_status}" == "paired" ]]; then
+    log "Akun SSH & OVPN berhasil dibuat: ${username}"
+  else
+    log "Akun SSH dibuat tanpa sisi OpenVPN: ${username}"
+  fi
   title
-  echo "Add SSH user sukses ✅"
+  if [[ "${pair_status}" == "paired" ]]; then
+    echo "Add SSH & OVPN user sukses ✅"
+  else
+    echo "Add SSH user sukses ✅"
+  fi
   hr
-  echo "Account file:"
+  printf "%-16s : %s\n" "Pair Status" "${pair_status}"
+  echo "SSH account file:"
   echo "  ${acc_file}"
-  echo "Metadata file:"
+  echo "SSH metadata file:"
   echo "  ${qf}"
+  if [[ "${pair_status}" == "paired" ]]; then
+    echo "OVPN account file:"
+    echo "  $(openvpn_account_info_file "${username}")"
+  fi
   hr
   echo "SSH ACCOUNT INFO:"
   if [[ -f "${acc_file}" ]]; then
@@ -4187,10 +4596,20 @@ ssh_add_user_menu() {
   else
     echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
   fi
+  hr
+  echo "OPENVPN ACCOUNT INFO:"
+  if [[ -f "$(openvpn_account_info_file "${username}")" ]]; then
+    cat "$(openvpn_account_info_file "${username}")"
+  elif [[ -n "${ovpn_notice}" ]]; then
+    echo "${ovpn_notice}"
+    echo "Gunakan 'Refresh OVPN Files' setelah runtime OpenVPN siap untuk melengkapi sisi OpenVPN."
+  else
+    echo "(OPENVPN ACCOUNT INFO tidak ditemukan: $(openvpn_account_info_file "${username}"))"
+  fi
   if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
     hr
     echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
+    echo "Note             : password ini hanya untuk SSH; OpenVPN memakai profile/ZIP."
   fi
   hr
   password=""
@@ -4199,17 +4618,17 @@ ssh_add_user_menu() {
 
 ssh_delete_user_menu() {
   title
-  echo "3) SSH Users > Delete User"
+  echo "3) SSH & OVPN User > Delete User"
   hr
 
   local username
-  if ! ssh_pick_managed_user username; then
+  if ! ssh_ovpn_pick_user username; then
     pause
     return 0
   fi
 
   local ask_rc=0
-  if ! confirm_yn_or_back "Hapus akun SSH '${username}' sekarang?"; then
+  if ! confirm_yn_or_back "Hapus akun SSH & OVPN '${username}' sekarang?"; then
     ask_rc=$?
     if (( ask_rc == 2 )); then
       return 0
@@ -4219,7 +4638,7 @@ ssh_delete_user_menu() {
     return 0
   fi
 
-  if id "${username}" >/dev/null 2>&1; then
+  if ssh_ovpn_user_has_ssh_side "${username}" && ssh_ovpn_user_has_linux_account "${username}"; then
     userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1 || {
       warn "Gagal menghapus user Linux '${username}'."
       pause
@@ -4227,32 +4646,39 @@ ssh_delete_user_menu() {
     }
   fi
 
-  rm -f "$(ssh_user_state_file "${username}")" \
-        "${SSH_USERS_STATE_DIR}/${username}.json" \
-        "$(ssh_account_info_file "${username}")" \
-        "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
-  log "Akun SSH '${username}' dihapus."
+  if ssh_ovpn_user_has_ssh_side "${username}"; then
+    rm -f "$(ssh_user_state_file "${username}")" \
+          "${SSH_USERS_STATE_DIR}/${username}.json" \
+          "$(ssh_account_info_file "${username}")" \
+          "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
+  fi
+  if ssh_ovpn_user_has_ovpn_side "${username}"; then
+    openvpn_client_delete_manage "${username}" || true
+  fi
+  log "Akun SSH & OVPN '${username}' dihapus."
   pause
 }
 
 ssh_extend_expiry_menu() {
   title
-  echo "3) SSH Users > Set Expiry"
+  echo "3) SSH & OVPN User > Set Expiry"
   hr
 
   local username
-  if ! ssh_pick_managed_user username; then
-    pause
-    return 0
-  fi
-  if ! id "${username}" >/dev/null 2>&1; then
-    warn "User Linux '${username}' tidak ditemukan."
+  if ! ssh_ovpn_pick_user username; then
     pause
     return 0
   fi
 
   local current_exp
-  current_exp="$(chage -l "${username}" 2>/dev/null | awk -F': ' '/Account expires/{print $2; exit}' || true)"
+  current_exp="-"
+  if ssh_ovpn_user_has_ssh_side "${username}" && ssh_ovpn_user_has_linux_account "${username}"; then
+    current_exp="$(chage -l "${username}" 2>/dev/null | awk -F': ' '/Account expires/{print $2; exit}' || true)"
+  elif ssh_ovpn_user_has_ssh_side "${username}"; then
+    current_exp="$(ssh_user_state_expired_at_get "${username}" 2>/dev/null || true)"
+  elif ssh_ovpn_user_has_ovpn_side "${username}"; then
+    current_exp="$(openvpn_client_expired_at_get "${username}" 2>/dev/null || true)"
+  fi
   [[ -n "${current_exp}" ]] || current_exp="-"
   echo "Expiry saat ini: ${current_exp}"
   hr
@@ -4315,31 +4741,56 @@ ssh_extend_expiry_menu() {
     return 0
   fi
 
-  if ! chage -E "${new_expiry}" "${username}" >/dev/null 2>&1; then
-    warn "Gagal update expiry untuk '${username}'."
+  local created_at updated_any="false"
+  created_at="$(ssh_user_state_created_at_get "${username}")"
+  if [[ -z "${created_at}" ]]; then
+    created_at="$(openvpn_client_created_at_get "${username}" 2>/dev/null || true)"
+  fi
+  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d')"
+
+  if ssh_ovpn_user_has_ssh_side "${username}"; then
+    if ssh_ovpn_user_has_linux_account "${username}"; then
+      if ! chage -E "${new_expiry}" "${username}" >/dev/null 2>&1; then
+        warn "Gagal update expiry SSH untuk '${username}'."
+      else
+        updated_any="true"
+      fi
+    else
+      warn "User Linux '${username}' tidak ditemukan. Metadata SSH tetap akan disinkronkan."
+    fi
+    if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
+      warn "Metadata SSH gagal diperbarui untuk '${username}'."
+    else
+      updated_any="true"
+    fi
+    if ! ssh_account_info_refresh_from_state "${username}"; then
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    fi
+  fi
+
+  if ssh_ovpn_user_has_ovpn_side "${username}"; then
+    if ! openvpn_client_state_set_dates "${username}" "${created_at}" "${new_expiry}"; then
+      warn "Metadata OpenVPN gagal diperbarui untuk '${username}'."
+    else
+      updated_any="true"
+    fi
+    openvpn_expiry_sync_now_warn "${username}" || true
+    openvpn_account_info_refresh "${username}" || true
+  fi
+
+  if [[ "${updated_any}" != "true" ]]; then
+    warn "Tidak ada sisi SSH/OVPN yang berhasil diperbarui untuk '${username}'."
     pause
     return 0
   fi
 
-  local created_at
-  created_at="$(ssh_user_state_created_at_get "${username}")"
-  if [[ -z "${created_at}" ]]; then
-    created_at="$(date -u '+%Y-%m-%d')"
-  fi
-  if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
-    warn "Metadata SSH gagal diperbarui untuk '${username}'."
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}"; then
-    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
-  fi
-
-  log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
+  log "Expiry akun SSH & OVPN '${username}' diperbarui ke ${new_expiry}."
   pause
 }
 
 ssh_reset_password_menu() {
   title
-  echo "3) SSH Users > Reset Password"
+  echo "3) SSH & OVPN User > Reset SSH Password"
   hr
 
   local username
@@ -4381,22 +4832,18 @@ ssh_reset_password_menu() {
 }
 
 ssh_list_users_menu() {
-  local -a users=()
-  local u
+  local -a rows=()
+  local row
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    rows+=("${row}")
+  done < <(ssh_ovpn_user_rows)
 
-  ssh_state_dirs_prepare
-  need_python3
-
-  while IFS= read -r u; do
-    [[ -n "${u}" ]] || continue
-    users+=("${u}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
-
-  if (( ${#users[@]} == 0 )); then
+  if (( ${#rows[@]} == 0 )); then
     title
-    echo "3) SSH Users > List Users"
+    echo "3) SSH & OVPN User > List Users"
     hr
-    warn "Belum ada akun SSH terkelola."
+    warn "Belum ada akun SSH/OVPN terkelola."
     hr
     pause
     return 0
@@ -4404,76 +4851,18 @@ ssh_list_users_menu() {
 
   while true; do
     title
-    echo "3) SSH Users > List Users"
+    echo "3) SSH & OVPN User > List Users"
     hr
-    printf "%-4s %-20s %-12s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
-    local i username qf fields meta_user created expired sys_user
-    for i in "${!users[@]}"; do
-      username="${users[$i]}"
-      qf="$(ssh_user_state_file "${username}")"
-      fields="$(python3 - <<'PY' "${qf}" 2>/dev/null || true
-import json
-import re
-import sys
-from datetime import datetime
-
-path = sys.argv[1]
-username = ""
-created = "-"
-expired = "-"
-
-def norm_created(v):
-  s = str(v or "").strip()
-  if not s or s == "-":
-    return "-"
-  s = s.replace("T", " ").strip()
-  if s.endswith("Z"):
-    s = s[:-1]
-  if len(s) >= 10 and re.match(r"^\d{4}-\d{2}-\d{2}$", s[:10]):
-    return s[:10]
-  try:
-    dt = datetime.fromisoformat(s)
-    return dt.strftime("%Y-%m-%d")
-  except Exception:
-    pass
-  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
-  if m:
-    return m.group(0)
-  return "-"
-
-def norm_expired(v):
-  s = str(v or "").strip()
-  if not s or s == "-":
-    return "-"
-  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
-  return m.group(0) if m else "-"
-
-try:
-  with open(path, "r", encoding="utf-8") as f:
-    d = json.load(f)
-  if isinstance(d, dict):
-    username = str(d.get("username") or "").strip()
-    created = norm_created(d.get("created_at"))
-    expired = norm_expired(d.get("expired_at"))
-except Exception:
-  pass
-print("|".join([username, created, expired]))
-PY
-)"
-      IFS='|' read -r meta_user created expired <<<"${fields}"
-      if [[ -n "${meta_user}" ]]; then
-        meta_user="$(ssh_username_from_key "${meta_user}")"
-        [[ -n "${meta_user}" ]] && username="${meta_user}"
-      fi
-      sys_user="present"
-      if ! id "${username}" >/dev/null 2>&1; then
-        sys_user="missing"
-      fi
-      printf "%-4s %-20s %-12s %-12s %-12s\n" "$((i + 1))" "${username}" "${created}" "${expired}" "${sys_user}"
+    printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "No" "Username" "Pair" "SSH" "OVPN" "Access" "Expired"
+    printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "----" "------------------" "----------" "------" "------" "-------" "----------"
+    local i username pair ssh_state ovpn_state access created expired client_cn token
+    for i in "${!rows[@]}"; do
+      IFS='|' read -r username pair ssh_state ovpn_state access created expired client_cn token <<<"${rows[$i]}"
+      printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "$((i + 1))" "${username}" "${pair}" "${ssh_state}" "${ovpn_state}" "${access}" "${expired}"
     done
     hr
-    echo "Ketik NO untuk lihat detail SSH ACCOUNT INFO."
-    echo "0/back untuk kembali ke SSH Users."
+    echo "Ketik nomor untuk lihat SSH & OVPN ACCOUNT INFO."
+    echo "0/back untuk kembali."
     hr
 
     local pick
@@ -4484,37 +4873,64 @@ PY
     if is_back_choice "${pick}"; then
       return 0
     fi
-    if [[ ! "${pick}" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#users[@]} )); then
+    if [[ ! "${pick}" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#rows[@]} )); then
       warn "Pilihan tidak valid."
       sleep 1
       continue
     fi
 
-    username="${users[$((pick - 1))]}"
-    local acc_file password_info
-    ssh_account_info_refresh_warn "${username}" || true
-    acc_file="$(ssh_account_info_file "${username}")"
-
-    title
-    echo "3) SSH Users > SSH ACCOUNT INFO"
-    hr
-    echo "Username : ${username}"
-    echo "File     : ${acc_file}"
-    hr
-    if [[ -f "${acc_file}" ]]; then
-      cat "${acc_file}"
-      password_info="$(grep -E '^Password[[:space:]]*:' "${acc_file}" 2>/dev/null | head -n1 | sed -E 's/^Password[[:space:]]*:[[:space:]]*//' || true)"
-      if [[ "$(ssh_account_info_password_mode)" != "store" || -z "${password_info}" || "${password_info}" == "********" ]]; then
-        hr
-        warn "Password plaintext tidak tersedia di account info (mode mask)."
-        echo "Gunakan menu 4) Reset Password untuk mendapatkan one-time password."
-      fi
-    else
-      warn "SSH ACCOUNT INFO tidak ditemukan untuk '${username}'."
-    fi
-    hr
-    pause
+    IFS='|' read -r username _ <<<"${rows[$((pick - 1))]}"
+    ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
   done
+}
+
+ssh_ovpn_refresh_ovpn_files_menu() {
+  title
+  echo "3) SSH & OVPN User > Refresh OVPN Files"
+  hr
+
+  local username
+  if ! ssh_ovpn_pick_user username; then
+    pause
+    return 0
+  fi
+  if ! ssh_ovpn_user_has_ovpn_side "${username}"; then
+    local created_at expired_at ready_reason
+    if ! ssh_ovpn_user_has_ssh_side "${username}"; then
+      warn "Akun '${username}' belum punya sisi OpenVPN."
+      pause
+      return 0
+    fi
+    if ! openvpn_manage_is_ready; then
+      ready_reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
+      warn "OpenVPN belum siap untuk '${username}': ${ready_reason:-runtime belum siap}."
+      pause
+      return 0
+    fi
+    created_at="$(ssh_user_state_created_at_get "${username}")"
+    expired_at="$(ssh_user_state_expired_at_get "${username}")"
+    [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d')"
+    [[ -n "${expired_at}" ]] || expired_at="-"
+    if ! ssh_ovpn_openvpn_side_ensure "${username}" "${created_at}" "${expired_at}"; then
+      warn "Gagal melengkapi sisi OpenVPN untuk '${username}'."
+      pause
+      return 0
+    fi
+    log "Sisi OpenVPN berhasil dilengkapi untuk '${username}'."
+    ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
+    return 0
+  fi
+
+  if ! openvpn_client_render_artifacts_manage "${username}"; then
+    warn "Gagal refresh file OpenVPN untuk '${username}'."
+    pause
+    return 0
+  fi
+  openvpn_account_info_refresh "${username}" || true
+  openvpn_expiry_sync_now_warn "${username}" || true
+
+  log "File OpenVPN direfresh untuk '${username}'."
+  ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
 }
 
 sshws_active_sessions_collect_rows() {
@@ -4876,7 +5292,7 @@ sshws_active_session_detail() {
   IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
 
   title
-  echo "3) SSH Users > Session Detail"
+  echo "3) SSH & OVPN User > SSH Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
   printf "%-16s : %s\n" "Client IP" "${client_ip}"
@@ -4912,7 +5328,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "3) SSH Users > Active Sessions"
+    echo "3) SSH & OVPN User > SSH Active Sessions"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -4973,16 +5389,21 @@ sshws_active_sessions_menu() {
 ssh_menu() {
   while true; do
     title
-    echo "3) SSH Users"
+    echo "3) SSH & OVPN User"
     hr
     echo "  1) Add User"
     echo "  2) Delete User"
     echo "  3) Set Expiry"
-    echo "  4) Reset Password"
-    echo "  5) List Users"
+    echo "  4) List Users"
+    echo "  5) Refresh OVPN Files"
     echo "  6) SSH WS Status"
-    echo "  7) Restart SSH WS"
-    echo "  8) Active Sessions"
+    echo "  7) OpenVPN Status"
+    echo "  8) Restart SSH WS"
+    echo "  9) Restart OpenVPN Core"
+    echo "  10) Restart OpenVPN WS Proxy"
+    echo "  11) SSH Active Sessions"
+    echo "  12) OpenVPN Core Log"
+    echo "  13) OpenVPN WS Proxy Log"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -4993,11 +5414,16 @@ ssh_menu() {
       1) ssh_add_user_menu ;;
       2) ssh_delete_user_menu ;;
       3) ssh_extend_expiry_menu ;;
-      4) ssh_reset_password_menu ;;
-      5) ssh_list_users_menu ;;
-      6) sshws_status_menu ;;
-      7) sshws_restart_menu ;;
-      8) sshws_active_sessions_menu ;;
+      4) ssh_list_users_menu ;;
+      5) ssh_ovpn_refresh_ovpn_files_menu ;;
+      6) sshws_status_menu "3) SSH & OVPN User > SSH WS Status" ;;
+      7) openvpn_status_menu "3) SSH & OVPN User > OpenVPN Status" ;;
+      8) sshws_restart_menu "3) SSH & OVPN User > Restart SSH WS" ;;
+      9) openvpn_restart_core_menu "3) SSH & OVPN User > Restart OpenVPN Core" ;;
+      10) openvpn_restart_ws_menu "3) SSH & OVPN User > Restart OpenVPN WS Proxy" ;;
+      11) sshws_active_sessions_menu ;;
+      12) daemon_log_tail_show "ovpn-tcp.service" 40 ;;
+      13) daemon_log_tail_show "ovpnws-proxy.service" 40 ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

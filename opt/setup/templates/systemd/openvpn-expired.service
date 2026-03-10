@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenVPN expiry access synchronizer
+After=network-online.target __OVPN_TCP_SERVICE_NAME__
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=OPENVPN_RUNTIME_ENV_FILE=__OPENVPN_RUNTIME_ENV_FILE__
+ExecStart=/usr/local/bin/openvpn-expired once
+SuccessExitStatus=0 1
