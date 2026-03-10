@@ -5,10 +5,10 @@ install_management_scripts() {
   ok "Siapkan tools runtime..."
 
   mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
-  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh-ovpn
   chmod 700 /opt/account /opt/quota
   chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
-  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
+  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh-ovpn
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3

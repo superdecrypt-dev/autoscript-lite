@@ -24,7 +24,7 @@ const (
 	defaultMetricsEnabled      = true
 	defaultTLSOn80             = true
 	defaultTLSHandshakeTimeout = 5 * time.Second
-	defaultSSHQuotaRoot        = "/opt/quota/ssh"
+	defaultSSHQuotaRoot        = "/opt/quota/ssh-ovpn"
 	defaultSSHDropbearUnit     = "sshws-dropbear"
 	defaultSSHQACEnforcer      = "/usr/local/bin/sshws-qac-enforcer"
 	defaultSSHSessionRoot      = "/run/autoscript/sshws-sessions"

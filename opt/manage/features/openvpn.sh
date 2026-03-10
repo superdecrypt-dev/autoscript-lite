@@ -562,7 +562,10 @@ openvpn_client_access_allowed_manage() {
     return 1
   fi
 
-  access_effective="$(ssh_ovpn_qac_state_read_field "${name}" "derived.access_effective" 2>/dev/null || true)"
+  access_effective="$(ssh_ovpn_qac_state_read_field "${name}" "derived.access_effective_ovpn" 2>/dev/null || true)"
+  if [[ -z "${access_effective}" ]]; then
+    access_effective="$(ssh_ovpn_qac_state_read_field "${name}" "derived.access_effective" 2>/dev/null || true)"
+  fi
   if [[ -n "${access_effective}" ]]; then
     [[ "${access_effective,,}" == "true" ]]
     return $?
@@ -1195,7 +1198,7 @@ openvpn_client_render_artifacts_manage() {
 
 openvpn_account_info_refresh() {
   local name="${1:-}"
-  local info_file account_dir token download_url download_file ws_path ws_alt_path cn created expired access domain ip remote_port
+  local info_file account_dir token download_url download_file ws_path ws_alt_path cn created expired access domain ip remote_port quota_ovpn_bytes quota_ovpn_disp
   info_file="$(openvpn_account_info_file "${name}")"
   account_dir="$(openvpn_account_dir_value)"
   token="$(openvpn_client_state_token_get "${name}")"
@@ -1221,6 +1224,9 @@ openvpn_account_info_refresh() {
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
   remote_port="$(openvpn_client_public_port_manage)"
+  quota_ovpn_bytes="$(ssh_ovpn_qac_state_read_field "${name}" "policy.quota_limit_ovpn_bytes" 2>/dev/null || true)"
+  [[ -n "${quota_ovpn_bytes}" ]] || quota_ovpn_bytes="$(ssh_ovpn_qac_state_read_field "${name}" "policy.quota_limit_bytes" 2>/dev/null || true)"
+  quota_ovpn_disp="$(ssh_ovpn_qac_format_quota_limit_display "${quota_ovpn_bytes:-0}" "binary" 2>/dev/null || printf '%s' "0 GB")"
 
   install -d -m 700 "${account_dir}" 2>/dev/null || true
   {
@@ -1232,6 +1238,7 @@ openvpn_account_info_refresh() {
     printf '%-12s : %s\n' "Created" "${created}"
     printf '%-12s : %s\n' "Expired" "${expired:-"-"}"
     printf '%-12s : %s\n' "Access" "${access}"
+    printf '%-12s : %s\n' "Quota Limit" "${quota_ovpn_disp}"
     printf '%-12s : %s\n' "TCP Remote" "${domain:-$ip}:${remote_port}"
     printf '%-12s : %s\n' "SSL Remote" "${domain:-$ip}:443"
     printf '%-12s : %s\n' "WS Remote" "${domain:-$ip}:443"

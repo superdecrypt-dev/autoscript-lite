@@ -228,16 +228,26 @@ derived = data.get("derived") if isinstance(data.get("derived"), dict) else {}
 
 access_value = derived.get("access_effective") if "access_effective" in derived else policy.get("access_enabled")
 
+legacy_quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), 0))
+quota_limit_ssh = max(0, to_int(policy.get("quota_limit_ssh_bytes"), legacy_quota_limit))
+quota_limit_ovpn = max(0, to_int(policy.get("quota_limit_ovpn_bytes"), legacy_quota_limit))
 quota_used_ssh = max(0, to_int(runtime.get("quota_used_ssh_bytes"), 0))
 quota_used_ovpn = max(0, to_int(runtime.get("quota_used_ovpn_bytes"), 0))
 quota_used_total = max(0, to_int(derived.get("quota_used_total_bytes"), quota_used_ssh + quota_used_ovpn))
 active_ssh = max(0, to_int(runtime.get("active_session_ssh"), 0))
 active_ovpn = max(0, to_int(runtime.get("active_session_ovpn"), 0))
 active_total = max(0, to_int(derived.get("active_session_total"), active_ssh + active_ovpn))
+access_effective_ssh = to_bool_str(derived.get("access_effective_ssh"))
+access_effective_ovpn = to_bool_str(derived.get("access_effective_ovpn"))
+quota_exhausted_ssh = to_bool_str(derived.get("quota_exhausted_ssh"))
+quota_exhausted_ovpn = to_bool_str(derived.get("quota_exhausted_ovpn"))
+last_reason_ssh = str(derived.get("last_reason_ssh") or derived.get("last_reason") or "-")
+last_reason_ovpn = str(derived.get("last_reason_ovpn") or derived.get("last_reason") or "-")
 
 fields = [
   str(data.get("username") or "-"),
-  str(max(0, to_int(policy.get("quota_limit_bytes"), 0))),
+  str(quota_limit_ssh),
+  str(quota_limit_ovpn),
   str(policy.get("quota_unit") or "binary"),
   str(policy.get("expired_at") or "-")[:10] or "-",
   to_bool_str(access_value),
@@ -252,9 +262,13 @@ fields = [
   str(active_ssh),
   str(active_ovpn),
   str(active_total),
-  to_bool_str(derived.get("quota_exhausted")),
+  access_effective_ssh,
+  access_effective_ovpn,
+  quota_exhausted_ssh,
+  quota_exhausted_ovpn,
   to_bool_str(derived.get("ip_limit_locked")),
-  str(derived.get("last_reason") or "-"),
+  last_reason_ssh,
+  last_reason_ovpn,
 ]
 print("|".join(fields))
 PY
@@ -390,7 +404,9 @@ expired_at = (
   or norm_date(ovpn.get("expired_at"))
   or "-"
 )
-quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), to_int(current.get("quota_limit"), 0)))
+legacy_quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), to_int(current.get("quota_limit"), 0)))
+quota_limit_ssh = max(0, to_int(policy.get("quota_limit_ssh_bytes"), legacy_quota_limit))
+quota_limit_ovpn = max(0, to_int(policy.get("quota_limit_ovpn_bytes"), legacy_quota_limit))
 quota_unit = str(policy.get("quota_unit") or current.get("quota_unit") or "binary").strip().lower()
 if quota_unit not in ("binary", "decimal"):
   quota_unit = "binary"
@@ -414,17 +430,28 @@ last_seen_ovpn = max(0, to_int(runtime.get("last_seen_ovpn_unix"), 0))
 
 quota_used_total = quota_used_ssh + quota_used_ovpn
 active_session_total = active_session_ssh + active_session_ovpn
-quota_exhausted = bool(quota_limit > 0 and quota_used_total >= quota_limit)
+quota_exhausted_ssh = bool(quota_limit_ssh > 0 and quota_used_ssh >= quota_limit_ssh)
+quota_exhausted_ovpn = bool(quota_limit_ovpn > 0 and quota_used_ovpn >= quota_limit_ovpn)
 ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and active_session_total > ip_limit)
-access_effective = bool(access_enabled and date_is_active(expired_at) and not quota_exhausted and not ip_limit_locked)
+shared_access = bool(access_enabled and date_is_active(expired_at) and not ip_limit_locked)
+access_effective_ssh = bool(shared_access and not quota_exhausted_ssh)
+access_effective_ovpn = bool(shared_access and not quota_exhausted_ovpn)
 if not access_enabled:
-  last_reason = "access_off"
+  last_reason_ssh = "access_off"
+  last_reason_ovpn = "access_off"
 elif not date_is_active(expired_at):
-  last_reason = "expired"
-elif quota_exhausted:
-  last_reason = "quota"
+  last_reason_ssh = "expired"
+  last_reason_ovpn = "expired"
 elif ip_limit_locked:
-  last_reason = "ip_limit"
+  last_reason_ssh = "ip_limit"
+  last_reason_ovpn = "ip_limit"
+else:
+  last_reason_ssh = "quota_ssh" if quota_exhausted_ssh else "-"
+  last_reason_ovpn = "quota_ovpn" if quota_exhausted_ovpn else "-"
+if last_reason_ssh not in ("", "-"):
+  last_reason = last_reason_ssh
+elif last_reason_ovpn not in ("", "-"):
+  last_reason = last_reason_ovpn
 else:
   last_reason = "-"
 
@@ -445,12 +472,12 @@ payload = {
   "created_at": created_at,
   "expired_at": expired_at,
   "sshws_token": sshws_token,
-  "quota_limit": quota_limit,
+  "quota_limit": quota_limit_ssh,
   "quota_unit": quota_unit,
-  "quota_used": quota_used_total,
+  "quota_used": quota_used_ssh,
   "status": {
     "manual_block": bool(to_bool(status.get("manual_block"))),
-    "quota_exhausted": bool(quota_exhausted),
+    "quota_exhausted": bool(quota_exhausted_ssh),
     "ip_limit_enabled": bool(ip_limit_enabled),
     "ip_limit": ip_limit,
     "ip_limit_locked": bool(ip_limit_locked),
@@ -463,7 +490,9 @@ payload = {
     "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
   },
   "policy": {
-    "quota_limit_bytes": quota_limit,
+    "quota_limit_bytes": quota_limit_ssh,
+    "quota_limit_ssh_bytes": quota_limit_ssh,
+    "quota_limit_ovpn_bytes": quota_limit_ovpn,
     "quota_unit": quota_unit,
     "expired_at": expired_at,
     "access_enabled": bool(access_enabled),
@@ -484,10 +513,16 @@ payload = {
   "derived": {
     "quota_used_total_bytes": quota_used_total,
     "active_session_total": active_session_total,
-    "quota_exhausted": bool(quota_exhausted),
+    "quota_exhausted": bool(quota_exhausted_ssh),
+    "quota_exhausted_ssh": bool(quota_exhausted_ssh),
+    "quota_exhausted_ovpn": bool(quota_exhausted_ovpn),
     "ip_limit_locked": bool(ip_limit_locked),
-    "access_effective": bool(access_effective),
+    "access_effective": bool(access_effective_ssh),
+    "access_effective_ssh": bool(access_effective_ssh),
+    "access_effective_ovpn": bool(access_effective_ovpn),
     "last_reason": last_reason,
+    "last_reason_ssh": last_reason_ssh,
+    "last_reason_ovpn": last_reason_ovpn,
   },
   "meta": meta,
 }

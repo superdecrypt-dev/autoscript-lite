@@ -80,6 +80,11 @@ def access_allowed(client_name: str, expired_at: str) -> bool:
     if not unified:
         return True
     derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
+    if "access_effective_ovpn" in derived:
+        value = derived.get("access_effective_ovpn")
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
     if "access_effective" in derived:
         value = derived.get("access_effective")
         if isinstance(value, bool):

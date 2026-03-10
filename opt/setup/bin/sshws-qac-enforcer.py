@@ -68,12 +68,14 @@ def to_float(v, default=0.0):
   except Exception:
     return default
 
-def to_bool(v):
+def to_bool(v, default=False):
   if isinstance(v, bool):
     return v
   if isinstance(v, (int, float)):
     return bool(v)
   s = str(v or "").strip().lower()
+  if not s:
+    return bool(default)
   return s in ("1", "true", "yes", "on", "y")
 
 def norm_user(v):
@@ -89,6 +91,13 @@ def normalize_token(v):
   if re.fullmatch(r"[a-f0-9]{10}", s):
     return s
   return ""
+
+def norm_date(v):
+  s = str(v or "").strip()
+  if not s or s == "-":
+    return ""
+  match = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  return match.group(0) if match else ""
 
 def normalize_ip(v):
   s = str(v or "").strip()
@@ -515,56 +524,136 @@ def normalize_payload(path):
       payload = {}
 
   username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
-  unit = str(payload.get("quota_unit") or "binary").strip().lower()
-  if unit not in ("binary", "decimal"):
-    unit = "binary"
-  token = pick_unique_sshws_token(path.parent, path, payload.get("sshws_token"))
-
-  quota_limit = to_int(payload.get("quota_limit"), 0)
-  if quota_limit < 0:
-    quota_limit = 0
-  quota_used = to_int(payload.get("quota_used"), 0)
-  if quota_used < 0:
-    quota_used = 0
-
+  policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+  runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+  derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+  meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
   status_raw = payload.get("status")
   status = status_raw if isinstance(status_raw, dict) else {}
 
-  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
-  if speed_down < 0:
-    speed_down = 0.0
-  if speed_up < 0:
-    speed_up = 0.0
+  unit = str(policy.get("quota_unit") or payload.get("quota_unit") or "binary").strip().lower()
+  if unit not in ("binary", "decimal"):
+    unit = "binary"
+  token = pick_unique_sshws_token(path.parent, path, payload.get("sshws_token") or meta.get("sshws_token"))
 
-  ip_limit = to_int(status.get("ip_limit"), 0)
-  if ip_limit < 0:
-    ip_limit = 0
+  quota_limit_ssh = max(
+    0,
+    to_int(
+      policy.get("quota_limit_ssh_bytes"),
+      to_int(policy.get("quota_limit_bytes"), to_int(payload.get("quota_limit"), 0)),
+    ),
+  )
+  quota_limit_ovpn = max(
+    0,
+    to_int(
+      policy.get("quota_limit_ovpn_bytes"),
+      to_int(policy.get("quota_limit_bytes"), quota_limit_ssh),
+    ),
+  )
+  quota_used_ssh = max(
+    0,
+    max(
+      to_int(runtime.get("quota_used_ssh_bytes"), 0),
+      to_int(payload.get("quota_used"), 0),
+    ),
+  )
+  quota_used_ovpn = max(0, to_int(runtime.get("quota_used_ovpn_bytes"), 0))
+  active_session_ssh = max(0, to_int(runtime.get("active_session_ssh"), 0))
+  active_session_ovpn = max(0, to_int(runtime.get("active_session_ovpn"), 0))
+  last_seen_ssh = max(0, to_int(runtime.get("last_seen_ssh_unix"), 0))
+  last_seen_ovpn = max(0, to_int(runtime.get("last_seen_ovpn_unix"), 0))
 
-  payload["managed_by"] = "autoscript-manage"
-  payload["protocol"] = "ssh"
-  payload["username"] = username
-  payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
-  payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
-  payload["sshws_token"] = token
-  payload["quota_limit"] = quota_limit
-  payload["quota_unit"] = unit
-  payload["quota_used"] = quota_used
-  payload["status"] = {
-    "manual_block": to_bool(status.get("manual_block")),
-    "quota_exhausted": to_bool(status.get("quota_exhausted")),
-    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
-    "ip_limit": ip_limit,
-    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
-    "speed_down_mbit": speed_down,
-    "speed_up_mbit": speed_up,
-    "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-    "account_locked": to_bool(status.get("account_locked")),
-    "lock_owner": str(status.get("lock_owner") or "").strip(),
-    "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
+  created_at = str(payload.get("created_at") or meta.get("created_at") or "-").strip() or "-"
+  expired_at = norm_date(policy.get("expired_at") or payload.get("expired_at") or "-") or "-"
+
+  ip_limit_enabled = to_bool(policy.get("ip_limit_enabled"), status.get("ip_limit_enabled"))
+  ip_limit = max(0, to_int(policy.get("ip_limit"), to_int(status.get("ip_limit"), 0)))
+  speed_limit_enabled = to_bool(policy.get("speed_limit_enabled"), status.get("speed_limit_enabled"))
+  speed_down = max(0.0, to_float(policy.get("speed_down_mbit"), to_float(status.get("speed_down_mbit"), 0.0)))
+  speed_up = max(0.0, to_float(policy.get("speed_up_mbit"), to_float(status.get("speed_up_mbit"), 0.0)))
+  manual_block = to_bool(status.get("manual_block"))
+  access_enabled = to_bool(policy.get("access_enabled"), True)
+  ip_limit_locked = to_bool(derived.get("ip_limit_locked"))
+  quota_exhausted_ssh = to_bool(derived.get("quota_exhausted_ssh"), to_bool(derived.get("quota_exhausted")))
+  quota_exhausted_ovpn = to_bool(derived.get("quota_exhausted_ovpn"))
+  access_effective_ssh = to_bool(derived.get("access_effective_ssh"), to_bool(derived.get("access_effective"), True))
+  access_effective_ovpn = to_bool(derived.get("access_effective_ovpn"), True)
+  last_reason_ssh = str(derived.get("last_reason_ssh") or derived.get("last_reason") or "-").strip() or "-"
+  last_reason_ovpn = str(derived.get("last_reason_ovpn") or derived.get("last_reason") or "-").strip() or "-"
+  quota_used_total = max(0, to_int(derived.get("quota_used_total_bytes"), quota_used_ssh + quota_used_ovpn))
+  active_session_total = max(0, to_int(derived.get("active_session_total"), active_session_ssh + active_session_ovpn))
+
+  meta = {
+    "created_at": created_at,
+    "updated_at_unix": max(0, to_int(meta.get("updated_at_unix"), 0)),
+    "migrated_from_legacy": bool(to_bool(meta.get("migrated_from_legacy"))),
+    "ssh_present": True,
+    "ovpn_present": bool(to_bool(meta.get("ovpn_present"))),
+    "sshws_token": token,
   }
-  return payload
+
+  return {
+    "version": 1,
+    "managed_by": "autoscript-manage",
+    "protocol": "ssh-ovpn",
+    "username": username,
+    "created_at": created_at,
+    "expired_at": expired_at,
+    "sshws_token": token,
+    "quota_limit": quota_limit_ssh,
+    "quota_unit": unit,
+    "quota_used": quota_used_ssh,
+    "status": {
+      "manual_block": bool(manual_block),
+      "quota_exhausted": bool(quota_exhausted_ssh),
+      "ip_limit_enabled": bool(ip_limit_enabled),
+      "ip_limit": ip_limit,
+      "ip_limit_locked": bool(ip_limit_locked),
+      "speed_limit_enabled": bool(speed_limit_enabled),
+      "speed_down_mbit": speed_down,
+      "speed_up_mbit": speed_up,
+      "lock_reason": str(last_reason_ssh or "-").strip() or "-",
+      "account_locked": bool(to_bool(status.get("account_locked"))),
+      "lock_owner": str(status.get("lock_owner") or "").strip(),
+      "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
+    },
+    "policy": {
+      "quota_limit_bytes": quota_limit_ssh,
+      "quota_limit_ssh_bytes": quota_limit_ssh,
+      "quota_limit_ovpn_bytes": quota_limit_ovpn,
+      "quota_unit": unit,
+      "expired_at": expired_at,
+      "access_enabled": bool(access_enabled),
+      "ip_limit_enabled": bool(ip_limit_enabled),
+      "ip_limit": ip_limit,
+      "speed_limit_enabled": bool(speed_limit_enabled),
+      "speed_down_mbit": speed_down,
+      "speed_up_mbit": speed_up,
+    },
+    "runtime": {
+      "quota_used_ssh_bytes": quota_used_ssh,
+      "quota_used_ovpn_bytes": quota_used_ovpn,
+      "active_session_ssh": active_session_ssh,
+      "active_session_ovpn": active_session_ovpn,
+      "last_seen_ssh_unix": last_seen_ssh,
+      "last_seen_ovpn_unix": last_seen_ovpn,
+    },
+    "derived": {
+      "quota_used_total_bytes": quota_used_total,
+      "active_session_total": active_session_total,
+      "quota_exhausted": bool(quota_exhausted_ssh),
+      "quota_exhausted_ssh": bool(quota_exhausted_ssh),
+      "quota_exhausted_ovpn": bool(quota_exhausted_ovpn),
+      "ip_limit_locked": bool(ip_limit_locked),
+      "access_effective": bool(access_effective_ssh),
+      "access_effective_ssh": bool(access_effective_ssh),
+      "access_effective_ovpn": bool(access_effective_ovpn),
+      "last_reason": str(last_reason_ssh if last_reason_ssh not in ("", "-") else last_reason_ovpn).strip() or "-",
+      "last_reason_ssh": str(last_reason_ssh or "-").strip() or "-",
+      "last_reason_ovpn": str(last_reason_ovpn or "-").strip() or "-",
+    },
+    "meta": meta,
+  }
 
 def enforce_user(path):
   payload = normalize_payload(path)
@@ -585,6 +674,8 @@ def enforce_user(path):
   unified = load_unified_state(username)
   unified_policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
   unified_derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
+  unified_runtime = unified.get("runtime") if isinstance(unified.get("runtime"), dict) else {}
+  unified_meta = unified.get("meta") if isinstance(unified.get("meta"), dict) else {}
 
   ip_enabled = bool(status.get("ip_limit_enabled"))
   ip_limit = to_int(status.get("ip_limit"), 0)
@@ -611,15 +702,34 @@ def enforce_user(path):
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
   if isinstance(unified_policy, dict) and unified_policy:
-    quota_limit = to_int(unified_policy.get("quota_limit_bytes"), quota_limit)
+    quota_limit = to_int(unified_policy.get("quota_limit_ssh_bytes"), to_int(unified_policy.get("quota_limit_bytes"), quota_limit))
   payload["quota_limit"] = max(0, quota_limit)
-  status["quota_exhausted"] = bool(unified_derived.get("quota_exhausted")) if unified_derived else bool(quota_limit > 0 and quota_used >= quota_limit)
+  payload["policy"]["quota_limit_bytes"] = max(0, quota_limit)
+  payload["policy"]["quota_limit_ssh_bytes"] = max(0, quota_limit)
+  payload["policy"]["quota_limit_ovpn_bytes"] = to_int(
+    unified_policy.get("quota_limit_ovpn_bytes"),
+    to_int(payload["policy"].get("quota_limit_ovpn_bytes"), max(0, quota_limit)),
+  )
+  payload["policy"]["quota_unit"] = str(unified_policy.get("quota_unit") or payload["policy"].get("quota_unit") or "binary").strip().lower() or "binary"
+  status["quota_exhausted"] = bool(unified_derived.get("quota_exhausted_ssh")) if unified_derived else bool(quota_limit > 0 and quota_used >= quota_limit)
+  payload["runtime"]["quota_used_ssh_bytes"] = max(0, quota_used)
+  payload["runtime"]["quota_used_ovpn_bytes"] = max(0, to_int(unified_runtime.get("quota_used_ovpn_bytes"), to_int(payload["runtime"].get("quota_used_ovpn_bytes"), 0)))
+  payload["runtime"]["active_session_ssh"] = max(0, active_sessions_count)
+  payload["runtime"]["active_session_ovpn"] = max(0, to_int(unified_runtime.get("active_session_ovpn"), to_int(payload["runtime"].get("active_session_ovpn"), 0)))
+  payload["runtime"]["last_seen_ssh_unix"] = max(0, to_int(unified_runtime.get("last_seen_ssh_unix"), to_int(payload["runtime"].get("last_seen_ssh_unix"), 0)))
+  payload["runtime"]["last_seen_ovpn_unix"] = max(0, to_int(unified_runtime.get("last_seen_ovpn_unix"), to_int(payload["runtime"].get("last_seen_ovpn_unix"), 0)))
+  payload["derived"]["quota_used_total_bytes"] = max(0, to_int(unified_derived.get("quota_used_total_bytes"), quota_used + to_int(payload["runtime"].get("quota_used_ovpn_bytes"), 0)))
+  payload["derived"]["active_session_total"] = max(0, to_int(unified_derived.get("active_session_total"), active_sessions_count + to_int(payload["runtime"].get("active_session_ovpn"), 0)))
+  payload["derived"]["quota_exhausted"] = bool(unified_derived.get("quota_exhausted_ssh")) if unified_derived else bool(status["quota_exhausted"])
+  payload["derived"]["quota_exhausted_ssh"] = bool(unified_derived.get("quota_exhausted_ssh")) if unified_derived else bool(status["quota_exhausted"])
+  payload["derived"]["quota_exhausted_ovpn"] = bool(unified_derived.get("quota_exhausted_ovpn")) if unified_derived else bool(payload["derived"].get("quota_exhausted_ovpn"))
+  payload["derived"]["ip_limit_locked"] = bool(unified_derived.get("ip_limit_locked")) if unified_derived else bool(status.get("ip_limit_locked"))
 
   reason = ""
   if bool(status.get("manual_block")):
     reason = "manual"
   else:
-    unified_reason = str(unified_derived.get("last_reason") or "").strip().lower() if unified_derived else ""
+    unified_reason = str(unified_derived.get("last_reason_ssh") or unified_derived.get("last_reason") or "").strip().lower() if unified_derived else ""
     if bool(status.get("quota_exhausted")):
       reason = "quota" if unified_reason in ("", "-") else unified_reason
     elif bool(status.get("ip_limit_locked")):
@@ -650,6 +760,14 @@ def enforce_user(path):
   status["account_locked"] = bool(account_locked)
   status["lock_owner"] = lock_owner
   payload["status"] = status
+  payload["derived"]["last_reason"] = reason or str(unified_derived.get("last_reason") or "-").strip() or "-"
+  payload["derived"]["last_reason_ssh"] = str(unified_derived.get("last_reason_ssh") or payload["derived"].get("last_reason") or "-").strip() or "-"
+  payload["derived"]["last_reason_ovpn"] = str(unified_derived.get("last_reason_ovpn") or "-").strip() or "-"
+  payload["derived"]["access_effective"] = bool(unified_derived.get("access_effective_ssh")) if unified_derived else bool(payload["derived"].get("access_effective"))
+  payload["derived"]["access_effective_ssh"] = bool(unified_derived.get("access_effective_ssh")) if unified_derived else bool(payload["derived"].get("access_effective_ssh"))
+  payload["derived"]["access_effective_ovpn"] = bool(unified_derived.get("access_effective_ovpn")) if unified_derived else bool(payload["derived"].get("access_effective_ovpn"))
+  payload["meta"]["updated_at_unix"] = max(0, to_int(unified_meta.get("updated_at_unix"), to_int(payload["meta"].get("updated_at_unix"), 0)))
+  payload["meta"]["ovpn_present"] = bool(to_bool(unified_meta.get("ovpn_present"), payload["meta"].get("ovpn_present")))
 
   after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
   if after != before:
@@ -658,12 +776,6 @@ def enforce_user(path):
       os.chmod(path, 0o600)
     except Exception:
       pass
-
-  sync_unified_ssh_runtime(
-    username,
-    quota_used=quota_used,
-    active_sessions_count=active_sessions_count,
-  )
 
 def run_once(target_user):
   if not STATE_ROOT.exists():

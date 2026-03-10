@@ -1231,7 +1231,7 @@ main_info_cache_refresh() {
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp
   local vless_count vmess_count trojan_count ss_count ss2022_count ssh_count
-  local edge_icon ws_icon nginx_icon xray_icon
+  local edge_icon nginx_icon xray_icon ssh_icon ovpn_icon
 
   main_info_cache_refresh
 
@@ -1251,9 +1251,10 @@ main_menu_info_header_print() {
   ss2022_count="$(account_count_by_proto "shadowsocks2022")"
   ssh_count="$(ssh_account_count)"
   edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
-  ws_icon="$(service_status_icon "${SSHWS_PROXY_SERVICE}")"
   nginx_icon="$(service_status_icon "nginx")"
   xray_icon="$(service_status_icon "xray")"
+  ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
+  ovpn_icon="$(service_group_status_icon "ovpn-tcp.service" "ovpnws-proxy.service")"
 
   printf "%-11s : %s\n" "SYSTEM OS" "${os}"
   printf "%-11s : %s\n" "RAM" "${ram}"
@@ -1265,9 +1266,11 @@ main_menu_info_header_print() {
   printf "%-11s : %s\n" "TLS EXPIRED" "${tls}"
   printf "%-11s : %s\n" "WARP STATUS" "${warp}"
   hr
-  echo "ACCOUNTS: VLESS=${vless_count} | VMESS=${vmess_count} | TROJAN=${trojan_count} | SS=${ss_count} | SS2022=${ss2022_count} | SSH=${ssh_count}"
+  main_menu_center_line "ACCOUNTS"
+  main_menu_center_line "VLESS=${vless_count} | VMESS=${vmess_count} | TROJAN=${trojan_count} | SS=${ss_count} | SS2022=${ss2022_count} | SSH=${ssh_count}"
   echo
-  echo "SERVICES: Edge Mux ${edge_icon} | WS Proxy ${ws_icon} | Nginx ${nginx_icon} | Xray ${xray_icon}"
+  main_menu_center_line "SERVICES"
+  main_menu_center_line "Edge Mux ${edge_icon} | Nginx ${nginx_icon} | Xray ${xray_icon} | SSH ${ssh_icon} | OpenVPN ${ovpn_icon}"
   hr
 }
 
@@ -2242,6 +2245,24 @@ hr() {
   echo -e "${UI_MUTED}${line}${UI_RESET}"
 }
 
+main_menu_center_line() {
+  local text="$1"
+  local w="${COLUMNS:-80}"
+  local pad
+  if [[ ! "${w}" =~ ^[0-9]+$ ]]; then
+    w=80
+  fi
+  if (( w < 60 )); then
+    w=60
+  fi
+  if (( ${#text} >= w )); then
+    echo "${text}"
+    return 0
+  fi
+  pad=$(( (w - ${#text}) / 2 ))
+  printf '%*s%s\n' "${pad}" '' "${text}"
+}
+
 title() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear || true
@@ -2306,6 +2327,21 @@ service_status_icon() {
   else
     printf '⛔\n'
   fi
+}
+
+service_group_status_icon() {
+  local svc
+  if (( $# == 0 )); then
+    printf '⛔\n'
+    return 0
+  fi
+  for svc in "$@"; do
+    if ! svc_exists "${svc}" || ! svc_is_active "${svc}"; then
+      printf '⛔\n'
+      return 0
+    fi
+  done
+  printf '✅\n'
 }
 
 main_menu_edge_service_name() {
