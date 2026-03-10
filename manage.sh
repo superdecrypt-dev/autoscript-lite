@@ -2025,7 +2025,7 @@ domain_control_apply_nginx_domain() {
 
 domain_control_set_domain_now() {
   title
-  echo "6) Domain Control > Set Domain (setup flow)"
+  echo "7) Domain Control > Set Domain (setup flow)"
   hr
   have_cmd curl || die "curl tidak ditemukan."
   have_cmd jq || die "jq tidak ditemukan."
@@ -2070,7 +2070,7 @@ domain_control_set_domain_now() {
 
 domain_control_show_info() {
   title
-  echo "6) Domain Control > Current Domain"
+  echo "7) Domain Control > Current Domain"
   hr
   echo "Domain aktif : $(detect_domain)"
   echo "Cert file    : ${CERT_FULLCHAIN}"
@@ -2086,7 +2086,7 @@ domain_control_show_info() {
 
 domain_control_guard_check() {
   title
-  echo "6) Domain Control > Guard Check"
+  echo "7) Domain Control > Guard Check"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -2119,7 +2119,7 @@ domain_control_guard_check() {
 
 domain_control_guard_renew_if_needed() {
   title
-  echo "6) Domain Control > Guard Renew"
+  echo "7) Domain Control > Guard Renew"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then

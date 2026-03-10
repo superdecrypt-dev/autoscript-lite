@@ -1961,7 +1961,7 @@ openvpn_status_menu() {
   hr
 
   local env_file core_svc ws_svc tcp_enabled ssl_enabled ws_enabled
-  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible
+  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible core_service_ok ws_service_required ws_service_ok
   env_file="$(openvpn_runtime_env_file)"
   core_svc="ovpn-tcp.service"
   ws_svc="ovpnws-proxy.service"
@@ -1989,6 +1989,30 @@ openvpn_status_menu() {
   runtime_reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
   if [[ -z "${runtime_reason}" ]]; then
     runtime_ready="true"
+  fi
+  core_service_ok="false"
+  ws_service_required="false"
+  ws_service_ok="false"
+  if svc_exists "${core_svc}" && svc_is_active "${core_svc}"; then
+    core_service_ok="true"
+  fi
+  if openvpn_value_is_true "${ws_enabled}"; then
+    ws_service_required="true"
+  fi
+  if svc_exists "${ws_svc}" && svc_is_active "${ws_svc}"; then
+    ws_service_ok="true"
+  fi
+  if [[ "${runtime_ready}" == "true" && "${core_service_ok}" != "true" ]]; then
+    runtime_ready="false"
+    runtime_reason="${core_svc} inactive."
+  fi
+  if [[ "${runtime_ready}" == "true" && "${ws_service_required}" == "true" && "${ws_service_ok}" != "true" ]]; then
+    runtime_ready="false"
+    if svc_exists "${ws_svc}"; then
+      runtime_reason="${ws_svc} inactive."
+    else
+      runtime_reason="${ws_svc} belum terpasang."
+    fi
   fi
   default_visible="false"
   if openvpn_client_state_exists "${default_name}" \
@@ -2030,15 +2054,27 @@ openvpn_status_menu() {
   echo "Clients dir : ${clients_dir}"
   echo "ZIP dir     : ${downloads_dir}"
   echo "Managed     : ${client_count} client(s)"
-  echo "Default     : ${default_name}"
-  echo "WS Token    : ${default_token:-"-"}"
-  echo "ZIP URL     : ${default_download_url:-"-"}"
-  echo "WS Path     : ${default_ws_path}"
-  echo "WS Path Alt : ${default_ws_alt_path}"
-  echo "TCP File    : ${default_profile}"
-  echo "SSL File    : ${default_ssl_profile}"
-  echo "WS File     : ${default_ws_profile}"
-  echo "ZIP File    : ${default_download_file:-"-"}"
+  if [[ "${runtime_ready}" == "true" ]]; then
+    echo "Default     : ${default_name}"
+    echo "WS Token    : ${default_token:-"-"}"
+    echo "ZIP URL     : ${default_download_url:-"-"}"
+    echo "WS Path     : ${default_ws_path}"
+    echo "WS Path Alt : ${default_ws_alt_path}"
+    echo "TCP File    : ${default_profile}"
+    echo "SSL File    : ${default_ssl_profile}"
+    echo "WS File     : ${default_ws_profile}"
+    echo "ZIP File    : ${default_download_file:-"-"}"
+  else
+    echo "Default     : -"
+    echo "WS Token    : -"
+    echo "ZIP URL     : -"
+    echo "WS Path     : -"
+    echo "WS Path Alt : -"
+    echo "TCP File    : -"
+    echo "SSL File    : -"
+    echo "WS File     : -"
+    echo "ZIP File    : -"
+  fi
   hr
 
   if svc_exists "${core_svc}"; then
@@ -2074,7 +2110,9 @@ openvpn_status_menu() {
   fi
 
   hr
-  if [[ -f "${default_profile}" ]]; then
+  if [[ "${runtime_ready}" != "true" ]]; then
+    warn "Default client disembunyikan sampai runtime OpenVPN sehat."
+  elif [[ -f "${default_profile}" ]]; then
     log "Default TCP file : ${default_profile}"
     [[ -f "${default_ssl_profile}" ]] && log "Default SSL file : ${default_ssl_profile}"
     [[ -f "${default_ws_profile}" ]] && log "Default WS file  : ${default_ws_profile}"
@@ -4227,10 +4265,10 @@ ssh_ovpn_pick_user() {
 
   printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "No" "Username" "Pair" "SSH" "OVPN" "Access" "Expired"
   printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "----" "------------------" "----------" "------" "------" "-------" "----------"
-  local i username pair ssh_state ovpn_state access created expired client_cn token
+  local i row_username pair ssh_state ovpn_state access created expired client_cn token
   for i in "${!rows[@]}"; do
-    IFS='|' read -r username pair ssh_state ovpn_state access created expired client_cn token <<<"${rows[$i]}"
-    printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "$((i + 1))" "${username}" "${pair}" "${ssh_state}" "${ovpn_state}" "${access}" "${expired}"
+    IFS='|' read -r row_username pair ssh_state ovpn_state access created expired client_cn token <<<"${rows[$i]}"
+    printf "%-4s %-18s %-10s %-6s %-6s %-7s %-10s\n" "$((i + 1))" "${row_username}" "${pair}" "${ssh_state}" "${ovpn_state}" "${access}" "${expired}"
   done
 
   local pick
@@ -4785,49 +4823,6 @@ ssh_extend_expiry_menu() {
   fi
 
   log "Expiry akun SSH & OVPN '${username}' diperbarui ke ${new_expiry}."
-  pause
-}
-
-ssh_reset_password_menu() {
-  title
-  echo "3) SSH & OVPN User > Reset SSH Password"
-  hr
-
-  local username
-  if ! ssh_pick_managed_user username; then
-    pause
-    return 0
-  fi
-  if ! id "${username}" >/dev/null 2>&1; then
-    warn "User Linux '${username}' tidak ditemukan."
-    pause
-    return 0
-  fi
-
-  local password=""
-  if ! ssh_read_password_confirm password; then
-    pause
-    return 0
-  fi
-
-  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    warn "Gagal reset password user '${username}'."
-    pause
-    return 0
-  fi
-
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
-  fi
-  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
-    hr
-    echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
-    hr
-  fi
-  password=""
-
-  log "Password akun '${username}' berhasil direset."
   pause
 }
 
@@ -6013,8 +6008,6 @@ ip_enabled = to_bool(status.get("ip_limit_enabled"))
 ip_limit = to_int(status.get("ip_limit"), 0)
 if ip_limit < 0:
   ip_limit = 0
-if not ip_enabled:
-  ip_limit = 0
 
 reason = str(status.get("lock_reason") or "").strip().lower()
 if to_bool(status.get("manual_block")):
@@ -6922,7 +6915,7 @@ daemon_log_tail_show() {
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
   title
-  echo "12) Install BOT Discord"
+  echo "12) Discord Bot"
   hr
 
   if [[ ! -x "${installer_cmd}" ]]; then
@@ -6949,7 +6942,7 @@ install_discord_bot_menu() {
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
   title
-  echo "13) Install BOT Telegram"
+  echo "13) Telegram Bot"
   hr
 
   if [[ ! -x "${installer_cmd}" ]]; then

@@ -48,19 +48,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 
 ## Menu Utama
 ```text
-1) Status & Diagnostics
-2) Xray Management
-3) SSH Management
+1) Status
+2) Xray Users
+3) SSH & OVPN User
 4) Xray QAC
 5) SSH QAC
-6) Network Controls
+6) Network
 7) Domain Control
 8) Speedtest
 9) Security
 10) Maintenance
-11) Traffic Analytics
-12) Install BOT Discord
-13) Install BOT Telegram
+11) Traffic
+12) Discord Bot
+13) Telegram Bot
 ```
 
 ## Bot

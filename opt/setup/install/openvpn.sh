@@ -5,9 +5,6 @@ OVPN_TCP_SERVICE_NAME="${OVPN_TCP_SERVICE_NAME:-ovpn-tcp.service}"
 OVPNWS_PROXY_SERVICE_NAME="${OVPNWS_PROXY_SERVICE_NAME:-ovpnws-proxy.service}"
 OPENVPN_EXPIRED_SERVICE_NAME="${OPENVPN_EXPIRED_SERVICE_NAME:-openvpn-expired.service}"
 OPENVPN_EXPIRED_TIMER_NAME="${OPENVPN_EXPIRED_TIMER_NAME:-openvpn-expired.timer}"
-OVPN_ENABLE_TCP_WAS_SET="${OVPN_ENABLE_TCP+x}"
-OVPN_ENABLE_SSL_WAS_SET="${OVPN_ENABLE_SSL+x}"
-OVPN_ENABLE_WS_WAS_SET="${OVPN_ENABLE_WS+x}"
 OVPN_TCP_BIND_WAS_SET="${OVPN_TCP_BIND+x}"
 OVPN_TCP_PORT_WAS_SET="${OVPN_TCP_PORT+x}"
 OVPNWS_PROXY_BIND_WAS_SET="${OVPNWS_PROXY_BIND+x}"
@@ -61,18 +58,6 @@ openvpn_runtime_load_persisted_env() {
   local value=""
   [[ -r "${env_file}" ]] || return 0
 
-  if [[ -z "${OVPN_ENABLE_TCP_WAS_SET}" ]]; then
-    value="$(openvpn_runtime_read_env_value OVPN_ENABLE_TCP "${env_file}" 2>/dev/null || true)"
-    [[ -n "${value}" ]] && OVPN_ENABLE_TCP="${value}"
-  fi
-  if [[ -z "${OVPN_ENABLE_SSL_WAS_SET}" ]]; then
-    value="$(openvpn_runtime_read_env_value OVPN_ENABLE_SSL "${env_file}" 2>/dev/null || true)"
-    [[ -n "${value}" ]] && OVPN_ENABLE_SSL="${value}"
-  fi
-  if [[ -z "${OVPN_ENABLE_WS_WAS_SET}" ]]; then
-    value="$(openvpn_runtime_read_env_value OVPN_ENABLE_WS "${env_file}" 2>/dev/null || true)"
-    [[ -n "${value}" ]] && OVPN_ENABLE_WS="${value}"
-  fi
   if [[ -z "${OVPN_TCP_BIND_WAS_SET}" ]]; then
     value="$(openvpn_runtime_read_env_value OVPN_TCP_BIND "${env_file}" 2>/dev/null || true)"
     [[ -n "${value}" ]] && OVPN_TCP_BIND="${value}"
