@@ -25,7 +25,7 @@ Prinsip:
   - `install/badvpn.sh`
   - `templates/systemd/badvpn-udpgw.service`
   - `templates/config/badvpn-runtime.env`
-- Tambahan aktif (opt-in via env runtime):
+- Tambahan aktif:
   - `install/openvpn.sh`
   - `bin/ovpnws-proxy.py`
   - `templates/systemd/ovpn-tcp.service`
