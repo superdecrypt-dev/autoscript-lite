@@ -7,6 +7,12 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/run.sh)
 ```
 
+Catatan penting:
+- OpenVPN sekarang ikut aktif pada install standar, tidak lagi `opt-in`.
+- User harian SSH dan OpenVPN dikelola bersama lewat menu `SSH & OVPN User`.
+- Metadata aktif `SSH + OVPN` sekarang hanya berada di `/opt/quota/ssh-ovpn/<username>.json`.
+- Host lama yang masih mengandalkan metadata SSH legacy perlu recreate akun lewat sistem baru.
+
 ## Inti Install
 - `Xray-core`
 - `Edge Gateway` provider `go` sebagai ingress utama `80/443`
@@ -46,13 +52,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 - `xray-observe`
 - `xray-domain-guard`
 
+## Catatan Operasional
+- Pergantian domain lewat `7) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
+- URL download bundle OpenVPN per user memakai format `https://domain/ovpn/<username>.zip`.
+- `SSH & OVPN QAC` memakai metadata unified yang sama untuk `quota`, `IP/Login limit`, `speed limit`, dan `expiry`.
+
 ## Menu Utama
 ```text
 1) Status
 2) Xray Users
 3) SSH & OVPN User
 4) Xray QAC
-5) SSH QAC
+5) SSH & OVPN QAC
 6) Network
 7) Domain Control
 8) Speedtest

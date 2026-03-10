@@ -260,27 +260,34 @@ print("|".join(fields))
 PY
 }
 
-ssh_ovpn_qac_state_refresh_from_legacy__locked() {
+ssh_ovpn_qac_token_valid() {
+  local token="${1:-}"
+  [[ "${token}" =~ ^[A-Fa-f0-9]{10}$ ]]
+}
+
+ssh_ovpn_qac_state_sync_now__locked() {
   local username="${1:-}"
-  local state_file ssh_state_file ovpn_state_file ccd_file tmp
+  local state_file ovpn_state_file ccd_file tmp
   ssh_ovpn_qac_username_valid "${username}" || return 1
   ssh_ovpn_qac_prepare_dirs
 
   state_file="$(ssh_ovpn_qac_state_path "${username}")"
-  ssh_state_file="$(ssh_user_state_file "${username}")"
+  [[ -s "${state_file}" ]] || return 1
   ovpn_state_file="$(openvpn_client_state_path_value "${username}")"
   ccd_file="$(openvpn_client_ccd_path_for_cn "$(openvpn_client_cn_get "${username}")" 2>/dev/null || true)"
   tmp="$(mktemp "$(ssh_ovpn_qac_state_root_value)/.${username}.XXXXXX")" || return 1
 
   need_python3
-  if ! python3 - <<'PY' "${state_file}" "${username}" "${ssh_state_file}" "${ovpn_state_file}" "${ccd_file}" > "${tmp}"; then
+  if ! python3 - <<'PY' "${state_file}" "${username}" "${ovpn_state_file}" "${ccd_file}" > "${tmp}"; then
 import datetime
 import json
 import os
+import pwd
+import re
 import sys
 import time
 
-state_path, username, ssh_path, ovpn_path, ccd_path = sys.argv[1:6]
+state_path, username, ovpn_path, ccd_path = sys.argv[1:5]
 
 def load_json(path):
   if not path or not os.path.isfile(path):
@@ -338,13 +345,22 @@ def to_bool(v, default=False):
 
 def norm_date(v):
   s = str(v or "").strip()
-  if not s:
+  if not s or s == "-":
     return ""
   return s[:10]
 
+def user_exists(name):
+  try:
+    pwd.getpwnam(name)
+    return True
+  except KeyError:
+    return False
+  except Exception:
+    return False
+
 def date_is_active(v):
   s = norm_date(v)
-  if not s or s == "-":
+  if not s:
     return True
   try:
     return datetime.datetime.strptime(s, "%Y-%m-%d").date() >= datetime.date.today()
@@ -352,92 +368,58 @@ def date_is_active(v):
     return True
 
 current = load_json(state_path)
-ssh = load_json(ssh_path)
-ovpn = load_json(ovpn_path)
-if not current and not ssh and not ovpn:
+if not current:
   raise SystemExit(3)
+ovpn = load_json(ovpn_path)
 
-current_policy = current.get("policy") if isinstance(current.get("policy"), dict) else {}
-current_runtime = current.get("runtime") if isinstance(current.get("runtime"), dict) else {}
-current_derived = current.get("derived") if isinstance(current.get("derived"), dict) else {}
-current_meta = current.get("meta") if isinstance(current.get("meta"), dict) else {}
-ssh_status = ssh.get("status") if isinstance(ssh.get("status"), dict) else {}
-
-ssh_present = bool(ssh)
-ovpn_present = bool(ovpn)
+policy = current.get("policy") if isinstance(current.get("policy"), dict) else {}
+runtime = current.get("runtime") if isinstance(current.get("runtime"), dict) else {}
+derived = current.get("derived") if isinstance(current.get("derived"), dict) else {}
+meta = current.get("meta") if isinstance(current.get("meta"), dict) else {}
+status = current.get("status") if isinstance(current.get("status"), dict) else {}
 
 created_at = (
-  norm_date(ssh.get("created_at"))
+  norm_date(current.get("created_at"))
+  or norm_date(meta.get("created_at"))
   or norm_date(ovpn.get("created_at"))
-  or norm_date(current_meta.get("created_at"))
   or datetime.datetime.utcnow().strftime("%Y-%m-%d")
 )
-
 expired_at = (
-  norm_date(ssh.get("expired_at"))
+  norm_date(policy.get("expired_at"))
+  or norm_date(current.get("expired_at"))
   or norm_date(ovpn.get("expired_at"))
-  or norm_date(current_policy.get("expired_at"))
   or "-"
 )
-
-quota_limit_raw = ssh.get("quota_limit")
-if quota_limit_raw is None:
-  quota_limit_raw = current_policy.get("quota_limit_bytes")
-quota_limit = max(0, to_int(quota_limit_raw, 0))
-
-quota_unit = str(ssh.get("quota_unit") or current_policy.get("quota_unit") or "binary").strip().lower()
+quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), to_int(current.get("quota_limit"), 0)))
+quota_unit = str(policy.get("quota_unit") or current.get("quota_unit") or "binary").strip().lower()
 if quota_unit not in ("binary", "decimal"):
   quota_unit = "binary"
+sshws_token = str(current.get("sshws_token") or meta.get("sshws_token") or "").strip().lower()
+if not re.fullmatch(r"[A-Fa-f0-9]{10}", sshws_token):
+  sshws_token = ""
 
-ip_limit_enabled = to_bool(
-  ssh_status.get("ip_limit_enabled"),
-  current_policy.get("ip_limit_enabled"),
-)
-ip_limit = max(0, to_int(ssh_status.get("ip_limit"), to_int(current_policy.get("ip_limit"), 0)))
+ip_limit_enabled = to_bool(policy.get("ip_limit_enabled"))
+ip_limit = max(0, to_int(policy.get("ip_limit"), 0))
+speed_limit_enabled = to_bool(policy.get("speed_limit_enabled"))
+speed_down = max(0.0, to_float(policy.get("speed_down_mbit"), 0.0))
+speed_up = max(0.0, to_float(policy.get("speed_up_mbit"), 0.0))
+access_enabled = to_bool(policy.get("access_enabled"), True)
 
-speed_limit_enabled = to_bool(
-  ssh_status.get("speed_limit_enabled"),
-  current_policy.get("speed_limit_enabled"),
-)
-speed_down = max(
-  0.0,
-  to_float(ssh_status.get("speed_down_mbit"), to_float(current_policy.get("speed_down_mbit"), 0.0)),
-)
-speed_up = max(
-  0.0,
-  to_float(ssh_status.get("speed_up_mbit"), to_float(current_policy.get("speed_up_mbit"), 0.0)),
-)
-
-manual_block = to_bool(ssh_status.get("manual_block"))
-account_locked = to_bool(ssh_status.get("account_locked"))
-ovpn_access = bool(ccd_path and os.path.exists(ccd_path)) if ovpn_present else None
-
-if "access_enabled" in current_policy:
-  access_requested = to_bool(current_policy.get("access_enabled"))
-elif ovpn_access is not None:
-  access_requested = ovpn_access
-else:
-  access_requested = not manual_block and not account_locked
-
-quota_used_ssh = max(
-  0,
-  to_int(ssh.get("quota_used"), to_int(current_runtime.get("quota_used_ssh_bytes"), 0)),
-)
-quota_used_ovpn = max(0, to_int(current_runtime.get("quota_used_ovpn_bytes"), 0))
-active_session_ssh = max(0, to_int(current_runtime.get("active_session_ssh"), 0))
-active_session_ovpn = max(0, to_int(current_runtime.get("active_session_ovpn"), 0))
-last_seen_ssh = max(0, to_int(current_runtime.get("last_seen_ssh_unix"), 0))
-last_seen_ovpn = max(0, to_int(current_runtime.get("last_seen_ovpn_unix"), 0))
+quota_used_ssh = max(0, to_int(runtime.get("quota_used_ssh_bytes"), 0))
+quota_used_ovpn = max(0, to_int(runtime.get("quota_used_ovpn_bytes"), 0))
+active_session_ssh = max(0, to_int(runtime.get("active_session_ssh"), 0))
+active_session_ovpn = max(0, to_int(runtime.get("active_session_ovpn"), 0))
+last_seen_ssh = max(0, to_int(runtime.get("last_seen_ssh_unix"), 0))
+last_seen_ovpn = max(0, to_int(runtime.get("last_seen_ovpn_unix"), 0))
 
 quota_used_total = quota_used_ssh + quota_used_ovpn
 active_session_total = active_session_ssh + active_session_ovpn
 quota_exhausted = bool(quota_limit > 0 and quota_used_total >= quota_limit)
 ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and active_session_total > ip_limit)
-expired_active = date_is_active(expired_at)
-access_effective = bool(access_requested and expired_active and not quota_exhausted and not ip_limit_locked)
-if not access_requested:
+access_effective = bool(access_enabled and date_is_active(expired_at) and not quota_exhausted and not ip_limit_locked)
+if not access_enabled:
   last_reason = "access_off"
-elif not expired_active:
+elif not date_is_active(expired_at):
   last_reason = "expired"
 elif quota_exhausted:
   last_reason = "quota"
@@ -446,23 +428,45 @@ elif ip_limit_locked:
 else:
   last_reason = "-"
 
-meta = dict(current_meta)
 meta.update({
   "created_at": created_at,
   "updated_at_unix": int(time.time()),
-  "migrated_from_legacy": bool(ssh_present or ovpn_present),
-  "ssh_present": bool(ssh_present),
-  "ovpn_present": bool(ovpn_present),
+  "migrated_from_legacy": bool(meta.get("migrated_from_legacy")),
+  "ssh_present": bool(user_exists(username) if meta.get("ssh_present") is not False else False),
+  "ovpn_present": bool(ovpn),
+  "sshws_token": sshws_token,
 })
 
 payload = {
   "version": 1,
+  "managed_by": "autoscript-manage",
+  "protocol": "ssh-ovpn",
   "username": username,
+  "created_at": created_at,
+  "expired_at": expired_at,
+  "sshws_token": sshws_token,
+  "quota_limit": quota_limit,
+  "quota_unit": quota_unit,
+  "quota_used": quota_used_total,
+  "status": {
+    "manual_block": bool(to_bool(status.get("manual_block"))),
+    "quota_exhausted": bool(quota_exhausted),
+    "ip_limit_enabled": bool(ip_limit_enabled),
+    "ip_limit": ip_limit,
+    "ip_limit_locked": bool(ip_limit_locked),
+    "speed_limit_enabled": bool(speed_limit_enabled),
+    "speed_down_mbit": speed_down,
+    "speed_up_mbit": speed_up,
+    "lock_reason": last_reason,
+    "account_locked": bool(to_bool(status.get("account_locked"))),
+    "lock_owner": str(status.get("lock_owner") or "").strip(),
+    "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
+  },
   "policy": {
     "quota_limit_bytes": quota_limit,
     "quota_unit": quota_unit,
     "expired_at": expired_at,
-    "access_enabled": bool(access_requested),
+    "access_enabled": bool(access_enabled),
     "ip_limit_enabled": bool(ip_limit_enabled),
     "ip_limit": ip_limit,
     "speed_limit_enabled": bool(speed_limit_enabled),
@@ -504,12 +508,6 @@ PY
   return 0
 }
 
-ssh_ovpn_qac_state_refresh_from_legacy() {
-  local username="${1:-}"
-  ssh_ovpn_qac_username_valid "${username}" || return 1
-  ssh_ovpn_qac_with_lock "${username}" ssh_ovpn_qac_state_refresh_from_legacy__locked "${username}"
-}
-
 ssh_ovpn_qac_state_remove__locked() {
   local username="${1:-}"
   local state_file
@@ -528,7 +526,7 @@ ssh_ovpn_qac_state_remove() {
 ssh_ovpn_qac_state_sync_now() {
   local username="${1:-}"
   [[ -n "${username}" ]] || return 1
-  ssh_ovpn_qac_state_refresh_from_legacy "${username}"
+  ssh_ovpn_qac_with_lock "${username}" ssh_ovpn_qac_state_sync_now__locked "${username}"
 }
 
 ssh_ovpn_qac_state_sync_now_warn() {

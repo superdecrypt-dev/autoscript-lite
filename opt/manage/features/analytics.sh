@@ -1960,11 +1960,12 @@ openvpn_status_menu() {
   echo "${breadcrumb}"
   hr
 
-  local env_file core_svc ws_svc tcp_enabled ssl_enabled ws_enabled
-  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible core_service_ok ws_service_required ws_service_ok
+  local env_file core_svc ws_svc speed_svc tcp_enabled ssl_enabled ws_enabled
+  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir speed_state_file default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible core_service_ok ws_service_required ws_service_ok
   env_file="$(openvpn_runtime_env_file)"
   core_svc="ovpn-tcp.service"
   ws_svc="ovpnws-proxy.service"
+  speed_svc="openvpn-speed.service"
   tcp_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_TCP 2>/dev/null || echo "false")"
   ssl_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_SSL 2>/dev/null || echo "false")"
   ws_enabled="$(openvpn_runtime_get_env OVPN_ENABLE_WS 2>/dev/null || echo "false")"
@@ -1975,6 +1976,7 @@ openvpn_status_menu() {
   ws_path="$(openvpn_runtime_ws_prefix_value)"
   clients_dir="$(openvpn_clients_dir_value)"
   downloads_dir="$(openvpn_downloads_dir_value)"
+  speed_state_file="$(openvpn_speed_state_file_manage)"
   default_name="$(openvpn_default_client_name_value)"
   default_profile="$(openvpn_demo_profile_path)"
   default_ssl_profile="$(openvpn_demo_ssl_profile_path)"
@@ -2053,6 +2055,7 @@ openvpn_status_menu() {
   echo "WS prefix   : ${ws_path}"
   echo "Clients dir : ${clients_dir}"
   echo "ZIP dir     : ${downloads_dir}"
+  echo "Speed state : ${speed_state_file}"
   echo "Managed     : ${client_count} client(s)"
   if [[ "${runtime_ready}" == "true" ]]; then
     echo "Default     : ${default_name}"
@@ -2089,6 +2092,12 @@ openvpn_status_menu() {
     warn "${ws_svc} belum terpasang padahal mode WS aktif"
   else
     log "${ws_svc} : disabled"
+  fi
+
+  if svc_exists "${speed_svc}"; then
+    svc_status_line "${speed_svc}"
+  else
+    warn "${speed_svc} tidak terpasang"
   fi
 
   hr
@@ -2627,14 +2636,12 @@ ssh_username_duplicate_reason() {
     return 0
   fi
 
-  local qf accf qf_compat accf_compat
+  local qf accf
   qf="$(ssh_user_state_file "${username}")"
   accf="$(ssh_account_info_file "${username}")"
-  qf_compat="${SSH_USERS_STATE_DIR}/${username}.json"
-  accf_compat="${SSH_ACCOUNT_DIR}/${username}.txt"
 
-  # Cegah duplikat terhadap metadata managed (format baru/kompatibilitas lama).
-  if [[ -f "${qf}" || -f "${accf}" || -f "${qf_compat}" || -f "${accf_compat}" ]]; then
+  # Cegah duplikat terhadap metadata managed unified.
+  if [[ -f "${qf}" || -f "${accf}" ]]; then
     printf "Username '%s' sudah terdaftar pada metadata SSH managed.\n" "${username}"
     return 0
   fi
@@ -2690,74 +2697,24 @@ ssh_account_info_password_mode() {
 }
 
 ssh_state_dirs_prepare() {
-  local compat_state_dir="/var/lib/xray-manage/ssh-users"
   mkdir -p "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" || true
 
-  if [[ -d "${compat_state_dir}" && "${compat_state_dir}" != "${SSH_USERS_STATE_DIR}" ]]; then
-    local f base username dst
-    while IFS= read -r -d '' f; do
-      base="$(basename "${f}")"
-      base="${base%.json}"
-      username="$(ssh_username_from_key "${base}")"
-      [[ -n "${username}" ]] || continue
-      dst="$(ssh_user_state_file "${username}")"
-      if [[ ! -f "${dst}" ]]; then
-        cp -a "${f}" "${dst}" >/dev/null 2>&1 || true
-        chmod 600 "${dst}" >/dev/null 2>&1 || true
-      elif [[ "${f}" -nt "${dst}" ]]; then
-        # Jika file kompatibilitas lebih baru, sinkronkan agar metadata terbaru tidak hilang.
-        cp -f "${f}" "${dst}" >/dev/null 2>&1 || true
-        chmod 600 "${dst}" >/dev/null 2>&1 || true
-      fi
-    done < <(find "${compat_state_dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
-  fi
-
-  local f base username dst
-  while IFS= read -r -d '' f; do
-    base="$(basename "${f}")"
-    base="${base%.json}"
-    username="$(ssh_username_from_key "${base}")"
-    [[ -n "${username}" ]] || continue
-    dst="$(ssh_user_state_file "${username}")"
-    if [[ "${f}" != "${dst}" ]]; then
-      if [[ ! -f "${dst}" ]]; then
-        mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
-        chmod 600 "${dst}" >/dev/null 2>&1 || true
-      elif [[ "${f}" -nt "${dst}" ]]; then
-        # Pilih versi paling baru ketika format kompatibilitas & format canonical sama-sama ada.
-        mv -f "${f}" "${dst}" >/dev/null 2>&1 || true
-        chmod 600 "${dst}" >/dev/null 2>&1 || true
-      else
-        # Duplikat format kompatibilitas tidak dibutuhkan lagi setelah format @ssh dipakai.
-        rm -f "${f}" >/dev/null 2>&1 || true
-      fi
-    fi
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
+  find "${QUOTA_ROOT}/ssh" -maxdepth 1 -type f \( -name '*.json' -o -name '*.json.lock' \) -delete 2>/dev/null || true
+  find "/var/lib/xray-manage/ssh-users" -maxdepth 1 -type f -name '*.json' -delete 2>/dev/null || true
+  find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' ! -name '*@ssh.txt' -delete 2>/dev/null || true
 }
 
 ssh_user_state_file() {
   local username="${1:-}"
-  printf '%s/%s@ssh.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
-}
-
-ssh_user_state_compat_file() {
-  local username="${1:-}"
-  printf '%s/%s.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+  ssh_ovpn_qac_state_path "${username}"
 }
 
 ssh_user_state_resolve_file() {
   local username="${1:-}"
-  local primary compat
+  local primary
   primary="$(ssh_user_state_file "${username}")"
-  compat="$(ssh_user_state_compat_file "${username}")"
-  if [[ -f "${primary}" ]]; then
-    printf '%s\n' "${primary}"
-  elif [[ -f "${compat}" ]]; then
-    printf '%s\n' "${compat}"
-  else
-    printf '%s\n' "${primary}"
-  fi
+  printf '%s\n' "${primary}"
 }
 
 ssh_account_info_file() {
@@ -2817,7 +2774,8 @@ try:
   with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
   if isinstance(data, dict):
-    token = str(data.get("sshws_token") or "").strip()
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    token = str(data.get("sshws_token") or meta.get("sshws_token") or "").strip()
 except Exception:
   token = ""
 
@@ -2830,7 +2788,7 @@ PY
 
 ssh_user_state_ensure_token() {
   local username="${1:-}"
-  local state_file tmp lock_file
+  local state_file lock_file
   ssh_state_dirs_prepare
   state_file="$(ssh_user_state_resolve_file "${username}")"
   [[ -f "${state_file}" ]] || return 1
@@ -2877,7 +2835,8 @@ def pick_unique_token(root_dir, current_path, current_token):
         continue
     except Exception:
       continue
-    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    meta = loaded.get("meta") if isinstance(loaded.get("meta"), dict) else {}
+    tok = str(loaded.get("sshws_token") or meta.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", tok):
       seen.add(tok)
   tok = str(current_token or "").strip().lower()
@@ -2889,9 +2848,13 @@ def pick_unique_token(root_dir, current_path, current_token):
       return tok
   raise RuntimeError("failed to allocate unique sshws token")
 
-token = pick_unique_token(os.path.dirname(path) or ".", path, payload.get("sshws_token"))
-if token != str(payload.get("sshws_token") or "").strip().lower():
+meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+current_token = payload.get("sshws_token") or meta.get("sshws_token")
+token = pick_unique_token(os.path.dirname(path) or ".", path, current_token)
+if token != str(current_token or "").strip().lower():
   payload["sshws_token"] = token
+  meta["sshws_token"] = token
+  payload["meta"] = meta
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
   try:
@@ -2954,7 +2917,8 @@ def pick_unique_token(root_dir, current_path, current_token):
         continue
     except Exception:
       continue
-    tok = str(loaded.get("sshws_token") or "").strip().lower()
+    meta = loaded.get("meta") if isinstance(loaded.get("meta"), dict) else {}
+    tok = str(loaded.get("sshws_token") or meta.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", tok):
       seen.add(tok)
   tok = str(current_token or "").strip().lower()
@@ -2966,9 +2930,13 @@ def pick_unique_token(root_dir, current_path, current_token):
       return tok
   raise RuntimeError("failed to allocate unique sshws token")
 
-token = pick_unique_token(os.path.dirname(path) or ".", path, payload.get("sshws_token"))
-if token != str(payload.get("sshws_token") or "").strip().lower():
+meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+current_token = payload.get("sshws_token") or meta.get("sshws_token")
+token = pick_unique_token(os.path.dirname(path) or ".", path, current_token)
+if token != str(current_token or "").strip().lower():
   payload["sshws_token"] = token
+  meta["sshws_token"] = token
+  payload["meta"] = meta
   dirn = os.path.dirname(path) or "."
   fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
   try:
@@ -3017,7 +2985,8 @@ if os.path.isdir(root):
         continue
     except Exception:
       continue
-    candidate = str(payload.get("sshws_token") or "").strip().lower()
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    candidate = str(payload.get("sshws_token") or meta.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", candidate):
       token = candidate
       break
@@ -3050,7 +3019,8 @@ path = sys.argv[1]
 try:
   with open(path, "r", encoding="utf-8") as f:
     d = json.load(f)
-  print(str(d.get("created_at") or "").strip())
+  meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+  print(str(d.get("created_at") or meta.get("created_at") or "").strip())
 except Exception:
   print("")
 PY
@@ -3072,7 +3042,8 @@ path = sys.argv[1]
 try:
   with open(path, "r", encoding="utf-8") as f:
     d = json.load(f)
-  print(str(d.get("expired_at") or "").strip()[:10])
+  policy = d.get("policy") if isinstance(d.get("policy"), dict) else {}
+  print(str(d.get("expired_at") or policy.get("expired_at") or "").strip()[:10])
 except Exception:
   print("")
 PY
@@ -3101,44 +3072,6 @@ import secrets
 import sys
 
 state_file, username, created_at, expired_at = sys.argv[1:5]
-
-def to_int(v, default=0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return int(v)
-    if isinstance(v, (int, float)):
-      return int(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return int(float(s))
-  except Exception:
-    return default
-
-def to_float(v, default=0.0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return float(int(v))
-    if isinstance(v, (int, float)):
-      return float(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return float(s)
-  except Exception:
-    return default
-
-def to_bool(v):
-  if isinstance(v, bool):
-    return v
-  if isinstance(v, (int, float)):
-    return bool(v)
-  s = str(v or "").strip().lower()
-  return s in ("1", "true", "yes", "on", "y")
 
 def norm_date(v):
   s = str(v or "").strip()
@@ -3186,31 +3119,12 @@ if os.path.isfile(state_file):
   except Exception:
     payload = {}
 
+policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
 status_raw = payload.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
-
-quota_limit = to_int(payload.get("quota_limit"), 0)
-if quota_limit < 0:
-  quota_limit = 0
-
-quota_used = to_int(payload.get("quota_used"), 0)
-if quota_used < 0:
-  quota_used = 0
-
-speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-speed_up = to_float(status.get("speed_up_mbit"), 0.0)
-if speed_down < 0:
-  speed_down = 0.0
-if speed_up < 0:
-  speed_up = 0.0
-
-ip_limit = to_int(status.get("ip_limit"), 0)
-if ip_limit < 0:
-  ip_limit = 0
-
-unit = str(payload.get("quota_unit") or "binary").strip().lower()
-if unit not in ("binary", "decimal"):
-  unit = "binary"
 
 created = str(created_at or "").strip() or str(payload.get("created_at") or "").strip()
 if created:
@@ -3219,31 +3133,25 @@ if not created:
   created = datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
-token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
+current_token = payload.get("sshws_token") or meta.get("sshws_token")
+token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, current_token)
 
+meta["created_at"] = created
+meta["ssh_present"] = True
+meta["sshws_token"] = token
+payload["meta"] = meta
 payload["managed_by"] = "autoscript-manage"
 payload["username"] = username
-payload["protocol"] = "ssh"
+payload["protocol"] = "ssh-ovpn"
 payload["created_at"] = created
 payload["expired_at"] = expired
 payload["sshws_token"] = token
-payload["quota_limit"] = quota_limit
-payload["quota_unit"] = unit
-payload["quota_used"] = quota_used
-payload["status"] = {
-  "manual_block": to_bool(status.get("manual_block")),
-  "quota_exhausted": to_bool(status.get("quota_exhausted")),
-  "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
-  "ip_limit": ip_limit,
-  "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-  "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
-  "speed_down_mbit": speed_down,
-  "speed_up_mbit": speed_up,
-  "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-  "account_locked": to_bool(status.get("account_locked")),
-  "lock_owner": str(status.get("lock_owner") or "").strip(),
-  "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
-}
+
+policy["expired_at"] = expired
+payload["policy"] = policy
+payload["runtime"] = runtime
+payload["derived"] = derived
+payload["status"] = status
 
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
@@ -3455,7 +3363,7 @@ ssh_qac_traffic_enforcement_ready() {
 
 ssh_qac_traffic_scope_label() {
   if ssh_qac_traffic_enforcement_ready; then
-    echo "Unified SSH QAC"
+    echo "Unified SSH & OVPN QAC"
   else
     echo "Metadata only (SSH runtime not installed)"
   fi
@@ -3716,6 +3624,8 @@ if not isinstance(d, dict):
 s = d.get("status")
 if not isinstance(s, dict):
   s = {}
+policy = d.get("policy") if isinstance(d.get("policy"), dict) else {}
+meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
 def tb(v):
   if isinstance(v, bool):
     return "true" if v else "false"
@@ -3754,15 +3664,15 @@ def fm(v):
   s = f"{float(v):.3f}".rstrip("0").rstrip(".")
   return s if s else "0"
 print("|".join([
-  str(max(0, ti(d.get("quota_limit"), 0))),
-  str(d.get("expired_at") or "-")[:10] if str(d.get("expired_at") or "-").strip() else "-",
-  str(d.get("created_at") or "-"),
-  tb(s.get("ip_limit_enabled")),
-  str(max(0, ti(s.get("ip_limit"), 0))),
-  tb(s.get("speed_limit_enabled")),
-  fm(max(0.0, tf(s.get("speed_down_mbit"), 0.0))),
-  fm(max(0.0, tf(s.get("speed_up_mbit"), 0.0))),
-  str(d.get("sshws_token") or "").strip().lower(),
+  str(max(0, ti(d.get("quota_limit"), ti(policy.get("quota_limit_bytes"), 0)))),
+  str(d.get("expired_at") or policy.get("expired_at") or "-")[:10] if str(d.get("expired_at") or policy.get("expired_at") or "-").strip() else "-",
+  str(d.get("created_at") or meta.get("created_at") or "-"),
+  tb(s.get("ip_limit_enabled", policy.get("ip_limit_enabled"))),
+  str(max(0, ti(s.get("ip_limit"), ti(policy.get("ip_limit"), 0)))),
+  tb(s.get("speed_limit_enabled", policy.get("speed_limit_enabled"))),
+  fm(max(0.0, tf(s.get("speed_down_mbit"), tf(policy.get("speed_down_mbit"), 0.0)))),
+  fm(max(0.0, tf(s.get("speed_up_mbit"), tf(policy.get("speed_up_mbit"), 0.0)))),
+  str(d.get("sshws_token") or meta.get("sshws_token") or "").strip().lower(),
 ]))
 PY
 )"
@@ -4113,10 +4023,7 @@ ssh_ovpn_user_has_ssh_side() {
   local username="${1:-}"
   [[ -n "${username}" ]] || return 1
   ssh_state_dirs_prepare
-  [[ -f "$(ssh_user_state_file "${username}")" \
-    || -f "$(ssh_user_state_compat_file "${username}")" \
-    || -f "$(ssh_account_info_file "${username}")" \
-    || -f "${SSH_ACCOUNT_DIR}/${username}.txt" ]]
+  [[ -f "$(ssh_user_state_file "${username}")" ]]
 }
 
 ssh_ovpn_user_has_ovpn_side() {
@@ -4642,6 +4549,7 @@ ssh_add_user_menu() {
     log "Akun SSH dibuat tanpa sisi OpenVPN: ${username}"
   fi
   ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+  openvpn_speed_sync_now_warn || true
   title
   if [[ "${pair_status}" == "paired" ]]; then
     echo "Add SSH & OVPN user sukses ✅"
@@ -4725,6 +4633,7 @@ ssh_delete_user_menu() {
     openvpn_client_delete_manage "${username}" || true
   fi
   ssh_ovpn_qac_state_remove "${username}" || true
+  openvpn_speed_sync_now_warn || true
   log "Akun SSH & OVPN '${username}' dihapus."
   pause
 }
@@ -4945,6 +4854,7 @@ ssh_ovpn_refresh_ovpn_files_menu() {
       return 0
     fi
     ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+    openvpn_speed_sync_now_warn || true
     log "Sisi OpenVPN berhasil dilengkapi untuk '${username}'."
     ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
     return 0
@@ -4958,6 +4868,7 @@ ssh_ovpn_refresh_ovpn_files_menu() {
   openvpn_account_info_refresh "${username}" || true
   openvpn_expiry_sync_now_warn "${username}" || true
   ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+  openvpn_speed_sync_now_warn || true
 
   log "File OpenVPN direfresh untuk '${username}'."
   ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
@@ -5765,9 +5676,9 @@ ssh_qac_enforce_now_warn() {
   local target_user="${1:-}"
   if ! ssh_qac_enforce_now "${target_user}"; then
     if [[ -n "${target_user}" ]]; then
-      warn "Enforcer SSH QAC gagal untuk '${target_user}'. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
+      warn "Enforcer SSH & OVPN QAC gagal untuk '${target_user}'. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
     else
-      warn "Enforcer SSH QAC gagal dijalankan. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
+      warn "Enforcer SSH & OVPN QAC gagal dijalankan. Pastikan '${SSH_QAC_ENFORCER_BIN}' tersedia (bisa di-restore dari setup.sh)."
     fi
     return 1
   fi
@@ -6266,12 +6177,11 @@ ssh_qac_atomic_update_file_unlocked() {
   need_python3
   python3 - <<'PY' "${qf}" "${action}" "${lock_file}" "$@"
 import atexit
+import datetime
 import fcntl
 import json
 import os
 import pathlib
-import re
-import secrets
 import sys
 import tempfile
 
@@ -6352,36 +6262,15 @@ def parse_float(v, key, minv=None):
     raise SystemExit(f"{key} minimal {minv}")
   return n
 
-def pick_unique_token(root_dir, current_path, current_token):
-  seen = set()
-  current_real = os.path.realpath(current_path)
+def date_is_active(value):
+  text = str(value or "").strip()
+  if not text or text == "-":
+    return True
   try:
-    names = sorted(os.listdir(root_dir), key=str.lower)
+    expiry = datetime.datetime.strptime(text[:10], "%Y-%m-%d").date()
   except Exception:
-    names = []
-  for name in names:
-    if name.startswith(".") or not name.endswith(".json"):
-      continue
-    entry = os.path.join(root_dir, name)
-    if os.path.realpath(entry) == current_real:
-      continue
-    try:
-      loaded = json.load(open(entry, "r", encoding="utf-8"))
-      if not isinstance(loaded, dict):
-        continue
-    except Exception:
-      continue
-    tok = str(loaded.get("sshws_token") or "").strip().lower()
-    if re.fullmatch(r"[a-f0-9]{10}", tok):
-      seen.add(tok)
-  tok = str(current_token or "").strip().lower()
-  if re.fullmatch(r"[a-f0-9]{10}", tok) and tok not in seen:
-    return tok
-  for _ in range(256):
-    tok = secrets.token_hex(5)
-    if tok not in seen:
-      return tok
-  raise SystemExit("failed to allocate unique sshws token")
+    return True
+  return expiry >= datetime.date.today()
 
 lock_handle = None
 
@@ -6417,109 +6306,132 @@ if os.path.isfile(qf):
   except Exception:
     payload = {}
 
-username_fallback = os.path.basename(qf)
-if username_fallback.endswith(".json"):
-  username_fallback = username_fallback[:-5]
-username_fallback = norm_user(username_fallback) or username_fallback
+username_fallback = norm_user(pathlib.Path(qf).stem) or pathlib.Path(qf).stem
+payload["version"] = 1
+payload["managed_by"] = str(payload.get("managed_by") or "autoscript-manage").strip() or "autoscript-manage"
+payload["protocol"] = str(payload.get("protocol") or "ssh-ovpn").strip() or "ssh-ovpn"
+payload["username"] = norm_user(payload.get("username") or username_fallback) or username_fallback
 
+meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
 status_raw = payload.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
 
-quota_limit = to_int(payload.get("quota_limit"), 0)
-if quota_limit < 0:
-  quota_limit = 0
-quota_used = to_int(payload.get("quota_used"), 0)
-if quota_used < 0:
-  quota_used = 0
+created_at = str(payload.get("created_at") or meta.get("created_at") or "-").strip() or "-"
+expired_at = str(payload.get("expired_at") or policy.get("expired_at") or "-").strip()[:10] or "-"
+quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), to_int(payload.get("quota_limit"), 0)))
+quota_unit = str(policy.get("quota_unit") or payload.get("quota_unit") or "binary").strip().lower()
+if quota_unit not in ("binary", "decimal"):
+  quota_unit = "binary"
+quota_used_ssh = max(0, to_int(runtime.get("quota_used_ssh_bytes"), 0))
+quota_used_ovpn = max(0, to_int(runtime.get("quota_used_ovpn_bytes"), 0))
+active_ssh = max(0, to_int(runtime.get("active_session_ssh"), 0))
+active_ovpn = max(0, to_int(runtime.get("active_session_ovpn"), 0))
 
-speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-speed_up = to_float(status.get("speed_up_mbit"), 0.0)
-if speed_down < 0:
-  speed_down = 0.0
-if speed_up < 0:
-  speed_up = 0.0
+status["manual_block"] = to_bool(status.get("manual_block"))
+status["account_locked"] = to_bool(status.get("account_locked"))
+status["lock_owner"] = str(status.get("lock_owner") or "").strip()
+status["lock_shell_restore"] = str(status.get("lock_shell_restore") or "").strip()
 
-ip_limit = to_int(status.get("ip_limit"), 0)
-if ip_limit < 0:
-  ip_limit = 0
-
-unit = str(payload.get("quota_unit") or "binary").strip().lower()
-if unit not in ("binary", "decimal"):
-  unit = "binary"
-token = pick_unique_token(os.path.dirname(qf) or ".", qf, payload.get("sshws_token"))
-
-payload["managed_by"] = "autoscript-manage"
-payload["protocol"] = "ssh"
-payload["username"] = norm_user(payload.get("username") or username_fallback) or username_fallback
-payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
-payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
-payload["sshws_token"] = token
-payload["quota_limit"] = quota_limit
-payload["quota_unit"] = unit
-payload["quota_used"] = quota_used
-payload["status"] = {
-  "manual_block": to_bool(status.get("manual_block")),
-  "quota_exhausted": to_bool(status.get("quota_exhausted")),
-  "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
-  "ip_limit": ip_limit,
-  "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-  "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
-  "speed_down_mbit": speed_down,
-  "speed_up_mbit": speed_up,
-  "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-  "account_locked": to_bool(status.get("account_locked")),
-  "lock_owner": str(status.get("lock_owner") or "").strip(),
-  "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
-}
-
-st = payload["status"]
+policy["quota_limit_bytes"] = quota_limit
+policy["quota_unit"] = quota_unit
+policy["expired_at"] = expired_at
+policy["access_enabled"] = to_bool(policy.get("access_enabled"), True)
+policy["ip_limit_enabled"] = to_bool(policy.get("ip_limit_enabled"), status.get("ip_limit_enabled"))
+policy["ip_limit"] = max(0, to_int(policy.get("ip_limit"), to_int(status.get("ip_limit"), 0)))
+policy["speed_limit_enabled"] = to_bool(policy.get("speed_limit_enabled"), status.get("speed_limit_enabled"))
+policy["speed_down_mbit"] = max(0.0, to_float(policy.get("speed_down_mbit"), to_float(status.get("speed_down_mbit"), 0.0)))
+policy["speed_up_mbit"] = max(0.0, to_float(policy.get("speed_up_mbit"), to_float(status.get("speed_up_mbit"), 0.0)))
 
 if action == "set_quota_limit":
   if len(args) != 1:
     raise SystemExit("set_quota_limit butuh 1 argumen (bytes)")
-  payload["quota_limit"] = parse_int(args[0], "quota_limit", 0)
+  policy["quota_limit_bytes"] = parse_int(args[0], "quota_limit", 0)
 elif action == "reset_quota_used":
-  payload["quota_used"] = 0
-  st["quota_exhausted"] = False
+  runtime["quota_used_ssh_bytes"] = 0
+  runtime["quota_used_ovpn_bytes"] = 0
+  derived["quota_exhausted"] = False
 elif action == "manual_block_set":
   if len(args) != 1:
     raise SystemExit("manual_block_set butuh 1 argumen (on/off)")
-  st["manual_block"] = bool(parse_onoff(args[0]))
+  status["manual_block"] = bool(parse_onoff(args[0]))
 elif action == "ip_limit_enabled_set":
   if len(args) != 1:
     raise SystemExit("ip_limit_enabled_set butuh 1 argumen (on/off)")
   enabled = bool(parse_onoff(args[0]))
-  st["ip_limit_enabled"] = enabled
+  policy["ip_limit_enabled"] = enabled
   if not enabled:
-    st["ip_limit_locked"] = False
+    derived["ip_limit_locked"] = False
 elif action == "set_ip_limit":
   if len(args) != 1:
     raise SystemExit("set_ip_limit butuh 1 argumen (angka)")
-  st["ip_limit"] = parse_int(args[0], "ip_limit", 1)
+  policy["ip_limit"] = parse_int(args[0], "ip_limit", 1)
 elif action == "clear_ip_limit_locked":
-  st["ip_limit_locked"] = False
+  derived["ip_limit_locked"] = False
 elif action == "set_speed_down":
   if len(args) != 1:
     raise SystemExit("set_speed_down butuh 1 argumen (Mbps)")
-  st["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
+  policy["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
 elif action == "set_speed_up":
   if len(args) != 1:
     raise SystemExit("set_speed_up butuh 1 argumen (Mbps)")
-  st["speed_up_mbit"] = parse_float(args[0], "speed_up_mbit", 0.000001)
+  policy["speed_up_mbit"] = parse_float(args[0], "speed_up_mbit", 0.000001)
 elif action == "speed_limit_set":
   if len(args) != 1:
     raise SystemExit("speed_limit_set butuh 1 argumen (on/off)")
-  st["speed_limit_enabled"] = bool(parse_onoff(args[0]))
+  policy["speed_limit_enabled"] = bool(parse_onoff(args[0]))
 elif action == "set_speed_all_enable":
   if len(args) != 2:
     raise SystemExit("set_speed_all_enable butuh 2 argumen (down up)")
-  st["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
-  st["speed_up_mbit"] = parse_float(args[1], "speed_up_mbit", 0.000001)
-  st["speed_limit_enabled"] = True
+  policy["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
+  policy["speed_up_mbit"] = parse_float(args[1], "speed_up_mbit", 0.000001)
+  policy["speed_limit_enabled"] = True
 else:
   raise SystemExit(f"aksi ssh_qac_atomic_update_file tidak dikenali: {action}")
 
-payload["status"] = st
+quota_used_total = max(0, int(runtime.get("quota_used_ssh_bytes", quota_used_ssh))) + max(0, int(runtime.get("quota_used_ovpn_bytes", quota_used_ovpn)))
+active_total = max(0, int(runtime.get("active_session_ssh", active_ssh))) + max(0, int(runtime.get("active_session_ovpn", active_ovpn)))
+quota_exhausted = bool(policy["quota_limit_bytes"] > 0 and quota_used_total >= policy["quota_limit_bytes"])
+ip_limit_locked = bool(policy["ip_limit_enabled"] and policy["ip_limit"] > 0 and active_total > policy["ip_limit"])
+if status.get("manual_block"):
+  last_reason = "manual"
+elif quota_exhausted:
+  last_reason = "quota"
+elif ip_limit_locked:
+  last_reason = "ip_limit"
+else:
+  last_reason = "-"
+
+derived["quota_used_total_bytes"] = quota_used_total
+derived["active_session_total"] = active_total
+derived["quota_exhausted"] = quota_exhausted
+derived["ip_limit_locked"] = ip_limit_locked
+derived["last_reason"] = last_reason
+derived["access_effective"] = bool(policy.get("access_enabled", True) and date_is_active(expired_at) and not quota_exhausted and not ip_limit_locked)
+
+status["quota_exhausted"] = quota_exhausted
+status["ip_limit_enabled"] = bool(policy["ip_limit_enabled"])
+status["ip_limit"] = int(policy["ip_limit"])
+status["ip_limit_locked"] = ip_limit_locked
+status["speed_limit_enabled"] = bool(policy["speed_limit_enabled"])
+status["speed_down_mbit"] = float(policy["speed_down_mbit"])
+status["speed_up_mbit"] = float(policy["speed_up_mbit"])
+status["lock_reason"] = last_reason
+
+meta["created_at"] = created_at
+payload["meta"] = meta
+payload["policy"] = policy
+payload["runtime"] = runtime
+payload["derived"] = derived
+payload["status"] = status
+payload["created_at"] = created_at
+payload["expired_at"] = expired_at
+payload["quota_limit"] = int(policy["quota_limit_bytes"])
+payload["quota_unit"] = quota_unit
+payload["quota_used"] = quota_used_total
+
 text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 dirn = os.path.dirname(qf) or "."
 fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
@@ -6568,7 +6480,7 @@ ssh_qac_view_json() {
     view_file="${unified_file}"
   fi
   title
-  echo "SSH QAC metadata: ${view_file}"
+  echo "SSH & OVPN QAC metadata: ${view_file}"
   hr
   need_python3
   if have_cmd less; then
@@ -6627,14 +6539,14 @@ ssh_qac_print_table_page() {
   fi
   SSH_QAC_PAGE="${page}"
 
-  echo "SSH accounts: ${total} | page $((page + 1))/${display_pages}"
+  echo "Managed users: ${total} | page $((page + 1))/${display_pages}"
   if [[ -n "${SSH_QAC_QUERY}" ]]; then
     echo "Filter: '${SSH_QAC_QUERY}'"
   fi
   echo
 
   if (( total == 0 )); then
-    echo "Belum ada data SSH QAC."
+    echo "Belum ada data SSH & OVPN QAC."
     return 0
   fi
 
@@ -6691,7 +6603,7 @@ ssh_qac_edit_flow() {
 
   while true; do
     title
-    echo "5) SSH QAC > Detail"
+    echo "5) SSH & OVPN QAC > Detail"
     hr
     echo "File  : ${qf}"
     hr
@@ -6736,9 +6648,9 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${unified_active_ssh}"
     printf "%-${label_w}s : %s\n" "Active OVPN Sessions" "${unified_active_ovpn}"
     printf "%-${label_w}s : %s\n" "Active Total" "${unified_active_total}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
-    printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
     printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
 
@@ -6751,7 +6663,7 @@ ssh_qac_edit_flow() {
     echo "  7) Unlock IP/Login"
     echo "  8) Set Speed Download"
     echo "  9) Set Speed Upload"
-    echo " 10) Speed Limit SSH Enable/Disable (toggle)"
+    echo " 10) Speed Limit Enable/Disable (toggle)"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -6917,6 +6829,9 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
+        ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+        ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_speed_sync_now_warn || true
         ssh_account_info_refresh_warn "${username}" || true
         log "Speed download SSH diubah: ${speed_down_input} Mbps"
         pause
@@ -6940,6 +6855,9 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
+        ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+        ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_speed_sync_now_warn || true
         ssh_account_info_refresh_warn "${username}" || true
         log "Speed upload SSH diubah: ${speed_up_input} Mbps"
         pause
@@ -6953,6 +6871,9 @@ ssh_qac_edit_flow() {
             pause
             continue
           fi
+          ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+          ssh_qac_enforce_now_warn "${username}" || true
+          openvpn_speed_sync_now_warn || true
           ssh_account_info_refresh_warn "${username}" || true
           log "Speed limit SSH: OFF"
           pause
@@ -6998,6 +6919,9 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
+        ssh_ovpn_qac_state_sync_now_warn "${username}" || true
+        ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_speed_sync_now_warn || true
         ssh_account_info_refresh_warn "${username}" || true
         log "Speed limit SSH: ON"
         pause
@@ -7019,7 +6943,7 @@ ssh_quota_menu() {
 
   while true; do
     title
-    echo "5) SSH QAC"
+    echo "5) SSH & OVPN QAC"
     hr
 
     ssh_qac_enforce_now_warn || true

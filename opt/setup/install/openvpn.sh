@@ -5,6 +5,7 @@ OVPN_TCP_SERVICE_NAME="${OVPN_TCP_SERVICE_NAME:-ovpn-tcp.service}"
 OVPNWS_PROXY_SERVICE_NAME="${OVPNWS_PROXY_SERVICE_NAME:-ovpnws-proxy.service}"
 OPENVPN_EXPIRED_SERVICE_NAME="${OPENVPN_EXPIRED_SERVICE_NAME:-openvpn-expired.service}"
 OPENVPN_EXPIRED_TIMER_NAME="${OPENVPN_EXPIRED_TIMER_NAME:-openvpn-expired.timer}"
+OPENVPN_SPEED_SERVICE_NAME="${OPENVPN_SPEED_SERVICE_NAME:-openvpn-speed.service}"
 OVPN_TCP_BIND_WAS_SET="${OVPN_TCP_BIND+x}"
 OVPN_TCP_PORT_WAS_SET="${OVPN_TCP_PORT+x}"
 OVPNWS_PROXY_BIND_WAS_SET="${OVPNWS_PROXY_BIND+x}"
@@ -16,6 +17,11 @@ OVPN_SERVER_SUBNET_WAS_SET="${OVPN_SERVER_SUBNET+x}"
 OVPN_SERVER_NETMASK_WAS_SET="${OVPN_SERVER_NETMASK+x}"
 OVPN_CCD_DIR_WAS_SET="${OVPN_CCD_DIR+x}"
 OVPN_DOWNLOADS_DIR_WAS_SET="${OVPN_DOWNLOADS_DIR+x}"
+OVPN_SPEED_TUN_IFACE_WAS_SET="${OVPN_SPEED_TUN_IFACE+x}"
+OVPN_SPEED_IFB_IFACE_WAS_SET="${OVPN_SPEED_IFB_IFACE+x}"
+OVPN_SPEED_STATE_FILE_WAS_SET="${OVPN_SPEED_STATE_FILE+x}"
+OVPN_SPEED_INTERVAL_WAS_SET="${OVPN_SPEED_INTERVAL+x}"
+OVPN_SPEED_DEFAULT_RATE_MBIT_WAS_SET="${OVPN_SPEED_DEFAULT_RATE_MBIT+x}"
 OVPN_TCP_PORT="${OVPN_TCP_PORT:-21194}"
 OVPNWS_PROXY_PORT="${OVPNWS_PROXY_PORT:-21195}"
 OVPNWS_PATH="${OVPNWS_PATH:-/}"
@@ -38,6 +44,11 @@ OVPN_DOWNLOADS_DIR="${OVPN_DOWNLOADS_DIR:-/var/lib/openvpn/downloads}"
 OVPN_DEFAULT_CLIENT_NAME="${OVPN_DEFAULT_CLIENT_NAME:-autoscript}"
 OVPN_SERVER_SUBNET="${OVPN_SERVER_SUBNET:-10.199.0.0}"
 OVPN_SERVER_NETMASK="${OVPN_SERVER_NETMASK:-255.255.255.0}"
+OVPN_SPEED_TUN_IFACE="${OVPN_SPEED_TUN_IFACE:-tun0}"
+OVPN_SPEED_IFB_IFACE="${OVPN_SPEED_IFB_IFACE:-ifb2}"
+OVPN_SPEED_STATE_FILE="${OVPN_SPEED_STATE_FILE:-/var/lib/openvpn/speed-state.json}"
+OVPN_SPEED_INTERVAL="${OVPN_SPEED_INTERVAL:-5}"
+OVPN_SPEED_DEFAULT_RATE_MBIT="${OVPN_SPEED_DEFAULT_RATE_MBIT:-10000}"
 
 openvpn_runtime_read_env_value() {
   local key="$1"
@@ -101,6 +112,26 @@ openvpn_runtime_load_persisted_env() {
   if [[ -z "${OVPN_DOWNLOADS_DIR_WAS_SET}" ]]; then
     value="$(openvpn_runtime_read_env_value OVPN_DOWNLOADS_DIR "${env_file}" 2>/dev/null || true)"
     [[ -n "${value}" ]] && OVPN_DOWNLOADS_DIR="${value}"
+  fi
+  if [[ -z "${OVPN_SPEED_TUN_IFACE_WAS_SET}" ]]; then
+    value="$(openvpn_runtime_read_env_value OVPN_SPEED_TUN_IFACE "${env_file}" 2>/dev/null || true)"
+    [[ -n "${value}" ]] && OVPN_SPEED_TUN_IFACE="${value}"
+  fi
+  if [[ -z "${OVPN_SPEED_IFB_IFACE_WAS_SET}" ]]; then
+    value="$(openvpn_runtime_read_env_value OVPN_SPEED_IFB_IFACE "${env_file}" 2>/dev/null || true)"
+    [[ -n "${value}" ]] && OVPN_SPEED_IFB_IFACE="${value}"
+  fi
+  if [[ -z "${OVPN_SPEED_STATE_FILE_WAS_SET}" ]]; then
+    value="$(openvpn_runtime_read_env_value OVPN_SPEED_STATE_FILE "${env_file}" 2>/dev/null || true)"
+    [[ -n "${value}" ]] && OVPN_SPEED_STATE_FILE="${value}"
+  fi
+  if [[ -z "${OVPN_SPEED_INTERVAL_WAS_SET}" ]]; then
+    value="$(openvpn_runtime_read_env_value OVPN_SPEED_INTERVAL "${env_file}" 2>/dev/null || true)"
+    [[ -n "${value}" ]] && OVPN_SPEED_INTERVAL="${value}"
+  fi
+  if [[ -z "${OVPN_SPEED_DEFAULT_RATE_MBIT_WAS_SET}" ]]; then
+    value="$(openvpn_runtime_read_env_value OVPN_SPEED_DEFAULT_RATE_MBIT "${env_file}" 2>/dev/null || true)"
+    [[ -n "${value}" ]] && OVPN_SPEED_DEFAULT_RATE_MBIT="${value}"
   fi
 }
 
@@ -452,7 +483,12 @@ write_openvpn_runtime_env() {
     "OVPN_DOWNLOADS_DIR=${OVPN_DOWNLOADS_DIR}" \
     "OVPN_DEFAULT_CLIENT_NAME=${OVPN_DEFAULT_CLIENT_NAME}" \
     "OVPN_SERVER_SUBNET=${OVPN_SERVER_SUBNET}" \
-    "OVPN_SERVER_NETMASK=${OVPN_SERVER_NETMASK}"
+    "OVPN_SERVER_NETMASK=${OVPN_SERVER_NETMASK}" \
+    "OVPN_SPEED_TUN_IFACE=${OVPN_SPEED_TUN_IFACE}" \
+    "OVPN_SPEED_IFB_IFACE=${OVPN_SPEED_IFB_IFACE}" \
+    "OVPN_SPEED_STATE_FILE=${OVPN_SPEED_STATE_FILE}" \
+    "OVPN_SPEED_INTERVAL=${OVPN_SPEED_INTERVAL}" \
+    "OVPN_SPEED_DEFAULT_RATE_MBIT=${OVPN_SPEED_DEFAULT_RATE_MBIT}"
 }
 
 render_openvpn_server_config() {
@@ -918,6 +954,7 @@ stage_openvpn_scaffold_assets() {
   install_setup_bin_or_die "ssh-ovpn-qac-runtime.py" "/usr/local/bin/ssh-ovpn-qac-runtime" 0755
   install_setup_bin_or_die "ovpnws-proxy.py" "/usr/local/bin/ovpnws-proxy" 0755
   install_setup_bin_or_die "openvpn-expired" "/usr/local/bin/openvpn-expired" 0755
+  install_setup_bin_or_die "openvpn-speed.py" "/usr/local/bin/openvpn-speed" 0755
   write_openvpn_runtime_env
   render_openvpn_server_config
 
@@ -954,12 +991,20 @@ stage_openvpn_scaffold_assets() {
     0644 \
     "OPENVPN_EXPIRED_SERVICE_NAME=${OPENVPN_EXPIRED_SERVICE_NAME}"
 
+  render_setup_template_or_die \
+    "systemd/openvpn-speed.service" \
+    "/etc/systemd/system/${OPENVPN_SPEED_SERVICE_NAME}" \
+    0644 \
+    "OPENVPN_RUNTIME_ENV_FILE=${OPENVPN_RUNTIME_ENV_FILE}" \
+    "OVPN_TCP_SERVICE_NAME=${OVPN_TCP_SERVICE_NAME}" \
+    "OVPN_SPEED_INTERVAL=${OVPN_SPEED_INTERVAL}"
+
   systemctl daemon-reload >/dev/null 2>&1 || true
   ok "OpenVPN scaffold siap:"
   ok "  - env    : ${OPENVPN_RUNTIME_ENV_FILE}"
   ok "  - config : ${OVPN_SERVER_CONF}"
-  ok "  - unit   : ${OVPN_TCP_SERVICE_NAME}, ${OVPNWS_PROXY_SERVICE_NAME}, ${OPENVPN_EXPIRED_SERVICE_NAME}, ${OPENVPN_EXPIRED_TIMER_NAME}"
-  ok "  - binary : /usr/local/bin/ovpnws-proxy, /usr/local/bin/openvpn-expired, /usr/local/bin/ssh-ovpn-qac-runtime"
+  ok "  - unit   : ${OVPN_TCP_SERVICE_NAME}, ${OVPNWS_PROXY_SERVICE_NAME}, ${OPENVPN_EXPIRED_SERVICE_NAME}, ${OPENVPN_EXPIRED_TIMER_NAME}, ${OPENVPN_SPEED_SERVICE_NAME}"
+  ok "  - binary : /usr/local/bin/ovpnws-proxy, /usr/local/bin/openvpn-expired, /usr/local/bin/openvpn-speed, /usr/local/bin/ssh-ovpn-qac-runtime"
 }
 
 install_openvpn_stack() {
@@ -996,9 +1041,15 @@ install_openvpn_stack() {
     warn "Gagal mengaktifkan ${OPENVPN_EXPIRED_TIMER_NAME}. Sinkronisasi expiry OpenVPN mungkin tidak otomatis."
   fi
 
+  if ! systemctl enable --now "${OPENVPN_SPEED_SERVICE_NAME}" >/dev/null 2>&1; then
+    warn "Gagal mengaktifkan ${OPENVPN_SPEED_SERVICE_NAME}. Speed limit OpenVPN mungkin tidak otomatis."
+    systemctl disable --now "${OPENVPN_SPEED_SERVICE_NAME}" >/dev/null 2>&1 || true
+  fi
+
   ok "OpenVPN stack aktif."
   ok "  - core backend : ${OVPN_TCP_BIND}:${OVPN_TCP_PORT}"
   ok "  - ws proxy     : ${OVPNWS_PROXY_BIND}:${OVPNWS_PROXY_PORT}"
+  ok "  - speed tun    : ${OVPN_SPEED_TUN_IFACE} (ifb ${OVPN_SPEED_IFB_IFACE})"
   ok "  - client demo  : $(openvpn_client_config_path "${OVPN_DEFAULT_CLIENT_NAME}")"
   ok "  - client ssl   : $(openvpn_client_ssl_profile_path "${OVPN_DEFAULT_CLIENT_NAME}")"
   ok "  - client ws    : $(openvpn_client_ws_profile_path "${OVPN_DEFAULT_CLIENT_NAME}")"

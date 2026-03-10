@@ -5,14 +5,13 @@ import fcntl
 import json
 import os
 import pathlib
+import pwd
 import tempfile
 import time
 
 
 UNIFIED_ROOT = pathlib.Path("/opt/quota/ssh-ovpn")
 UNIFIED_LOCK_ROOT = pathlib.Path("/run/autoscript/locks/ssh-ovpn-qac")
-SSH_QUOTA_ROOT = pathlib.Path("/opt/quota/ssh")
-SSH_STATE_ROOT = pathlib.Path("/var/lib/xray-manage/ssh-users")
 OVPN_CLIENTS_ROOT = pathlib.Path("/etc/openvpn/clients")
 OVPN_CCD_ROOT = pathlib.Path("/etc/openvpn/server/ccd")
 OVPN_STATUS_FILE = pathlib.Path("/var/log/openvpn/ovpn-tcp-status.log")
@@ -115,9 +114,19 @@ def to_bool(value, default=False):
 
 def norm_date(value):
     text = str(value or "").strip()
-    if not text:
+    if not text or text == "-":
         return ""
     return text[:10]
+
+
+def user_exists(username):
+    try:
+        pwd.getpwnam(username)
+        return True
+    except KeyError:
+        return False
+    except Exception:
+        return False
 
 
 def date_is_active(value):
@@ -139,15 +148,7 @@ def unified_lock_path(username):
     return UNIFIED_LOCK_ROOT / f"{username}.lock"
 
 
-def legacy_ssh_path(username):
-    return SSH_QUOTA_ROOT / f"{username}@ssh.json"
-
-
-def legacy_ssh_state_path(username):
-    return SSH_STATE_ROOT / f"{username}.json"
-
-
-def legacy_ovpn_path(username):
+def ovpn_state_path(username):
     return OVPN_CLIENTS_ROOT / f"{username}.json"
 
 
@@ -174,61 +175,63 @@ def ensure_unified_dirs():
 def ensure_state(username):
     username = norm_user(username)
     current = load_json(unified_path(username))
-    ssh = load_json(legacy_ssh_path(username))
-    ssh_state = load_json(legacy_ssh_state_path(username))
-    ovpn = load_json(legacy_ovpn_path(username))
+    ovpn = load_json(ovpn_state_path(username))
 
     current_policy = current.get("policy") if isinstance(current.get("policy"), dict) else {}
     current_runtime = current.get("runtime") if isinstance(current.get("runtime"), dict) else {}
     current_derived = current.get("derived") if isinstance(current.get("derived"), dict) else {}
     current_meta = current.get("meta") if isinstance(current.get("meta"), dict) else {}
-    ssh_status = ssh.get("status") if isinstance(ssh.get("status"), dict) else {}
+    current_status = current.get("status") if isinstance(current.get("status"), dict) else {}
 
     client_cn = str(ovpn.get("client_cn") or "").strip()
     ccd_path = current_ccd_path(client_cn)
     ovpn_access = bool(ccd_path and ccd_path.exists()) if ovpn else None
 
     created_at = (
-        norm_date(ssh_state.get("created_at"))
-        or norm_date(ssh.get("created_at"))
-        or norm_date(ovpn.get("created_at"))
+        norm_date(current.get("created_at"))
         or norm_date(current_meta.get("created_at"))
+        or norm_date(ovpn.get("created_at"))
         or time.strftime("%Y-%m-%d", time.gmtime())
     )
     expired_at = (
-        norm_date(ssh_state.get("expired_at"))
-        or norm_date(ssh.get("expired_at"))
+        norm_date(current_policy.get("expired_at"))
+        or norm_date(current.get("expired_at"))
         or norm_date(ovpn.get("expired_at"))
-        or norm_date(current_policy.get("expired_at"))
         or "-"
     )
+
+    sshws_token = str(
+        current.get("sshws_token")
+        or current_meta.get("sshws_token")
+        or ""
+    ).strip().lower()
 
     quota_limit = max(
         0,
         to_int(
-            ssh.get("quota_limit"),
+            current_policy.get("quota_limit_bytes"),
             to_int(current_policy.get("quota_limit_bytes"), 0),
         ),
     )
-    quota_unit = str(ssh.get("quota_unit") or current_policy.get("quota_unit") or "binary").strip().lower()
+    quota_unit = str(current_policy.get("quota_unit") or "binary").strip().lower()
     if quota_unit not in ("binary", "decimal"):
         quota_unit = "binary"
 
-    ip_limit_enabled = to_bool(ssh_status.get("ip_limit_enabled"), current_policy.get("ip_limit_enabled"))
-    ip_limit = max(0, to_int(ssh_status.get("ip_limit"), to_int(current_policy.get("ip_limit"), 0)))
-    speed_limit_enabled = to_bool(ssh_status.get("speed_limit_enabled"), current_policy.get("speed_limit_enabled"))
-    speed_down = max(0.0, to_float(ssh_status.get("speed_down_mbit"), to_float(current_policy.get("speed_down_mbit"), 0.0)))
-    speed_up = max(0.0, to_float(ssh_status.get("speed_up_mbit"), to_float(current_policy.get("speed_up_mbit"), 0.0)))
+    ip_limit_enabled = to_bool(current_policy.get("ip_limit_enabled"))
+    ip_limit = max(0, to_int(current_policy.get("ip_limit"), 0))
+    speed_limit_enabled = to_bool(current_policy.get("speed_limit_enabled"))
+    speed_down = max(0.0, to_float(current_policy.get("speed_down_mbit"), 0.0))
+    speed_up = max(0.0, to_float(current_policy.get("speed_up_mbit"), 0.0))
 
     if "access_enabled" in current_policy:
         access_enabled = to_bool(current_policy.get("access_enabled"))
     elif ovpn_access is not None:
         access_enabled = bool(ovpn_access)
     else:
-        access_enabled = not to_bool(ssh_status.get("manual_block")) and not to_bool(ssh_status.get("account_locked"))
+        access_enabled = True
 
     runtime = {
-        "quota_used_ssh_bytes": max(0, to_int(current_runtime.get("quota_used_ssh_bytes"), to_int(ssh.get("quota_used"), 0))),
+        "quota_used_ssh_bytes": max(0, to_int(current_runtime.get("quota_used_ssh_bytes"), 0)),
         "quota_used_ovpn_bytes": max(0, to_int(current_runtime.get("quota_used_ovpn_bytes"), 0)),
         "active_session_ssh": max(0, to_int(current_runtime.get("active_session_ssh"), 0)),
         "active_session_ovpn": max(0, to_int(current_runtime.get("active_session_ovpn"), 0)),
@@ -251,9 +254,9 @@ def ensure_state(username):
                 runtime["active_session_ssh"] + runtime["active_session_ovpn"],
             ),
         ),
-        "quota_exhausted": to_bool(ssh_status.get("quota_exhausted"), current_derived.get("quota_exhausted")),
-        "ip_limit_locked": to_bool(ssh_status.get("ip_limit_locked"), current_derived.get("ip_limit_locked")),
-        "last_reason": str(ssh_status.get("lock_reason") or current_derived.get("last_reason") or "-").strip() or "-",
+        "quota_exhausted": to_bool(current_derived.get("quota_exhausted")),
+        "ip_limit_locked": to_bool(current_derived.get("ip_limit_locked")),
+        "last_reason": str(current_derived.get("last_reason") or "-").strip() or "-",
     }
 
     meta = dict(current_meta)
@@ -261,15 +264,38 @@ def ensure_state(username):
         {
             "created_at": created_at,
             "updated_at_unix": int(time.time()),
-            "migrated_from_legacy": bool(ssh or ovpn),
-            "ssh_present": bool(ssh or ssh_state),
+            "migrated_from_legacy": bool(current_meta.get("migrated_from_legacy")),
+            "ssh_present": bool(user_exists(username) if current_meta.get("ssh_present") is not False else False),
             "ovpn_present": bool(ovpn),
+            "sshws_token": sshws_token,
         }
     )
 
     payload = {
         "version": 1,
+        "managed_by": "autoscript-manage",
+        "protocol": "ssh-ovpn",
         "username": username,
+        "created_at": created_at,
+        "expired_at": expired_at,
+        "sshws_token": sshws_token,
+        "quota_limit": quota_limit,
+        "quota_unit": quota_unit,
+        "quota_used": runtime["quota_used_ssh_bytes"] + runtime["quota_used_ovpn_bytes"],
+        "status": {
+            "manual_block": bool(to_bool(current_status.get("manual_block"))),
+            "quota_exhausted": bool(derived.get("quota_exhausted")),
+            "ip_limit_enabled": bool(ip_limit_enabled),
+            "ip_limit": ip_limit,
+            "ip_limit_locked": bool(derived.get("ip_limit_locked")),
+            "speed_limit_enabled": bool(speed_limit_enabled),
+            "speed_down_mbit": speed_down,
+            "speed_up_mbit": speed_up,
+            "lock_reason": str(derived.get("last_reason") or "-").strip() or "-",
+            "account_locked": bool(to_bool(current_status.get("account_locked"))),
+            "lock_owner": str(current_status.get("lock_owner") or "").strip(),
+            "lock_shell_restore": str(current_status.get("lock_shell_restore") or "").strip(),
+        },
         "policy": {
             "quota_limit_bytes": quota_limit,
             "quota_unit": quota_unit,
@@ -340,10 +366,57 @@ def evaluate_policy(payload):
     payload["derived"] = derived
 
 
+def sync_compat_fields(payload):
+    if not isinstance(payload, dict):
+        return
+    policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+
+    quota_limit = max(0, to_int(policy.get("quota_limit_bytes"), to_int(payload.get("quota_limit"), 0)))
+    quota_unit = str(policy.get("quota_unit") or payload.get("quota_unit") or "binary").strip().lower()
+    if quota_unit not in ("binary", "decimal"):
+        quota_unit = "binary"
+    expired_at = norm_date(policy.get("expired_at") or payload.get("expired_at")) or "-"
+    created_at = norm_date(meta.get("created_at") or payload.get("created_at")) or time.strftime("%Y-%m-%d", time.gmtime())
+    sshws_token = str(payload.get("sshws_token") or meta.get("sshws_token") or "").strip().lower()
+    quota_used_total = max(0, to_int(derived.get("quota_used_total_bytes"), to_int(runtime.get("quota_used_ssh_bytes"), 0) + to_int(runtime.get("quota_used_ovpn_bytes"), 0)))
+
+    status["quota_exhausted"] = to_bool(derived.get("quota_exhausted"))
+    status["ip_limit_enabled"] = to_bool(policy.get("ip_limit_enabled"))
+    status["ip_limit"] = max(0, to_int(policy.get("ip_limit"), 0))
+    status["ip_limit_locked"] = to_bool(derived.get("ip_limit_locked"))
+    status["speed_limit_enabled"] = to_bool(policy.get("speed_limit_enabled"))
+    status["speed_down_mbit"] = max(0.0, to_float(policy.get("speed_down_mbit"), 0.0))
+    status["speed_up_mbit"] = max(0.0, to_float(policy.get("speed_up_mbit"), 0.0))
+    status["lock_reason"] = str(derived.get("last_reason") or status.get("lock_reason") or "-").strip() or "-"
+    status["account_locked"] = to_bool(status.get("account_locked"))
+    status["lock_owner"] = str(status.get("lock_owner") or "").strip()
+    status["lock_shell_restore"] = str(status.get("lock_shell_restore") or "").strip()
+
+    payload["managed_by"] = str(payload.get("managed_by") or "autoscript-manage").strip() or "autoscript-manage"
+    payload["protocol"] = str(payload.get("protocol") or "ssh-ovpn").strip() or "ssh-ovpn"
+    payload["created_at"] = created_at
+    payload["expired_at"] = expired_at
+    payload["sshws_token"] = sshws_token
+    payload["quota_limit"] = quota_limit
+    payload["quota_unit"] = quota_unit
+    payload["quota_used"] = quota_used_total
+    meta["created_at"] = created_at
+    meta["sshws_token"] = sshws_token
+    payload["meta"] = meta
+    payload["status"] = status
+
+
 def write_user_state(username, mutator):
     username = norm_user(username)
     if not valid_user(username):
         return 1
+    state_path = unified_path(username)
+    if not state_path.is_file():
+        return 0
     ensure_unified_dirs()
     lock_path = unified_lock_path(username)
     with open(lock_path, "a+", encoding="utf-8") as lock_handle:
@@ -352,6 +425,7 @@ def write_user_state(username, mutator):
         mutator(payload)
         update_derived(payload)
         evaluate_policy(payload)
+        sync_compat_fields(payload)
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
         meta["updated_at_unix"] = int(time.time())
         payload["meta"] = meta
@@ -451,8 +525,7 @@ def ovpn_access_allowed(username):
             return to_bool(derived.get("access_effective"), True)
         policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
         return to_bool(policy.get("access_enabled"), True) and date_is_active(policy.get("expired_at"))
-    ovpn = load_json(legacy_ovpn_path(username))
-    return date_is_active(ovpn.get("expired_at") if isinstance(ovpn, dict) else "-")
+    return False
 
 
 def cmd_ovpn_sync_access(args):

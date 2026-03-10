@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-STATE_ROOT = pathlib.Path("/opt/quota/ssh")
+STATE_ROOT = pathlib.Path("/opt/quota/ssh-ovpn")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
 UNIFIED_QAC_ROOT = pathlib.Path("/opt/quota/ssh-ovpn")
@@ -590,12 +590,24 @@ def enforce_user(path):
   ip_limit = to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
+  speed_enabled = to_bool(status.get("speed_limit_enabled"))
+  speed_down = max(0.0, to_float(status.get("speed_down_mbit"), 0.0))
+  speed_up = max(0.0, to_float(status.get("speed_up_mbit"), 0.0))
   if isinstance(unified_policy, dict) and unified_policy:
     ip_enabled = to_bool(unified_policy.get("ip_limit_enabled"))
     ip_limit = to_int(unified_policy.get("ip_limit"), ip_limit)
+    speed_enabled = to_bool(unified_policy.get("speed_limit_enabled"))
+    speed_down = max(0.0, to_float(unified_policy.get("speed_down_mbit"), speed_down))
+    speed_up = max(0.0, to_float(unified_policy.get("speed_up_mbit"), speed_up))
   status["ip_limit_enabled"] = bool(ip_enabled)
   status["ip_limit"] = max(0, ip_limit)
   status["ip_limit_locked"] = bool(unified_derived.get("ip_limit_locked")) if unified_derived else False
+  if not speed_enabled:
+    speed_down = 0.0
+    speed_up = 0.0
+  status["speed_limit_enabled"] = bool(speed_enabled and (speed_down > 0 or speed_up > 0))
+  status["speed_down_mbit"] = speed_down if status["speed_limit_enabled"] else 0.0
+  status["speed_up_mbit"] = speed_up if status["speed_limit_enabled"] else 0.0
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
   if isinstance(unified_policy, dict) and unified_policy:

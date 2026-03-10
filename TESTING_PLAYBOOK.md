@@ -45,7 +45,7 @@ Sudah tercakup di bagian preflight.
 
 ```bash
 printf "0\n" | timeout 20 bash manage.sh
-printf "3\n5\n0\n0\n" | timeout 30 bash manage.sh
+printf "3\n4\n0\n0\n" | timeout 30 bash manage.sh
 printf "5\n0\n0\n" | timeout 30 bash manage.sh
 bash install-discord-bot.sh status
 printf "0\n" | timeout 20 bash install-discord-bot.sh menu
@@ -56,8 +56,8 @@ printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
-- SSH menu (`3) SSH Management`) bisa dibuka, list user tampil aman walau data kosong.
-- Menu `SSH QAC` (`5) SSH QAC`) bisa dibuka walau data user masih kosong.
+- Menu `SSH & OVPN User` (`3)`) bisa dibuka, `List Users` tampil aman walau data kosong.
+- Menu `SSH & OVPN QAC` (`5)`) bisa dibuka walau data user masih kosong.
 
 ### 3.3 Negative/Failure
 

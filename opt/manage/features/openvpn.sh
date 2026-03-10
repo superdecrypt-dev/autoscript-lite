@@ -214,8 +214,16 @@ openvpn_core_service_name_manage() {
   printf '%s\n' "ovpn-tcp.service"
 }
 
+openvpn_speed_service_name_manage() {
+  printf '%s\n' "openvpn-speed.service"
+}
+
 openvpn_server_conf_manage() {
   openvpn_runtime_get_env OVPN_SERVER_CONF 2>/dev/null || echo "/etc/openvpn/server/ovpn-tcp.conf"
+}
+
+openvpn_speed_state_file_manage() {
+  openvpn_runtime_get_env OVPN_SPEED_STATE_FILE 2>/dev/null || echo "/var/lib/openvpn/speed-state.json"
 }
 
 openvpn_manage_ready_reason() {
@@ -599,6 +607,23 @@ openvpn_expiry_sync_now_warn() {
   fi
   if ! openvpn_client_access_sync_all_manage; then
     warn "Sinkronisasi akses OpenVPN belum sepenuhnya berhasil."
+    return 1
+  fi
+  return 0
+}
+
+openvpn_speed_sync_now_manage() {
+  local env_file
+  env_file="$(openvpn_runtime_env_file)"
+  [[ -r "${env_file}" ]] || return 1
+  have_cmd python3 || return 1
+  [[ -x /usr/local/bin/openvpn-speed ]] || return 1
+  /usr/local/bin/openvpn-speed once --env-file "${env_file}" >/dev/null 2>&1
+}
+
+openvpn_speed_sync_now_warn() {
+  if ! openvpn_speed_sync_now_manage; then
+    warn "Sinkronisasi speed OpenVPN belum sepenuhnya berhasil."
     return 1
   fi
   return 0

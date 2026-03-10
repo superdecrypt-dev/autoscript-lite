@@ -11,6 +11,7 @@ ENV_FILE = os.environ.get("OPENVPN_RUNTIME_ENV_FILE", "/etc/default/openvpn-runt
 UNIFIED_QAC_RUNTIME_BIN = Path("/usr/local/bin/ssh-ovpn-qac-runtime")
 UNIFIED_QAC_ROOT = Path("/opt/quota/ssh-ovpn")
 SSH_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
+OPENVPN_SPEED_BIN = Path("/usr/local/bin/openvpn-speed")
 
 
 def load_env(path: str) -> dict[str, str]:
@@ -157,6 +158,17 @@ def main() -> int:
         try:
             subprocess.run(
                 [str(SSH_QAC_ENFORCER_BIN), "--once"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    if OPENVPN_SPEED_BIN.is_file():
+        try:
+            subprocess.run(
+                [str(OPENVPN_SPEED_BIN), "once", "--env-file", ENV_FILE],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 HANDSHAKE_TIMEOUT_DEFAULT = 10.0
-QAC_STATE_ROOT = Path("/opt/quota/ssh")
+QAC_STATE_ROOT = Path("/opt/quota/ssh-ovpn")
 QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
@@ -449,20 +449,10 @@ class QuotaManager:
 
   def _qf(self, username):
     u = norm_user(username)
-    return self.state_root / "{}@ssh.json".format(u)
-
-  def _legacy_qf(self, username):
-    u = norm_user(username)
     return self.state_root / "{}.json".format(u)
 
   def _resolve_qf(self, username):
-    primary = self._qf(username)
-    if primary.is_file():
-      return primary
-    legacy = self._legacy_qf(username)
-    if legacy.is_file():
-      return legacy
-    return primary
+    return self._qf(username)
 
   def _state_entries(self):
     try:
