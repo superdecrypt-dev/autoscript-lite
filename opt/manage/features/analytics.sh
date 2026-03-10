@@ -3768,6 +3768,12 @@ PY
 )"
   IFS='|' read -r quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token <<<"${fields}"
 
+  local unified_fields _unified_username unified_quota_unit _unified_access_enabled _unified_quota_exhausted _unified_ip_locked _unified_last_reason
+  local _unified_quota_used_ssh _unified_quota_used_ovpn _unified_quota_used_total _unified_active_ssh _unified_active_ovpn _unified_active_total
+  if unified_fields="$(ssh_ovpn_qac_summary_raw_fields "${username}" 2>/dev/null || true)"; [[ -n "${unified_fields}" ]]; then
+    IFS='|' read -r _unified_username quota_bytes unified_quota_unit expired_at _unified_access_enabled ip_enabled ip_limit speed_enabled speed_down speed_up _unified_quota_used_ssh _unified_quota_used_ovpn _unified_quota_used_total _unified_active_ssh _unified_active_ovpn _unified_active_total _unified_quota_exhausted _unified_ip_locked _unified_last_reason <<<"${unified_fields}"
+  fi
+
   password="${password_override}"
   if [[ -z "${password}" ]]; then
     password="$(ssh_account_info_password_get "${username}")"
@@ -4325,6 +4331,30 @@ ssh_ovpn_account_info_show() {
     printf "%-12s : %s\n" "WS Token" "${token}"
   fi
   hr
+  local unified_fields _unified_username unified_quota_bytes unified_quota_unit _unified_expired unified_access_enabled
+  local unified_ip_enabled unified_ip_limit unified_speed_enabled unified_speed_down unified_speed_up
+  local unified_used_ssh unified_used_ovpn unified_used_total unified_active_ssh unified_active_ovpn unified_active_total
+  local _unified_quota_exhausted _unified_ip_locked unified_last_reason
+  if unified_fields="$(ssh_ovpn_qac_summary_raw_fields "${username}" 2>/dev/null || true)"; [[ -n "${unified_fields}" ]]; then
+    IFS='|' read -r _unified_username unified_quota_bytes unified_quota_unit _unified_expired unified_access_enabled unified_ip_enabled unified_ip_limit unified_speed_enabled unified_speed_down unified_speed_up unified_used_ssh unified_used_ovpn unified_used_total unified_active_ssh unified_active_ovpn unified_active_total _unified_quota_exhausted _unified_ip_locked unified_last_reason <<<"${unified_fields}"
+    echo "UNIFIED QAC:"
+    printf "%-12s : %s\n" "Quota Limit" "$(ssh_ovpn_qac_format_quota_limit_display "${unified_quota_bytes}" "${unified_quota_unit}")"
+    printf "%-12s : %s\n" "Used SSH" "$(ssh_ovpn_qac_human_bytes "${unified_used_ssh}")"
+    printf "%-12s : %s\n" "Used OVPN" "$(ssh_ovpn_qac_human_bytes "${unified_used_ovpn}")"
+    printf "%-12s : %s\n" "Used Total" "$(ssh_ovpn_qac_human_bytes "${unified_used_total}")"
+    printf "%-12s : %s\n" "Sess SSH" "${unified_active_ssh}"
+    printf "%-12s : %s\n" "Sess OVPN" "${unified_active_ovpn}"
+    printf "%-12s : %s\n" "Sess Total" "${unified_active_total}"
+    printf "%-12s : %s\n" "Access" "$( [[ "${unified_access_enabled}" == "true" ]] && echo "ON" || echo "OFF" )"
+    printf "%-12s : %s\n" "IP Limit" "$( [[ "${unified_ip_enabled}" == "true" ]] && printf 'ON (%s)' "${unified_ip_limit}" || echo "OFF" )"
+    if [[ "${unified_speed_enabled}" == "true" ]]; then
+      printf "%-12s : %s\n" "Speed" "ON (DOWN ${unified_speed_down} Mbps | UP ${unified_speed_up} Mbps)"
+    else
+      printf "%-12s : %s\n" "Speed" "OFF"
+    fi
+    printf "%-12s : %s\n" "Reason" "${unified_last_reason}"
+    hr
+  fi
   if [[ -f "$(ssh_account_info_file "${username}")" ]]; then
     cat "$(ssh_account_info_file "${username}")"
     hr
@@ -4611,6 +4641,7 @@ ssh_add_user_menu() {
   else
     log "Akun SSH dibuat tanpa sisi OpenVPN: ${username}"
   fi
+  ssh_ovpn_qac_state_sync_now_warn "${username}" || true
   title
   if [[ "${pair_status}" == "paired" ]]; then
     echo "Add SSH & OVPN user sukses ✅"
@@ -4693,6 +4724,7 @@ ssh_delete_user_menu() {
   if ssh_ovpn_user_has_ovpn_side "${username}"; then
     openvpn_client_delete_manage "${username}" || true
   fi
+  ssh_ovpn_qac_state_remove "${username}" || true
   log "Akun SSH & OVPN '${username}' dihapus."
   pause
 }
@@ -4816,6 +4848,7 @@ ssh_extend_expiry_menu() {
     openvpn_account_info_refresh "${username}" || true
   fi
 
+  ssh_ovpn_qac_state_sync_now_warn "${username}" || true
   if [[ "${updated_any}" != "true" ]]; then
     warn "Tidak ada sisi SSH/OVPN yang berhasil diperbarui untuk '${username}'."
     pause
@@ -4911,6 +4944,7 @@ ssh_ovpn_refresh_ovpn_files_menu() {
       pause
       return 0
     fi
+    ssh_ovpn_qac_state_sync_now_warn "${username}" || true
     log "Sisi OpenVPN berhasil dilengkapi untuk '${username}'."
     ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
     return 0
@@ -4923,6 +4957,7 @@ ssh_ovpn_refresh_ovpn_files_menu() {
   fi
   openvpn_account_info_refresh "${username}" || true
   openvpn_expiry_sync_now_warn "${username}" || true
+  ssh_ovpn_qac_state_sync_now_warn "${username}" || true
 
   log "File OpenVPN direfresh untuk '${username}'."
   ssh_ovpn_account_info_show "${username}" "3) SSH & OVPN User > ACCOUNT INFO"
@@ -5787,13 +5822,31 @@ ssh_qac_read_summary_fields() {
   # args: json_file
   # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_disp|block_reason|lock_state
   local qf="$1"
+  local username unified_file
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  unified_file="$(ssh_ovpn_qac_state_path "${username}" 2>/dev/null || true)"
   need_python3
-  python3 - <<'PY' "${qf}"
+  python3 - <<'PY' "${qf}" "${unified_file}"
 import json
 import pathlib
 import sys
 
+def load_json(path):
+  if not path:
+    return {}
+  p = pathlib.Path(path)
+  if not p.is_file():
+    return {}
+  try:
+    loaded = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(loaded, dict):
+      return loaded
+  except Exception:
+    pass
+  return {}
+
 p = pathlib.Path(sys.argv[1])
+unified = load_json(sys.argv[2] if len(sys.argv) > 2 else "")
 def norm_user(v):
   s = str(v or "").strip()
   if s.endswith("@ssh"):
@@ -5850,42 +5903,48 @@ def used_disp(b):
     return f"{b/1024:.2f} KB"
   return f"{b} B"
 
-data = {}
-try:
-  loaded = json.loads(p.read_text(encoding="utf-8"))
-  if isinstance(loaded, dict):
-    data = loaded
-except Exception:
-  data = {}
+data = load_json(str(p))
+policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
+runtime = unified.get("runtime") if isinstance(unified.get("runtime"), dict) else {}
+derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
+status_raw = data.get("status")
+status = status_raw if isinstance(status_raw, dict) else {}
 
-username = norm_user(data.get("username") or username_fallback) or username_fallback
-quota_limit = to_int(data.get("quota_limit"), 0)
-quota_used = to_int(data.get("quota_used"), 0)
-unit = str(data.get("quota_unit") or "binary").strip().lower()
+username = norm_user((unified.get("username") if unified else None) or data.get("username") or username_fallback) or username_fallback
+quota_limit = to_int((policy.get("quota_limit_bytes") if unified else None), to_int(data.get("quota_limit"), 0))
+quota_used = to_int(
+  (derived.get("quota_used_total_bytes") if unified else None),
+  to_int(runtime.get("quota_used_ssh_bytes"), 0) + to_int(runtime.get("quota_used_ovpn_bytes"), 0) if unified else to_int(data.get("quota_used"), 0),
+)
+unit = str((policy.get("quota_unit") if unified else None) or data.get("quota_unit") or "binary").strip().lower()
 bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
 quota_limit_disp = f"{fmt_gb(quota_limit / bpg)} GB"
 quota_used_disp = used_disp(quota_used)
-expired_at = str(data.get("expired_at") or "-").strip()
+expired_at = str((policy.get("expired_at") if unified else None) or data.get("expired_at") or "-").strip()
 expired_date = expired_at[:10] if expired_at and expired_at != "-" else "-"
-
-status_raw = data.get("status")
-status = status_raw if isinstance(status_raw, dict) else {}
-ip_enabled = to_bool(status.get("ip_limit_enabled"))
-ip_limit = to_int(status.get("ip_limit"), 0)
+ip_enabled = to_bool((policy.get("ip_limit_enabled") if unified else None))
+if not unified:
+  ip_enabled = to_bool(status.get("ip_limit_enabled"))
+ip_limit = to_int((policy.get("ip_limit") if unified else None), to_int(status.get("ip_limit"), 0))
 if ip_limit < 0:
   ip_limit = 0
 ip_disp = "ON({})".format(ip_limit) if ip_enabled and ip_limit > 0 else ("ON" if ip_enabled else "OFF")
+access_enabled = True
+if unified and "access_enabled" in policy:
+  access_enabled = to_bool(policy.get("access_enabled"))
 
-reason = str(status.get("lock_reason") or "").strip().lower()
+reason = str((derived.get("last_reason") if unified else None) or status.get("lock_reason") or "").strip().lower()
 if to_bool(status.get("manual_block")):
   reason = "manual"
-elif to_bool(status.get("quota_exhausted")):
+elif to_bool((derived.get("quota_exhausted") if unified else None) or status.get("quota_exhausted")):
   reason = "quota"
-elif to_bool(status.get("ip_limit_locked")):
+elif to_bool((derived.get("ip_limit_locked") if unified else None) or status.get("ip_limit_locked")):
   reason = "ip_limit"
+elif unified and not access_enabled:
+  reason = "access"
 reason_disp = reason.upper() if reason else "-"
 
-lock_disp = "ON" if to_bool(status.get("account_locked")) else "OFF"
+lock_disp = "ON" if (to_bool(status.get("account_locked")) or (unified and not access_enabled)) else "OFF"
 
 print(f"{username}|{quota_limit_disp}|{quota_used_disp}|{expired_date}|{ip_disp}|{reason_disp}|{lock_disp}")
 PY
@@ -5895,13 +5954,31 @@ ssh_qac_read_detail_fields() {
   # args: json_file
   # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_onoff|ip_limit_value|block_reason|speed_onoff|speed_down_mbit|speed_up_mbit|lock_state
   local qf="$1"
+  local username unified_file
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  unified_file="$(ssh_ovpn_qac_state_path "${username}" 2>/dev/null || true)"
   need_python3
-  python3 - <<'PY' "${qf}"
+  python3 - <<'PY' "${qf}" "${unified_file}"
 import json
 import pathlib
 import sys
 
+def load_json(path):
+  if not path:
+    return {}
+  p = pathlib.Path(path)
+  if not p.is_file():
+    return {}
+  try:
+    loaded = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(loaded, dict):
+      return loaded
+  except Exception:
+    pass
+  return {}
+
 p = pathlib.Path(sys.argv[1])
+unified = load_json(sys.argv[2] if len(sys.argv) > 2 else "")
 def norm_user(v):
   s = str(v or "").strip()
   if s.endswith("@ssh"):
@@ -5983,50 +6060,57 @@ def used_disp(b):
     return f"{b/1024:.2f} KB"
   return f"{b} B"
 
-data = {}
-try:
-  loaded = json.loads(p.read_text(encoding="utf-8"))
-  if isinstance(loaded, dict):
-    data = loaded
-except Exception:
-  data = {}
-
-username = norm_user(data.get("username") or username_fallback) or username_fallback
-quota_limit = to_int(data.get("quota_limit"), 0)
-quota_used = to_int(data.get("quota_used"), 0)
-unit = str(data.get("quota_unit") or "binary").strip().lower()
-bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
-quota_limit_disp = f"{fmt_gb(quota_limit / bpg)} GB"
-quota_used_disp = used_disp(quota_used)
-expired_at = str(data.get("expired_at") or "-").strip()
-expired_date = expired_at[:10] if expired_at and expired_at != "-" else "-"
-
+data = load_json(str(p))
+policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
+runtime = unified.get("runtime") if isinstance(unified.get("runtime"), dict) else {}
+derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
 status_raw = data.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
 
-ip_enabled = to_bool(status.get("ip_limit_enabled"))
-ip_limit = to_int(status.get("ip_limit"), 0)
+username = norm_user((unified.get("username") if unified else None) or data.get("username") or username_fallback) or username_fallback
+quota_limit = to_int((policy.get("quota_limit_bytes") if unified else None), to_int(data.get("quota_limit"), 0))
+quota_used = to_int(
+  (derived.get("quota_used_total_bytes") if unified else None),
+  to_int(runtime.get("quota_used_ssh_bytes"), 0) + to_int(runtime.get("quota_used_ovpn_bytes"), 0) if unified else to_int(data.get("quota_used"), 0),
+)
+unit = str((policy.get("quota_unit") if unified else None) or data.get("quota_unit") or "binary").strip().lower()
+bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
+quota_limit_disp = f"{fmt_gb(quota_limit / bpg)} GB"
+quota_used_disp = used_disp(quota_used)
+expired_at = str((policy.get("expired_at") if unified else None) or data.get("expired_at") or "-").strip()
+expired_date = expired_at[:10] if expired_at and expired_at != "-" else "-"
+ip_enabled = to_bool((policy.get("ip_limit_enabled") if unified else None))
+if not unified:
+  ip_enabled = to_bool(status.get("ip_limit_enabled"))
+ip_limit = to_int((policy.get("ip_limit") if unified else None), to_int(status.get("ip_limit"), 0))
 if ip_limit < 0:
   ip_limit = 0
+access_enabled = True
+if unified and "access_enabled" in policy:
+  access_enabled = to_bool(policy.get("access_enabled"))
 
-reason = str(status.get("lock_reason") or "").strip().lower()
+reason = str((derived.get("last_reason") if unified else None) or status.get("lock_reason") or "").strip().lower()
 if to_bool(status.get("manual_block")):
   reason = "manual"
-elif to_bool(status.get("quota_exhausted")):
+elif to_bool((derived.get("quota_exhausted") if unified else None) or status.get("quota_exhausted")):
   reason = "quota"
-elif to_bool(status.get("ip_limit_locked")):
+elif to_bool((derived.get("ip_limit_locked") if unified else None) or status.get("ip_limit_locked")):
   reason = "ip_limit"
+elif unified and not access_enabled:
+  reason = "access"
 reason_disp = reason.upper() if reason else "-"
 
-speed_enabled = to_bool(status.get("speed_limit_enabled"))
-speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+speed_enabled = to_bool((policy.get("speed_limit_enabled") if unified else None))
+if not unified:
+  speed_enabled = to_bool(status.get("speed_limit_enabled"))
+speed_down = to_float((policy.get("speed_down_mbit") if unified else None), to_float(status.get("speed_down_mbit"), 0.0))
+speed_up = to_float((policy.get("speed_up_mbit") if unified else None), to_float(status.get("speed_up_mbit"), 0.0))
 if speed_down < 0:
   speed_down = 0.0
 if speed_up < 0:
   speed_up = 0.0
 
-lock_disp = "ON" if to_bool(status.get("account_locked")) else "OFF"
+lock_disp = "ON" if (to_bool(status.get("account_locked")) or (unified and not access_enabled)) else "OFF"
 print(
   f"{username}|{quota_limit_disp}|{quota_used_disp}|{expired_date}|"
   f"{'ON' if ip_enabled else 'OFF'}|{ip_limit}|{reason_disp}|"
@@ -6039,27 +6123,59 @@ ssh_qac_get_status_bool() {
   # args: json_file key
   local qf="$1"
   local key="$2"
+  local username unified_file
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  unified_file="$(ssh_ovpn_qac_state_path "${username}" 2>/dev/null || true)"
   need_python3
-  python3 - <<'PY' "${qf}" "${key}"
+  python3 - <<'PY' "${qf}" "${key}" "${unified_file}"
 import json
+import pathlib
 import sys
 
-qf, key = sys.argv[1:3]
+qf, key, unified_path = sys.argv[1:4]
+def load_json(path):
+  if not path:
+    return {}
+  p = pathlib.Path(path)
+  if not p.is_file():
+    return {}
+  try:
+    loaded = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(loaded, dict):
+      return loaded
+  except Exception:
+    pass
+  return {}
+
 try:
   data = json.load(open(qf, "r", encoding="utf-8"))
 except Exception:
-  print("false")
-  raise SystemExit(0)
+  data = {}
 
 if not isinstance(data, dict):
-  print("false")
-  raise SystemExit(0)
+  data = {}
 
 status = data.get("status")
 if not isinstance(status, dict):
   status = {}
+unified = load_json(unified_path)
+policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
+derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
 
-val = status.get(key)
+val = None
+if unified:
+  if key == "ip_limit_enabled":
+    val = policy.get("ip_limit_enabled")
+  elif key == "speed_limit_enabled":
+    val = policy.get("speed_limit_enabled")
+  elif key == "quota_exhausted":
+    val = derived.get("quota_exhausted")
+  elif key == "ip_limit_locked":
+    val = derived.get("ip_limit_locked")
+  elif key == "account_locked":
+    val = not bool(policy.get("access_enabled", True))
+if val is None:
+  val = status.get(key)
 if isinstance(val, bool):
   print("true" if val else "false")
 elif isinstance(val, (int, float)):
@@ -6074,27 +6190,54 @@ ssh_qac_get_status_number() {
   # args: json_file key
   local qf="$1"
   local key="$2"
+  local username unified_file
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  unified_file="$(ssh_ovpn_qac_state_path "${username}" 2>/dev/null || true)"
   need_python3
-  python3 - <<'PY' "${qf}" "${key}"
+  python3 - <<'PY' "${qf}" "${key}" "${unified_file}"
 import json
+import pathlib
 import sys
 
-qf, key = sys.argv[1:3]
+qf, key, unified_path = sys.argv[1:4]
+def load_json(path):
+  if not path:
+    return {}
+  p = pathlib.Path(path)
+  if not p.is_file():
+    return {}
+  try:
+    loaded = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(loaded, dict):
+      return loaded
+  except Exception:
+    pass
+  return {}
+
 try:
   data = json.load(open(qf, "r", encoding="utf-8"))
 except Exception:
-  print("0")
-  raise SystemExit(0)
+  data = {}
 
 if not isinstance(data, dict):
-  print("0")
-  raise SystemExit(0)
+  data = {}
 
 status = data.get("status")
 if not isinstance(status, dict):
   status = {}
+unified = load_json(unified_path)
+policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
 
-val = status.get(key)
+val = None
+if unified:
+  if key == "ip_limit":
+    val = policy.get("ip_limit")
+  elif key == "speed_down_mbit":
+    val = policy.get("speed_down_mbit")
+  elif key == "speed_up_mbit":
+    val = policy.get("speed_up_mbit")
+if val is None:
+  val = status.get(key)
 try:
   if val is None:
     print("0")
@@ -6405,18 +6548,31 @@ ssh_qac_atomic_update_file() {
   # args: json_file action [args...]
   local qf="$1"
   local action="$2"
+  local username
   shift 2 || true
-  ssh_qac_atomic_update_file_unlocked "${qf}" "${action}" "$@"
+  ssh_qac_atomic_update_file_unlocked "${qf}" "${action}" "$@" || return $?
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  if [[ -n "${username}" ]]; then
+    ssh_ovpn_qac_state_sync_now "${username}" || true
+  fi
+  return 0
 }
 
 ssh_qac_view_json() {
   local qf="$1"
+  local username unified_file view_file
+  username="$(ssh_ovpn_qac_username_from_legacy_ssh_path "${qf}" 2>/dev/null || true)"
+  unified_file="$(ssh_ovpn_qac_state_path "${username}" 2>/dev/null || true)"
+  view_file="${qf}"
+  if [[ -n "${unified_file}" && -f "${unified_file}" ]]; then
+    view_file="${unified_file}"
+  fi
   title
-  echo "SSH QAC metadata: ${qf}"
+  echo "SSH QAC metadata: ${view_file}"
   hr
   need_python3
   if have_cmd less; then
-    python3 - <<'PY' "${qf}" | less -R
+    python3 - <<'PY' "${view_file}" | less -R
 import json
 import sys
 
@@ -6433,7 +6589,7 @@ if isinstance(exp, str) and exp:
 print(json.dumps(d, ensure_ascii=False, indent=2))
 PY
   else
-    python3 - <<'PY' "${qf}"
+    python3 - <<'PY' "${view_file}"
 import json
 import sys
 
@@ -6548,16 +6704,38 @@ ssh_qac_edit_flow() {
     active_sessions="$(ssh_active_sessions_count "${username}")"
     [[ "${active_sessions}" =~ ^[0-9]+$ ]] || active_sessions="0"
 
+    local unified_fields _unified_username unified_quota_bytes unified_quota_unit _unified_expired unified_access_enabled
+    local unified_ip_enabled unified_ip_limit unified_speed_enabled _unified_speed_down2 _unified_speed_up2
+    local unified_used_ssh unified_used_ovpn unified_used_total unified_active_ssh unified_active_ovpn unified_active_total
+    local _unified_quota_exhausted _unified_ip_locked unified_last_reason
+    if unified_fields="$(ssh_ovpn_qac_summary_raw_fields "${username}" 2>/dev/null || true)"; [[ -n "${unified_fields}" ]]; then
+      IFS='|' read -r _unified_username unified_quota_bytes unified_quota_unit _unified_expired unified_access_enabled unified_ip_enabled unified_ip_limit unified_speed_enabled _unified_speed_down2 _unified_speed_up2 unified_used_ssh unified_used_ovpn unified_used_total unified_active_ssh unified_active_ovpn unified_active_total _unified_quota_exhausted _unified_ip_locked unified_last_reason <<<"${unified_fields}"
+    else
+      unified_used_ssh="0"
+      unified_used_ovpn="0"
+      unified_used_total="0"
+      unified_active_ssh="${active_sessions}"
+      unified_active_ovpn="0"
+      unified_active_total="${active_sessions}"
+      unified_access_enabled="true"
+      unified_last_reason="${block_reason}"
+    fi
+
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
-    printf "%-${label_w}s : %s\n" "Quota Used (SSH)" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used (SSH)" "$( [[ -n "${unified_fields:-}" ]] && ssh_ovpn_qac_human_bytes "${unified_used_ssh}" || printf '%s' "${qu_disp}" )"
+    printf "%-${label_w}s : %s\n" "Quota Used (OVPN)" "$(ssh_ovpn_qac_human_bytes "${unified_used_ovpn}")"
+    printf "%-${label_w}s : %s\n" "Quota Used (Total)" "$(ssh_ovpn_qac_human_bytes "${unified_used_total}")"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s\n" "Access" "$( [[ "${unified_access_enabled}" == "true" ]] && echo "ON" || echo "OFF" )"
+    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${unified_active_ssh}"
+    printf "%-${label_w}s : %s\n" "Active OVPN Sessions" "${unified_active_ovpn}"
+    printf "%-${label_w}s : %s\n" "Active Total" "${unified_active_total}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
@@ -6615,6 +6793,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_expiry_sync_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
         log "Quota limit SSH diubah: ${gb_num} GB"
         pause
@@ -6626,6 +6805,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_expiry_sync_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
         log "Quota used SSH di-reset: 0"
         pause
@@ -6640,6 +6820,7 @@ ssh_qac_edit_flow() {
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
+          openvpn_expiry_sync_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: OFF"
         else
@@ -6649,6 +6830,7 @@ ssh_qac_edit_flow() {
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
+          openvpn_expiry_sync_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: ON"
         fi
@@ -6664,6 +6846,7 @@ ssh_qac_edit_flow() {
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
+          openvpn_expiry_sync_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
           log "IP limit SSH: OFF"
         else
@@ -6673,6 +6856,7 @@ ssh_qac_edit_flow() {
             continue
           fi
           ssh_qac_enforce_now_warn "${username}" || true
+          openvpn_expiry_sync_now_warn "${username}" || true
           ssh_account_info_refresh_warn "${username}" || true
           log "IP limit SSH: ON"
         fi
@@ -6697,6 +6881,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_expiry_sync_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
         log "IP limit SSH diubah: ${lim}"
         pause
@@ -6708,6 +6893,7 @@ ssh_qac_edit_flow() {
           continue
         fi
         ssh_qac_enforce_now_warn "${username}" || true
+        openvpn_expiry_sync_now_warn "${username}" || true
         ssh_account_info_refresh_warn "${username}" || true
         log "IP lock SSH di-unlock"
         pause

@@ -545,6 +545,24 @@ openvpn_client_allow_cn() {
   chmod 644 "${file}" 2>/dev/null || true
 }
 
+openvpn_client_access_allowed_manage() {
+  local name="${1:-}"
+  local expired_at access_effective
+  openvpn_client_name_valid "${name}" || return 1
+  expired_at="$(openvpn_client_expired_at_get "${name}")"
+  if ! openvpn_expiry_is_active_manage "${expired_at}"; then
+    return 1
+  fi
+
+  access_effective="$(ssh_ovpn_qac_state_read_field "${name}" "derived.access_effective" 2>/dev/null || true)"
+  if [[ -n "${access_effective}" ]]; then
+    [[ "${access_effective,,}" == "true" ]]
+    return $?
+  fi
+
+  return 0
+}
+
 openvpn_client_access_sync_manage() {
   local name="${1:-}"
   local client_cn expired_at file
@@ -553,7 +571,7 @@ openvpn_client_access_sync_manage() {
   client_cn="$(openvpn_client_cn_get "${name}")"
   expired_at="$(openvpn_client_expired_at_get "${name}")"
   file="$(openvpn_client_ccd_path_for_cn "${client_cn}")"
-  if openvpn_expiry_is_active_manage "${expired_at}"; then
+  if openvpn_client_access_allowed_manage "${name}"; then
     openvpn_client_allow_cn "${client_cn}" || return 1
   else
     rm -f "${file}" >/dev/null 2>&1 || true

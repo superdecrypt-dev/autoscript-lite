@@ -15,6 +15,8 @@ import time
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
+UNIFIED_QAC_ROOT = pathlib.Path("/opt/quota/ssh-ovpn")
+UNIFIED_QAC_RUNTIME_BIN = pathlib.Path("/usr/local/bin/ssh-ovpn-qac-runtime")
 LOCK_SHELL_CANDIDATES = (
   "/usr/sbin/nologin",
   "/usr/bin/nologin",
@@ -385,6 +387,73 @@ def write_json_atomic(path, payload):
     except Exception:
       pass
 
+
+def sync_unified_ssh_runtime(username, quota_used=None, active_sessions_count=None, quota_exhausted=None, ip_limit_locked=None, last_reason=None):
+  user = norm_user(username)
+  if not user or not UNIFIED_QAC_RUNTIME_BIN.is_file():
+    return
+  cmd = [str(UNIFIED_QAC_RUNTIME_BIN), "ssh-sync", "--user", user]
+  if quota_used is not None:
+    cmd.extend(["--quota-used-ssh", str(max(0, int(quota_used)))])
+  if active_sessions_count is not None:
+    active_count = max(0, int(active_sessions_count))
+    cmd.extend(["--active-session-ssh", str(active_count)])
+    if active_count > 0:
+      cmd.extend(["--last-seen-ssh", str(max(0, int(time.time())))])
+  if quota_exhausted is not None:
+    cmd.extend(["--quota-exhausted", "true" if quota_exhausted else "false"])
+  if ip_limit_locked is not None:
+    cmd.extend(["--ip-limit-locked", "true" if ip_limit_locked else "false"])
+  if last_reason is not None:
+    cmd.extend(["--last-reason", str(last_reason or "-")])
+  try:
+    subprocess.run(
+      cmd,
+      check=False,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+    )
+  except Exception:
+    pass
+
+
+def sync_unified_ovpn_access():
+  if not UNIFIED_QAC_RUNTIME_BIN.is_file():
+    return
+  cmd = [
+    str(UNIFIED_QAC_RUNTIME_BIN),
+    "ovpn-sync-access",
+    "--clients-dir",
+    "/etc/openvpn/clients",
+    "--ccd-dir",
+    "/etc/openvpn/server/ccd",
+  ]
+  try:
+    subprocess.run(
+      cmd,
+      check=False,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+    )
+  except Exception:
+    pass
+
+
+def load_unified_state(username):
+  user = norm_user(username)
+  if not user:
+    return {}
+  path = UNIFIED_QAC_ROOT / f"{user}.json"
+  if not path.is_file():
+    return {}
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+      return payload
+  except Exception:
+    pass
+  return {}
+
 def iter_ssh_state_files(root):
   root_path = pathlib.Path(root)
   try:
@@ -503,28 +572,46 @@ def enforce_user(path):
   before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
   username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  active_sessions_count = active_sessions(username)
+  quota_used = to_int(payload.get("quota_used"), 0)
+
+  sync_unified_ssh_runtime(
+    username,
+    quota_used=quota_used,
+    active_sessions_count=active_sessions_count,
+  )
+  sync_unified_ovpn_access()
+
+  unified = load_unified_state(username)
+  unified_policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
+  unified_derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
+
   ip_enabled = bool(status.get("ip_limit_enabled"))
   ip_limit = to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
-  if not ip_enabled:
-    status["ip_limit_locked"] = False
-  elif ip_limit > 0:
-    status["ip_limit_locked"] = active_login_metric(username) > ip_limit
-  else:
-    status["ip_limit_locked"] = False
+  if isinstance(unified_policy, dict) and unified_policy:
+    ip_enabled = to_bool(unified_policy.get("ip_limit_enabled"))
+    ip_limit = to_int(unified_policy.get("ip_limit"), ip_limit)
+  status["ip_limit_enabled"] = bool(ip_enabled)
+  status["ip_limit"] = max(0, ip_limit)
+  status["ip_limit_locked"] = bool(unified_derived.get("ip_limit_locked")) if unified_derived else False
 
   quota_limit = to_int(payload.get("quota_limit"), 0)
-  quota_used = to_int(payload.get("quota_used"), 0)
-  status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
+  if isinstance(unified_policy, dict) and unified_policy:
+    quota_limit = to_int(unified_policy.get("quota_limit_bytes"), quota_limit)
+  payload["quota_limit"] = max(0, quota_limit)
+  status["quota_exhausted"] = bool(unified_derived.get("quota_exhausted")) if unified_derived else bool(quota_limit > 0 and quota_used >= quota_limit)
 
   reason = ""
   if bool(status.get("manual_block")):
     reason = "manual"
-  elif bool(status.get("quota_exhausted")):
-    reason = "quota"
-  elif bool(status.get("ip_limit_locked")):
-    reason = "ip_limit"
+  else:
+    unified_reason = str(unified_derived.get("last_reason") or "").strip().lower() if unified_derived else ""
+    if bool(status.get("quota_exhausted")):
+      reason = "quota" if unified_reason in ("", "-") else unified_reason
+    elif bool(status.get("ip_limit_locked")):
+      reason = "ip_limit" if unified_reason in ("", "-") else unified_reason
 
   status["lock_reason"] = reason
   account_locked = bool(status.get("account_locked"))
@@ -559,6 +646,12 @@ def enforce_user(path):
       os.chmod(path, 0o600)
     except Exception:
       pass
+
+  sync_unified_ssh_runtime(
+    username,
+    quota_used=quota_used,
+    active_sessions_count=active_sessions_count,
+  )
 
 def run_once(target_user):
   if not STATE_ROOT.exists():

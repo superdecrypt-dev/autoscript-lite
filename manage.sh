@@ -7263,6 +7263,7 @@ quota_menu() {
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MANAGE_REQUIRED_MODULES=(
   "features/network.sh"
+  "features/ssh_ovpn_qac.sh"
   "features/analytics.sh"
   "features/openvpn.sh"
   "menus/maintenance_menu.sh"

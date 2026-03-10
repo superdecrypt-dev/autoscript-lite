@@ -915,6 +915,7 @@ render_openvpn_client_artifacts() {
 stage_openvpn_scaffold_assets() {
   validate_openvpn_ports_config
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk ovpnws-proxy."
+  install_setup_bin_or_die "ssh-ovpn-qac-runtime.py" "/usr/local/bin/ssh-ovpn-qac-runtime" 0755
   install_setup_bin_or_die "ovpnws-proxy.py" "/usr/local/bin/ovpnws-proxy" 0755
   install_setup_bin_or_die "openvpn-expired" "/usr/local/bin/openvpn-expired" 0755
   write_openvpn_runtime_env
@@ -958,7 +959,7 @@ stage_openvpn_scaffold_assets() {
   ok "  - env    : ${OPENVPN_RUNTIME_ENV_FILE}"
   ok "  - config : ${OVPN_SERVER_CONF}"
   ok "  - unit   : ${OVPN_TCP_SERVICE_NAME}, ${OVPNWS_PROXY_SERVICE_NAME}, ${OPENVPN_EXPIRED_SERVICE_NAME}, ${OPENVPN_EXPIRED_TIMER_NAME}"
-  ok "  - binary : /usr/local/bin/ovpnws-proxy, /usr/local/bin/openvpn-expired"
+  ok "  - binary : /usr/local/bin/ovpnws-proxy, /usr/local/bin/openvpn-expired, /usr/local/bin/ssh-ovpn-qac-runtime"
 }
 
 install_openvpn_stack() {

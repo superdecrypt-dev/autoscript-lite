@@ -2,11 +2,15 @@
 import json
 import os
 import re
+import subprocess
 from datetime import date, datetime
 from pathlib import Path
 
 
 ENV_FILE = os.environ.get("OPENVPN_RUNTIME_ENV_FILE", "/etc/default/openvpn-runtime")
+UNIFIED_QAC_RUNTIME_BIN = Path("/usr/local/bin/ssh-ovpn-qac-runtime")
+UNIFIED_QAC_ROOT = Path("/opt/quota/ssh-ovpn")
+SSH_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 
 
 def load_env(path: str) -> dict[str, str]:
@@ -54,6 +58,41 @@ def ensure_ccd(path: Path) -> None:
         pass
 
 
+def load_unified(client_name: str) -> dict:
+    text = norm_name(client_name)
+    if not text:
+        return {}
+    path = UNIFIED_QAC_ROOT / f"{text}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def access_allowed(client_name: str, expired_at: str) -> bool:
+    if not is_active(expired_at):
+        return False
+    unified = load_unified(client_name)
+    if not unified:
+        return True
+    derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
+    if "access_effective" in derived:
+        value = derived.get("access_effective")
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
+    policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {}
+    value = policy.get("access_enabled")
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
 def main() -> int:
     env = load_env(ENV_FILE)
     clients_dir = Path(env.get("OVPN_CLIENTS_DIR", "/etc/openvpn/clients"))
@@ -62,6 +101,26 @@ def main() -> int:
     if not clients_dir.is_dir():
         print("openvpn-expired: clients dir missing, nothing to do")
         return 0
+
+    if UNIFIED_QAC_RUNTIME_BIN.is_file():
+        try:
+            subprocess.run(
+                [
+                    str(UNIFIED_QAC_RUNTIME_BIN),
+                    "ovpn-sync-status",
+                    "--status-file",
+                    env.get("OVPN_STATUS_FILE", "/var/log/openvpn/ovpn-tcp-status.log"),
+                    "--clients-dir",
+                    str(clients_dir),
+                    "--ccd-dir",
+                    str(ccd_dir),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     scanned = 0
     changed = 0
@@ -81,7 +140,7 @@ def main() -> int:
             continue
         expired_at = norm_date(data.get("expired_at"))
         ccd_path = ccd_dir / client_cn
-        should_allow = is_active(expired_at)
+        should_allow = access_allowed(client_name, expired_at)
         if should_allow:
             if not ccd_path.exists():
                 ensure_ccd(ccd_path)
@@ -93,6 +152,17 @@ def main() -> int:
                 except Exception:
                     continue
                 changed += 1
+
+    if SSH_QAC_ENFORCER_BIN.is_file():
+        try:
+            subprocess.run(
+                [str(SSH_QAC_ENFORCER_BIN), "--once"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     print(f"openvpn-expired: scanned={scanned} changed={changed}")
     return 0
