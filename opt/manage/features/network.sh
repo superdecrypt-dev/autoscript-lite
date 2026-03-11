@@ -356,7 +356,7 @@ PY
     fi
 
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -475,7 +475,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -587,7 +587,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -1214,7 +1214,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -1458,7 +1458,7 @@ PY
 
       if [[ "${changed_local}" == "1" ]]; then
         svc_restart xray || true
-        if ! svc_wait_active xray 20; then
+        if ! svc_wait_active xray 240; then
           restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
           systemctl restart xray || true
           exit 86
@@ -3150,7 +3150,7 @@ PY
             exit 1
           }
           svc_restart xray || true
-          if ! svc_wait_active xray 20; then
+          if ! svc_wait_active xray 60; then
             restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
             systemctl restart xray || true
             exit 86
@@ -3233,7 +3233,7 @@ PY
             exit 1
           }
           svc_restart xray || true
-          if ! svc_wait_active xray 20; then
+          if ! svc_wait_active xray 60; then
             restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
             systemctl restart xray || true
             exit 86
@@ -3381,7 +3381,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -3464,7 +3464,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -3530,7 +3530,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -3592,7 +3592,7 @@ PY
       exit 1
     }
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -3727,7 +3727,7 @@ dns_addons_menu() {
         if have_cmd nano; then
           nano "${XRAY_DNS_CONF}"
           svc_restart xray || true
-          if ! svc_wait_active xray 20; then
+          if ! svc_wait_active xray 60; then
             warn "xray tidak aktif setelah edit manual DNS config."
             systemctl status xray --no-pager 2>/dev/null || true
           fi

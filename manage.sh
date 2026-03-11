@@ -3504,7 +3504,7 @@ xray_restart_or_rollback_file() {
   local backup="$2"
   local ctx="${3:-config}"
   svc_restart xray || true
-  if ! svc_wait_active xray 20; then
+  if ! svc_wait_active xray 60; then
     cp -a "${backup}" "${target}" 2>/dev/null || true
     systemctl restart xray || true
     die "xray tidak aktif setelah update ${ctx}. Config di-rollback ke backup: ${backup}"
@@ -3658,7 +3658,7 @@ PY
         }
 
         svc_restart xray || true
-        if ! svc_wait_active xray 20; then
+        if ! svc_wait_active xray 60; then
           restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"
           systemctl restart xray || true
           exit 86
@@ -3794,7 +3794,7 @@ PY
         }
 
         svc_restart xray || true
-        if ! svc_wait_active xray 20; then
+        if ! svc_wait_active xray 60; then
           restore_file_if_exists "${backup_inb}" "${XRAY_INBOUNDS_CONF}"
           restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"
           systemctl restart xray || true
@@ -3919,7 +3919,7 @@ PY
         }
 
         svc_restart xray || true
-        if ! svc_wait_active xray 20; then
+        if ! svc_wait_active xray 60; then
           restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
           systemctl restart xray || true
           exit 86
@@ -4451,7 +4451,7 @@ PY
     }
 
     svc_restart xray || true
-    if ! svc_wait_active xray 20; then
+    if ! svc_wait_active xray 60; then
       restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}"
       restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
