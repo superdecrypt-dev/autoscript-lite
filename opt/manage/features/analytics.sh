@@ -1135,6 +1135,31 @@ security_overview_menu() {
   local swap_line
   swap_line="$(swap_status_pretty_get)"
 
+  local edge_svc edge_line xray_svc_line nginx_svc_line ssh_svc_line
+  edge_svc="$(main_menu_edge_service_name)"
+  if svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+    edge_line="Active"
+  else
+    edge_line="Inactive"
+  fi
+  if svc_exists xray && svc_is_active xray; then
+    xray_svc_line="Active"
+  else
+    xray_svc_line="Inactive"
+  fi
+  if svc_exists nginx && svc_is_active nginx; then
+    nginx_svc_line="Active"
+  else
+    nginx_svc_line="Inactive"
+  fi
+  if svc_exists "${SSHWS_DROPBEAR_SERVICE}" && svc_is_active "${SSHWS_DROPBEAR_SERVICE}" \
+    && svc_exists "${SSHWS_STUNNEL_SERVICE}" && svc_is_active "${SSHWS_STUNNEL_SERVICE}" \
+    && svc_exists "${SSHWS_PROXY_SERVICE}" && svc_is_active "${SSHWS_PROXY_SERVICE}"; then
+    ssh_svc_line="Active"
+  else
+    ssh_svc_line="Inactive"
+  fi
+
   echo
   echo "TLS Expiry        : ${tls_line}"
   echo "Fail2ban          : ${f2b_line}"
@@ -1144,6 +1169,12 @@ security_overview_menu() {
   echo "Recidive          : ${rec_line}"
   echo "BBR               : ${bbr_line}"
   echo "Swap              : ${swap_line}"
+  hr
+  echo "Core Services"
+  echo "Edge Mux          : ${edge_line}"
+  echo "Nginx             : ${nginx_svc_line}"
+  echo "Xray              : ${xray_svc_line}"
+  echo "SSH               : ${ssh_svc_line}"
   hr
   pause
 }

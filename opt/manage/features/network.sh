@@ -3412,7 +3412,7 @@ network_diagnostics_menu() {
     echo "  1) Show summary (routing)"
     echo "  2) Validate conf.d JSON (jq)"
     echo "  3) xray run -test -confdir (syntax check)"
-    echo "  4) Show wireproxy + xray + nginx status"
+    echo "  4) Show core service status"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
@@ -3440,17 +3440,41 @@ network_diagnostics_menu() {
         ;;
       4)
         title
-        echo "Service status (wireproxy, xray, nginx)"
+        echo "Service status (core)"
+        hr
+        if svc_exists "$(main_menu_edge_service_name)"; then
+          systemctl status "$(main_menu_edge_service_name)" --no-pager || true
+        else
+          warn "$(main_menu_edge_service_name) tidak terdeteksi"
+        fi
+        hr
+        systemctl status xray --no-pager || true
+        hr
+        systemctl status nginx --no-pager || true
+        hr
+        if svc_exists "${SSHWS_DROPBEAR_SERVICE}"; then
+          systemctl status "${SSHWS_DROPBEAR_SERVICE}" --no-pager || true
+        else
+          warn "${SSHWS_DROPBEAR_SERVICE} tidak terdeteksi"
+        fi
+        hr
+        if svc_exists "${SSHWS_STUNNEL_SERVICE}"; then
+          systemctl status "${SSHWS_STUNNEL_SERVICE}" --no-pager || true
+        else
+          warn "${SSHWS_STUNNEL_SERVICE} tidak terdeteksi"
+        fi
+        hr
+        if svc_exists "${SSHWS_PROXY_SERVICE}"; then
+          systemctl status "${SSHWS_PROXY_SERVICE}" --no-pager || true
+        else
+          warn "${SSHWS_PROXY_SERVICE} tidak terdeteksi"
+        fi
         hr
         if svc_exists wireproxy; then
           systemctl status wireproxy --no-pager || true
         else
           warn "wireproxy.service tidak terdeteksi"
         fi
-        hr
-        systemctl status xray --no-pager || true
-        hr
-        systemctl status nginx --no-pager || true
         hr
         pause
         ;;
