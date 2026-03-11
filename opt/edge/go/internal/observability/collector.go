@@ -87,6 +87,8 @@ type StatusSnapshot struct {
 	MetricsListen             string                           `json:"metrics_listen"`
 	HTTPBackend               string                           `json:"http_backend"`
 	SSHBackend                string                           `json:"ssh_backend"`
+	SSHTLSBackend             string                           `json:"ssh_tls_backend"`
+	SSHWSBackend              string                           `json:"ssh_ws_backend"`
 	MetricsEnabled            bool                             `json:"metrics_enabled"`
 	ClassicTLSOn80            bool                             `json:"classic_tls_on_80"`
 	AcceptProxyProtocol       bool                             `json:"accept_proxy_protocol"`
@@ -302,6 +304,15 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 			backendCopy[key] = value
 		}
 	}
+	allBackendHealthy := true
+	if len(backendCopy) > 0 {
+		for _, snapshot := range backendCopy {
+			if !snapshot.Healthy {
+				allBackendHealthy = false
+				break
+			}
+		}
+	}
 	var abuseCopy *AbuseSnapshot
 	if abuse != nil {
 		clone := *abuse
@@ -339,7 +350,7 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 	}
 
 	return StatusSnapshot{
-		OK:                        listeners.HTTPUp && listeners.TLSUp,
+		OK:                        listeners.HTTPUp && listeners.TLSUp && allBackendHealthy,
 		Provider:                  cfg.Provider,
 		StartedAt:                 startedAt.Format(time.RFC3339),
 		UptimeSeconds:             int64(time.Since(startedAt).Seconds()),
@@ -348,6 +359,8 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		MetricsListen:             listeners.MetricsAddr,
 		HTTPBackend:               cfg.HTTPBackendAddr(),
 		SSHBackend:                cfg.SSHBackendAddr(),
+		SSHTLSBackend:             cfg.SSHTLSBackendAddr(),
+		SSHWSBackend:              cfg.SSHWSBackendAddr(),
 		MetricsEnabled:            cfg.MetricsEnabled,
 		ClassicTLSOn80:            cfg.ClassicTLSOn80,
 		AcceptProxyProtocol:       cfg.AcceptProxyProtocol,

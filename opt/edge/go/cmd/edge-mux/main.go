@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,7 +59,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s trojan_raw_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s trojan_raw_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -66,6 +67,8 @@ func main() {
 		cfg.MetricsEnabled,
 		cfg.HTTPBackendAddr(),
 		cfg.SSHBackendAddr(),
+		cfg.SSHTLSBackendAddr(),
+		cfg.SSHWSBackendAddr(),
 		cfg.VLESSRawBackendAddr(),
 		cfg.TrojanRawBackendAddr(),
 		cfg.DetectTimeout,
@@ -807,33 +810,28 @@ func safeRemote(conn net.Conn) string {
 
 func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendHealthSnapshot {
 	out := make(map[string]observability.BackendHealthSnapshot)
-	addCheck := func(name, addr string, enabled bool) {
-		if strings.TrimSpace(addr) == "" {
-			return
-		}
+	checkBackend := func(addr string, enabled bool) observability.BackendHealthSnapshot {
 		nowUnix := time.Now().Unix()
 		if !enabled {
-			out[name] = observability.BackendHealthSnapshot{
+			return observability.BackendHealthSnapshot{
 				Address:       addr,
 				Healthy:       false,
 				Status:        "disabled",
 				Reason:        "disabled",
 				CheckedAtUnix: nowUnix,
 			}
-			return
 		}
 		dialer := net.Dialer{Timeout: 750 * time.Millisecond}
 		started := time.Now()
 		conn, err := dialer.Dial("tcp", addr)
 		if err != nil {
-			out[name] = observability.BackendHealthSnapshot{
+			return observability.BackendHealthSnapshot{
 				Address:       addr,
 				Healthy:       false,
 				Status:        "down",
 				Reason:        err.Error(),
 				CheckedAtUnix: nowUnix,
 			}
-			return
 		}
 		latency := time.Since(started).Milliseconds()
 		_ = conn.Close()
@@ -841,7 +839,7 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 		if latency >= 250 {
 			status = "degraded"
 		}
-		out[name] = observability.BackendHealthSnapshot{
+		return observability.BackendHealthSnapshot{
 			Address:       addr,
 			Healthy:       true,
 			Status:        status,
@@ -849,11 +847,87 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 			CheckedAtUnix: nowUnix,
 		}
 	}
+	addCheck := func(name, addr string, enabled bool) {
+		if strings.TrimSpace(addr) == "" {
+			return
+		}
+		out[name] = checkBackend(addr, enabled)
+	}
+	aggregateGroup := func(name string, members map[string]observability.BackendHealthSnapshot) {
+		if len(members) == 0 {
+			return
+		}
+		memberNames := make([]string, 0, len(members))
+		for member := range members {
+			memberNames = append(memberNames, member)
+		}
+		sort.Strings(memberNames)
+
+		parts := make([]string, 0, len(memberNames))
+		reasons := make([]string, 0, len(memberNames))
+		var (
+			allHealthy  = true
+			hasDegraded bool
+			maxLatency  int64
+			checkedAt   int64
+		)
+		for _, member := range memberNames {
+			snapshot := members[member]
+			parts = append(parts, fmt.Sprintf("%s=%s", member, snapshot.Address))
+			if snapshot.CheckedAtUnix > checkedAt {
+				checkedAt = snapshot.CheckedAtUnix
+			}
+			if snapshot.LatencyMS > maxLatency {
+				maxLatency = snapshot.LatencyMS
+			}
+			if snapshot.Status == "degraded" {
+				hasDegraded = true
+			}
+			if snapshot.Healthy {
+				continue
+			}
+			allHealthy = false
+			reason := strings.TrimSpace(snapshot.Reason)
+			if reason == "" {
+				reason = snapshot.Status
+			}
+			reasons = append(reasons, fmt.Sprintf("%s:%s", member, reason))
+		}
+
+		status := "up"
+		if hasDegraded {
+			status = "degraded"
+		}
+		if !allHealthy {
+			status = "degraded"
+		}
+
+		aggregate := observability.BackendHealthSnapshot{
+			Address:       strings.Join(parts, ", "),
+			Healthy:       allHealthy,
+			Status:        status,
+			CheckedAtUnix: checkedAt,
+		}
+		if maxLatency > 0 && allHealthy {
+			aggregate.LatencyMS = maxLatency
+		}
+		if len(reasons) > 0 {
+			aggregate.Reason = strings.Join(reasons, "; ")
+		}
+		out[name] = aggregate
+	}
 
 	addCheck("http", cfg.HTTPBackendAddr(), true)
-	addCheck("ssh", cfg.SSHBackendAddr(), true)
+	addCheck("ssh-direct", cfg.SSHBackendAddr(), true)
+	addCheck("ssh-tls", cfg.SSHTLSBackendAddr(), true)
+	addCheck("ssh-ws", cfg.SSHWSBackendAddr(), true)
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
+	aggregateGroup("ssh", map[string]observability.BackendHealthSnapshot{
+		"direct": out["ssh-direct"],
+		"tls":    out["ssh-tls"],
+		"ws":     out["ssh-ws"],
+	})
 	return out
 }
 
