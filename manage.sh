@@ -1121,10 +1121,24 @@ main_info_geo_lookup() {
   esac
 
   if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && have_cmd curl && have_cmd jq; then
-    json="$(curl -fsSL --max-time 6 "https://ipwho.is/${ip}" 2>/dev/null || true)"
+    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/${ip}?fields=status,country,isp" 2>/dev/null || true)"
     if [[ -n "${json}" ]]; then
-      country="$(echo "${json}" | jq -r 'if .success == true then (.country // "-") else "-" end' 2>/dev/null || true)"
-      isp="$(echo "${json}" | jq -r 'if .success == true then (.connection.isp // .isp // "-") else "-" end' 2>/dev/null || true)"
+      country="$(echo "${json}" | jq -r 'if .status == "success" then (.country // "-") else "-" end' 2>/dev/null || true)"
+      isp="$(echo "${json}" | jq -r 'if .status == "success" then (.isp // "-") else "-" end' 2>/dev/null || true)"
+    fi
+    if [[ -z "${isp}" || "${isp}" == "-" || -z "${country}" || "${country}" == "-" ]]; then
+      json="$(curl -fsSL --max-time 6 "https://ipwho.is/${ip}" 2>/dev/null || true)"
+      if [[ -n "${json}" ]]; then
+        [[ -z "${country}" || "${country}" == "-" ]] && country="$(echo "${json}" | jq -r 'if .success == true then (.country // "-") else "-" end' 2>/dev/null || true)"
+        [[ -z "${isp}" || "${isp}" == "-" ]] && isp="$(echo "${json}" | jq -r 'if .success == true then (.connection.isp // .isp // "-") else "-" end' 2>/dev/null || true)"
+      fi
+    fi
+    if [[ -z "${isp}" || "${isp}" == "-" || -z "${country}" || "${country}" == "-" ]]; then
+      json="$(curl -fsSL --max-time 6 "https://ipapi.co/${ip}/json/" 2>/dev/null || true)"
+      if [[ -n "${json}" ]]; then
+        [[ -z "${country}" || "${country}" == "-" ]] && country="$(echo "${json}" | jq -r '.country_name // "-"' 2>/dev/null || true)"
+        [[ -z "${isp}" || "${isp}" == "-" ]] && isp="$(echo "${json}" | jq -r '.org // .asn_org // "-" ' 2>/dev/null || true)"
+      fi
     fi
   fi
 
@@ -1597,13 +1611,12 @@ cf_prepare_subdomain_a_record() {
 }
 
 domain_menu_v2() {
-  echo "============================================"
-  echo "   INPUT DOMAIN (TLS)"
-  echo "============================================"
-  echo "1. input domain sendiri"
-  echo "2. gunakan domain yang disediakan"
-  echo "0. kembali"
-  echo
+  ui_menu_screen_begin "7) Domain Control > Set Domain" "Konfigurasi Domain TLS"
+  echo -e "${UI_MUTED}Pilih metode domain untuk proses set domain.${UI_RESET}"
+  echo -e "  ${UI_ACCENT}1)${UI_RESET} Input domain manual"
+  echo -e "  ${UI_ACCENT}2)${UI_RESET} Gunakan domain yang disediakan"
+  echo -e "  ${UI_ACCENT}0)${UI_RESET} Kembali"
+  hr
 
   local choice=""
   while true; do
@@ -1654,11 +1667,11 @@ domain_menu_v2() {
   [[ ${#PROVIDED_ROOT_DOMAINS[@]} -gt 0 ]] || die "Daftar domain induk (PROVIDED_ROOT_DOMAINS) kosong."
 
   echo
-  echo "Pilih domain induk"
+  echo -e "${UI_BOLD}Pilih domain induk${UI_RESET}"
   local i=1
   local root=""
   for root in "${PROVIDED_ROOT_DOMAINS[@]}"; do
-    echo "  $i. $root"
+    echo -e "  ${UI_ACCENT}${i})${UI_RESET} ${root}"
     i=$((i + 1))
   done
 
@@ -1685,9 +1698,9 @@ domain_menu_v2() {
   [[ -n "${CF_ACCOUNT_ID:-}" ]] || warn "Tidak bisa ambil CF_ACCOUNT_ID dari zone (acme.sh dns_cf mungkin tetap bisa jalan tanpa ini)."
 
   echo
-  echo "Pilih metode pembuatan subdomain"
-  echo "1. generate secara acak"
-  echo "2. input sendiri"
+  echo -e "${UI_BOLD}Pilih metode pembuatan subdomain${UI_RESET}"
+  echo -e "  ${UI_ACCENT}1)${UI_RESET} Generate acak"
+  echo -e "  ${UI_ACCENT}2)${UI_RESET} Input manual"
 
   local mth=""
   while true; do
@@ -2012,9 +2025,6 @@ domain_control_apply_nginx_domain() {
 }
 
 domain_control_set_domain_now() {
-  title
-  echo "7) Domain Control > Set Domain (setup flow)"
-  hr
   have_cmd curl || die "curl tidak ditemukan."
   have_cmd jq || die "jq tidak ditemukan."
 
@@ -3373,24 +3383,20 @@ sanity_check_now() {
 }
 
 status_diagnostics_menu() {
-  local -a items=(
-    "1|Core Check"
-    "0|Back"
-  )
-  while true; do
-    ui_menu_screen_begin "1) Status"
-    ui_menu_render_options items 76
-    hr
-    if ! read -r -p "Pilih: " c; then
-      echo
-      break
-    fi
-    case "${c}" in
-      1) sanity_check_now ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
+  title
+  echo "1) Status"
+  hr
+  svc_status_line xray
+  svc_status_line nginx
+  svc_status_line "$(main_menu_edge_service_name)"
+  svc_status_line "${SSHWS_DROPBEAR_SERVICE}"
+  svc_status_line "${SSHWS_STUNNEL_SERVICE}"
+  svc_status_line "${SSHWS_PROXY_SERVICE}"
+  hr
+  echo "Listeners (ringkas):"
+  show_listeners_compact
+  hr
+  pause
 }
 
 trap 'domain_control_restore_on_exit' EXIT
