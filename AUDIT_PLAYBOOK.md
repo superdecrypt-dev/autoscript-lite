@@ -121,7 +121,7 @@ bash -n opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
 bash -n opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
 shellcheck -x -S warning opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
-shellcheck -x -S warning opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard
+shellcheck -x -S warning opt/setup/bin/xray-domain-guard
 python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
 go -C opt/edge/go build ./...
 test -s opt/edge/dist/edge-mux-linux-amd64
@@ -199,7 +199,7 @@ test -s opt/badvpn/dist/badvpn-udpgw-linux-arm64
 ## 7. Audit Runtime (Opsional, Host Live)
 
 ```bash
-systemctl is-active xray nginx edge-mux sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer xray-speed xray-observe.timer xray-domain-guard.timer badvpn-udpgw.service
+systemctl is-active xray nginx edge-mux sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer xray-speed xray-domain-guard.timer badvpn-udpgw.service
 nginx -t
 /usr/local/bin/xray run -test -confdir /usr/local/etc/xray/conf.d
 ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:18080\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b|127\\.0\\.0\\.1:7300\\b)'

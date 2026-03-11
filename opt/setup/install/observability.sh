@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Observability, guard, and log maintenance module for setup runtime.
+# Domain guard and log maintenance module for setup runtime.
 
 ensure_env_assignment_present() {
   local file="$1"
@@ -31,60 +31,11 @@ EOF
   ok "Logrotate aktif."
 }
 
-install_observability_alerting() {
-  ok "Pasang observability..."
-
-  mkdir -p "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}"
-  chmod 700 "${OBS_CONFIG_DIR}" "${OBS_STATE_DIR}" "${OBS_LOG_DIR}" || true
-
-  if [[ ! -f "${OBS_CONFIG_FILE}" ]]; then
-    cat > "${OBS_CONFIG_FILE}" <<'EOF'
-# URL webhook opsional. Jika kosong, alert hanya ditulis ke log lokal.
-ALERT_WEBHOOK_URL=""
-# Batas warning masa berlaku cert (hari).
-CERT_WARN_DAYS=14
-# Kirim alert hanya saat payload berubah (anti-spam).
-ALERT_ONLY_ON_CHANGE=1
-# Jika 1, mismatch DNS->IP asal diabaikan bila resolve ke IP Cloudflare (proxied).
-ALLOW_CLOUDFLARE_PROXY_MISMATCH=1
-EOF
-  else
-    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALERT_WEBHOOK_URL" 'ALERT_WEBHOOK_URL=""'
-    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "CERT_WARN_DAYS" 'CERT_WARN_DAYS=14'
-    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALERT_ONLY_ON_CHANGE" 'ALERT_ONLY_ON_CHANGE=1'
-    ensure_env_assignment_present "${OBS_CONFIG_FILE}" "ALLOW_CLOUDFLARE_PROXY_MISMATCH" 'ALLOW_CLOUDFLARE_PROXY_MISMATCH=1'
-  fi
-  chmod 600 "${OBS_CONFIG_FILE}" || true
-
-  install_setup_bin_or_die "xray-observe" "/usr/local/bin/xray-observe" 0755
-
-  render_setup_template_or_die \
-    "systemd/xray-observe.service" \
-    "/etc/systemd/system/xray-observe.service" \
-    0644
-
-  render_setup_template_or_die \
-    "systemd/xray-observe.timer" \
-    "/etc/systemd/system/xray-observe.timer" \
-    0644
-
-  systemctl daemon-reload
-  if systemctl enable --now xray-observe.timer >/dev/null 2>&1; then
-    systemctl start xray-observe.service >/dev/null 2>&1 || true
-    ok "Observability aktif:"
-    ok "  - binary: /usr/local/bin/xray-observe"
-    ok "  - config: ${OBS_CONFIG_FILE}"
-    ok "  - timer : xray-observe.timer (5 menit)"
-  else
-    warn "Gagal mengaktifkan xray-observe.timer. Cek: systemctl status xray-observe.timer --no-pager"
-  fi
-}
-
 install_domain_cert_guard() {
   ok "Pasang domain guard..."
 
-  mkdir -p "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}"
-  chmod 700 "${DOMAIN_GUARD_CONFIG_DIR}" "${OBS_LOG_DIR}" || true
+  mkdir -p "${DOMAIN_GUARD_CONFIG_DIR}" "${DOMAIN_GUARD_LOG_DIR}"
+  chmod 700 "${DOMAIN_GUARD_CONFIG_DIR}" "${DOMAIN_GUARD_LOG_DIR}" || true
 
   if [[ ! -f "${DOMAIN_GUARD_CONFIG_FILE}" ]]; then
     cat > "${DOMAIN_GUARD_CONFIG_FILE}" <<'EOF'

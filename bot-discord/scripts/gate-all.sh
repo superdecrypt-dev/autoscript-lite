@@ -184,8 +184,8 @@ s, b = get_allow_error("/api/main-menu")
 rec("auth_guard", s == 401)
 s, b = post("/api/menu/5/action", {"action": "domain_info", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
 rec("menu5_domain_info", s == 200 and b.get("code") == "ok")
-s, b = post("/api/menu/1/action", {"action": "observe_status", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
-rec("menu1_observe_status", s == 200 and b.get("code") == "ok")
+s, b = post("/api/menu/1/action", {"action": "tls_info", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
+rec("menu1_tls_info", s == 200 and b.get("code") == "ok")
 s, b = post("/api/menu/9/action", {"action": "overview", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
 rec("menu9_overview", s == 200 and b.get("code") == "ok")
 
@@ -283,8 +283,8 @@ s,b=get_allow_error("/api/main-menu")
 rec("auth_guard", s==401)
 s,b=post("/api/menu/5/action", {"action":"domain_info","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
 rec("menu5_domain_info", s==200 and b.get("code")=="ok")
-s,b=post("/api/menu/1/action", {"action":"observe_status","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
-rec("menu1_observe_status", s==200 and b.get("code")=="ok")
+s,b=post("/api/menu/1/action", {"action":"tls_info","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
+rec("menu1_tls_info", s==200 and b.get("code")=="ok")
 s,b=post("/api/menu/9/action", {"action":"overview","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
 rec("menu9_overview", s==200 and b.get("code")=="ok")
 
@@ -467,10 +467,10 @@ def resolve_backend_base_url(default_port: int) -> str:
 BASE=resolve_backend_base_url(8080)
 cases=[
   ("1","overview",{}),
-  ("1","observe_status",{}),
+  ("1","tls_info",{}),
   ("2","list_users",{}),
   ("3","summary",{}),
-  ("4","egress_summary",{}),
+  ("4","dns_summary",{}),
   ("5","domain_info",{}),
   ("5","domain_guard_status",{}),
   ("6","version",{}),

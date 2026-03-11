@@ -19,38 +19,6 @@ const ROOT_DOMAIN_FALLBACK_VALUES = [
 ] as const;
 
 const NETWORK_SINGLE_SELECTS: Record<string, ActionSingleSelectConfig> = {
-  set_egress_mode: {
-    fieldId: "mode",
-    title: "Set Egress Mode",
-    placeholder: "Pilih mode egress",
-    options: [
-      { label: "DIRECT", value: "direct", description: "Lewat outbound direct" },
-      { label: "WARP", value: "warp", description: "Lewat outbound warp" },
-      { label: "BALANCER", value: "balancer", description: "Lewat balancer egress" },
-    ],
-  },
-  set_balancer_strategy: {
-    fieldId: "strategy",
-    title: "Set Balancer Strategy",
-    placeholder: "Pilih strategy balancer",
-    options: [
-      { label: "random", value: "random", description: "Pilih secara acak" },
-      { label: "roundRobin", value: "roundRobin", description: "Rotasi berurutan" },
-      { label: "leastPing", value: "leastPing", description: "Pilih ping paling rendah" },
-      { label: "leastLoad", value: "leastLoad", description: "Pilih beban paling ringan" },
-    ],
-  },
-  set_balancer_selector: {
-    fieldId: "selector",
-    title: "Set Balancer Selector",
-    placeholder: "Pilih selector",
-    options: [
-      { label: "auto", value: "auto", description: "Otomatis pilih outbound valid" },
-      { label: "direct,warp", value: "direct,warp", description: "Gunakan direct + warp" },
-      { label: "direct", value: "direct", description: "Pakai direct saja" },
-      { label: "warp", value: "warp", description: "Pakai warp saja" },
-    ],
-  },
   set_dns_query_strategy: {
     fieldId: "strategy",
     title: "Set DNS Query Strategy",

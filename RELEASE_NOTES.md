@@ -250,7 +250,6 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
   - `sshws-proxy.py`
   - `sshws-qac-enforcer.py`
   - `xray-speed.py`
-  - `xray-observe`
   - `xray-domain-guard`
   - template `nginx`, `systemd`, dan config pendukung
 
@@ -279,7 +278,7 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
 
 ### Hasil Validasi
 - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
-- `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
+- `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-domain-guard` -> PASS
 - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
 - Full E2E modular installer `run.sh -> setup.sh -> manage.sh` live -> PASS
 
@@ -647,9 +646,9 @@ Rilis ini memfinalkan integrasi fitur baru bot Discord untuk operasional staging
 ### Perubahan Utama
 1. Integrasi Fitur Bot (menu 1, 5, 12)
 - Menu `1) Status & Diagnostics` ditambah action:
-  - `observe_snapshot`
-  - `observe_status`
-  - `observe_alert_log`
+  - `overview`
+  - `xray_test`
+  - `tls_info`
 - Menu `5) Domain Control` ditambah action:
   - `domain_guard_check`
   - `domain_guard_status`
@@ -671,7 +670,7 @@ Rilis ini memfinalkan integrasi fitur baru bot Discord untuk operasional staging
 3. Penguatan Gate Testing Bot
 - `bot-discord/scripts/gate-all.sh` diperbarui agar:
   - mengenali kehadiran menu `12`
-  - menambah smoke check `observe_status` dan `menu12.overview`
+  - menambah smoke check `tls_info` dan `menu12.overview`
   - memperluas regression read-only smoke hingga menu `12`.
 
 4. Dokumentasi Continuity Agent

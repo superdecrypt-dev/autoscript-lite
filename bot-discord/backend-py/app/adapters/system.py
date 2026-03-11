@@ -13,13 +13,9 @@ XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 CERT_FULLCHAIN = Path("/opt/cert/fullchain.pem")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
-XRAY_OBSERVE_BIN = Path("/usr/local/bin/xray-observe")
-XRAY_OBSERVE_CONFIG_FILE = Path("/etc/xray-observe/config.env")
-XRAY_OBSERVE_ALERT_LOG = Path("/var/log/xray-observe/alerts.log")
-XRAY_OBSERVE_REPORT_FILE = Path("/var/lib/xray-observe/last-report.txt")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
-XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-observe/domain-guard.log")
+XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
 PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -273,83 +269,6 @@ def op_tls_info() -> tuple[bool, str, str]:
     if ok:
         return True, "TLS Certificate Info", out
     return False, "TLS Certificate Info", f"Gagal membaca cert:\n{out}"
-
-
-def op_observe_snapshot() -> tuple[bool, str, str]:
-    title = "Observability Snapshot"
-    if not XRAY_OBSERVE_BIN.exists():
-        return False, title, "xray-observe belum terpasang. Jalankan setup.sh terbaru."
-
-    ok, out = run_cmd([str(XRAY_OBSERVE_BIN), "once"], timeout=180)
-    rc = 0 if ok else _extract_exit_code(out)
-
-    summary = "Snapshot selesai."
-    if rc == 0:
-        summary = "Snapshot sehat (critical=0)."
-    elif rc == 1:
-        summary = "Snapshot selesai dengan critical issue."
-    elif rc is not None:
-        summary = f"Snapshot selesai dengan status {rc}."
-
-    lines = [
-        summary,
-        f"Config path : {XRAY_OBSERVE_CONFIG_FILE}",
-        f"Alert path  : {XRAY_OBSERVE_ALERT_LOG}",
-        f"Report path : {XRAY_OBSERVE_REPORT_FILE}",
-    ]
-
-    if XRAY_OBSERVE_REPORT_FILE.exists():
-        report_tail = _tail_lines(XRAY_OBSERVE_REPORT_FILE, limit=24)
-        if report_tail:
-            lines.extend(["", "Last report (tail):", *report_tail])
-
-    if out and out != "(no output)":
-        out_lines = [line for line in out.splitlines() if line.strip() and not line.strip().startswith("[exit ")]
-        if out_lines:
-            lines.extend(["", "Command output:", *out_lines[:30]])
-
-    msg = "\n".join(lines)
-    if rc in (None, 0):
-        return True, title, msg
-    return False, title, msg
-
-
-def op_observe_status() -> tuple[bool, str, str]:
-    title = "Observability Status"
-    if not XRAY_OBSERVE_BIN.exists():
-        return False, title, "xray-observe belum terpasang. Jalankan setup.sh terbaru."
-
-    lines = [
-        f"Binary       : {XRAY_OBSERVE_BIN}",
-        f"Config path  : {XRAY_OBSERVE_CONFIG_FILE}",
-        f"Alert path   : {XRAY_OBSERVE_ALERT_LOG}",
-        f"Report path  : {XRAY_OBSERVE_REPORT_FILE}",
-        "",
-        f"Timer active : {service_state('xray-observe.timer')}",
-        f"Timer enable : {systemctl_enabled_state('xray-observe.timer')}",
-        f"Svc active   : {service_state('xray-observe.service')}",
-    ]
-
-    if XRAY_OBSERVE_REPORT_FILE.exists():
-        report_tail = _tail_lines(XRAY_OBSERVE_REPORT_FILE, limit=24)
-        if report_tail:
-            lines.extend(["", "Last report (tail):", *report_tail])
-    else:
-        lines.append("")
-        lines.append("Belum ada report observability.")
-
-    return True, title, "\n".join(lines)
-
-
-def op_observe_alert_log(lines: int = 80) -> tuple[bool, str, str]:
-    title = "Observability Alert Log"
-    if not XRAY_OBSERVE_ALERT_LOG.exists():
-        return False, title, f"Log alert belum tersedia: {XRAY_OBSERVE_ALERT_LOG}"
-
-    log_lines = _tail_lines(XRAY_OBSERVE_ALERT_LOG, limit=lines)
-    if not log_lines:
-        return False, title, f"Log alert kosong: {XRAY_OBSERVE_ALERT_LOG}"
-    return True, title, "\n".join(log_lines)
 
 
 def op_domain_guard_check() -> tuple[bool, str, str]:
@@ -868,38 +787,6 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
             "speed_limit": _fmt_speed_limit_from_account_fields(fields),
         }
     return False, f"File quota/account tidak ditemukan untuk {user_n} [{proto_n}]"
-
-
-def op_network_outbound_summary() -> tuple[str, str]:
-    out_file = XRAY_CONFDIR / "20-outbounds.json"
-    route_file = XRAY_CONFDIR / "30-routing.json"
-    lines = []
-
-    ok_out, payload_out = read_json(out_file)
-    if ok_out and isinstance(payload_out, dict):
-        outbounds = payload_out.get("outbounds", [])
-        tags = []
-        if isinstance(outbounds, list):
-            for item in outbounds:
-                if isinstance(item, dict) and isinstance(item.get("tag"), str):
-                    tags.append(item["tag"])
-        lines.append(f"Outbounds: {len(tags)}")
-        if tags:
-            lines.append("Tags: " + ", ".join(tags[:40]))
-    else:
-        lines.append(f"Gagal baca outbounds: {payload_out}")
-
-    ok_rt, payload_rt = read_json(route_file)
-    if ok_rt and isinstance(payload_rt, dict):
-        routing = payload_rt.get("routing", {})
-        rules = routing.get("rules", []) if isinstance(routing, dict) else []
-        balancers = routing.get("balancers", []) if isinstance(routing, dict) else []
-        lines.append(f"Routing rules: {len(rules) if isinstance(rules, list) else 0}")
-        lines.append(f"Balancers: {len(balancers) if isinstance(balancers, list) else 0}")
-    else:
-        lines.append(f"Gagal baca routing: {payload_rt}")
-
-    return "Network Controls - Egress Summary", "\n".join(lines)
 
 
 def op_dns_summary() -> tuple[str, str]:

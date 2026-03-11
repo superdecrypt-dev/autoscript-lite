@@ -23,7 +23,6 @@ shellcheck *.sh \
   opt/manage/core/*.sh \
   opt/manage/features/*.sh \
   opt/manage/menus/*.sh \
-  opt/setup/bin/xray-observe \
   opt/setup/bin/xray-domain-guard
 python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')

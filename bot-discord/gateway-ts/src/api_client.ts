@@ -2,7 +2,6 @@ import axios, { AxiosInstance } from "axios";
 
 const DEFAULT_BACKEND_TIMEOUT_MS = 30_000;
 const ACTION_TIMEOUT_MS: Record<string, number> = {
-  "1:observe_snapshot": 190_000,
   "5:setup_domain_custom": 420_000,
   "5:setup_domain_cloudflare": 420_000,
   "5:domain_guard_check": 190_000,

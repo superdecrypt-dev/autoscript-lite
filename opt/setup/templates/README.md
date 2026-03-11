@@ -15,8 +15,6 @@ Yang sudah dipindah pada tahap awal:
 - `systemd/xray-expired.service`
 - `systemd/xray-limit-ip.service`
 - `systemd/xray-quota.service`
-- `systemd/xray-observe.service`
-- `systemd/xray-observe.timer`
 - `systemd/xray-domain-guard.service`
 - `systemd/xray-domain-guard.timer`
 - `config/sshws-stunnel.conf`
@@ -25,9 +23,7 @@ Yang sudah dipindah pada tahap awal:
 
 Target berikutnya yang masih layak dipindah:
 - `systemd/xray.service.d/10-confdir.conf`
-- script `xray-observe`
 - script `xray-domain-guard`
-- config `xray-observe/config.env`
 - config `xray-domain-guard/config.env`
 
 Tujuan:

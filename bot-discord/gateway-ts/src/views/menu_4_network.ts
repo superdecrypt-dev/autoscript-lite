@@ -3,56 +3,8 @@ import type { MenuDefinition } from "./types";
 export const menu4: MenuDefinition = {
   id: "4",
   label: "Network Controls",
-  description: "Ringkasan outbound, routing, DNS, dan status network.",
+  description: "Ringkasan routing WARP, DNS, dan status network.",
   actions: [
-    { id: "egress_summary", label: "View Egress Sum", mode: "direct", style: "primary" },
-    {
-      id: "set_egress_mode",
-      label: "Set Egress Mode",
-      mode: "modal",
-      style: "secondary",
-      modal: {
-        title: "Set Egress Mode",
-        fields: [{ id: "mode", label: "Mode", style: "short", required: true, placeholder: "direct / warp / balancer" }],
-      },
-    },
-    {
-      id: "set_balancer_strategy",
-      label: "Set Balance Strat",
-      mode: "modal",
-      style: "secondary",
-      modal: {
-        title: "Set Balancer Strategy",
-        fields: [
-          {
-            id: "strategy",
-            label: "Strategy",
-            style: "short",
-            required: true,
-            placeholder: "random / roundRobin / leastPing / leastLoad",
-          },
-        ],
-      },
-    },
-    { id: "set_balancer_selector_auto", label: "Auto Balance Sel", mode: "direct", style: "secondary" },
-    {
-      id: "set_balancer_selector",
-      label: "Set Balance Sel",
-      mode: "modal",
-      style: "secondary",
-      modal: {
-        title: "Set Balancer Selector",
-        fields: [
-          {
-            id: "selector",
-            label: "Selector",
-            style: "short",
-            required: true,
-            placeholder: "auto atau direct,warp",
-          },
-        ],
-      },
-    },
     { id: "dns_summary", label: "View DNS Summary", mode: "direct", style: "secondary" },
     {
       id: "set_dns_primary",

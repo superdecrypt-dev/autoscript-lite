@@ -1,9 +1,0 @@
-[Unit]
-Description=Xray observability snapshot
-After=network-online.target xray.service nginx.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/xray-observe once
-SuccessExitStatus=0 1

@@ -106,10 +106,6 @@ Ketentuan UX gateway (terkini):
 ## 4) Update Arsitektur Terkini (2026-02-25)
 1. Menu dan kapabilitas baru:
    - Menu `12) Traffic Analytics` ditambahkan ke gateway router + backend service.
-   - Menu `1)` mendapat action observability:
-     - `observe_snapshot`
-     - `observe_status`
-     - `observe_alert_log`
    - Menu `5)` mendapat action domain guard:
      - `domain_guard_check`
      - `domain_guard_status`

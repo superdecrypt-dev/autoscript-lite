@@ -16,7 +16,7 @@ Catatan penting:
 - `Edge Gateway` provider `go` sebagai ingress utama `80/443`
 - `nginx` backend internal `127.0.0.1:18080`
 - `SSH WS`, `SSH SSL/TLS`, dan `SSH Direct`
-- `WARP`, `BadVPN UDPGW`, TLS, dan daemon observability
+- `WARP`, `BadVPN UDPGW`, TLS, dan `xray-domain-guard`
 - `manage.sh` untuk operasional harian
 - installer bot `Discord` dan `Telegram`
 
@@ -41,7 +41,6 @@ Catatan penting:
 - `sshws-stunnel`
 - `sshws-proxy`
 - `badvpn-udpgw`
-- `xray-observe`
 - `xray-domain-guard`
 
 ## Catatan Operasional

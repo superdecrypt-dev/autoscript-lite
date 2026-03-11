@@ -816,9 +816,6 @@ parts = [
   ("30-routing.json", {"routing": routing}),
   ("40-policy.json", {"policy": cfg.get("policy") or {}}),
   ("50-stats.json", {"stats": cfg.get("stats") or {}}),
-  # 60-observatory.json dibutuhkan manage.sh (XRAY_OBSERVATORY_CONF).
-  # Dibuat kosong dulu; manage.sh akan mengisinya saat fitur observatory diaktifkan.
-  ("60-observatory.json", {"observatory": cfg.get("observatory") or {}}),
 ]
 
 os.makedirs(outdir, exist_ok=True)
@@ -842,7 +839,6 @@ PY
   ok "  - ${XRAY_CONFDIR}/30-routing.json"
   ok "  - ${XRAY_CONFDIR}/40-policy.json"
   ok "  - ${XRAY_CONFDIR}/50-stats.json"
-  ok "  - ${XRAY_CONFDIR}/60-observatory.json"
 }
 
 ensure_xray_service_user() {

@@ -110,7 +110,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - Full E2E terbaru untuk refactor modular installer juga lolos live:
     - domain final: `dlj8u.vyxara2.web.id`
     - `run.sh` dijalankan dengan `RUN_USE_LOCAL_SOURCE=1 KEEP_REPO_AFTER_INSTALL=1`
-    - `xray`, `nginx`, `sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`, `xray-speed`, `xray-observe.timer`, dan `xray-domain-guard.timer` aktif
+    - `xray`, `nginx`, `sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`, `xray-speed`, dan `xray-domain-guard.timer` aktif
     - `/<token>` dan `/<bebas>/<token>` sama-sama lolos `101`
   - Cutover Edge Gateway sudah lolos live:
     - HTTP/HTTPS publik diteruskan ke backend HTTP internal
@@ -139,7 +139,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - listener lokal di `127.0.0.1:7300`
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
-    - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-observe opt/setup/bin/xray-domain-guard` -> PASS
+    - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-domain-guard` -> PASS
     - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
   - Validasi playbook terbaru:
     - `TESTING_PLAYBOOK.md` sudah sinkron dengan SSH WS token path dan pengujian bot Telegram

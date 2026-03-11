@@ -29,7 +29,7 @@ Bot ini berdiri sendiri dan tidak menjalankan `manage.sh`. Perilaku menunya dibu
   - `Set Domain Auto (API Cloudflare)` untuk root domain bawaan sistem,
   - root domain dipilih via select (`vyxara1.web.id`, `vyxara2.web.id`, `vyxara1.qzz.io`, `vyxara2.qzz.io`).
 - `Network Controls`:
-  - `Set Egress Mode`, `Set Balancer Strategy`, `Set Balancer Selector`, `Set DNS Query Strategy` memakai select.
+  - `Set DNS Query Strategy` memakai select.
 - `Run Speedtest` diringkas ke metrik inti: ISP, Latency, Packet Loss, Download, Upload.
 
 ## Jalankan Lokal

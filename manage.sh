@@ -24,7 +24,6 @@ XRAY_OUTBOUNDS_CONF="${XRAY_CONFDIR}/20-outbounds.json"
 XRAY_ROUTING_CONF="${XRAY_CONFDIR}/30-routing.json"
 XRAY_POLICY_CONF="${XRAY_CONFDIR}/40-policy.json"
 XRAY_STATS_CONF="${XRAY_CONFDIR}/50-stats.json"
-XRAY_OBSERVATORY_CONF="${XRAY_CONFDIR}/60-observatory.json"
 XRAY_DOMAIN_FILE="/etc/xray/domain"
 NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
@@ -35,7 +34,6 @@ WGCF_DIR="/etc/wgcf"
 XRAY_ASSET_DIR="/usr/local/share/xray"
 CUSTOM_GEOSITE_DAT="${XRAY_ASSET_DIR}/custom.dat"
 ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
-ADBLOCK_BALANCER_TAG="adblock-balance"
 
 # Domain / ACME / Cloudflare (disamakan dengan setup.sh)
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
@@ -75,13 +73,9 @@ SPEED_MARK_MAX=59999
 SPEED_OUTBOUND_TAG_PREFIX="speed-mark-"
 SPEED_RULE_MARKER_PREFIX="dummy-speed-user-"
 SPEED_POLICY_LOCK_FILE="/var/lock/xray-speed-policy.lock"
-XRAY_OBSERVE_BIN="/usr/local/bin/xray-observe"
-XRAY_OBSERVE_CONFIG_FILE="/etc/xray-observe/config.env"
-XRAY_OBSERVE_ALERT_LOG="/var/log/xray-observe/alerts.log"
-XRAY_OBSERVE_REPORT_FILE="/var/lib/xray-observe/last-report.txt"
 XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
 XRAY_DOMAIN_GUARD_CONFIG_FILE="/etc/xray-domain-guard/config.env"
-XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-observe/domain-guard.log"
+XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-domain-guard/domain-guard.log"
 
 # Direktori kerja untuk operasi aman (atomic write)
 WORK_DIR="/var/lib/xray-manage"
@@ -91,7 +85,6 @@ WORK_DIR="/var/lib/xray-manage"
 # memodifikasi 30-routing.json untuk menghindari race condition last-write-wins.
 ROUTING_LOCK_FILE="/run/autoscript/locks/xray-routing.lock"
 DNS_LOCK_FILE="/run/autoscript/locks/xray-dns.lock"
-OBS_LOCK_FILE="/run/autoscript/locks/xray-observatory.lock"
 WARP_LOCK_FILE="/run/autoscript/locks/xray-warp.lock"
 
 # Direktori laporan/export
@@ -111,7 +104,7 @@ SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
-: "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}" \
+: "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
   "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
@@ -165,7 +158,6 @@ init_runtime_dirs() {
   for lock_dir in \
     "$(dirname "${ROUTING_LOCK_FILE}")" \
     "$(dirname "${DNS_LOCK_FILE}")" \
-    "$(dirname "${OBS_LOCK_FILE}")" \
     "$(dirname "${WARP_LOCK_FILE}")"; do
     mkdir -p "${lock_dir}" 2>/dev/null || true
     chmod 700 "${lock_dir}" 2>/dev/null || true
@@ -257,23 +249,13 @@ for o in (out_cfg.get("outbounds") or []):
 
 routing = rt_cfg.get("routing") or {}
 
-for b in (routing.get("balancers") or []):
-  if not isinstance(b, dict):
-    continue
-  tag = b.get("tag")
-  if isinstance(tag, str) and tag.startswith(bal_prefix):
-    raise SystemExit(0)
-
 for r in (routing.get("rules") or []):
   if not isinstance(r, dict):
     continue
   if r.get("type") != "field":
     continue
   ot = r.get("outboundTag")
-  bt = r.get("balancerTag")
   if isinstance(ot, str) and ot.startswith(out_prefix):
-    raise SystemExit(0)
-  if isinstance(bt, str) and bt.startswith(bal_prefix):
     raise SystemExit(0)
   users = r.get("user")
   if isinstance(users, list):
@@ -286,7 +268,7 @@ PY
 }
 
 speed_policy_resync_after_egress_change() {
-  # Default egress/balancer mempengaruhi jalur dasar speed-mark outbounds.
+  # WARP global direct/warp mempengaruhi jalur dasar speed-mark outbounds.
   # Wajib sinkron ulang supaya speed user tidak memakai topology sebelumnya.
   # Walau policy kosong, tetap perlu sync bila artefak speed historis masih tertinggal.
   local need_sync="false"
@@ -301,7 +283,7 @@ speed_policy_resync_after_egress_change() {
   fi
 
   if ! speed_policy_sync_xray; then
-    warn "Perubahan egress tersimpan, tetapi sinkronisasi speed policy gagal."
+    warn "Perubahan WARP global tersimpan, tetapi sinkronisasi speed policy gagal."
     return 1
   fi
 
@@ -3015,8 +2997,7 @@ check_xray_config_json() {
     "${XRAY_OUTBOUNDS_CONF}" \
     "${XRAY_ROUTING_CONF}" \
     "${XRAY_POLICY_CONF}" \
-    "${XRAY_STATS_CONF}" \
-    "${XRAY_OBSERVATORY_CONF}"; do
+    "${XRAY_STATS_CONF}"; do
     if [[ ! -f "${f}" ]]; then
       warn "Konfigurasi tidak ditemukan: ${f}"
       ok=0
@@ -3167,93 +3148,12 @@ sanity_check_now() {
   pause
 }
 
-observability_snapshot_now() {
-  title
-  echo "1) Status > Observability Snapshot"
-  hr
-
-  if [[ ! -x "${XRAY_OBSERVE_BIN}" ]]; then
-    warn "xray-observe belum terpasang."
-    warn "Jalankan setup.sh terbaru untuk mengaktifkan observability."
-    hr
-    pause
-    return 0
-  fi
-
-  local rc=0
-  set +e
-  "${XRAY_OBSERVE_BIN}" once
-  rc=$?
-  set -e
-
-  hr
-  case "${rc}" in
-    0) log "Observability snapshot: sehat (critical=0)." ;;
-    1) warn "Observability snapshot: ditemukan isu critical (lihat detail di atas)." ;;
-    *) warn "Observability snapshot selesai dengan status ${rc}." ;;
-  esac
-  pause
-}
-
-observability_status_show() {
-  title
-  echo "1) Status > Observability Status"
-  hr
-
-  if [[ ! -x "${XRAY_OBSERVE_BIN}" ]]; then
-    warn "xray-observe belum terpasang."
-    hr
-    pause
-    return 0
-  fi
-
-  if svc_exists xray-observe.timer; then
-    svc_status_line xray-observe.timer
-    echo "Enable state: $(systemctl is-enabled xray-observe.timer 2>/dev/null || echo unknown)"
-  else
-    warn "xray-observe.timer belum tersedia."
-  fi
-  if svc_exists xray-observe.service; then
-    echo "Service last state: $(systemctl is-active xray-observe.service 2>/dev/null || echo unknown)"
-  fi
-  echo "Config path: ${XRAY_OBSERVE_CONFIG_FILE}"
-  echo "Alert  path: ${XRAY_OBSERVE_ALERT_LOG}"
-  hr
-
-  if [[ -s "${XRAY_OBSERVE_REPORT_FILE}" ]]; then
-    echo "Last report (${XRAY_OBSERVE_REPORT_FILE}):"
-    sed -n '1,80p' "${XRAY_OBSERVE_REPORT_FILE}" || true
-  else
-    warn "Belum ada report observability."
-  fi
-  hr
-  pause
-}
-
-observability_alert_log_show() {
-  title
-  echo "1) Status > Alert Log"
-  hr
-
-  if [[ -s "${XRAY_OBSERVE_ALERT_LOG}" ]]; then
-    tail -n 80 "${XRAY_OBSERVE_ALERT_LOG}" || true
-  else
-    warn "Log alert observability belum tersedia."
-    echo "Path: ${XRAY_OBSERVE_ALERT_LOG}"
-  fi
-  hr
-  pause
-}
-
 status_diagnostics_menu() {
   while true; do
     title
     echo "1) Status"
     hr
     echo "  1) Core Check"
-    echo "  2) Snapshot"
-    echo "  3) Observability"
-    echo "  4) Alert Log"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -3262,9 +3162,6 @@ status_diagnostics_menu() {
     fi
     case "${c}" in
       1) sanity_check_now ;;
-      2) observability_snapshot_now ;;
-      3) observability_status_show ;;
-      4) observability_alert_log_show ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
@@ -4054,7 +3951,6 @@ import sys
 policy_root, out_src, rt_src, out_dst, rt_dst, out_prefix, marker_prefix, mark_min_raw, mark_max_raw = sys.argv[1:10]
 mark_min = int(mark_min_raw)
 mark_max = int(mark_max_raw)
-speed_bal_prefix = f"{out_prefix}bal-"
 
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
@@ -4173,53 +4069,17 @@ routing = rt_cfg.get("routing") or {}
 rules = routing.get("rules")
 if not isinstance(rules, list):
   raise SystemExit("Invalid routing config: routing.rules bukan list")
-balancers = routing.get("balancers")
-if not isinstance(balancers, list):
-  balancers = []
-balancers_by_tag = {}
-for b in balancers:
-  if not isinstance(b, dict):
-    continue
-  t = norm_tag(b.get("tag"))
-  if not t:
-    continue
-  balancers_by_tag[t] = b
 
 default_rule = None
 for r in rules:
   if is_default_rule(r):
     default_rule = r
 
-base_mode = "outbound"
 base_selector = []
-base_strategy = {}
-base_balancer_tag = ""
 if isinstance(default_rule, dict):
-  bt = norm_tag(default_rule.get("balancerTag"))
   ot = norm_tag(default_rule.get("outboundTag"))
-  if bt:
-    base_mode = "balancer"
-    base_balancer_tag = bt
-  elif ot:
+  if ot:
     base_selector = [ot]
-
-if base_mode == "balancer":
-  b0 = balancers_by_tag.get(base_balancer_tag)
-  if isinstance(b0, dict):
-    sel = b0.get("selector")
-    if isinstance(sel, list):
-      for t in sel:
-        t2 = norm_tag(t)
-        if t2:
-          base_selector.append(t2)
-    st = b0.get("strategy")
-    if isinstance(st, dict):
-      base_strategy = copy.deepcopy(st)
-  if not base_selector and isinstance(default_rule, dict):
-    ot = norm_tag(default_rule.get("outboundTag"))
-    if ot:
-      base_mode = "outbound"
-      base_selector = [ot]
 
 if not base_selector:
   if "direct" in outbounds_by_tag:
@@ -4301,31 +4161,6 @@ for mark in sorted(mark_users.keys()):
 out_cfg["outbounds"] = clean_outbounds
 dump_json(out_dst, out_cfg)
 
-clean_balancers = []
-for b in balancers:
-  if isinstance(b, dict):
-    t = norm_tag(b.get("tag"))
-    if t.startswith(speed_bal_prefix):
-      continue
-  clean_balancers.append(b)
-
-speed_balancers = {}
-if base_mode == "balancer":
-  for mark in sorted(mark_users.keys()):
-    sel = []
-    for base_tag in effective_selector:
-      mt = mark_out_tags.get(mark, {}).get(base_tag)
-      if mt:
-        sel.append(mt)
-    if not sel:
-      continue
-    btag = f"{speed_bal_prefix}{mark}"
-    nb = {"tag": btag, "selector": sel}
-    if isinstance(base_strategy, dict) and base_strategy:
-      nb["strategy"] = copy.deepcopy(base_strategy)
-    clean_balancers.append(nb)
-    speed_balancers[mark] = btag
-
 kept_rules = []
 for r in rules:
   if not isinstance(r, dict):
@@ -4336,11 +4171,10 @@ for r in rules:
     continue
   users = r.get("user")
   ot = norm_tag(r.get("outboundTag"))
-  bt = norm_tag(r.get("balancerTag"))
   has_speed_marker = isinstance(users, list) and any(
     isinstance(x, str) and x.startswith(marker_prefix) for x in users
   )
-  if has_speed_marker and (ot.startswith(out_prefix) or bt.startswith(speed_bal_prefix)):
+  if has_speed_marker and ot.startswith(out_prefix):
     continue
   kept_rules.append(r)
 
@@ -4358,22 +4192,15 @@ for mark, users in sorted(mark_users.items()):
     "type": "field",
     "user": [marker] + users,
   }
-  if base_mode == "balancer":
-    btag = speed_balancers.get(mark, "")
-    if not btag:
-      continue
-    rule["balancerTag"] = btag
-  else:
-    first_base = effective_selector[0]
-    ot = mark_out_tags.get(mark, {}).get(first_base, "")
-    if not ot:
-      continue
-    rule["outboundTag"] = ot
+  first_base = effective_selector[0]
+  ot = mark_out_tags.get(mark, {}).get(first_base, "")
+  if not ot:
+    continue
+  rule["outboundTag"] = ot
   speed_rules.append(rule)
 
 merged_rules = kept_rules[:insert_idx] + speed_rules + kept_rules[insert_idx:]
 routing["rules"] = merged_rules
-routing["balancers"] = clean_balancers
 rt_cfg["routing"] = routing
 dump_json(rt_dst, rt_cfg)
 PY

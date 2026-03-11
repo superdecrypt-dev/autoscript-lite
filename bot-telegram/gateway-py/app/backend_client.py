@@ -8,7 +8,6 @@ import httpx
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
-    "1:observe_snapshot": 190.0,
     "7:setup_domain_custom": 420.0,
     "7:setup_domain_cloudflare": 420.0,
     "7:domain_guard_check": 190.0,

@@ -750,16 +750,12 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
     if field_id == "mode":
         if action_id == "extend_expiry":
             return [("Extend (+hari)", "extend"), ("Set Tanggal", "set")]
-        if action_id == "set_egress_mode":
-            return [("Direct", "direct"), ("Warp", "warp"), ("Balancer", "balancer")]
         if action_id == "set_warp_global_mode":
             return [("Direct", "direct"), ("Warp", "warp")]
         if action_id in {"set_warp_user_mode", "set_warp_inbound_mode", "set_warp_domain_mode"}:
             return [("Direct", "direct"), ("Warp", "warp"), ("Off (inherit)", "off")]
 
     if field_id == "strategy":
-        if action_id == "set_balancer_strategy":
-            return [("random", "random"), ("roundRobin", "roundRobin"), ("leastPing", "leastPing"), ("leastLoad", "leastLoad")]
         if action_id == "set_dns_query_strategy":
             return [
                 ("UseIP", "UseIP"),

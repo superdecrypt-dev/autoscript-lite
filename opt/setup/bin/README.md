@@ -7,7 +7,6 @@ Yang sudah dipindah:
 - `sshws-proxy.py`
 - `sshws-qac-enforcer.py`
 - `xray-speed.py`
-- `xray-observe`
 - `xray-domain-guard`
 
 Kandidat berikutnya bila masih ada script inline baru:

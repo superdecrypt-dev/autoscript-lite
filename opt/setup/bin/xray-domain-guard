@@ -8,7 +8,7 @@ CONFIG_FILE="/etc/xray-domain-guard/config.env"
 CERT_FILE="/opt/cert/fullchain.pem"
 KEY_FILE="/opt/cert/privkey.pem"
 NGINX_CONF="/etc/nginx/conf.d/xray.conf"
-LOG_FILE="/var/log/xray-observe/domain-guard.log"
+LOG_FILE="/var/log/xray-domain-guard/domain-guard.log"
 
 CERT_WARN_DAYS=14
 RENEW_BELOW_DAYS=7

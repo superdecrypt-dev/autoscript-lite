@@ -71,8 +71,6 @@ SPEED_RULE_MARKER_PREFIX = "dummy-speed-user-"
 SPEED_MARK_MIN = 1000
 SPEED_MARK_MAX = 59999
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
-BALANCER_EGRESS_TAG = "egress-balance"
-BALANCER_ALLOWED_STRATEGIES = {"random", "roundRobin", "leastPing", "leastLoad"}
 DEFAULT_EGRESS_PORTS = {"1-65535", "0-65535"}
 DNS_LOCK_FILE = "/run/autoscript/locks/xray-dns.lock"
 WARP_LOCK_FILE = "/run/autoscript/locks/xray-warp.lock"
@@ -765,9 +763,6 @@ def _routing_default_mode_pretty(rt_cfg: dict[str, Any]) -> str:
     target = rules[idx] if idx < len(rules) else None
     if not isinstance(target, dict):
         return "unknown"
-    bal = str(target.get("balancerTag") or "").strip()
-    if bal:
-        return f"balancer ({bal})"
     ot = str(target.get("outboundTag") or "").strip().lower()
     if ot in {"direct", "warp"}:
         return ot
@@ -1512,114 +1507,10 @@ def _outbound_tags_from_cfg(out_cfg: dict[str, Any]) -> list[str]:
     return tags
 
 
-def _pick_default_balancer_selector(outbound_tags: list[str]) -> list[str]:
-    selector: list[str] = []
-    for preferred in ("direct", "warp"):
-        if preferred in outbound_tags and preferred not in selector:
-            selector.append(preferred)
-    if selector:
-        return selector
-
-    deny = {"api", "blocked"}
-    for tag in outbound_tags:
-        if tag in deny or _is_speed_outbound_tag(tag):
-            continue
-        selector.append(tag)
-        if len(selector) >= 2:
-            break
-    return selector
-
-
-def _sanitize_balancer_selector(raw_selector: Any, outbound_tags: list[str]) -> list[str]:
-    if not isinstance(raw_selector, list):
-        return []
-    known = set(outbound_tags)
-    deny = {"api", "blocked"}
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for item in raw_selector:
-        tag = str(item or "").strip()
-        if not tag or tag in seen:
-            continue
-        if tag in deny or _is_speed_outbound_tag(tag):
-            continue
-        if tag not in known:
-            continue
-        seen.add(tag)
-        cleaned.append(tag)
-    return cleaned
-
-
-def _normalize_selector_input(selector_raw: str, outbound_tags: list[str]) -> tuple[bool, list[str] | str]:
-    raw = str(selector_raw or "").strip()
-    if not raw or raw.lower() == "auto":
-        auto_sel = _pick_default_balancer_selector(outbound_tags)
-        if not auto_sel:
-            return False, "Selector otomatis kosong. Pastikan outbound non-system tersedia."
-        return True, auto_sel
-
-    known = set(outbound_tags)
-    deny = {"api", "blocked"}
-    selector: list[str] = []
-    seen: set[str] = set()
-    for part in raw.split(","):
-        tag = str(part or "").strip()
-        if not tag or tag in seen:
-            continue
-        if tag in deny or _is_speed_outbound_tag(tag):
-            continue
-        if tag not in known:
-            continue
-        seen.add(tag)
-        selector.append(tag)
-
-    if not selector:
-        return False, "Selector kosong. Gunakan auto atau isi tag outbound valid non-speed dipisah koma."
-    return True, selector
-
-
-def _upsert_egress_balancer(
-    routing: dict[str, Any],
-    outbound_tags: list[str],
-    selector_override: list[str] | None = None,
-) -> tuple[bool, str, dict[str, Any] | None]:
-    balancers = routing.get("balancers")
-    if not isinstance(balancers, list):
-        balancers = []
-
-    balancer: dict[str, Any] | None = None
-    for item in balancers:
-        if isinstance(item, dict) and item.get("tag") == BALANCER_EGRESS_TAG:
-            balancer = item
-            break
-
-    if balancer is None:
-        balancer = {"tag": BALANCER_EGRESS_TAG, "selector": [], "strategy": {"type": "random"}}
-        balancers.insert(0, balancer)
-
-    selector = selector_override if selector_override is not None else _sanitize_balancer_selector(balancer.get("selector"), outbound_tags)
-    if not selector:
-        selector = _pick_default_balancer_selector(outbound_tags)
-    if not selector:
-        return False, "Tidak ada outbound valid untuk balancer egress-balance.", None
-
-    balancer["selector"] = selector
-    strategy = balancer.get("strategy")
-    if not isinstance(strategy, dict):
-        strategy = {}
-    stype = str(strategy.get("type") or "").strip()
-    if stype not in BALANCER_ALLOWED_STRATEGIES:
-        strategy["type"] = "random"
-    balancer["strategy"] = strategy
-
-    routing["balancers"] = balancers
-    return True, "ok", balancer
-
-
-def _routing_set_default_egress_mode(rt_cfg: dict[str, Any], out_cfg: dict[str, Any], mode: str) -> tuple[bool, str]:
+def _routing_set_default_warp_global_mode(rt_cfg: dict[str, Any], out_cfg: dict[str, Any], mode: str) -> tuple[bool, str]:
     mode_n = str(mode or "").strip().lower()
-    if mode_n not in {"direct", "warp", "balancer"}:
-        return False, "Mode egress harus direct/warp/balancer."
+    if mode_n not in {"direct", "warp"}:
+        return False, "Mode WARP global harus direct/warp."
 
     routing = rt_cfg.get("routing")
     if not isinstance(routing, dict):
@@ -1641,61 +1532,11 @@ def _routing_set_default_egress_mode(rt_cfg: dict[str, Any], out_cfg: dict[str, 
         return False, "Default rule tidak valid."
 
     if mode_n in {"direct", "warp"}:
-        target.pop("balancerTag", None)
         target["outboundTag"] = mode_n
-    else:
-        ok_bal, msg_bal, _ = _upsert_egress_balancer(routing, outbound_tags, selector_override=None)
-        if not ok_bal:
-            return False, msg_bal
-        target.pop("outboundTag", None)
-        target["balancerTag"] = BALANCER_EGRESS_TAG
-
     rules[idx] = target
     routing["rules"] = rules
     rt_cfg["routing"] = routing
-    return True, f"Default egress di-set ke {mode_n}."
-
-
-def _routing_set_balancer_strategy(rt_cfg: dict[str, Any], out_cfg: dict[str, Any], strategy_raw: str) -> tuple[bool, str]:
-    strategy = str(strategy_raw or "").strip()
-    if strategy not in BALANCER_ALLOWED_STRATEGIES:
-        choices = ", ".join(sorted(BALANCER_ALLOWED_STRATEGIES))
-        return False, f"Strategy invalid. Pilihan: {choices}."
-
-    routing = rt_cfg.get("routing")
-    if not isinstance(routing, dict):
-        routing = {}
-    outbound_tags = _outbound_tags_from_cfg(out_cfg)
-    ok_bal, msg_bal, balancer = _upsert_egress_balancer(routing, outbound_tags, selector_override=None)
-    if not ok_bal or balancer is None:
-        return False, msg_bal
-
-    strategy_obj = balancer.get("strategy")
-    if not isinstance(strategy_obj, dict):
-        strategy_obj = {}
-    strategy_obj["type"] = strategy
-    balancer["strategy"] = strategy_obj
-    routing["balancers"] = routing.get("balancers", [])
-    rt_cfg["routing"] = routing
-    return True, f"Balancer strategy di-set ke {strategy}."
-
-
-def _routing_set_balancer_selector(rt_cfg: dict[str, Any], out_cfg: dict[str, Any], selector_raw: str) -> tuple[bool, str]:
-    routing = rt_cfg.get("routing")
-    if not isinstance(routing, dict):
-        routing = {}
-    outbound_tags = _outbound_tags_from_cfg(out_cfg)
-    ok_sel, sel_or_msg = _normalize_selector_input(selector_raw, outbound_tags)
-    if not ok_sel:
-        return False, str(sel_or_msg)
-    selector = sel_or_msg
-    assert isinstance(selector, list)
-
-    ok_bal, msg_bal, _ = _upsert_egress_balancer(routing, outbound_tags, selector_override=selector)
-    if not ok_bal:
-        return False, msg_bal
-    rt_cfg["routing"] = routing
-    return True, f"Balancer selector di-set: {', '.join(selector)}"
+    return True, f"WARP global di-set ke {mode_n}."
 
 
 def _routing_find_user_rule_index(rules: list[Any], marker: str, outbound: str) -> int:
@@ -2857,14 +2698,10 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
 
         routing = rt_cfg.get("routing") or {}
         rules = routing.get("rules") if isinstance(routing, dict) else None
-        balancers = routing.get("balancers") if isinstance(routing, dict) else None
         if not isinstance(rules, list):
             return False, "routing.rules bukan list"
-        if not isinstance(balancers, list):
-            balancers = []
 
         mark_users = _list_speed_mark_users()
-        speed_bal_prefix = f"{SPEED_OUTBOUND_TAG_PREFIX}bal-"
 
         out_by_tag: dict[str, dict[str, Any]] = {}
         for out in outbounds:
@@ -2891,42 +2728,12 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
                 default_rule = rule
                 break
 
-        base_mode = "outbound"
         base_selector: list[str] = []
-        base_strategy: dict[str, Any] = {}
-        base_balancer_tag = ""
 
         if isinstance(default_rule, dict):
-            bt = str(default_rule.get("balancerTag") or "").strip()
             ot = str(default_rule.get("outboundTag") or "").strip()
-            if bt:
-                base_mode = "balancer"
-                base_balancer_tag = bt
-            elif ot:
+            if ot:
                 base_selector = [ot]
-
-        balancers_by_tag: dict[str, dict[str, Any]] = {}
-        for b in balancers:
-            if isinstance(b, dict):
-                t = str(b.get("tag") or "").strip()
-                if t:
-                    balancers_by_tag[t] = b
-
-        if base_mode == "balancer":
-            b0 = balancers_by_tag.get(base_balancer_tag)
-            if isinstance(b0, dict):
-                sel = b0.get("selector")
-                if isinstance(sel, list):
-                    base_selector.extend([str(x).strip() for x in sel if str(x).strip()])
-                st = b0.get("strategy")
-                if isinstance(st, dict):
-                    base_strategy = json.loads(json.dumps(st))
-
-            if not base_selector and isinstance(default_rule, dict):
-                ot = str(default_rule.get("outboundTag") or "").strip()
-                if ot:
-                    base_mode = "outbound"
-                    base_selector = [ot]
 
         if not base_selector:
             if "direct" in out_by_tag:
@@ -3000,28 +2807,6 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
 
         out_cfg["outbounds"] = clean_outbounds
 
-        clean_balancers: list[Any] = []
-        for bal in balancers:
-            if isinstance(bal, dict):
-                t = str(bal.get("tag") or "").strip()
-                if t.startswith(speed_bal_prefix):
-                    continue
-            clean_balancers.append(bal)
-
-        speed_balancers: dict[int, str] = {}
-        if base_mode == "balancer":
-            for mark in sorted(mark_users.keys()):
-                selector = [mark_out_tags.get(mark, {}).get(bt, "") for bt in effective_selector]
-                selector = [t for t in selector if t]
-                if not selector:
-                    continue
-                btag = f"{speed_bal_prefix}{mark}"
-                obj: dict[str, Any] = {"tag": btag, "selector": selector}
-                if base_strategy:
-                    obj["strategy"] = json.loads(json.dumps(base_strategy))
-                clean_balancers.append(obj)
-                speed_balancers[mark] = btag
-
         def is_protected_rule(rule: Any) -> bool:
             if not isinstance(rule, dict):
                 return False
@@ -3040,11 +2825,10 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
                 continue
             users = rule.get("user")
             ot = str(rule.get("outboundTag") or "").strip()
-            bt = str(rule.get("balancerTag") or "").strip()
             has_speed_marker = isinstance(users, list) and any(
                 isinstance(u, str) and u.startswith(SPEED_RULE_MARKER_PREFIX) for u in users
             )
-            if has_speed_marker and (ot.startswith(SPEED_OUTBOUND_TAG_PREFIX) or bt.startswith(speed_bal_prefix)):
+            if has_speed_marker and ot.startswith(SPEED_OUTBOUND_TAG_PREFIX):
                 continue
             kept_rules.append(rule)
 
@@ -3059,22 +2843,15 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
         for mark, users in sorted(mark_users.items()):
             marker = f"{SPEED_RULE_MARKER_PREFIX}{mark}"
             rule: dict[str, Any] = {"type": "field", "user": [marker] + users}
-            if base_mode == "balancer":
-                btag = speed_balancers.get(mark, "")
-                if not btag:
-                    continue
-                rule["balancerTag"] = btag
-            else:
-                first_base = effective_selector[0]
-                ot = mark_out_tags.get(mark, {}).get(first_base, "")
-                if not ot:
-                    continue
-                rule["outboundTag"] = ot
+            first_base = effective_selector[0]
+            ot = mark_out_tags.get(mark, {}).get(first_base, "")
+            if not ot:
+                continue
+            rule["outboundTag"] = ot
             speed_rules.append(rule)
 
         merged_rules = kept_rules[:insert_idx] + speed_rules + kept_rules[insert_idx:]
         routing["rules"] = merged_rules
-        routing["balancers"] = clean_balancers
         rt_cfg["routing"] = routing
 
         try:
@@ -4734,12 +4511,12 @@ def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     return True, "Domain Control - Refresh Account Info", f"Selesai: updated={updated}, failed={failed}"
 
 
-def op_network_set_egress_mode(mode: str) -> tuple[bool, str, str]:
-    title = "Network Controls - Set Egress Mode"
+def op_network_apply_warp_global_mode(mode: str) -> tuple[bool, str, str]:
+    title = "Network Controls - WARP Global"
     mode_n = str(mode or "").strip().lower()
 
     ok_apply, msg_apply = _apply_routing_transaction(
-        lambda rt_cfg, out_cfg: _routing_set_default_egress_mode(rt_cfg, out_cfg, mode_n)
+        lambda rt_cfg, out_cfg: _routing_set_default_warp_global_mode(rt_cfg, out_cfg, mode_n)
     )
     if not ok_apply:
         return False, title, msg_apply
@@ -4748,42 +4525,6 @@ def op_network_set_egress_mode(mode: str) -> tuple[bool, str, str]:
     if not ok_sync:
         return True, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}"
     return True, title, msg_apply
-
-
-def op_network_set_balancer_strategy(strategy: str) -> tuple[bool, str, str]:
-    title = "Network Controls - Balancer Strategy"
-    strategy_n = str(strategy or "").strip()
-
-    ok_apply, msg_apply = _apply_routing_transaction(
-        lambda rt_cfg, out_cfg: _routing_set_balancer_strategy(rt_cfg, out_cfg, strategy_n)
-    )
-    if not ok_apply:
-        return False, title, msg_apply
-
-    ok_sync, msg_sync = _speed_policy_sync_xray()
-    if not ok_sync:
-        return True, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}"
-    return True, title, msg_apply
-
-
-def op_network_set_balancer_selector(selector: str) -> tuple[bool, str, str]:
-    title = "Network Controls - Balancer Selector"
-    selector_n = str(selector or "").strip()
-
-    ok_apply, msg_apply = _apply_routing_transaction(
-        lambda rt_cfg, out_cfg: _routing_set_balancer_selector(rt_cfg, out_cfg, selector_n)
-    )
-    if not ok_apply:
-        return False, title, msg_apply
-
-    ok_sync, msg_sync = _speed_policy_sync_xray()
-    if not ok_sync:
-        return True, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}"
-    return True, title, msg_apply
-
-
-def op_network_set_balancer_selector_auto() -> tuple[bool, str, str]:
-    return op_network_set_balancer_selector("auto")
 
 
 def op_network_warp_status_report() -> tuple[bool, str, str]:
@@ -4813,7 +4554,7 @@ def op_network_warp_status_report() -> tuple[bool, str, str]:
         wireproxy_state = "active" if _service_is_active("wireproxy") else "inactive"
 
     lines = [
-        f"Egress Global : {global_mode}",
+        f"WARP Global   : {global_mode}",
         f"wireproxy     : {wireproxy_state}",
         f"User Override : warp={len(user_warp)}, direct={len(user_direct)}",
         f"Inbound Ovr   : warp={len(inb_warp)}, direct={len(inb_direct)}",
@@ -4845,7 +4586,7 @@ def op_network_warp_set_global_mode(mode: str) -> tuple[bool, str, str]:
     mode_n = str(mode or "").strip().lower()
     if mode_n not in {"direct", "warp"}:
         return False, title, "Mode global harus direct/warp."
-    ok_op, _, msg = op_network_set_egress_mode(mode_n)
+    ok_op, _, msg = op_network_apply_warp_global_mode(mode_n)
     if not ok_op:
         return False, title, msg
     return True, title, msg

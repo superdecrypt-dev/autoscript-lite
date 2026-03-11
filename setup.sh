@@ -44,12 +44,9 @@ SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
 SPEED_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
-OBS_CONFIG_DIR="/etc/xray-observe"
-OBS_CONFIG_FILE="${OBS_CONFIG_DIR}/config.env"
-OBS_STATE_DIR="/var/lib/xray-observe"
-OBS_LOG_DIR="/var/log/xray-observe"
 DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
 DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
+DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
 # Daftar domain induk yang disediakan (private)
 PROVIDED_ROOT_DOMAINS=(
@@ -383,7 +380,6 @@ main() {
   sync_manage_modules_layout
   sync_setup_runtime_layout
   install_xray_speed_limiter_foundation
-  install_observability_alerting
   install_domain_cert_guard
   setup_logrotate
   configure_fail2ban_aggressive_jails

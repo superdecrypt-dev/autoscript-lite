@@ -1,8 +1,6 @@
 # shellcheck shell=bash
 # Network Controls
-# - Egress mode: direct / warp / balancer
-# - Balancer: tag "egress-balance"
-# - Observatory: conf.d/60-observatory.json (untuk leastPing/leastLoad)
+# - WARP global: direct / warp
 # - WARP: global / per-user / per-protocol (inbound)
 # - Domain/Geosite: direct exceptions (editable list, template tetap readonly)
 # - Adblock: custom geosite ext:custom.dat:adblock (enable/disable)
@@ -182,8 +180,6 @@ if not found:
 out="-"
 if isinstance(found.get("outboundTag"), str) and found.get("outboundTag"):
   out=found.get("outboundTag")
-elif isinstance(found.get("balancerTag"), str) and found.get("balancerTag"):
-  out="balancer:" + found.get("balancerTag")
 
 print(f"OutboundTag : {out} (readonly)")
 dom=found.get("domain") or []
@@ -195,7 +191,11 @@ PY
 
 
 xray_routing_default_rule_get() {
-  # prints: mode=<direct|warp|balancer|unknown> tag=<tag-or-empty> balancer=<balancerTag-or-empty>
+  # prints: mode=<direct|warp|unknown> tag=<tag-or-empty>
+  if [[ ! -f "${XRAY_ROUTING_CONF}" ]]; then
+    printf 'mode=unknown\ntag=\n'
+    return 0
+  fi
   need_python3
   python3 - <<'PY' "${XRAY_ROUTING_CONF}"
 import json, sys
@@ -206,7 +206,6 @@ routing=(cfg.get('routing') or {})
 rules=routing.get('rules') or []
 mode='unknown'
 tag=''
-bal=''
 def is_default_rule(r):
   if not isinstance(r, dict):
     return False
@@ -215,7 +214,9 @@ def is_default_rule(r):
   port=str(r.get('port','')).strip()
   if port not in ('1-65535','0-65535'):
     return False
-  # Heuristic: default catch-all has only port + outboundTag/balancerTag
+  # Keep this in sync with the writer-side heuristic below.
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
   return True
 
 target=None
@@ -224,27 +225,22 @@ for r in rules:
     target=r
 # pick last matching
 if isinstance(target, dict):
-  if 'balancerTag' in target and isinstance(target.get('balancerTag'), str) and target.get('balancerTag'):
-    mode='balancer'
-    bal=target.get('balancerTag','')
-  else:
-    ot=target.get('outboundTag')
-    if isinstance(ot, str) and ot:
-      tag=ot
-      if ot == 'warp':
-        mode='warp'
-      elif ot == 'direct':
-        mode='direct'
-      else:
-        mode='unknown'
+  ot=target.get('outboundTag')
+  if isinstance(ot, str) and ot:
+    tag=ot
+    if ot == 'warp':
+      mode='warp'
+    elif ot == 'direct':
+      mode='direct'
+    else:
+      mode='unknown'
 print(f"mode={mode}")
 print(f"tag={tag}")
-print(f"balancer={bal}")
 PY
 }
 
 xray_routing_default_rule_set() {
-  # args: mode direct|warp|balancer
+  # args: mode direct|warp
   local mode="$1"
   local tmp backup rc
   need_python3
@@ -335,67 +331,9 @@ def pick_default_selector(tags):
 
 r=rules[idx]
 if mode == 'direct':
-  r.pop('balancerTag', None)
   r['outboundTag']='direct'
 elif mode == 'warp':
-  r.pop('balancerTag', None)
   r['outboundTag']='warp'
-elif mode == 'balancer':
-  tags=list_outbound_tags()
-  balancers=routing.get('balancers')
-  if not isinstance(balancers, list):
-    balancers=[]
-
-  b=None
-  for it in balancers:
-    if isinstance(it, dict) and it.get('tag') == 'egress-balance':
-      b=it
-      break
-
-  if b is None:
-    b={"tag":"egress-balance","selector":[],"strategy":{"type":"random"}}
-    balancers.insert(0,b)
-
-  raw_sel=b.get('selector')
-  if not isinstance(raw_sel, list):
-    raw_sel=[]
-
-  deny={"api","blocked"}
-  valid_sel=[]
-  seen=set()
-  for t in raw_sel:
-    if not isinstance(t, str):
-      continue
-    t=t.strip()
-    if not t:
-      continue
-    if t in deny:
-      continue
-    if speed_out_prefix and t.startswith(speed_out_prefix):
-      continue
-    if t not in tags:
-      continue
-    if t in seen:
-      continue
-    seen.add(t)
-    valid_sel.append(t)
-
-  if not valid_sel:
-    valid_sel=pick_default_selector(tags)
-  if not valid_sel:
-    raise SystemExit("Tidak ada outbound valid untuk balancer egress-balance.")
-
-  b['selector']=valid_sel
-  st=b.get('strategy')
-  if not isinstance(st, dict):
-    st={}
-  if not isinstance(st.get('type'), str) or not st.get('type'):
-    st['type']='random'
-  b['strategy']=st
-  routing['balancers']=balancers
-
-  r.pop('outboundTag', None)
-  r['balancerTag']='egress-balance'
 else:
   raise SystemExit("Mode tidak dikenal: " + mode)
 
@@ -433,579 +371,6 @@ PY
     "Konfigurasi xray invalid setelah update routing default. Config di-rollback ke backup: ${backup}"
 
   speed_policy_resync_after_egress_change || return 1
-}
-
-xray_routing_balancer_get() {
-  # prints: strategy=<type> selector=<comma-separated>
-  need_python3
-  python3 - <<'PY' "${XRAY_ROUTING_CONF}"
-import json, sys
-src=sys.argv[1]
-with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
-routing=(cfg.get('routing') or {})
-balancers=routing.get('balancers') or []
-b=None
-for it in balancers:
-  if isinstance(it, dict) and it.get('tag') == 'egress-balance':
-    b=it
-    break
-if not isinstance(b, dict):
-  print("strategy=")
-  print("selector=")
-  raise SystemExit(0)
-st=(b.get('strategy') or {})
-stype=st.get('type') if isinstance(st, dict) else ''
-sel=b.get('selector') or []
-if not isinstance(sel, list):
-  sel=[]
-sel=[str(x) for x in sel if str(x).strip()]
-print("strategy=" + (str(stype) if stype is not None else ""))
-print("selector=" + ",".join(sel))
-PY
-}
-
-xray_routing_balancer_set_strategy() {
-  # args: strategy type
-  local stype="$1"
-  local tmp backup rc
-  need_python3
-
-  [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
-  ensure_path_writable "${XRAY_ROUTING_CONF}"
-
-  backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
-  tmp="${WORK_DIR}/30-routing.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${tmp}" "${stype}" || exit 1
-import json, sys
-src, dst, stype = sys.argv[1:4]
-allowed={"random","roundRobin","leastPing","leastLoad"}
-if stype not in allowed:
-  raise SystemExit("Strategy invalid. Pilihan: " + ", ".join(sorted(allowed)))
-
-with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
-routing=(cfg.get('routing') or {})
-balancers=routing.get('balancers')
-if not isinstance(balancers, list):
-  balancers=[]
-
-b=None
-for it in balancers:
-  if isinstance(it, dict) and it.get('tag') == 'egress-balance':
-    b=it
-    break
-if b is None:
-  b={"tag":"egress-balance","selector":["direct","warp"],"strategy":{"type":"random"}}
-  balancers.insert(0,b)
-
-b.setdefault('strategy', {})
-if not isinstance(b['strategy'], dict):
-  b['strategy']={}
-b['strategy']['type']=stype
-
-routing['balancers']=balancers
-cfg['routing']=routing
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_ROUTING_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${ROUTING_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal update balancer (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah update balancer strategy. Config di-rollback ke backup: ${backup}"
-
-  speed_policy_resync_after_egress_change || return 1
-}
-
-xray_routing_balancer_set_selector_from_outbounds() {
-  # args: comma-separated or "auto"
-  local mode="${1:-auto}"
-  local tmp backup rc
-  need_python3
-
-  [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
-  [[ -f "${XRAY_OUTBOUNDS_CONF}" ]] || die "Xray outbounds conf tidak ditemukan: ${XRAY_OUTBOUNDS_CONF}"
-  ensure_path_writable "${XRAY_ROUTING_CONF}"
-
-  backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
-  tmp="${WORK_DIR}/30-routing.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${XRAY_OUTBOUNDS_CONF}" "${tmp}" "${mode}" "${SPEED_OUTBOUND_TAG_PREFIX}" || exit 1
-import json, sys
-rt_src, ob_src, dst, mode, speed_out_prefix = sys.argv[1:6]
-with open(rt_src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
-with open(ob_src,'r',encoding='utf-8') as f:
-  ob=json.load(f)
-
-def list_outbound_tags():
-  out=[]
-  for o in (ob.get('outbounds') or []):
-    if not isinstance(o, dict):
-      continue
-    tag=o.get('tag')
-    if isinstance(tag, str) and tag.strip():
-      out.append(tag.strip())
-  return out
-
-routing=(cfg.get('routing') or {})
-balancers=routing.get('balancers')
-if not isinstance(balancers, list):
-  balancers=[]
-b=None
-for it in balancers:
-  if isinstance(it, dict) and it.get('tag') == 'egress-balance':
-    b=it
-    break
-if b is None:
-  b={"tag":"egress-balance","selector":["direct","warp"],"strategy":{"type":"random"}}
-  balancers.insert(0,b)
-
-sel=[]
-if mode == 'auto':
-  tags=list_outbound_tags()
-  # Exclude internal/system tags
-  deny={"api","blocked"}
-  seen=set()
-  for t in tags:
-    if t in deny:
-      continue
-    if speed_out_prefix and t.startswith(speed_out_prefix):
-      continue
-    if t in seen:
-      continue
-    seen.add(t)
-    sel.append(t)
-else:
-  deny={"api","blocked"}
-  known=set(list_outbound_tags())
-  seen=set()
-  for x in mode.split(","):
-    t=x.strip()
-    if not t:
-      continue
-    if t in deny:
-      continue
-    if speed_out_prefix and t.startswith(speed_out_prefix):
-      continue
-    if t not in known:
-      continue
-    if t in seen:
-      continue
-    seen.add(t)
-    sel.append(t)
-
-if not sel:
-  raise SystemExit("Selector kosong. Gunakan auto atau isi tag outbound valid non-speed dipisah koma.")
-
-b['selector']=sel
-routing['balancers']=balancers
-cfg['routing']=routing
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_ROUTING_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${ROUTING_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal update selector balancer (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah update balancer selector. Config di-rollback ke backup: ${backup}"
-
-  speed_policy_resync_after_egress_change || return 1
-}
-
-xray_observatory_get() {
-  # prints: probeURL=... interval=... concurrency=true|false subjectSelector=comma-separated
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    echo "probeURL="
-    echo "interval="
-    echo "concurrency="
-    echo "subjectSelector="
-    return 0
-  fi
-  need_python3
-  python3 - <<'PY' "${XRAY_OBSERVATORY_CONF}"
-import json, sys
-src=sys.argv[1]
-with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
-obs=cfg.get('observatory') or {}
-if not isinstance(obs, dict):
-  obs={}
-probe=obs.get('probeURL') or obs.get('probeUrl') or ''
-interval=obs.get('probeInterval') or ''
-con=obs.get('enableConcurrency')
-sub=obs.get('subjectSelector') or []
-if not isinstance(sub, list):
-  sub=[]
-sub=[str(x) for x in sub if str(x).strip()]
-print("probeURL=" + str(probe))
-print("interval=" + str(interval))
-print("concurrency=" + ("true" if bool(con) else "false"))
-print("subjectSelector=" + ",".join(sub))
-PY
-}
-
-xray_observatory_set_basic() {
-  # args: probeURL interval enableConcurrency(true/false)
-  local probe="$1"
-  local interval="$2"
-  local conc="$3"
-  local tmp backup rc
-
-  need_python3
-
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    # Create empty file with safe perms
-    install -m 600 -o root -g root /dev/null "${XRAY_OBSERVATORY_CONF}"
-    echo '{}' > "${XRAY_OBSERVATORY_CONF}"
-  fi
-
-  ensure_path_writable "${XRAY_OBSERVATORY_CONF}"
-  backup="$(xray_backup_path_prepare "${XRAY_OBSERVATORY_CONF}")"
-  tmp="${WORK_DIR}/60-observatory.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_OBSERVATORY_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_OBSERVATORY_CONF}" "${tmp}" "${probe}" "${interval}" "${conc}"
-import json, sys
-src, dst, probe, interval, conc = sys.argv[1:6]
-conc = str(conc).lower() in ("1","true","yes","y","on")
-with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f) if f.readable() else {}
-if not isinstance(cfg, dict):
-  cfg={}
-obs=cfg.get('observatory')
-if not isinstance(obs, dict):
-  obs={}
-if probe.strip():
-  obs['probeURL']=probe.strip()
-if interval.strip():
-  obs['probeInterval']=interval.strip()
-obs['enableConcurrency']=bool(conc)
-if 'subjectSelector' not in obs:
-  obs['subjectSelector']=[]
-cfg['observatory']=obs
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_OBSERVATORY_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${OBS_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal update observatory (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah update observatory. Config di-rollback ke backup: ${backup}"
-  return 0
-}
-
-
-xray_observatory_set_probe_url() {
-  # args: probeURL
-  local probe="$1"
-  local tmp backup rc
-
-  need_python3
-
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    install -m 600 -o root -g root /dev/null "${XRAY_OBSERVATORY_CONF}"
-    echo '{}' > "${XRAY_OBSERVATORY_CONF}"
-  fi
-
-  ensure_path_writable "${XRAY_OBSERVATORY_CONF}"
-  backup="$(xray_backup_path_prepare "${XRAY_OBSERVATORY_CONF}")"
-  tmp="${WORK_DIR}/60-observatory.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_OBSERVATORY_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_OBSERVATORY_CONF}" "${tmp}" "${probe}"
-import json, sys
-src, dst, probe = sys.argv[1:4]
-probe = str(probe).strip()
-
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception:
-    cfg={}
-
-if not isinstance(cfg, dict):
-  cfg={}
-
-obs=cfg.get('observatory')
-if not isinstance(obs, dict):
-  obs={}
-
-if probe:
-  obs['probeURL']=probe
-
-cfg['observatory']=obs
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_OBSERVATORY_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${OBS_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal update probeURL (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah update observatory probeURL. Config di-rollback ke backup: ${backup}"
-  return 0
-}
-
-xray_observatory_set_interval() {
-  # args: interval (contoh: 30s / 10m)
-  local interval="$1"
-  local tmp backup rc
-
-  need_python3
-
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    install -m 600 -o root -g root /dev/null "${XRAY_OBSERVATORY_CONF}"
-    echo '{}' > "${XRAY_OBSERVATORY_CONF}"
-  fi
-
-  ensure_path_writable "${XRAY_OBSERVATORY_CONF}"
-  backup="$(xray_backup_path_prepare "${XRAY_OBSERVATORY_CONF}")"
-  tmp="${WORK_DIR}/60-observatory.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_OBSERVATORY_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_OBSERVATORY_CONF}" "${tmp}" "${interval}"
-import json, sys
-src, dst, interval = sys.argv[1:4]
-interval = str(interval).strip()
-
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception:
-    cfg={}
-
-if not isinstance(cfg, dict):
-  cfg={}
-
-obs=cfg.get('observatory')
-if not isinstance(obs, dict):
-  obs={}
-
-if interval:
-  obs['probeInterval']=interval
-
-cfg['observatory']=obs
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_OBSERVATORY_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${OBS_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal update interval (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah update observatory interval. Config di-rollback ke backup: ${backup}"
-  return 0
-}
-
-xray_observatory_toggle_concurrency() {
-  local tmp backup rc
-  need_python3
-
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    install -m 600 -o root -g root /dev/null "${XRAY_OBSERVATORY_CONF}"
-    echo '{}' > "${XRAY_OBSERVATORY_CONF}"
-  fi
-
-  ensure_path_writable "${XRAY_OBSERVATORY_CONF}"
-  backup="$(xray_backup_path_prepare "${XRAY_OBSERVATORY_CONF}")"
-  tmp="${WORK_DIR}/60-observatory.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_OBSERVATORY_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_OBSERVATORY_CONF}" "${tmp}"
-import json, sys
-src, dst = sys.argv[1:3]
-
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception:
-    cfg={}
-
-if not isinstance(cfg, dict):
-  cfg={}
-
-obs=cfg.get('observatory')
-if not isinstance(obs, dict):
-  obs={}
-
-cur=bool(obs.get('enableConcurrency'))
-obs['enableConcurrency']=not cur
-
-cfg['observatory']=obs
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_OBSERVATORY_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${OBS_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal toggle concurrency (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah toggle observatory concurrency. Config di-rollback ke backup: ${backup}"
-  return 0
-}
-
-xray_observatory_sync_subject_selector_from_balancer() {
-  local tmp backup rc
-  need_python3
-
-  [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
-  if [[ ! -f "${XRAY_OBSERVATORY_CONF}" ]]; then
-    install -m 600 -o root -g root /dev/null "${XRAY_OBSERVATORY_CONF}"
-    echo '{}' > "${XRAY_OBSERVATORY_CONF}"
-  fi
-
-  ensure_path_writable "${XRAY_OBSERVATORY_CONF}"
-  backup="$(xray_backup_path_prepare "${XRAY_OBSERVATORY_CONF}")"
-  tmp="${WORK_DIR}/60-observatory.json.tmp"
-
-  set +e
-  (
-    flock -x 200
-    cp -a "${XRAY_OBSERVATORY_CONF}" "${backup}" || exit 1
-    python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${XRAY_OBSERVATORY_CONF}" "${tmp}"
-import json, sys
-rt, obs_src, dst = sys.argv[1:4]
-with open(rt,'r',encoding='utf-8') as f:
-  rt_cfg=json.load(f)
-routing=(rt_cfg.get('routing') or {})
-balancers=routing.get('balancers') or []
-sel=[]
-for b in balancers:
-  if isinstance(b, dict) and b.get('tag') == 'egress-balance':
-    s=b.get('selector') or []
-    if isinstance(s, list):
-      sel=[str(x) for x in s if str(x).strip()]
-    break
-
-with open(obs_src,'r',encoding='utf-8') as f:
-  cfg=json.load(f) if f.readable() else {}
-if not isinstance(cfg, dict):
-  cfg={}
-obs=cfg.get('observatory')
-if not isinstance(obs, dict):
-  obs={}
-obs['subjectSelector']=sel
-cfg['observatory']=obs
-with open(dst,'w',encoding='utf-8') as f:
-  json.dump(cfg,f,ensure_ascii=False,indent=2)
-  f.write("\n")
-PY
-    xray_write_file_atomic "${XRAY_OBSERVATORY_CONF}" "${tmp}" || {
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      exit 1
-    }
-    svc_restart xray || true
-    if ! svc_wait_active xray 20; then
-      restore_file_if_exists "${backup}" "${XRAY_OBSERVATORY_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
-  ) 200>"${OBS_LOCK_FILE}"
-  rc=$?
-  set -e
-
-  xray_txn_rc_or_die "${rc}" \
-    "Gagal sync subjectSelector (rollback ke backup: ${backup})" \
-    "xray tidak aktif setelah sync observatory subjectSelector. Config di-rollback ke backup: ${backup}"
-  return 0
 }
 
 xray_routing_rule_toggle_user_outbound() {
@@ -1292,16 +657,9 @@ network_show_summary() {
   if [[ -f "${XRAY_ROUTING_CONF}" ]]; then
     xray_routing_default_rule_get
     hr
-    echo "Balancer (egress-balance):"
-    xray_routing_balancer_get
-    hr
   else
     warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
   fi
-
-  echo "Observatory:"
-  xray_observatory_get
-  hr
 
   if svc_exists wireproxy; then
     svc_status_line wireproxy
@@ -1312,306 +670,16 @@ network_show_summary() {
   pause
 }
 
-egress_menu() {
-  while true; do
-    title
-    echo "6) Network > Egress Mode & Balancer"
-    hr
-    xray_routing_default_rule_get || true
-    echo ""
-    echo "Balancer (egress-balance):"
-    xray_routing_balancer_get || true
-    echo ""
-    echo "Observatory:"
-    xray_observatory_get || true
-    hr
-
-    echo "  1) Set default egress: DIRECT"
-    echo "  2) Set default egress: WARP"
-    echo "  3) Set default egress: BALANCER (egress-balance)"
-    echo "  4) Set balancer strategy (random/roundRobin/leastPing/leastLoad)"
-    echo "  5) Set balancer selector (auto dari outbounds)"
-    echo "  6) Set balancer selector (manual: tag1,tag2,...)"
-    echo "  7) Observatory: set probeURL/interval/concurrency"
-    echo "  8) Observatory: sync subjectSelector dari balancer selector"
-    echo "  0) Back"
-    hr
-    if ! read -r -p "Pilih: " c; then
-      echo
-      break
-    fi
-    case "${c}" in
-      1) xray_routing_default_rule_set direct ; log "Default egress: DIRECT" ; pause ;;
-      2) xray_routing_default_rule_set warp ; log "Default egress: WARP" ; pause ;;
-      3) xray_routing_default_rule_set balancer ; log "Default egress: BALANCER" ; pause ;;
-      4)
-        read -r -p "Strategy (random/roundRobin/leastPing/leastLoad) (atau kembali): " st
-        if is_back_choice "${st}"; then
-          continue
-        fi
-        xray_routing_balancer_set_strategy "${st}"
-        log "Balancer strategy updated: ${st}"
-        pause
-        ;;
-      5)
-        xray_routing_balancer_set_selector_from_outbounds auto
-        log "Balancer selector di-set: auto"
-        pause
-        ;;
-      6)
-        read -r -p "Selector tags (tag1,tag2,...) (atau kembali): " sel
-        if is_back_choice "${sel}"; then
-          continue
-        fi
-        xray_routing_balancer_set_selector_from_outbounds "${sel}"
-        log "Balancer selector updated"
-        pause
-        ;;
-      7)
-        read -r -p "probeURL (contoh https://www.google.com/generate_204) (atau kembali): " purl
-        if is_back_choice "${purl}"; then
-          continue
-        fi
-        read -r -p "probeInterval (contoh 30s) (atau kembali): " pint
-        if is_back_choice "${pint}"; then
-          continue
-        fi
-        read -r -p "enableConcurrency (true/false) (atau kembali): " pcon
-        if is_back_choice "${pcon}"; then
-          continue
-        fi
-        xray_observatory_set_basic "${purl}" "${pint}" "${pcon}"
-        log "Observatory updated"
-        pause
-        ;;
-      8)
-        xray_observatory_sync_subject_selector_from_balancer
-        log "Observatory subjectSelector disinkronkan"
-        pause
-        ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
-}
-
-
-# -------------------------
-# Egress Mode & Balancer (revisi menu sederhana)
-# -------------------------
-egress_show_detailed_status() {
-  title
-  echo "Egress Detailed Status"
-  hr
-  if [[ -f "${XRAY_ROUTING_CONF}" ]]; then
-    xray_routing_default_rule_get || true
-    hr
-    echo "Balancer (egress-balance):"
-    xray_routing_balancer_get || true
-    hr
-  else
-    warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
-    hr
-  fi
-
-  echo "Observatory:"
-  xray_observatory_get || true
-  hr
-  pause
-}
-
-egress_set_mode_menu() {
-  while true; do
-    title
-    echo "Egress Mode & Balancer > Set Egress Mode"
-    hr
-    printf "Current Egress Mode: %s\n" "$(warp_global_mode_pretty_get)"
-    hr
-    echo "  1) DIRECT"
-    echo "  2) WARP"
-    echo "  3) BALANCER"
-    echo "  0) Back"
-    hr
-    if ! read -r -p "Pilih: " c; then
-      echo
-      break
-    fi
-    case "${c}" in
-      1)
-        xray_routing_default_rule_set direct
-        log "Egress Mode di-set: DIRECT"
-        pause
-        ;;
-      2)
-        xray_routing_default_rule_set warp
-        log "Egress Mode di-set: WARP"
-        pause
-        ;;
-      3)
-        xray_routing_default_rule_set balancer
-        log "Egress Mode di-set: BALANCER (egress-balance)"
-        pause
-        ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
-}
-
-egress_balancer_settings_menu() {
-  while true; do
-    title
-    echo "Egress Mode & Balancer > Balancer Settings (egress-balance)"
-    hr
-    xray_routing_balancer_get || true
-    hr
-    echo "  1) Set Strategy"
-    echo "  2) Set Selector (auto)"
-    echo "  3) Set Selector (manual)"
-    echo "  0) Back"
-    hr
-    read -r -p "Pilih: " c
-    case "${c}" in
-      1)
-        read -r -p "Strategy (random/roundRobin/leastPing/leastLoad) (atau kembali): " st
-        if is_back_choice "${st}"; then
-          continue
-        fi
-        case "${st}" in
-          random|roundRobin|leastPing|leastLoad)
-            xray_routing_balancer_set_strategy "${st}"
-            log "Balancer strategy updated: ${st}"
-            pause
-            ;;
-          *)
-            warn "Strategy tidak valid"
-            pause
-            ;;
-        esac
-        ;;
-      2)
-        xray_routing_balancer_set_selector_from_outbounds auto
-        log "Balancer selector di-set: auto"
-        pause
-        ;;
-      3)
-        read -r -p "Selector tags (tag1,tag2,...) (atau kembali): " sel
-        if is_back_choice "${sel}"; then
-          continue
-        fi
-        xray_routing_balancer_set_selector_from_outbounds "${sel}"
-        log "Balancer selector updated"
-        pause
-        ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
-}
-
-egress_observatory_settings_menu() {
-  while true; do
-    title
-    echo "Egress Mode & Balancer > Observatory Settings"
-    hr
-
-    local probe interval conc subj
-    probe="$(xray_observatory_get | awk -F'=' '/^probeURL=/{print $2; exit}' 2>/dev/null || true)"
-    interval="$(xray_observatory_get | awk -F'=' '/^interval=/{print $2; exit}' 2>/dev/null || true)"
-    conc="$(xray_observatory_get | awk -F'=' '/^concurrency=/{print $2; exit}' 2>/dev/null || true)"
-    subj="$(xray_observatory_get | awk -F'=' '/^subjectSelector=/{print $2; exit}' 2>/dev/null || true)"
-
-    echo "probeURL        : ${probe}"
-    echo "interval        : ${interval}"
-    echo "concurrency     : ${conc}"
-    echo "subjectSelector : ${subj}"
-    hr
-
-    echo "  1) Set probeURL"
-    echo "  2) Set interval"
-    echo "  3) Toggle concurrency"
-    echo "  4) Sync subjectSelector from balancer"
-    echo "  0) Back"
-    hr
-    read -r -p "Pilih: " c
-    case "${c}" in
-      1)
-        read -r -p "probeURL (contoh https://www.google.com/generate_204) (atau kembali): " purl
-        if is_back_choice "${purl}"; then
-          continue
-        fi
-        xray_observatory_set_probe_url "${purl}"
-        log "probeURL updated"
-        pause
-        ;;
-      2)
-        read -r -p "interval (contoh 30s / 10m) (atau kembali): " pint
-        if is_back_choice "${pint}"; then
-          continue
-        fi
-        xray_observatory_set_interval "${pint}"
-        log "interval updated"
-        pause
-        ;;
-      3)
-        xray_observatory_toggle_concurrency
-        log "concurrency toggled"
-        pause
-        ;;
-      4)
-        xray_observatory_sync_subject_selector_from_balancer
-        log "Observatory subjectSelector disinkronkan"
-        pause
-        ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
-}
-
-egress_menu_simple() {
-  while true; do
-    title
-    echo "6) Network > Egress Mode & Balancer"
-    hr
-    printf "Current Egress Mode: %s\n" "$(warp_global_mode_pretty_get)"
-    hr
-    echo "  1) Set Egress Mode"
-    echo "  2) Balancer Settings"
-    echo "  3) Observatory Settings"
-    echo "  4) Show Detailed Status"
-    echo "  0) Back"
-    hr
-    read -r -p "Pilih: " c
-    case "${c}" in
-      1) egress_set_mode_menu ;;
-      2) egress_balancer_settings_menu ;;
-      3) egress_observatory_settings_menu ;;
-      4) egress_show_detailed_status ;;
-      0|kembali|k|back|b) break ;;
-      *) warn "Pilihan tidak valid" ; sleep 1 ;;
-    esac
-  done
-}
-
 warp_global_mode_get() {
   xray_routing_default_rule_get | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true
 }
 
 warp_global_mode_pretty_get() {
-  local mode bal
+  local mode
   mode="$(warp_global_mode_get)"
-  bal="$(xray_routing_default_rule_get | awk -F'=' '/^balancer=/{print $2; exit}' 2>/dev/null || true)"
   case "${mode}" in
     warp) echo "warp" ;;
     direct) echo "direct" ;;
-    balancer)
-      if [[ -n "${bal}" ]]; then
-        echo "balancer (${bal})"
-      else
-        echo "balancer"
-      fi
-      ;;
     *) echo "unknown" ;;
   esac
 }
@@ -1825,16 +893,11 @@ def get_default_mode():
   mode='unknown'
   bal=''
   if isinstance(target, dict):
-    bt=target.get('balancerTag')
-    if isinstance(bt, str) and bt:
-      mode='balancer'
-      bal=bt
-    else:
-      ot=target.get('outboundTag')
-      if ot == 'warp':
-        mode='warp'
-      elif ot == 'direct':
-        mode='direct'
+    ot=target.get('outboundTag')
+    if ot == 'warp':
+      mode='warp'
+    elif ot == 'direct':
+      mode='direct'
       elif isinstance(ot, str) and ot:
         mode='unknown'
       else:
@@ -1882,8 +945,6 @@ def rule_list_domain(marker, outbound):
 
 mode, bal = get_default_mode()
 default_label = mode
-if mode == 'balancer' and bal:
-  default_label = f'balancer({bal})'
 
 warp_users=set(rule_list_user('dummy-warp-user','warp'))
 direct_users=set(rule_list_user('dummy-direct-user','direct'))
@@ -2169,7 +1230,7 @@ PY
 }
 
 xray_routing_adblock_rule_get() {
-  # prints: enabled=<0|1> outbound=<tag|balancer:tag|-> duplicates=<n> domains=<n>
+  # prints: enabled=<0|1> outbound=<tag|-> duplicates=<n> domains=<n>
   need_python3
   if [[ ! -f "${XRAY_ROUTING_CONF}" ]]; then
     echo "enabled=0"
@@ -2219,11 +1280,6 @@ out = "-"
 ot = r.get("outboundTag")
 if isinstance(ot, str) and ot.strip():
   out = ot.strip()
-else:
-  bt = r.get("balancerTag")
-  if isinstance(bt, str) and bt.strip():
-    out = "balancer:" + bt.strip()
-
 dom = r.get("domain") or []
 dom_count = 0
 if isinstance(dom, list):
@@ -2245,14 +1301,11 @@ adblock_custom_dat_status_get() {
 }
 
 xray_routing_adblock_rule_set() {
-  # args: blocked|direct|warp|balancer|off
+  # args: blocked|off
   local mode="${1:-}"
   local backup tmp out changed rc
   need_python3
   [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
-  if [[ "${mode,,}" == "balancer" ]]; then
-    [[ -f "${XRAY_OUTBOUNDS_CONF}" ]] || die "Xray outbounds conf tidak ditemukan: ${XRAY_OUTBOUNDS_CONF}"
-  fi
   ensure_path_writable "${XRAY_ROUTING_CONF}"
   backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
   tmp="${WORK_DIR}/30-routing-adblock.json.tmp"
@@ -2263,14 +1316,14 @@ xray_routing_adblock_rule_set() {
       flock -x 200
       cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
       py_out="$(
-        python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${XRAY_OUTBOUNDS_CONF}" "${tmp}" "${mode}" "${ADBLOCK_GEOSITE_ENTRY}" "${ADBLOCK_BALANCER_TAG}"
+        python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${tmp}" "${mode}" "${ADBLOCK_GEOSITE_ENTRY}"
 import json
 import sys
 
-src, out_src, dst, mode, entry, bal_tag = sys.argv[1:7]
+src, dst, mode, entry = sys.argv[1:5]
 mode = mode.strip().lower()
-if mode not in ("blocked", "direct", "warp", "balancer", "off"):
-  raise SystemExit("Mode harus blocked|direct|warp|balancer|off")
+if mode not in ("blocked", "off"):
+  raise SystemExit("Mode harus blocked|off")
 
 with open(src, "r", encoding="utf-8") as f:
   cfg = json.load(f)
@@ -2279,10 +1332,6 @@ routing = cfg.get("routing") or {}
 rules = routing.get("rules")
 if not isinstance(rules, list):
   raise SystemExit("Invalid routing.rules")
-balancers = routing.get("balancers")
-if not isinstance(balancers, list):
-  balancers = []
-
 before = json.dumps(cfg, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 def is_default_rule(r):
@@ -2329,24 +1378,6 @@ def has_entry(r):
     if isinstance(x, str) and x.strip() == entry:
       return True
   return False
-
-def get_outbound_tags():
-  try:
-    with open(out_src, "r", encoding="utf-8") as f:
-      out_cfg = json.load(f)
-  except Exception as e:
-    raise SystemExit(f"Gagal membaca outbounds: {e}")
-  outbounds = out_cfg.get("outbounds")
-  if not isinstance(outbounds, list):
-    outbounds = []
-  tags = []
-  for o in outbounds:
-    if not isinstance(o, dict):
-      continue
-    t = o.get("tag")
-    if isinstance(t, str) and t.strip():
-      tags.append(t.strip())
-  return tags
 
 idxs = [i for i, r in enumerate(rules) if has_entry(r)]
 
@@ -2398,12 +1429,7 @@ else:
 
   rule["type"] = "field"
   rule["domain"] = cleaned
-  if mode == "balancer":
-    rule.pop("outboundTag", None)
-    rule["balancerTag"] = bal_tag
-  else:
-    rule.pop("balancerTag", None)
-    rule["outboundTag"] = mode
+  rule["outboundTag"] = mode
   rules[primary_idx] = rule
 
   default_idx = find_default_idx()
@@ -2411,38 +1437,7 @@ else:
     moved = rules.pop(primary_idx)
     rules.insert(default_idx, moved)
 
-clean_balancers = []
-found_bal = None
-for b in balancers:
-  if not isinstance(b, dict):
-    continue
-  t = b.get("tag")
-  if isinstance(t, str) and t.strip() == bal_tag:
-    if found_bal is None:
-      found_bal = dict(b)
-    continue
-  clean_balancers.append(b)
-
-if mode == "balancer":
-  known = set(get_outbound_tags())
-  if not {"direct", "warp"}.issubset(known):
-    raise SystemExit("Outbound direct/warp wajib ada untuk mode balancer adblock.")
-  selector = ["direct", "warp"]
-
-  if found_bal is None:
-    found_bal = {"tag": bal_tag}
-  found_bal["selector"] = selector
-  st = found_bal.get("strategy")
-  if not isinstance(st, dict):
-    st = {}
-  typ = st.get("type")
-  if not isinstance(typ, str) or not typ.strip():
-    st = {"type": "random"}
-  found_bal["strategy"] = st
-  clean_balancers.insert(0, found_bal)
-
 routing["rules"] = rules
-routing["balancers"] = clean_balancers
 cfg["routing"] = routing
 after = json.dumps(cfg, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 changed = 1 if after != before else 0
@@ -2511,7 +1506,7 @@ adblock_menu() {
       printf "Duplicates   : %s (akan dibersihkan saat update)\n" "${duplicates}"
     fi
     hr
-    echo "  1) Enable -> balancer (direct+warp)"
+    echo "  1) Enable -> blocked"
     echo "  2) Disable (hapus rule)"
     echo "  0) Back"
     hr
@@ -2523,8 +1518,8 @@ adblock_menu() {
           pause
           continue
         fi
-        xray_routing_adblock_rule_set balancer
-        log "Adblock diaktifkan ke balancer ${ADBLOCK_BALANCER_TAG} (${ADBLOCK_GEOSITE_ENTRY})"
+        xray_routing_adblock_rule_set blocked
+        log "Adblock diaktifkan ke blocked (${ADBLOCK_GEOSITE_ENTRY})"
         pause
         ;;
       2)
@@ -2655,7 +1650,6 @@ warp_per_user_menu() {
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
-      balancer) default_mode="balancer" ;;
       *) default_mode="unknown" ;;
     esac
 
@@ -2867,7 +1861,6 @@ warp_per_inbounds_menu() {
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
-      balancer) default_mode="balancer" ;;
       *) default_mode="unknown" ;;
     esac
 
@@ -4415,7 +3408,7 @@ network_diagnostics_menu() {
     title
     echo "6) Network > Diagnostics"
     hr
-    echo "  1) Show summary (routing/balancer/observatory)"
+    echo "  1) Show summary (routing)"
     echo "  2) Validate conf.d JSON (jq)"
     echo "  3) xray run -test -confdir (syntax check)"
     echo "  4) Show wireproxy + xray + nginx status"
@@ -4471,12 +3464,11 @@ network_menu() {
     title
     echo "6) Network"
     hr
-    echo "  1) Egress & Balancer"
-    echo "  2) WARP"
-    echo "  3) DNS"
-    echo "  4) DNS Editor"
-    echo "  5) Checks"
-    echo "  6) Adblock"
+    echo "  1) WARP"
+    echo "  2) DNS"
+    echo "  3) DNS Editor"
+    echo "  4) Checks"
+    echo "  5) Adblock"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -4484,12 +3476,11 @@ network_menu() {
       break
     fi
     case "${c}" in
-      1) egress_menu_simple ;;
-      2) warp_controls_menu ;;
-      3) dns_settings_menu ;;
-      4) dns_addons_menu ;;
-      5) network_diagnostics_menu ;;
-      6) adblock_menu ;;
+      1) warp_controls_menu ;;
+      2) dns_settings_menu ;;
+      3) dns_addons_menu ;;
+      4) network_diagnostics_menu ;;
+      5) adblock_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
