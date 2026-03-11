@@ -127,7 +127,7 @@ traffic_analytics_dataset_make_tmp() {
 
 traffic_analytics_overview_show() {
   title
-  echo "11) Traffic > Overview"
+  echo "10) Traffic > Overview"
   hr
 
   local dataset
@@ -207,7 +207,7 @@ PY
 
 traffic_analytics_top_users_show() {
   title
-  echo "11) Traffic > Top Users by Usage"
+  echo "10) Traffic > Top Users by Usage"
   hr
 
   local n
@@ -287,7 +287,7 @@ PY
 
 traffic_analytics_search_user_show() {
   title
-  echo "11) Traffic > Search User Traffic"
+  echo "10) Traffic > Search User Traffic"
   hr
 
   local q
@@ -371,7 +371,7 @@ PY
 
 traffic_analytics_export_json() {
   title
-  echo "11) Traffic > Export JSON"
+  echo "10) Traffic > Export JSON"
   hr
 
   local dataset out
@@ -404,7 +404,7 @@ traffic_analytics_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "11) Traffic"
+    ui_menu_screen_begin "10) Traffic"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1157,7 +1157,7 @@ fail2ban_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "9) Security"
+    ui_menu_screen_begin "8) Security"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1179,7 +1179,7 @@ fail2ban_menu() {
 # -------------------------
 wireproxy_status_menu() {
   title
-  echo "10) Maintenance > WARP Status"
+  echo "9) Maintenance > WARP Status"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1252,7 +1252,7 @@ wireproxy_status_menu() {
 
 wireproxy_restart_menu() {
   title
-  echo "10) Maintenance > Restart WARP"
+  echo "9) Maintenance > Restart WARP"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1524,7 +1524,7 @@ PY
 
 edge_runtime_status_menu() {
   title
-  echo "10) Maintenance > Edge Gateway Status"
+  echo "9) Maintenance > Edge Gateway Status"
   hr
 
   local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
@@ -1621,7 +1621,7 @@ edge_runtime_status_menu() {
 
 edge_runtime_restart_menu() {
   title
-  echo "10) Maintenance > Restart Edge Gateway"
+  echo "9) Maintenance > Restart Edge Gateway"
   hr
 
   local svc
@@ -1640,7 +1640,7 @@ edge_runtime_restart_menu() {
 
 edge_runtime_info_menu() {
   title
-  echo "10) Maintenance > Edge Gateway Info"
+  echo "9) Maintenance > Edge Gateway Info"
   hr
 
   local provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file
@@ -1684,7 +1684,7 @@ edge_runtime_info_menu() {
 
 badvpn_status_menu() {
   title
-  echo "10) Maintenance > BadVPN UDPGW Status"
+  echo "9) Maintenance > BadVPN UDPGW Status"
   hr
 
   local env_file port max_clients max_conn sndbuf svc
@@ -1725,7 +1725,7 @@ badvpn_status_menu() {
 
 badvpn_restart_menu() {
   title
-  echo "10) Maintenance > Restart BadVPN UDPGW"
+  echo "9) Maintenance > Restart BadVPN UDPGW"
   hr
 
   local svc
@@ -1786,7 +1786,7 @@ sshws_detect_proxy_port() {
 
 sshws_status_menu() {
   title
-  echo "10) Maintenance > SSH WS Status"
+  echo "9) Maintenance > SSH WS Status"
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -1830,7 +1830,7 @@ sshws_status_menu() {
 
 sshws_restart_menu() {
   title
-  echo "10) Maintenance > Restart SSH WS"
+  echo "9) Maintenance > Restart SSH WS"
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -1996,7 +1996,7 @@ sshws_probe_result_disp() {
 
 sshws_combined_logs_menu() {
   title
-  echo "10) Maintenance > SSH WS Combined Logs"
+  echo "9) Maintenance > SSH WS Combined Logs"
   hr
 
   local -a svc_args=()
@@ -2023,7 +2023,7 @@ sshws_diagnostics_menu() {
   local choice=""
   while true; do
     title
-    echo "10) Maintenance > SSH WS Diagnostics"
+    echo "9) Maintenance > SSH WS Diagnostics"
     hr
 
     local dropbear_port stunnel_port proxy_port domain probe_path
@@ -3517,7 +3517,7 @@ ssh_add_user_menu() {
   local username qf acc_file header_page=0
   while true; do
     title
-    echo "3) SSH Users > Add User"
+  echo "2) SSH Users > Add User"
     hr
     ssh_add_user_header_render header_page
     hr
@@ -3789,7 +3789,7 @@ ssh_add_user_menu() {
 
 ssh_delete_user_menu() {
   title
-  echo "3) SSH Users > Delete User"
+  echo "2) SSH Users > Delete User"
   hr
 
   local username
@@ -3827,7 +3827,7 @@ ssh_delete_user_menu() {
 
 ssh_extend_expiry_menu() {
   title
-  echo "3) SSH Users > Set Expiry"
+  echo "2) SSH Users > Set Expiry"
   hr
 
   local username
@@ -3929,7 +3929,7 @@ ssh_extend_expiry_menu() {
 
 ssh_reset_password_menu() {
   title
-  echo "3) SSH Users > Reset Password"
+  echo "2) SSH Users > Reset Password"
   hr
 
   local username
@@ -3984,7 +3984,7 @@ ssh_list_users_menu() {
 
   if (( ${#users[@]} == 0 )); then
     title
-    echo "3) SSH Users > List Users"
+    echo "2) SSH Users > List Users"
     hr
     warn "Belum ada akun SSH terkelola."
     hr
@@ -3994,7 +3994,7 @@ ssh_list_users_menu() {
 
   while true; do
     title
-    echo "3) SSH Users > List Users"
+    echo "2) SSH Users > List Users"
     hr
     printf "%-4s %-20s %-12s %-12s %-12s\n" "No" "Username" "Created" "Expired" "SystemUser"
     local i username qf fields meta_user created expired sys_user
@@ -4086,7 +4086,7 @@ PY
     acc_file="$(ssh_account_info_file "${username}")"
 
     title
-    echo "3) SSH Users > SSH ACCOUNT INFO"
+    echo "2) SSH Users > SSH ACCOUNT INFO"
     hr
     echo "Username : ${username}"
     echo "File     : ${acc_file}"
@@ -4581,7 +4581,7 @@ sshws_active_session_detail() {
   IFS='|' read -r username mode client_ip peer pid sess reason lock age state backend source started updated <<<"${row}"
 
   title
-  echo "3) SSH Users > Session Detail"
+  echo "2) SSH Users > Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
   printf "%-16s : %s\n" "Mode" "${mode}"
@@ -4624,7 +4624,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "3) SSH Users > Active Sessions"
+    echo "2) SSH Users > Active Sessions"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -4695,7 +4695,7 @@ ssh_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "3) SSH Users"
+    ui_menu_screen_begin "2) SSH Users"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -5859,7 +5859,7 @@ ssh_qac_edit_flow() {
 
   while true; do
     title
-    echo "5) SSH QAC > Detail"
+    echo "4) SSH QAC > Detail"
     hr
     echo "File  : ${qf}"
     hr
@@ -6182,7 +6182,7 @@ ssh_quota_menu() {
   SSH_QAC_QUERY=""
 
   while true; do
-    ui_menu_screen_begin "5) SSH QAC"
+    ui_menu_screen_begin "4) SSH QAC"
 
     ssh_qac_enforce_now_warn || true
     ssh_qac_collect_files
@@ -6249,7 +6249,7 @@ daemon_log_tail_show() {
   local svc="$1"
   local lines="${2:-20}"
   title
-  echo "10) Maintenance > Log ${svc}"
+  echo "9) Maintenance > Log ${svc}"
   hr
   if svc_exists "${svc}"; then
     journalctl -u "${svc}" --no-pager -n "${lines}" 2>/dev/null || true
@@ -6283,7 +6283,7 @@ sshws_restart_after_dropbear() {
 
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
-  ui_menu_screen_begin "12) Discord Bot"
+  ui_menu_screen_begin "11) Discord Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Discord tidak ditemukan / tidak executable:"
@@ -6308,7 +6308,7 @@ install_discord_bot_menu() {
 
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
-  ui_menu_screen_begin "13) Telegram Bot"
+  ui_menu_screen_begin "12) Telegram Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Telegram tidak ditemukan / tidak executable:"
@@ -6333,7 +6333,7 @@ install_telegram_bot_menu() {
 
 daemon_status_menu() {
   title
-  echo "10) Maintenance > Xray Daemons"
+  echo "9) Maintenance > Xray Daemons"
   hr
 
   local sshws_dropbear_svc="${SSHWS_DROPBEAR_SERVICE:-sshws-dropbear}"

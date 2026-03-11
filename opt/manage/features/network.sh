@@ -1491,7 +1491,7 @@ adblock_menu() {
     asset_status="$(adblock_custom_dat_status_get)"
 
     title
-    echo "6) Network > Adblock (Custom Geosite)"
+    echo "5) Network > Adblock (Custom Geosite)"
     hr
     printf "Geosite File : %s\n" "${CUSTOM_GEOSITE_DAT}"
     printf "Asset Status : %s\n" "${asset_status}"
@@ -2368,7 +2368,7 @@ warp_tier_show_status() {
 
 warp_tier_switch_free() {
   title
-  echo "6) Network > WARP Controls > Switch ke WARP Free"
+  echo "5) Network > WARP Controls > Switch ke WARP Free"
   hr
 
   local rc
@@ -2429,7 +2429,7 @@ warp_tier_switch_free() {
 warp_tier_switch_plus() {
   local rc
   title
-  echo "6) Network > WARP Controls > Switch ke WARP Plus"
+  echo "5) Network > WARP Controls > Switch ke WARP Plus"
   hr
 
   (
@@ -2506,7 +2506,7 @@ warp_tier_switch_plus() {
 warp_tier_reconnect_regenerate() {
   local rc
   title
-  echo "6) Network > WARP Controls > Reconnect/Regenerate"
+  echo "5) Network > WARP Controls > Reconnect/Regenerate"
   hr
 
   (
@@ -2578,7 +2578,7 @@ warp_tier_reconnect_regenerate() {
 warp_tier_menu() {
   while true; do
     title
-    echo "6) Network > WARP Controls > WARP Tier (Free/Plus)"
+    echo "5) Network > WARP Controls > WARP Tier (Free/Plus)"
     hr
     warp_tier_show_status
     hr
@@ -2592,7 +2592,7 @@ warp_tier_menu() {
     case "${c}" in
       1)
         title
-        echo "6) Network > WARP Controls > WARP Tier Status"
+        echo "5) Network > WARP Controls > WARP Tier Status"
         hr
         warp_tier_show_status
         hr
@@ -2619,7 +2619,7 @@ warp_controls_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "6) Network > WARP"
+    ui_menu_screen_begin "5) Network > WARP"
     ui_menu_render_options items 76
     hr
     read -r -p "Pilih: " c
@@ -2652,7 +2652,7 @@ domain_geosite_menu() {
   need_python3
   while true; do
     title
-    echo "6) Network > Domain/Geosite Routing (Direct List)"
+    echo "5) Network > Domain/Geosite Routing (Direct List)"
     hr
     echo "Template (readonly):"
     python3 - <<'PY' "${XRAY_ROUTING_CONF}" 2>/dev/null || true
@@ -3301,7 +3301,7 @@ dns_show_status() {
 dns_settings_menu() {
   while true; do
     title
-    echo "6) Network > DNS Settings"
+    echo "5) Network > DNS Settings"
     hr
     echo "  1) Set Primary DNS"
     echo "  2) Set Secondary DNS"
@@ -3367,7 +3367,7 @@ dns_settings_menu() {
 dns_addons_menu() {
   while true; do
     title
-    echo "6) Network > DNS Add-ons"
+    echo "5) Network > DNS Add-ons"
     hr
     if [[ -f "${XRAY_DNS_CONF}" ]]; then
       echo "DNS conf: ${XRAY_DNS_CONF}"
@@ -3407,7 +3407,7 @@ dns_addons_menu() {
 network_diagnostics_menu() {
   while true; do
     title
-    echo "6) Network > Diagnostics"
+    echo "5) Network > Diagnostics"
     hr
     echo "  1) Show summary (routing)"
     echo "  2) Validate conf.d JSON (jq)"
@@ -3470,7 +3470,7 @@ network_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "6) Network"
+    ui_menu_screen_begin "5) Network"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -3506,7 +3506,7 @@ speedtest_bin_get() {
 
 speedtest_run_now() {
   title
-  echo "8) Speedtest > Run"
+  echo "7) Speedtest > Run"
   hr
 
   local speedtest_bin
@@ -3538,7 +3538,7 @@ speedtest_run_now() {
 
 speedtest_show_version() {
   title
-  echo "8) Speedtest > Version"
+  echo "7) Speedtest > Version"
   hr
 
   local speedtest_bin
@@ -3564,7 +3564,7 @@ speedtest_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "8) Speedtest"
+    ui_menu_screen_begin "7) Speedtest"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then

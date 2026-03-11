@@ -1611,7 +1611,7 @@ cf_prepare_subdomain_a_record() {
 }
 
 domain_menu_v2() {
-  ui_menu_screen_begin "7) Domain Control > Set Domain" "Konfigurasi Domain TLS"
+  ui_menu_screen_begin "6) Domain Control > Set Domain" "Konfigurasi Domain TLS"
   echo -e "${UI_MUTED}Pilih metode domain untuk proses set domain.${UI_RESET}"
   echo -e "  ${UI_ACCENT}1)${UI_RESET} Input domain manual"
   echo -e "  ${UI_ACCENT}2)${UI_RESET} Gunakan domain yang disediakan"
@@ -2082,7 +2082,7 @@ domain_control_set_domain_after_prompt() {
 
 domain_control_show_info() {
   title
-  echo "7) Domain Control > Current Domain"
+  echo "6) Domain Control > Current Domain"
   hr
   echo "Domain aktif : $(detect_domain)"
   echo "Cert file    : ${CERT_FULLCHAIN}"
@@ -2098,7 +2098,7 @@ domain_control_show_info() {
 
 domain_control_guard_check() {
   title
-  echo "7) Domain Control > Guard Check"
+  echo "6) Domain Control > Guard Check"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -2137,7 +2137,7 @@ domain_control_guard_check() {
 
 domain_control_guard_renew_if_needed() {
   title
-  echo "7) Domain Control > Guard Renew"
+  echo "6) Domain Control > Guard Renew"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -2191,7 +2191,7 @@ domain_control_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "7) Domain Control"
+    ui_menu_screen_begin "6) Domain Control"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -2634,7 +2634,7 @@ svc_restart() {
   local svc="$1"
   local spin_log=""
   if ui_run_logged_command_with_spinner spin_log "Restart ${svc}" svc_restart_now "${svc}"; then
-    ok "Restart sukses: ${svc}"
+    log "Restart sukses: ${svc}"
     rm -f "${spin_log}" >/dev/null 2>&1 || true
     return 0
   fi
@@ -3384,7 +3384,7 @@ sanity_check_now() {
 
 status_diagnostics_menu() {
   title
-  echo "1) Status"
+  echo "9) Maintenance > Core Check"
   hr
   svc_status_line xray
   svc_status_line nginx
