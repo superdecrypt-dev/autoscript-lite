@@ -80,6 +80,7 @@ log()  { echo -e "${CYAN}[run]${NC} $*"; }
 ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+subtle() { echo -e "${YELLOW}$*${NC}"; }
 
 hr() { echo "------------------------------------------------------------"; }
 
@@ -504,11 +505,9 @@ run_setup() {
 
   [[ -f "${setup}" ]] || die "File setup.sh tidak ditemukan di repositori."
 
-  log "Jalankan setup.sh dalam 3 detik ..."
-  sleep 3
-  hr
+  log "Buka setup interaktif..."
+  subtle "Prompt domain tetap dijalankan dari setup.sh."
   bash "${setup}"
-  hr
   ok "setup.sh selesai."
 }
 

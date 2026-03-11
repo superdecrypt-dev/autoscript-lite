@@ -331,31 +331,7 @@ sanity_check() {
   fi
 }
 
-main() {
-  safe_clear
-  need_root
-  ensure_runtime_lock_dirs
-  ensure_stdin_available
-  validate_sshws_ports_config
-  check_os
-  install_base_deps
-  need_python3
-  install_extra_deps
-  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
-  validate_sshws_ports_config
-  install_speedtest_snap
-  enable_cron_service
-  setup_time_sync_chrony
-  install_fail2ban_aggressive
-  enable_bbr
-  setup_swap_2gb
-  tune_ulimit
-  install_wgcf
-  install_wireproxy
-  setup_wgcf
-  setup_wireproxy
-  cleanup_wgcf_files
-  domain_menu_v2
+setup_post_domain_main() {
   install_nginx_official_repo
   write_nginx_main_conf
   install_acme_and_issue_cert
@@ -384,7 +360,72 @@ main() {
   setup_logrotate
   configure_fail2ban_aggressive_jails
   sanity_check
-  ok "Setup selesai."
+}
+
+setup_run_post_domain_with_spinner() {
+  local setup_log_dir setup_log_file setup_pid rc
+  setup_log_dir="/var/log/autoscript"
+  mkdir -p "${setup_log_dir}"
+  chmod 755 "${setup_log_dir}" 2>/dev/null || true
+  setup_log_file="${setup_log_dir}/setup-$(date +%Y%m%d-%H%M%S).log"
+
+  ui_header "Menyiapkan Server"
+  ui_subtle "Domain     : ${DOMAIN}"
+  ui_subtle "Transport  : Edge Gateway + Xray + SSH"
+  ui_subtle "Output log : ${setup_log_file}"
+  ui_hr
+  ui_section_title "Proses setup berjalan di latar belakang."
+  ui_subtle "Tunggu sampai spinner selesai. Jika gagal, potongan log terakhir akan ditampilkan."
+  echo
+
+  (
+    setup_post_domain_main
+  ) >"${setup_log_file}" 2>&1 &
+  setup_pid=$!
+
+  set +e
+  ui_spinner_wait "${setup_pid}" "Menyiapkan layanan inti"
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    ok "Setup selesai."
+    ui_subtle "Log setup tersimpan di ${setup_log_file}"
+    return 0
+  fi
+
+  warn "Setup gagal. Potongan log terakhir:"
+  ui_hr
+  tail -n 60 "${setup_log_file}" 2>/dev/null || true
+  ui_hr
+  die "Setup berhenti. Periksa log lengkap: ${setup_log_file} (exit ${rc})"
+}
+
+main() {
+  safe_clear
+  need_root
+  ensure_runtime_lock_dirs
+  ensure_stdin_available
+  validate_sshws_ports_config
+  check_os
+  install_base_deps
+  need_python3
+  install_extra_deps
+  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
+  validate_sshws_ports_config
+  install_speedtest_snap
+  enable_cron_service
+  setup_time_sync_chrony
+  install_fail2ban_aggressive
+  enable_bbr
+  setup_swap_2gb
+  tune_ulimit
+  install_wgcf
+  install_wireproxy
+  setup_wgcf
+  setup_wireproxy
+  cleanup_wgcf_files
+  domain_menu_v2
+  setup_run_post_domain_with_spinner
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

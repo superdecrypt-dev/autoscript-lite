@@ -63,3 +63,43 @@ ui_header() {
   echo -e "${BOLD}${CYAN}${text}${NC}"
   ui_hr
 }
+
+ui_subtle() {
+  echo -e "${DIM}$*${NC}"
+}
+
+ui_section_title() {
+  local text="$1"
+  echo -e "${BOLD}${text}${NC}"
+}
+
+ui_spinner_wait() {
+  local pid="$1"
+  local label="${2:-Memproses}"
+  local start_ts now elapsed frame_idx rc
+  local -a frames=('|' '/' '-' '\\')
+
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  if [[ ! -t 1 ]]; then
+    wait "${pid}"
+    return $?
+  fi
+
+  start_ts="$(date +%s 2>/dev/null || echo 0)"
+  frame_idx=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    now="$(date +%s 2>/dev/null || echo "${start_ts}")"
+    elapsed=$(( now - start_ts ))
+    printf '\r%b' "${frames[$frame_idx]} ${label} ${DIM}(${elapsed}s)${NC}"
+    frame_idx=$(( (frame_idx + 1) % ${#frames[@]} ))
+    sleep 0.12
+  done
+
+  wait "${pid}"
+  rc=$?
+  printf '\r\033[2K'
+  return "${rc}"
+}
