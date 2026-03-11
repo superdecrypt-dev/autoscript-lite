@@ -21,15 +21,15 @@ type SSHSpeedPolicy struct {
 }
 
 type SSHSpeedController struct {
-	logger   *log.Logger
-	cfg      SSHQuotaConfig
+	logger    *log.Logger
+	cfg       SSHQuotaConfig
 	localPort int
-	done     chan struct{}
-	started  atomic.Bool
-	ready    atomic.Bool
-	user     atomic.Value
-	downBPS  atomic.Uint64
-	upBPS    atomic.Uint64
+	done      chan struct{}
+	started   atomic.Bool
+	ready     atomic.Bool
+	user      atomic.Value
+	downBPS   atomic.Uint64
+	upBPS     atomic.Uint64
 	startedAt atomic.Int64
 }
 

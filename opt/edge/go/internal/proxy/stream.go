@@ -95,7 +95,7 @@ func BridgeWithStatsAndOptions(left net.Conn, right net.Conn, leftToRightPrefix 
 }
 
 type paceLimiter struct {
-	lastRate uint64
+	lastRate  uint64
 	bytes     uint64
 	seenBytes uint64
 	start     time.Time
@@ -123,7 +123,7 @@ func (p *paceLimiter) Wait(written uint64, provider RateProvider) {
 		p.start = now
 	}
 	p.bytes += written
-	targetElapsed := time.Duration(float64(p.bytes)/float64(rate)*float64(time.Second))
+	targetElapsed := time.Duration(float64(p.bytes) / float64(rate) * float64(time.Second))
 	actualElapsed := now.Sub(p.start)
 	if targetElapsed > actualElapsed {
 		time.Sleep(targetElapsed - actualElapsed)
