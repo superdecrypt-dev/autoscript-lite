@@ -84,6 +84,71 @@ subtle() { echo -e "${YELLOW}$*${NC}"; }
 
 hr() { echo "------------------------------------------------------------"; }
 
+ui_spinner_wait() {
+  local pid="$1"
+  local label="${2:-Memproses}"
+  local start_ts now elapsed frame_idx rc
+  local -a frames=('|' '/' '-' '\\')
+
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if [[ ! -t 1 ]]; then
+    wait "${pid}"
+    return $?
+  fi
+
+  start_ts="$(date +%s 2>/dev/null || echo 0)"
+  frame_idx=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    now="$(date +%s 2>/dev/null || echo "${start_ts}")"
+    elapsed=$(( now - start_ts ))
+    printf '\r%b' "${frames[$frame_idx]} ${label} ${YELLOW}(${elapsed}s)${NC}"
+    frame_idx=$(( (frame_idx + 1) % ${#frames[@]} ))
+    sleep 0.12
+  done
+
+  wait "${pid}"
+  rc=$?
+  printf '\r\033[2K'
+  return "${rc}"
+}
+
+run_step_with_spinner() {
+  local label="$1"
+  shift || true
+  local log_file pid rc
+
+  if [[ ! -t 1 ]]; then
+    "$@"
+    return $?
+  fi
+
+  ensure_run_state_dir
+  log_file="$(mktemp "${RUN_STATE_DIR}/run-step.XXXXXX.log")" || die "Gagal membuat log sementara untuk ${label}."
+  (
+    "$@"
+  ) >"${log_file}" 2>&1 &
+  pid=$!
+
+  set +e
+  ui_spinner_wait "${pid}" "${label}"
+  rc=$?
+  set -e
+
+  if (( rc == 0 )); then
+    rm -f "${log_file}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  warn "${label} gagal. Potongan log terakhir:"
+  hr
+  tail -n 40 "${log_file}" 2>/dev/null || true
+  hr
+  rm -f "${log_file}" >/dev/null 2>&1 || true
+  return "${rc}"
+}
+
 ensure_run_state_dir() {
   mkdir -p "${RUN_STATE_DIR}"
   chmod 700 "${RUN_STATE_DIR}" 2>/dev/null || true
@@ -523,13 +588,13 @@ main() {
 
   check_root
   check_os
-  check_deps
-  clone_repo
-  install_manage
-  seed_discord_bot_home
-  seed_telegram_bot_home
+  run_step_with_spinner "Memeriksa dependency" check_deps
+  run_step_with_spinner "Menyiapkan source repo" clone_repo
+  run_step_with_spinner "Memasang panel manage" install_manage
+  run_step_with_spinner "Menyiapkan source Discord" seed_discord_bot_home
+  run_step_with_spinner "Menyiapkan source Telegram" seed_telegram_bot_home
   run_setup
-  cleanup_repo_after_success
+  run_step_with_spinner "Membersihkan source installer" cleanup_repo_after_success
 
   echo
   echo -e "${BOLD}============================================================${NC}"

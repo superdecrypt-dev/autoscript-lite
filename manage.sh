@@ -2028,6 +2028,24 @@ domain_control_set_domain_now() {
     fi
     return "${domain_input_rc}"
   fi
+  local spin_log=""
+  if ! ui_run_logged_command_with_spinner spin_log "Menerapkan domain & sertifikat" domain_control_set_domain_after_prompt; then
+    warn "Set Domain gagal."
+    hr
+    tail -n 60 "${spin_log}" 2>/dev/null || true
+    hr
+    rm -f "${spin_log}" >/dev/null 2>&1 || true
+    pause
+    return 0
+  fi
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
+  MAIN_INFO_CACHE_TS=0
+  hr
+  log "Domain aktif sekarang: ${DOMAIN}"
+  pause
+}
+
+domain_control_set_domain_after_prompt() {
   local cert_backup_dir
   cert_backup_dir="${WORK_DIR}/cert-snapshot.$(date +%s).$$"
   cert_snapshot_create "${cert_backup_dir}"
@@ -2050,10 +2068,6 @@ domain_control_set_domain_now() {
     warn "Sebagian ACCOUNT INFO gagal disinkronkan. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
     warn "State sinkronisasi domain tidak diubah agar auto-sync bisa retry."
   fi
-
-  hr
-  log "Domain aktif sekarang: ${DOMAIN}"
-  pause
 }
 
 domain_control_show_info() {
@@ -2085,13 +2099,18 @@ domain_control_guard_check() {
     return 0
   fi
 
-  local rc=0
-  set +e
-  "${XRAY_DOMAIN_GUARD_BIN}" check
-  rc=$?
-  set -e
+  local rc=0 spin_log=""
+  if ui_run_logged_command_with_spinner spin_log "Menjalankan guard check" "${XRAY_DOMAIN_GUARD_BIN}" check; then
+    rc=0
+  else
+    rc=$?
+  fi
 
   hr
+  if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
+    cat "${spin_log}" 2>/dev/null || true
+    hr
+  fi
   case "${rc}" in
     0) log "Domain & Cert Guard: sehat." ;;
     1) warn "Domain & Cert Guard: warning terdeteksi." ;;
@@ -2102,6 +2121,7 @@ domain_control_guard_check() {
   if [[ -f "${XRAY_DOMAIN_GUARD_LOG_FILE}" ]]; then
     echo "Log path   : ${XRAY_DOMAIN_GUARD_LOG_FILE}"
   fi
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
   pause
 }
 
@@ -2130,19 +2150,25 @@ domain_control_guard_renew_if_needed() {
     return 0
   fi
 
-  local rc=0
-  set +e
-  "${XRAY_DOMAIN_GUARD_BIN}" renew-if-needed
-  rc=$?
-  set -e
+  local rc=0 spin_log=""
+  if ui_run_logged_command_with_spinner spin_log "Menjalankan guard renew" "${XRAY_DOMAIN_GUARD_BIN}" renew-if-needed; then
+    rc=0
+  else
+    rc=$?
+  fi
 
   hr
+  if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
+    cat "${spin_log}" 2>/dev/null || true
+    hr
+  fi
   case "${rc}" in
     0) log "Renew-if-needed selesai, status sehat." ;;
     1) warn "Renew-if-needed selesai dengan warning." ;;
     2) warn "Renew-if-needed selesai, namun masih ada kondisi critical." ;;
     *) warn "Renew-if-needed selesai dengan status ${rc}." ;;
   esac
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
   pause
 }
 
@@ -2396,6 +2422,60 @@ ui_menu_render_options() {
   fi
 }
 
+ui_spinner_wait() {
+  local pid="$1"
+  local label="${2:-Memproses}"
+  local start_ts now elapsed frame_idx rc
+  local -a frames=('|' '/' '-' '\\')
+
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if [[ ! -t 1 ]]; then
+    wait "${pid}"
+    return $?
+  fi
+
+  start_ts="$(date +%s 2>/dev/null || echo 0)"
+  frame_idx=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    now="$(date +%s 2>/dev/null || echo "${start_ts}")"
+    elapsed=$(( now - start_ts ))
+    printf '\r%b' "${frames[$frame_idx]} ${label} ${UI_MUTED}(${elapsed}s)${UI_RESET}"
+    frame_idx=$(( (frame_idx + 1) % ${#frames[@]} ))
+    sleep 0.12
+  done
+
+  wait "${pid}"
+  rc=$?
+  printf '\r\033[2K'
+  return "${rc}"
+}
+
+ui_run_logged_command_with_spinner() {
+  local __outvar="$1"
+  local label="$2"
+  shift 2 || true
+
+  local spinner_log_dir spinner_log_file spinner_pid rc
+  spinner_log_dir="${WORK_DIR:-/tmp}"
+  mkdir -p "${spinner_log_dir}" >/dev/null 2>&1 || spinner_log_dir="/tmp"
+  spinner_log_file="$(mktemp "${spinner_log_dir}/manage-spin.XXXXXX.log")" || return 1
+
+  (
+    "$@"
+  ) >"${spinner_log_file}" 2>&1 &
+  spinner_pid=$!
+
+  set +e
+  ui_spinner_wait "${spinner_pid}" "${label}"
+  rc=$?
+  set -e
+
+  printf -v "${__outvar}" '%s' "${spinner_log_file}"
+  return "${rc}"
+}
+
 title() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear || true
@@ -2515,12 +2595,11 @@ svc_status_line() {
   fi
 }
 
-svc_restart() {
+svc_restart_now() {
   local svc="$1"
   local st
   systemctl restart "${svc}" >/dev/null 2>&1 || true
   if svc_wait_active "${svc}" 20; then
-    log "Restart sukses: ${svc}"
     return 0
   fi
 
@@ -2537,7 +2616,26 @@ svc_restart() {
     st="$(svc_state "${svc}")"
   fi
 
-  warn "Restart dilakukan, tapi status masih tidak aktif: ${svc} (state=${st:-unknown})"
+  echo "Restart dilakukan, tapi status masih tidak aktif: ${svc} (state=${st:-unknown})" >&2
+  return 1
+}
+
+svc_restart() {
+  local svc="$1"
+  local spin_log=""
+  if ui_run_logged_command_with_spinner spin_log "Restart ${svc}" svc_restart_now "${svc}"; then
+    ok "Restart sukses: ${svc}"
+    rm -f "${spin_log}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  warn "Restart gagal: ${svc}"
+  if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
+    hr
+    tail -n 30 "${spin_log}" 2>/dev/null || true
+    hr
+  fi
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
   return 1
 }
 

@@ -3518,11 +3518,20 @@ speedtest_run_now() {
     return 0
   fi
 
-  echo "Menjalankan: ${speedtest_bin} --accept-license --accept-gdpr"
-  echo
-  if ! "${speedtest_bin}" --accept-license --accept-gdpr; then
+  local spin_log=""
+  if ! ui_run_logged_command_with_spinner spin_log "Menjalankan speedtest" "${speedtest_bin}" --accept-license --accept-gdpr; then
     warn "Speedtest gagal dijalankan."
+    hr
+    tail -n 60 "${spin_log}" 2>/dev/null || true
+    hr
+    rm -f "${spin_log}" >/dev/null 2>&1 || true
+    pause
+    return 0
   fi
+  if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
+    cat "${spin_log}" 2>/dev/null || true
+  fi
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
   hr
   pause
 }
