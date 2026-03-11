@@ -13,7 +13,7 @@ trap 'rc=$?; echo "[ERROR] line ${LINENO}: command failed (exit ${rc})" >&2; exi
 # =========================
 # Setup-only autoscript:
 # Xray + Nginx (nginx.org repo) + acme.sh
-# VLESS/VMess/Trojan/Shadowsocks/Shadowsocks 2022 over WS/HTTPUpgrade/gRPC
+# VLESS/VMess/Trojan over WS/HTTPUpgrade/gRPC
 # Public paths fixed, internal ports & paths randomized
 # Cert saved to /opt/cert/fullchain.pem & /opt/cert/privkey.pem
 # Supports: Ubuntu >= 20.04, Debian >= 11, KVM only
@@ -43,7 +43,7 @@ NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-}"
 SPEED_POLICY_ROOT="/opt/speed"
 SPEED_STATE_DIR="/var/lib/xray-speed"
 SPEED_CONFIG_DIR="/etc/xray-speed"
-SPEED_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
+SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
 DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
 DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
 DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"

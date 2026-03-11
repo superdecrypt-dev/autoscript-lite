@@ -32,7 +32,7 @@ READONLY_GEOSITE_DOMAINS = (
     "geosite:netflix",
     "geosite:reddit",
 )
-XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 SSH_PROTOCOL = "ssh"
 USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
 PROTOCOLS = XRAY_PROTOCOLS

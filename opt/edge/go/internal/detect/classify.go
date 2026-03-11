@@ -17,6 +17,8 @@ const (
 	ClassHTTP
 	ClassTLSClientHello
 	ClassSSH
+	ClassVLESSRaw
+	ClassTrojanRaw
 	ClassTimeout
 	ClassPossibleHTTP
 )
@@ -68,6 +70,78 @@ func IsSSHBanner(b []byte) bool {
 	return bytes.HasPrefix(trimmed, []byte("SSH-"))
 }
 
+func IsVLESSRequest(b []byte) bool {
+	if len(b) < 24 {
+		return false
+	}
+	version := b[0]
+	if version != 0x00 && version != 0x01 {
+		return false
+	}
+	uuid := b[1:17]
+	allZero := true
+	for _, v := range uuid {
+		if v != 0x00 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return false
+	}
+	addonsLen := int(b[17])
+	pos := 18 + addonsLen
+	if len(b) < pos+4 {
+		return false
+	}
+	command := b[pos]
+	if command != 0x01 && command != 0x02 && command != 0x03 {
+		return false
+	}
+	pos++
+	if len(b) < pos+2+1 {
+		return false
+	}
+	pos += 2 // port
+	addrType := b[pos]
+	pos++
+	switch addrType {
+	case 0x01:
+		return len(b) >= pos+4
+	case 0x02:
+		if len(b) < pos+1 {
+			return false
+		}
+		addrLen := int(b[pos])
+		pos++
+		return addrLen > 0 && len(b) >= pos+addrLen
+	case 0x03:
+		return len(b) >= pos+16
+	default:
+		return false
+	}
+}
+
+func IsTrojanRequest(b []byte) bool {
+	if len(b) < 58 {
+		return false
+	}
+	for i := 0; i < 56; i++ {
+		ch := b[i]
+		switch {
+		case ch >= '0' && ch <= '9':
+		case ch >= 'a' && ch <= 'f':
+		case ch >= 'A' && ch <= 'F':
+		default:
+			return false
+		}
+	}
+	if b[56] != '\r' || b[57] != '\n' {
+		return false
+	}
+	return true
+}
+
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
@@ -91,6 +165,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassTLSClientHello, nil
 			case IsSSHBanner(current):
 				return current, ClassSSH, nil
+			case IsTrojanRequest(current):
+				return current, ClassTrojanRaw, nil
+			case IsVLESSRequest(current):
+				return current, ClassVLESSRaw, nil
 			case IsPossibleHTTPPrefix(current):
 				continue
 			default:
@@ -120,6 +198,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassTLSClientHello, nil
 				case IsSSHBanner(current):
 					return current, ClassSSH, nil
+				case IsTrojanRequest(current):
+					return current, ClassTrojanRaw, nil
+				case IsVLESSRequest(current):
+					return current, ClassVLESSRaw, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -137,6 +219,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassTLSClientHello, nil
 	case IsSSHBanner(current):
 		return current, ClassSSH, nil
+	case IsTrojanRequest(current):
+		return current, ClassTrojanRaw, nil
+	case IsVLESSRequest(current):
+		return current, ClassVLESSRaw, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:

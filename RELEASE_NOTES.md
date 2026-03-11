@@ -110,46 +110,6 @@ Rilis ini menambahkan surface resmi `SSH Direct` di port `80` dan `443` lewat pr
 - `SSH SSL/TLS` tetap hidup di `443`
 - `SSH WS` invalid token tetap `403`
 
-## Rilis 2026-03-09 (Xray Shadowsocks Shorthand Path Only)
-
-### Ringkasan
-Rilis ini merapikan surface path publik Xray untuk `shadowsocks` dan `shadowsocks2022` agar mengikuti penamaan singkat yang searah dengan konsep `SSH WS`.
-
-### Perubahan Utama
-1. Path lama `shadowsocks*` dihapus
-- Path publik lama berikut tidak lagi dipakai:
-  - `/shadowsocks-ws`
-  - `/shadowsocks-hup`
-  - `/shadowsocks-grpc`
-  - `/shadowsocks2022-ws`
-  - `/shadowsocks2022-hup`
-  - `/shadowsocks2022-grpc`
-
-2. Path baru `ss*` dan `ss2022*` menjadi baseline
-- Path resmi sekarang:
-  - `/ss-ws`
-  - `/ss-hup`
-  - `/ss-grpc`
-  - `/ss2022-ws`
-  - `/ss2022-hup`
-  - `/ss2022-grpc`
-- Prefix opsional satu segmen juga didukung:
-  - `/<bebas>/ss-ws`
-  - `/<bebas>/ss-hup`
-  - `/<bebas>/ss-grpc`
-  - `/<bebas>/ss2022-ws`
-  - `/<bebas>/ss2022-hup`
-  - `/<bebas>/ss2022-grpc`
-
-3. Loader render `nginx` ikut dibuat tahan transisi
-- Pembaca context route live di `nginx.sh` sekarang bisa mengenali bentuk route lama maupun baru saat rerender.
-- Ini mencegah render `nginx` gagal saat host sedang berada di tengah transisi path lama -> path baru.
-
-### Hasil Validasi
-- Path lama `shadowsocks*` -> `404`
-- Path baru `ss*` / `ss2022*` -> tetap match handler yang benar
-- Reload `nginx` live -> PASS
-
 ## Rilis 2026-03-08 (Provider `nginx-stream` Experimental Implemented)
 
 ### Ringkasan
@@ -416,7 +376,6 @@ Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa 
   - `ws://<domain>:80/`
   - `wss://<domain>:443/`
 - Path Xray existing (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `-hup`, `-grpc`) tetap dipertahankan.
-- Catatan: baseline `shadowsocks*` kemudian berubah pada rilis `2026-03-09`, yang mengganti surface publik ke path singkat `ss*` dan `ss2022*`.
 
 3. Operasional menu `manage`
 - Maintenance menu menambah:
@@ -501,33 +460,6 @@ Rilis ini memindahkan Hysteria2 menjadi fitur terintegrasi di jalur CLI (`setup.
 - `bash -n setup.sh manage.sh run.sh` -> PASS
 - Hasil patch memastikan setup memanggil `install_hysteria2_integrated()` dan `sanity_check` memverifikasi `hysteria-server` + `xray-hy2-sync`.
 
-## Rilis 2026-03-02 (SS Multi-User + Bot Coexist Stability)
-
-### Ringkasan
-Rilis ini menambahkan dukungan multi-user untuk Shadowsocks dan Shadowsocks 2022 di jalur CLI dan bot, sekaligus menstabilkan deploy bot Telegram/Discord agar bisa aktif bersamaan tanpa konflik port.
-
-### Perubahan Utama
-1. Dukungan Shadowsocks + Shadowsocks 2022 multi-user
-- Protokol `shadowsocks` dan `shadowsocks2022` aktif di `setup.sh`, `manage.sh`, backend bot Discord/Telegram, serta command schema gateway.
-- Method default:
-  - `shadowsocks`: `aes-128-gcm`
-  - `shadowsocks2022`: `2022-blake3-aes-128-gcm`
-- Generator account info/link dan validasi protocol diperluas agar mencakup kedua protokol baru.
-
-2. Pembersihan transport terdepresiasi non-default
-- Jalur transport non-default (termasuk `xhttp` dan `wireguard`) dibersihkan dari stack default provisioning/runtime.
-- Tujuan: menjaga kompatibilitas domain fronting dan mengurangi noise konfigurasi yang tidak dipakai default.
-
-3. Stabilitas installer Telegram (hasil temuan E2E)
-- Archive default `bot_telegram.zip` diperbarui agar sesuai artefak terbaru.
-- Default env Telegram backend dipindah ke `127.0.0.1:8081` agar tidak bentrok dengan Discord backend `127.0.0.1:8080`.
-- Template systemd Telegram backend tidak lagi hardcode port, melainkan memakai `${BACKEND_HOST}` dan `${BACKEND_PORT}`.
-
-### Commit
-- `5d0a08c` — `feat: add ss multi-user support and stabilize bot e2e`
-
-### Hasil Validasi
-- E2E `run.sh` sampai setup domain: PASS.
 - Deploy bot Discord:
   - `xray-discord-backend` -> `active`
   - `xray-discord-gateway` -> `active`

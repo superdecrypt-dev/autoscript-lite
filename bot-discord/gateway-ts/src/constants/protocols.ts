@@ -1,4 +1,4 @@
-export const XRAY_PROTOCOLS = ["vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"] as const;
+export const XRAY_PROTOCOLS = ["vless", "vmess", "trojan"] as const;
 
 export type XrayProtocol = (typeof XRAY_PROTOCOLS)[number];
 

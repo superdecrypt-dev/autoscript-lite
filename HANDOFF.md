@@ -20,7 +20,6 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `27194cc` — `docs(edge): rename rollback guide to recovery`
   - `9d55920` — `feat(edge): add haproxy standby failover flow`
   - `0b795dc` — `feat(edge): add nginx-stream provider support`
-  - `1b451b2` — `feat(xray): use shorthand shadowsocks paths only`
   - `f1bf684` — `fix(setup): avoid tty warning in non-interactive runs`
   - `da09ee0` — `fix(edge): clean dynamic env export`
   - `ca066dc` — `fix(edge): improve request classification and error handling`
@@ -63,10 +62,6 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
     - full E2E modular installer sudah lolos live
   - SSH WS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
-  - Surface publik Xray untuk `shadowsocks` dan `shadowsocks2022` sekarang memakai path singkat saja:
-    - `ss-ws`, `ss-hup`, `ss-grpc`
-    - `ss2022-ws`, `ss2022-hup`, `ss2022-grpc`
-    - bentuk lama `shadowsocks*` dan `shadowsocks2022*` tidak dipakai lagi
   - Guardrail audit: konsep SSH WS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
   - SSH WS kini memakai token path per-user 10 hex chars:
     - `/<token>`

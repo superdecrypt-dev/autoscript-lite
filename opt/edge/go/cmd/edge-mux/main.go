@@ -58,7 +58,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s trojan_raw_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -66,6 +66,8 @@ func main() {
 		cfg.MetricsEnabled,
 		cfg.HTTPBackendAddr(),
 		cfg.SSHBackendAddr(),
+		cfg.VLESSRawBackendAddr(),
+		cfg.TrojanRawBackendAddr(),
 		cfg.DetectTimeout,
 		cfg.TLSHandshakeTimeout,
 		cfg.ClassicTLSOn80,
@@ -686,6 +688,14 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 		target = cfg.SSHBackendAddr()
 		contextLabel = fmt.Sprintf("%s:ssh", surface)
 		collector.ObserveRouteDecision(surface, "ssh", "ssh", "", "", alpn, sni)
+	case detect.ClassVLESSRaw:
+		target = cfg.VLESSRawBackendAddr()
+		contextLabel = fmt.Sprintf("%s:vless-tcp", surface)
+		collector.ObserveRouteDecision(surface, "vless-tcp", "vless", "", "", alpn, sni)
+	case detect.ClassTrojanRaw:
+		target = cfg.TrojanRawBackendAddr()
+		contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
+		collector.ObserveRouteDecision(surface, "trojan-tcp", "trojan", "", "", alpn, sni)
 	default:
 		contextLabel = fmt.Sprintf("%s:unknown", surface)
 		collector.ObserveRouteDecision(surface, "unknown", backendLabel(cfg, target), "", "", alpn, sni)
@@ -727,6 +737,10 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "http"
 	case cfg.SSHBackendAddr():
 		return "ssh"
+	case cfg.VLESSRawBackendAddr():
+		return "vless"
+	case cfg.TrojanRawBackendAddr():
+		return "trojan"
 	default:
 		return "other"
 	}
@@ -838,6 +852,8 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 
 	addCheck("http", cfg.HTTPBackendAddr(), true)
 	addCheck("ssh", cfg.SSHBackendAddr(), true)
+	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
+	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
 	return out
 }
 

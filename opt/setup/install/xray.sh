@@ -22,41 +22,27 @@ install_xray() {
 }
 
 write_xray_config() {
-  local UUID TROJAN_PASS SS_PASS SS2022_SERVER_PSK SS2022_USER_PSK
+  local UUID TROJAN_PASS
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   TROJAN_PASS="$(rand_str 24)"
-  SS_PASS="$(rand_str 24)"
-  SS2022_SERVER_PSK="$(python3 - <<'PY'
-import base64, os
-print(base64.b64encode(os.urandom(16)).decode())
-PY
-)"
-  SS2022_USER_PSK="$(python3 - <<'PY'
-import base64, os
-print(base64.b64encode(os.urandom(16)).decode())
-PY
-)"
 
-  local P_VLESS_WS P_VMESS_WS P_TROJAN_WS P_SS_WS P_SS2022_WS
-  local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP P_SS_HUP P_SS2022_HUP
-  local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC P_SS_GRPC P_SS2022_GRPC
+  local P_VLESS_TCP P_TROJAN_TCP
+  local P_VLESS_WS P_VMESS_WS P_TROJAN_WS
+  local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
+  local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
   local P_API
 
+  P_VLESS_TCP="$(pick_port)"
+  P_TROJAN_TCP="$(pick_port)"
   P_VLESS_WS="$(pick_port)"
   P_VMESS_WS="$(pick_port)"
   P_TROJAN_WS="$(pick_port)"
-  P_SS_WS="$(pick_port)"
-  P_SS2022_WS="$(pick_port)"
   P_VLESS_HUP="$(pick_port)"
   P_VMESS_HUP="$(pick_port)"
   P_TROJAN_HUP="$(pick_port)"
-  P_SS_HUP="$(pick_port)"
-  P_SS2022_HUP="$(pick_port)"
   P_VLESS_GRPC="$(pick_port)"
   P_VMESS_GRPC="$(pick_port)"
   P_TROJAN_GRPC="$(pick_port)"
-  P_SS_GRPC="$(pick_port)"
-  P_SS2022_GRPC="$(pick_port)"
   P_API="10080"
 
   if ! is_port_free "$P_API"; then
@@ -68,25 +54,19 @@ PY
   fi
   is_port_free "$P_API" || die "Port API Xray ($P_API) sedang dipakai. Bebaskan port ini atau ubah konfigurasi."
 
-  local I_VLESS_WS I_VMESS_WS I_TROJAN_WS I_SS_WS I_SS2022_WS
-  local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP I_SS_HUP I_SS2022_HUP
-  local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC I_SS_GRPC I_SS2022_GRPC
+  local I_VLESS_WS I_VMESS_WS I_TROJAN_WS
+  local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP
+  local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC
 
   I_VLESS_WS="/$(rand_str 14)"
   I_VMESS_WS="/$(rand_str 14)"
   I_TROJAN_WS="/$(rand_str 14)"
-  I_SS_WS="/$(rand_str 14)"
-  I_SS2022_WS="/$(rand_str 14)"
   I_VLESS_HUP="/$(rand_str 14)"
   I_VMESS_HUP="/$(rand_str 14)"
   I_TROJAN_HUP="/$(rand_str 14)"
-  I_SS_HUP="/$(rand_str 14)"
-  I_SS2022_HUP="/$(rand_str 14)"
   I_VLESS_GRPC="$(rand_str 12)"
   I_VMESS_GRPC="$(rand_str 12)"
   I_TROJAN_GRPC="$(rand_str 12)"
-  I_SS_GRPC="$(rand_str 12)"
-  I_SS2022_GRPC="$(rand_str 12)"
 
   mkdir -p "$(dirname "$XRAY_CONFIG")"
 
@@ -229,6 +209,59 @@ PY
     },
     {
       "listen": "127.0.0.1",
+      "port": ${P_VLESS_TCP},
+      "protocol": "vless",
+      "tag": "default@vless-tcp",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "email": "default@vless-tcp"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_TROJAN_TCP},
+      "protocol": "trojan",
+      "tag": "default@trojan-tcp",
+      "settings": {
+        "clients": [
+          {
+            "password": "${TROJAN_PASS}",
+            "email": "default@trojan-tcp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
       "port": ${P_VLESS_WS},
       "protocol": "vless",
       "tag": "default@vless-ws",
@@ -305,71 +338,6 @@ PY
         "security": "none",
         "wsSettings": {
           "path": "${I_TROJAN_WS}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_SS_WS},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks-ws",
-      "settings": {
-        "method": "aes-128-gcm",
-        "password": "${SS_PASS}",
-        "clients": [
-          {
-            "method": "aes-128-gcm",
-            "password": "${SS_PASS}",
-            "email": "default@shadowsocks-ws"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "${I_SS_WS}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_SS2022_WS},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks2022-ws",
-      "settings": {
-        "method": "2022-blake3-aes-128-gcm",
-        "password": "${SS2022_SERVER_PSK}",
-        "clients": [
-          {
-            "password": "${SS2022_USER_PSK}",
-            "email": "default@shadowsocks2022-ws"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "${I_SS2022_WS}"
         }
       },
       "sniffing": {
@@ -472,71 +440,6 @@ PY
     },
     {
       "listen": "127.0.0.1",
-      "port": ${P_SS_HUP},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks-hup",
-      "settings": {
-        "method": "aes-128-gcm",
-        "password": "${SS_PASS}",
-        "clients": [
-          {
-            "method": "aes-128-gcm",
-            "password": "${SS_PASS}",
-            "email": "default@shadowsocks-hup"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "httpupgrade",
-        "security": "none",
-        "httpupgradeSettings": {
-          "path": "${I_SS_HUP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_SS2022_HUP},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks2022-hup",
-      "settings": {
-        "method": "2022-blake3-aes-128-gcm",
-        "password": "${SS2022_SERVER_PSK}",
-        "clients": [
-          {
-            "password": "${SS2022_USER_PSK}",
-            "email": "default@shadowsocks2022-hup"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "httpupgrade",
-        "security": "none",
-        "httpupgradeSettings": {
-          "path": "${I_SS2022_HUP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
       "port": ${P_VLESS_GRPC},
       "protocol": "vless",
       "tag": "default@vless-grpc",
@@ -624,70 +527,6 @@ PY
         ]
       }
     },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_SS_GRPC},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks-grpc",
-      "settings": {
-        "method": "aes-128-gcm",
-        "password": "${SS_PASS}",
-        "clients": [
-          {
-            "method": "aes-128-gcm",
-            "password": "${SS_PASS}",
-            "email": "default@shadowsocks-grpc"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "${I_SS_GRPC}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_SS2022_GRPC},
-      "protocol": "shadowsocks",
-      "tag": "default@shadowsocks2022-grpc",
-      "settings": {
-        "method": "2022-blake3-aes-128-gcm",
-        "password": "${SS2022_SERVER_PSK}",
-        "clients": [
-          {
-            "password": "${SS2022_USER_PSK}",
-            "email": "default@shadowsocks2022-grpc"
-          }
-        ],
-        "network": "tcp,udp"
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "${I_SS2022_GRPC}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
     }
   ],
   "outbounds": [
@@ -749,42 +588,29 @@ EOF
   ok "Config Xray dasar siap."
   declare -gx XR_UUID="$UUID"
   declare -gx XR_TROJAN_PASS="$TROJAN_PASS"
-  declare -gx XR_SS_PASS="$SS_PASS"
-  declare -gx XR_SS2022_SERVER_PSK="$SS2022_SERVER_PSK"
-  declare -gx XR_SS2022_USER_PSK="$SS2022_USER_PSK"
   declare -gx XR_API_PORT="$P_API"
 
+  declare -gx P_VLESS_TCP="$P_VLESS_TCP"
+  declare -gx P_TROJAN_TCP="$P_TROJAN_TCP"
   declare -gx P_VLESS_WS="$P_VLESS_WS"
   declare -gx P_VMESS_WS="$P_VMESS_WS"
   declare -gx P_TROJAN_WS="$P_TROJAN_WS"
-  declare -gx P_SS_WS="$P_SS_WS"
-  declare -gx P_SS2022_WS="$P_SS2022_WS"
   declare -gx P_VLESS_HUP="$P_VLESS_HUP"
   declare -gx P_VMESS_HUP="$P_VMESS_HUP"
   declare -gx P_TROJAN_HUP="$P_TROJAN_HUP"
-  declare -gx P_SS_HUP="$P_SS_HUP"
-  declare -gx P_SS2022_HUP="$P_SS2022_HUP"
   declare -gx P_VLESS_GRPC="$P_VLESS_GRPC"
   declare -gx P_VMESS_GRPC="$P_VMESS_GRPC"
   declare -gx P_TROJAN_GRPC="$P_TROJAN_GRPC"
-  declare -gx P_SS_GRPC="$P_SS_GRPC"
-  declare -gx P_SS2022_GRPC="$P_SS2022_GRPC"
 
   declare -gx I_VLESS_WS="$I_VLESS_WS"
   declare -gx I_VMESS_WS="$I_VMESS_WS"
   declare -gx I_TROJAN_WS="$I_TROJAN_WS"
-  declare -gx I_SS_WS="$I_SS_WS"
-  declare -gx I_SS2022_WS="$I_SS2022_WS"
   declare -gx I_VLESS_HUP="$I_VLESS_HUP"
   declare -gx I_VMESS_HUP="$I_VMESS_HUP"
   declare -gx I_TROJAN_HUP="$I_TROJAN_HUP"
-  declare -gx I_SS_HUP="$I_SS_HUP"
-  declare -gx I_SS2022_HUP="$I_SS2022_HUP"
   declare -gx I_VLESS_GRPC="$I_VLESS_GRPC"
   declare -gx I_VMESS_GRPC="$I_VMESS_GRPC"
   declare -gx I_TROJAN_GRPC="$I_TROJAN_GRPC"
-  declare -gx I_SS_GRPC="$I_SS_GRPC"
-  declare -gx I_SS2022_GRPC="$I_SS2022_GRPC"
 }
 
 write_xray_modular_configs() {
@@ -996,7 +822,7 @@ install_xray_speed_limiter_foundation() {
   systemctl daemon-reload
   if service_enable_restart_checked xray-speed; then
     ok "xray-speed aktif:"
-    ok "  - policy root: ${SPEED_POLICY_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
+    ok "  - policy root: ${SPEED_POLICY_ROOT}/{vless,vmess,trojan}"
     ok "  - config: ${SPEED_CONFIG_DIR}/config.json"
     ok "  - binary: /usr/local/bin/xray-speed"
     ok "  - service: xray-speed"

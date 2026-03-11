@@ -4,11 +4,11 @@
 install_management_scripts() {
   ok "Siapkan tools runtime..."
 
-  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
-  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
   chmod 700 /opt/account /opt/quota
-  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/shadowsocks /opt/account/shadowsocks2022 /opt/account/ssh
-  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/shadowsocks /opt/quota/shadowsocks2022 /opt/quota/ssh
+  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
+  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
@@ -25,7 +25,7 @@ XRAY_ROUTING_DEFAULT  = "/usr/local/etc/xray/conf.d/30-routing.json"
 ACCOUNT_ROOT = "/opt/account"
 QUOTA_ROOT = "/opt/quota"
 SPEED_ROOT = "/opt/speed"
-PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+PROTO_DIRS = ("vless", "vmess", "trojan")
 
 def now_utc():
   return datetime.now(timezone.utc)
@@ -359,7 +359,7 @@ from datetime import datetime, timezone
 
 XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+PROTO_DIRS = ("vless", "vmess", "trojan")
 XRAY_ACCESS_LOG = "/var/log/xray/access.log"
 
 EMAIL_RE = re.compile(r"(?:email|user)\s*[:=]\s*([A-Za-z0-9._%+-]{1,128}@[A-Za-z0-9._-]{1,128})")
@@ -794,7 +794,7 @@ from datetime import datetime, timezone
 
 XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+PROTO_DIRS = ("vless", "vmess", "trojan")
 
 def now_iso():
   return datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1037,7 +1037,7 @@ XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 API_SERVER_DEFAULT = "127.0.0.1:10080,127.0.0.1:10085"
 API_SERVER_FALLBACKS = ("127.0.0.1:10080", "127.0.0.1:10085")
 QUOTA_ROOT = "/opt/quota"
-PROTO_DIRS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+PROTO_DIRS = ("vless", "vmess", "trojan")
 
 GB_DECIMAL = 1000 ** 3
 GB_BINARY = 1024 ** 3

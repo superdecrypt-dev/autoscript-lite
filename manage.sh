@@ -58,15 +58,15 @@ declare -ag DOMAIN_CTRL_STOPPED_SERVICES=()
 
 # Account store (read-only source for Menu 2)
 ACCOUNT_ROOT="/opt/account"
-ACCOUNT_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
+ACCOUNT_PROTO_DIRS=("vless" "vmess" "trojan")
 
 # Quota metadata store (Menu 2 add/delete)
 QUOTA_ROOT="/opt/quota"
-QUOTA_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
+QUOTA_PROTO_DIRS=("vless" "vmess" "trojan")
 
 # Speed policy store (fondasi dari setup.sh)
 SPEED_POLICY_ROOT="/opt/speed"
-SPEED_POLICY_PROTO_DIRS=("vless" "vmess" "trojan" "shadowsocks" "shadowsocks2022")
+SPEED_POLICY_PROTO_DIRS=("vless" "vmess" "trojan")
 SPEED_CONFIG_FILE="/etc/xray-speed/config.json"
 SPEED_MARK_MIN=1000
 SPEED_MARK_MAX=59999
@@ -566,7 +566,7 @@ validate_username() {
 proto_uses_password() {
   local proto="${1:-}"
   case "${proto}" in
-    trojan|shadowsocks|shadowsocks2022) return 0 ;;
+    trojan) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -575,8 +575,6 @@ proto_list_menu_print() {
   echo "  1) vless"
   echo "  2) vmess"
   echo "  3) trojan"
-  echo "  4) shadowsocks"
-  echo "  5) shadowsocks2022"
 }
 
 proto_menu_pick_to_value() {
@@ -586,8 +584,6 @@ proto_menu_pick_to_value() {
     1) echo "vless" ;;
     2) echo "vmess" ;;
     3) echo "trojan" ;;
-    4) echo "shadowsocks" ;;
-    5) echo "shadowsocks2022" ;;
     *) echo "" ;;
   esac
 }
@@ -1212,7 +1208,7 @@ main_info_cache_refresh() {
 
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp
-  local vless_count vmess_count trojan_count ss_count ss2022_count ssh_count
+  local vless_count vmess_count trojan_count ssh_count
   local edge_icon nginx_icon xray_icon ssh_icon
 
   main_info_cache_refresh
@@ -1229,8 +1225,6 @@ main_menu_info_header_print() {
   vless_count="$(account_count_by_proto "vless")"
   vmess_count="$(account_count_by_proto "vmess")"
   trojan_count="$(account_count_by_proto "trojan")"
-  ss_count="$(account_count_by_proto "shadowsocks")"
-  ss2022_count="$(account_count_by_proto "shadowsocks2022")"
   ssh_count="$(ssh_account_count)"
   edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
   nginx_icon="$(service_status_icon "nginx")"
@@ -1252,8 +1246,6 @@ main_menu_info_header_print() {
     "VLESS ${vless_count}" \
     "VMESS ${vmess_count}" \
     "TROJAN ${trojan_count}" \
-    "SS ${ss_count}" \
-    "SS2022 ${ss2022_count}" \
     "SSH ${ssh_count}"
   echo
   main_menu_center_line "SERVICES"
@@ -2708,7 +2700,7 @@ account_print_table_page() {
   pages="$(account_total_pages)"
 
   if (( total == 0 )); then
-    warn "Tidak ada file account di ${ACCOUNT_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
+    warn "Tidak ada file account di ${ACCOUNT_ROOT}/{vless,vmess,trojan}"
     return 0
   fi
 
@@ -2777,13 +2769,11 @@ human_size() {
 account_print_table() {
   local i f proto base mtime size
   if (( ${#ACCOUNT_FILES[@]} == 0 )); then
-    warn "Tidak ada file account di ${ACCOUNT_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
+    warn "Tidak ada file account di ${ACCOUNT_ROOT}/{vless,vmess,trojan}"
     echo "Pastikan directory berikut ada:"
     echo "  ${ACCOUNT_ROOT}/vless"
     echo "  ${ACCOUNT_ROOT}/vmess"
     echo "  ${ACCOUNT_ROOT}/trojan"
-    echo "  ${ACCOUNT_ROOT}/shadowsocks"
-    echo "  ${ACCOUNT_ROOT}/shadowsocks2022"
     return 0
   fi
 
@@ -3347,13 +3337,8 @@ def inbound_matches_proto(ib, p):
   if not isinstance(ib, dict):
     return False
   ib_proto = str(ib.get("protocol") or "").strip().lower()
-  tag = str(ib.get("tag") or "").strip().lower()
   if p in ("vless", "vmess", "trojan"):
     return ib_proto == p
-  if p == "shadowsocks":
-    return ib_proto == "shadowsocks" and "@shadowsocks-" in tag
-  if p == "shadowsocks2022":
-    return ib_proto == "shadowsocks" and "@shadowsocks2022-" in tag
   return False
 
 def iter_clients_for_protocol(p):
@@ -3375,10 +3360,6 @@ if proto == "vless":
 elif proto == "vmess":
   client = {"id": cred, "alterId": 0, "email": email}
 elif proto == "trojan":
-  client = {"password": cred, "email": email}
-elif proto == "shadowsocks":
-  client = {"method": "aes-128-gcm", "password": cred, "email": email}
-elif proto == "shadowsocks2022":
   client = {"password": cred, "email": email}
 else:
   raise SystemExit("Unsupported protocol: " + proto)
@@ -3486,13 +3467,8 @@ def inbound_matches_proto(ib, p):
   if not isinstance(ib, dict):
     return False
   ib_proto = str(ib.get("protocol") or "").strip().lower()
-  tag = str(ib.get("tag") or "").strip().lower()
   if p in ("vless", "vmess", "trojan"):
     return ib_proto == p
-  if p == "shadowsocks":
-    return ib_proto == "shadowsocks" and "@shadowsocks-" in tag
-  if p == "shadowsocks2022":
-    return ib_proto == "shadowsocks" and "@shadowsocks2022-" in tag
   return False
 
 removed = 0
@@ -3835,7 +3811,7 @@ def load_json(path):
     return {}
 
 used = set()
-for p1 in ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"):
+for p1 in ("vless", "vmess", "trojan"):
   d = os.path.join(root, p1)
   if not os.path.isdir(d):
     continue
@@ -3989,7 +3965,7 @@ def to_mark(v):
 
 def list_mark_users(root):
   mark_users = {}
-  for proto in ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022"):
+  for proto in ("vless", "vmess", "trojan"):
     d = os.path.join(root, proto)
     if not os.path.isdir(d):
       continue
@@ -4335,8 +4311,6 @@ PROTO_LABELS = {
   "vless": "Vless",
   "vmess": "Vmess",
   "trojan": "Trojan",
-  "shadowsocks": "SS",
-  "shadowsocks2022": "SS2022",
 }
 
 def proto_label(p):
@@ -4405,11 +4379,8 @@ PUBLIC_PATHS = {
   "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-  "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
-  "shadowsocks2022": {"ws": "/ss2022-ws", "httpupgrade": "/ss2022-hup", "grpc": "ss2022-grpc"},
 }
-SS_METHOD = "aes-128-gcm"
-SS2022_METHOD = "2022-blake3-aes-128-gcm"
+TCP_TLS_PROTOCOLS = {"vless", "trojan"}
 
 
 def vless_link(net, val):
@@ -4452,43 +4423,12 @@ def vmess_link(net, val):
   raw=json.dumps(obj, separators=(",",":"))
   return "vmess://" + base64.b64encode(raw.encode()).decode()
 
-def ss_link(method, password, net, val):
-  userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip("=")
-  if net == "ws":
-    plugin = f"xray-plugin;mode=websocket;tls;host={domain};path={val or '/'}"
-  elif net == "httpupgrade":
-    plugin = f"xray-plugin;mode=httpupgrade;tls;host={domain};path={val or '/'}"
-  else:
-    plugin = f"xray-plugin;mode=grpc;tls;serviceName={val or ''}"
-  q = urllib.parse.urlencode({"plugin": plugin})
-  return f"ss://{userinfo}@{domain}:443?{q}#{urllib.parse.quote(username + '@' + proto)}"
-
-def resolve_ss2022_server_key():
-  try:
-    cfg = json.load(open(inbounds_file, "r", encoding="utf-8"))
-  except Exception:
-    return ""
-  inbounds = cfg.get("inbounds") if isinstance(cfg, dict) else None
-  if not isinstance(inbounds, list):
-    return ""
-  for ib in inbounds:
-    if not isinstance(ib, dict):
-      continue
-    if str(ib.get("protocol") or "").strip().lower() != "shadowsocks":
-      continue
-    tag = str(ib.get("tag") or "").strip().lower()
-    if "@shadowsocks2022-" not in tag:
-      continue
-    st = ib.get("settings") if isinstance(ib.get("settings"), dict) else {}
-    v = st.get("password")
-    if isinstance(v, str) and v.strip():
-      return v.strip()
-  return ""
-
 links={}
 public_proto = PUBLIC_PATHS.get(proto, {})
-ss2022_server_key = resolve_ss2022_server_key() if proto == "shadowsocks2022" else ""
-for net in ("ws","httpupgrade","grpc"):
+nets = ["ws", "httpupgrade", "grpc"]
+if proto in TCP_TLS_PROTOCOLS:
+  nets = ["tcp"] + nets
+for net in nets:
   val = public_proto.get(net, "")
   if proto=="vless":
     links[net]=vless_link(net,val)
@@ -4496,13 +4436,6 @@ for net in ("ws","httpupgrade","grpc"):
     links[net]=vmess_link(net,val)
   elif proto=="trojan":
     links[net]=trojan_link(net,val)
-  elif proto=="shadowsocks":
-    links[net]=ss_link(SS_METHOD, cred, net, val)
-  elif proto=="shadowsocks2022":
-    if ss2022_server_key:
-      links[net]=ss_link(SS2022_METHOD, f"{ss2022_server_key}:{cred}", net, val)
-    else:
-      links[net]="-"
 
 quota_gb = quota_bytes/(1024**3) if quota_bytes else 0
 quota_gb_disp = fmt_gb(quota_gb)
@@ -4523,11 +4456,6 @@ if proto in ("vless","vmess"):
   lines.append(f"UUID        : {cred}")
 else:
   lines.append(f"Password    : {cred}")
-if proto == "shadowsocks":
-  lines.append(f"Method      : {SS_METHOD}")
-if proto == "shadowsocks2022":
-  lines.append(f"Method      : {SS2022_METHOD}")
-  lines.append(f"Server Key  : {ss2022_server_key or '-'}")
 lines.append(f"Quota Limit : {quota_gb_disp} GB")
 lines.append(f"Expired     : {days} days")
 lines.append(f"Valid Until : {expired_at}")
@@ -4540,8 +4468,12 @@ else:
 lines.append(f"{proto_disp} Path : {ws_path}")
 lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
 lines.append(f"{proto_disp} Port : 443 & 80")
+if proto in TCP_TLS_PROTOCOLS:
+  lines.append(f"{proto_disp} TCP+TLS Port : 443")
 lines.append("")
 lines.append("Links Import:")
+if "tcp" in links:
+  lines.append(f"  TCP+TLS    : {links.get('tcp','-')}")
 lines.append(f"  WebSocket   : {links.get('ws','-')}")
 lines.append(f"  HTTPUpgrade : {links.get('httpupgrade','-')}")
 lines.append(f"  gRPC        : {links.get('grpc','-')}")
@@ -4698,8 +4630,6 @@ PROTO_LABELS = {
   "vless": "Vless",
   "vmess": "Vmess",
   "trojan": "Trojan",
-  "shadowsocks": "SS",
-  "shadowsocks2022": "SS2022",
 }
 
 
@@ -4889,7 +4819,6 @@ if not speed_enabled or speed_down_mbit <= 0 or speed_up_mbit <= 0:
   speed_up_mbit = 0.0
 
 cred = ""
-ss2022_server_key = ""
 if os.path.isfile(inbounds_file):
   try:
     cfg = json.load(open(inbounds_file, "r", encoding="utf-8"))
@@ -4897,13 +4826,8 @@ if os.path.isfile(inbounds_file):
       if not isinstance(ib, dict):
         return False
       ib_proto = str(ib.get("protocol") or "").strip().lower()
-      tag = str(ib.get("tag") or "").strip().lower()
       if p in ("vless", "vmess", "trojan"):
         return ib_proto == p
-      if p == "shadowsocks":
-        return ib_proto == "shadowsocks" and "@shadowsocks-" in tag
-      if p == "shadowsocks2022":
-        return ib_proto == "shadowsocks" and "@shadowsocks2022-" in tag
       return False
 
     for ib in cfg.get("inbounds") or []:
@@ -4911,8 +4835,6 @@ if os.path.isfile(inbounds_file):
         continue
       if not inbound_matches_proto(ib, proto):
         continue
-      if proto == "shadowsocks2022" and not ss2022_server_key:
-        ss2022_server_key = str(((ib.get("settings") or {}).get("password") or "")).strip()
       clients = (ib.get("settings") or {}).get("clients") or []
       if not isinstance(clients, list):
         continue
@@ -4921,7 +4843,7 @@ if os.path.isfile(inbounds_file):
           continue
         if str(c.get("email") or "") != email:
           continue
-        if proto in ("trojan", "shadowsocks", "shadowsocks2022"):
+        if proto == "trojan":
           v = c.get("password")
         else:
           v = c.get("id")
@@ -4934,12 +4856,10 @@ if os.path.isfile(inbounds_file):
     cred = ""
 
 if not cred:
-  if proto in ("trojan", "shadowsocks", "shadowsocks2022"):
+  if proto == "trojan":
     cred = str(existing.get("Password") or "").strip()
   else:
     cred = str(existing.get("UUID") or "").strip()
-if proto == "shadowsocks2022" and not ss2022_server_key:
-  ss2022_server_key = str(existing.get("Server Key") or "").strip()
 if not cred:
   raise SystemExit(20)
 
@@ -4947,11 +4867,8 @@ PUBLIC_PATHS = {
   "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-  "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
-  "shadowsocks2022": {"ws": "/ss2022-ws", "httpupgrade": "/ss2022-hup", "grpc": "ss2022-grpc"},
 }
-SS_METHOD = "aes-128-gcm"
-SS2022_METHOD = "2022-blake3-aes-128-gcm"
+TCP_TLS_PROTOCOLS = {"vless", "trojan"}
 
 
 def vless_link(net, val):
@@ -4994,24 +4911,15 @@ def vmess_link(net, val):
   raw = json.dumps(obj, separators=(",", ":"))
   return "vmess://" + base64.b64encode(raw.encode()).decode()
 
-def ss_link(method, password, net, val):
-  userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip("=")
-  if net == "ws":
-    plugin = f"xray-plugin;mode=websocket;tls;host={domain};path={val or '/'}"
-  elif net == "httpupgrade":
-    plugin = f"xray-plugin;mode=httpupgrade;tls;host={domain};path={val or '/'}"
-  else:
-    plugin = f"xray-plugin;mode=grpc;tls;serviceName={val or ''}"
-  q = urllib.parse.urlencode({"plugin": plugin})
-  return f"ss://{userinfo}@{domain}:443?{q}#{urllib.parse.quote(username + '@' + proto)}"
-
-
 links = {}
 public_proto = PUBLIC_PATHS.get(proto, {})
 proto_disp = PROTO_LABELS.get(proto, proto.title() or "Xray")
 ws_path = public_proto.get("ws", "") or "/"
 ws_path_alt = path_alt_placeholder(ws_path)
-for net in ("ws", "httpupgrade", "grpc"):
+nets = ["ws", "httpupgrade", "grpc"]
+if proto in TCP_TLS_PROTOCOLS:
+  nets = ["tcp"] + nets
+for net in nets:
   val = public_proto.get(net, "")
   if proto == "vless":
     links[net] = vless_link(net, val)
@@ -5019,13 +4927,6 @@ for net in ("ws", "httpupgrade", "grpc"):
     links[net] = vmess_link(net, val)
   elif proto == "trojan":
     links[net] = trojan_link(net, val)
-  elif proto == "shadowsocks":
-    links[net] = ss_link(SS_METHOD, cred, net, val)
-  elif proto == "shadowsocks2022":
-    if ss2022_server_key:
-      links[net] = ss_link(SS2022_METHOD, f"{ss2022_server_key}:{cred}", net, val)
-    else:
-      links[net] = "-"
 
 lines = []
 lines.append("=== XRAY ACCOUNT INFO ===")
@@ -5039,11 +4940,6 @@ if proto in ("vless", "vmess"):
   lines.append(f"UUID        : {cred}")
 else:
   lines.append(f"Password    : {cred}")
-if proto == "shadowsocks":
-  lines.append(f"Method      : {SS_METHOD}")
-if proto == "shadowsocks2022":
-  lines.append(f"Method      : {SS2022_METHOD}")
-  lines.append(f"Server Key  : {ss2022_server_key or '-'}")
 lines.append(f"Quota Limit : {quota_gb_disp} GB")
 lines.append(f"Expired     : {days} days")
 lines.append(f"Valid Until : {expired_at}")
@@ -5056,8 +4952,12 @@ else:
 lines.append(f"{proto_disp} Path : {ws_path}")
 lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
 lines.append(f"{proto_disp} Port : 443 & 80")
+if proto in TCP_TLS_PROTOCOLS:
+  lines.append(f"{proto_disp} TCP+TLS Port : 443")
 lines.append("")
 lines.append("Links Import:")
+if "tcp" in links:
+  lines.append(f"  TCP+TLS    : {links.get('tcp', '-')}")
 lines.append(f"  WebSocket   : {links.get('ws', '-')}")
 lines.append(f"  HTTPUpgrade : {links.get('httpupgrade', '-')}")
 lines.append(f"  gRPC        : {links.get('grpc', '-')}")
@@ -5389,13 +5289,6 @@ import secrets
 print(secrets.token_hex(16))
 PY
 )"
-    if [[ "${proto}" == "shadowsocks2022" ]]; then
-      cred="$(python3 - <<'PY'
-import base64, os
-print(base64.b64encode(os.urandom(16)).decode())
-PY
-)"
-    fi
   else
     cred="$(gen_uuid)"
   fi
@@ -5944,7 +5837,7 @@ user_menu() {
 
 # -------------------------
 # Quota & Access Control
-# - Sumber metadata: /opt/quota/(vless|vmess|trojan|shadowsocks|shadowsocks2022)/*.json
+# - Sumber metadata: /opt/quota/(vless|vmess|trojan)/*.json
 # - Perubahan JSON menggunakan atomic write (tmp + replace) untuk menghindari file korup
 # -------------------------
 QUOTA_FILES=()
@@ -6420,7 +6313,7 @@ quota_print_table_page() {
   pages="$(quota_total_pages_for_indexes)"
 
   if (( total == 0 )); then
-    warn "Tidak ada quota metadata di ${QUOTA_ROOT}/{vless,vmess,trojan,shadowsocks,shadowsocks2022}"
+    warn "Tidak ada quota metadata di ${QUOTA_ROOT}/{vless,vmess,trojan}"
     return 0
   fi
 

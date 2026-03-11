@@ -16,7 +16,7 @@ NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
-PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+PROTOCOLS = ("vless", "vmess", "trojan")
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
@@ -390,7 +390,7 @@ def list_accounts() -> list[tuple[str, str]]:
 def op_user_list() -> tuple[str, str]:
     records = list_accounts()
     if not records:
-        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
+        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan}}"
 
     counts = {p: 0 for p in PROTOCOLS}
     for proto, _ in records:
@@ -684,7 +684,7 @@ def op_quota_summary() -> tuple[str, str]:
 
     if not lines:
         return "Quota & Access Control - Summary", (
-            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan,shadowsocks,shadowsocks2022}}"
+            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan}}"
         )
     return "Quota & Access Control - Summary", "Maks 200 entri:\n" + "\n".join(lines)
 

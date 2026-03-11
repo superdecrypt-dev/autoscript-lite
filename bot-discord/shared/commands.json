@@ -43,7 +43,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -112,7 +112,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -138,7 +138,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -202,7 +202,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -240,7 +240,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -265,7 +265,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -299,7 +299,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -325,7 +325,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -358,7 +358,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -391,7 +391,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -424,7 +424,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -450,7 +450,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -483,7 +483,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",
@@ -516,7 +516,7 @@
                 "label": "Protocol",
                 "style": "short",
                 "required": true,
-                "placeholder": "vless/vmess/trojan/shadowsocks/shadowsocks2022"
+                "placeholder": "vless/vmess/trojan"
               },
               {
                 "id": "username",

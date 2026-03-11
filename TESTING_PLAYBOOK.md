@@ -121,12 +121,6 @@ Kriteria lulus tambahan:
 - saat provider aktif adalah `Edge Gateway (go)`, `SSH Direct`, `SSH SSL/TLS`, dan `SSH WS` diperlakukan sebagai satu sistem SSH untuk `quota`, `speed limit`, dan `IP/Login limit`.
 - jika BadVPN terpasang, `SSH ACCOUNT INFO` harus menampilkan `BadVPN UDPGW : 7300`.
 
-Khusus path Xray `shadowsocks`:
-- Baseline resmi sekarang hanya:
-  - `ss-ws`, `ss-hup`, `ss-grpc`
-  - `ss2022-ws`, `ss2022-hup`, `ss2022-grpc`
-- Bentuk lama `shadowsocks*` dan `shadowsocks2022*` harus dianggap invalid dan diharapkan jatuh ke `404`.
-
 Jika provider `nginx-stream` diuji, tambahkan juga:
 
 ```bash

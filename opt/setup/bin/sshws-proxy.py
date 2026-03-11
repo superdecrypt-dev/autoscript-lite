@@ -123,18 +123,12 @@ def extract_token_from_path(path, expected_prefix):
       "vless-ws",
       "vmess-ws",
       "trojan-ws",
-      "shadowsocks-ws",
-      "shadowsocks2022-ws",
       "vless-hup",
       "vmess-hup",
       "trojan-hup",
-      "shadowsocks-hup",
-      "shadowsocks2022-hup",
       "vless-grpc",
       "vmess-grpc",
       "trojan-grpc",
-      "shadowsocks-grpc",
-      "shadowsocks2022-grpc",
     }:
       return ""
     return normalize_token(parts[-1])

@@ -27,7 +27,7 @@ ACCOUNT_ROOT = Path("/opt/account")
 QUOTA_ROOT = Path("/opt/quota")
 SPEED_POLICY_ROOT = Path("/opt/speed")
 SSH_PROTOCOL = "ssh"
-XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "shadowsocks2022")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
 SSH_ACCOUNT_DIR = ACCOUNT_ROOT / SSH_PROTOCOL
 SSH_QUOTA_DIR = QUOTA_ROOT / SSH_PROTOCOL
@@ -61,8 +61,6 @@ WORK_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot")) / "tmp
 ROUTING_LOCK_FILE = "/run/autoscript/locks/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
 PROTOCOLS = XRAY_PROTOCOLS
-SS_METHOD = "aes-128-gcm"
-SS2022_METHOD = "2022-blake3-aes-128-gcm"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
@@ -376,20 +374,14 @@ def _ensure_runtime_dirs() -> None:
         ACCOUNT_ROOT / "vless",
         ACCOUNT_ROOT / "vmess",
         ACCOUNT_ROOT / "trojan",
-        ACCOUNT_ROOT / "shadowsocks",
-        ACCOUNT_ROOT / "shadowsocks2022",
         SSH_ACCOUNT_DIR,
         QUOTA_ROOT / "vless",
         QUOTA_ROOT / "vmess",
         QUOTA_ROOT / "trojan",
-        QUOTA_ROOT / "shadowsocks",
-        QUOTA_ROOT / "shadowsocks2022",
         SSH_QUOTA_DIR,
         SPEED_POLICY_ROOT / "vless",
         SPEED_POLICY_ROOT / "vmess",
         SPEED_POLICY_ROOT / "trojan",
-        SPEED_POLICY_ROOT / "shadowsocks",
-        SPEED_POLICY_ROOT / "shadowsocks2022",
         WORK_DIR,
     ]:
         p.mkdir(parents=True, exist_ok=True)
@@ -855,8 +847,6 @@ def _proto_display_label(proto: str) -> str:
         "vless": "Vless",
         "vmess": "Vmess",
         "trojan": "Trojan",
-        "shadowsocks": "SS",
-        "shadowsocks2022": "SS2022",
     }
     return mapping.get(str(proto or "").strip().lower(), str(proto or "").strip().title() or "Xray")
 
@@ -1212,21 +1202,12 @@ def _inbound_matches_proto(ib: Any, proto: str) -> bool:
     if not isinstance(ib, dict):
         return False
     ib_proto = str(ib.get("protocol") or "").strip().lower()
-    tag = str(ib.get("tag") or "").strip().lower()
-    if proto in {"vless", "vmess", "trojan"}:
-        return ib_proto == proto
-    if proto == "shadowsocks":
-        return ib_proto == "shadowsocks" and "@shadowsocks-" in tag
-    if proto == "shadowsocks2022":
-        return ib_proto == "shadowsocks" and "@shadowsocks2022-" in tag
-    return False
+    return proto in {"vless", "vmess", "trojan"} and ib_proto == proto
 
 
 def _generate_credential(proto: str) -> str:
-    if proto in {"trojan", "shadowsocks"}:
+    if proto == "trojan":
         return secrets.token_hex(16)
-    if proto == "shadowsocks2022":
-        return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
     return str(uuid.uuid4())
 
 
@@ -1265,12 +1246,10 @@ def _xray_add_client(proto: str, username: str, cred: str) -> tuple[bool, str]:
             client = {"id": cred, "alterId": 0, "email": email}
         elif proto == "trojan":
             client = {"password": cred, "email": email}
-        elif proto == "shadowsocks":
-            client = {"method": SS_METHOD, "password": cred, "email": email}
-        elif proto == "shadowsocks2022":
-            client = {"password": cred, "email": email}
-        else:
+        elif proto != "trojan":
             return False, f"Protocol tidak didukung: {proto}"
+        else:
+            client = {"password": cred, "email": email}
 
         updated = False
         for ib in inbounds:
@@ -2081,17 +2060,11 @@ def _dns_toggle_cache(cfg: dict[str, Any]) -> tuple[bool, str]:
     return True, f"DNS cache sekarang: {state}."
 
 
-def _build_links(proto: str, username: str, cred: str, domain: str, ss2022_server_key: str = "") -> dict[str, str]:
+def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str, str]:
     public_paths = {
         "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
-        "shadowsocks": {"ws": "/ss-ws", "httpupgrade": "/ss-hup", "grpc": "ss-grpc"},
-        "shadowsocks2022": {
-            "ws": "/ss2022-ws",
-            "httpupgrade": "/ss2022-hup",
-            "grpc": "ss2022-grpc",
-        },
     }
 
     def vless_link(net: str, val: str) -> str:
@@ -2132,35 +2105,16 @@ def _build_links(proto: str, username: str, cred: str, domain: str, ss2022_serve
         raw = json.dumps(obj, separators=(",", ":"))
         return "vmess://" + base64.b64encode(raw.encode()).decode()
 
-    def ss_link(method: str, password: str, net: str, val: str) -> str:
-        userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip("=")
-        if net == "ws":
-            plugin = f"xray-plugin;mode=websocket;tls;host={domain};path={val or '/'}"
-        elif net == "httpupgrade":
-            plugin = f"xray-plugin;mode=httpupgrade;tls;host={domain};path={val or '/'}"
-        else:
-            plugin = f"xray-plugin;mode=grpc;tls;serviceName={val or ''}"
-        q = urllib.parse.urlencode({"plugin": plugin})
-        return f"ss://{userinfo}@{domain}:443?{q}#{urllib.parse.quote(username + '@' + proto)}"
-
     links: dict[str, str] = {}
     p = public_paths.get(proto, {})
-    resolved_ss2022_key = str(ss2022_server_key or "").strip()
     for net in ("ws", "httpupgrade", "grpc"):
         v = p.get(net, "")
         if proto == "vless":
             links[net] = vless_link(net, v)
         elif proto == "vmess":
             links[net] = vmess_link(net, v)
-        elif proto == "trojan":
+        else:
             links[net] = trojan_link(net, v)
-        elif proto == "shadowsocks":
-            links[net] = ss_link(SS_METHOD, cred, net, v)
-        elif proto == "shadowsocks2022":
-            if resolved_ss2022_key:
-                links[net] = ss_link(SS2022_METHOD, f"{resolved_ss2022_key}:{cred}", net, v)
-            else:
-                links[net] = "-"
     return links
 
 
@@ -2179,20 +2133,14 @@ def _build_account_text(
     speed_enabled: bool,
     speed_down: float,
     speed_up: float,
-    ss2022_server_key: str = "",
 ) -> str:
-    resolved_ss2022_key = str(ss2022_server_key or "").strip()
-    if proto == "shadowsocks2022" and not resolved_ss2022_key:
-        resolved_ss2022_key = _find_ss2022_server_key_in_inbounds()
-    links = _build_links(proto, username, credential, domain, resolved_ss2022_key)
+    links = _build_links(proto, username, credential, domain)
     isp, country = _geo_lookup(ip)
     proto_disp = _proto_display_label(proto)
     ws_path = (({
         "vless": {"ws": "/vless-ws"},
         "vmess": {"ws": "/vmess-ws"},
         "trojan": {"ws": "/trojan-ws"},
-        "shadowsocks": {"ws": "/ss-ws"},
-        "shadowsocks2022": {"ws": "/ss2022-ws"},
     }).get(proto, {}).get("ws") or "/")
     lines = [
         "=== XRAY ACCOUNT INFO ===",
@@ -2207,11 +2155,6 @@ def _build_account_text(
         lines.append(f"UUID        : {credential}")
     else:
         lines.append(f"Password    : {credential}")
-    if proto == "shadowsocks":
-        lines.append(f"Method      : {SS_METHOD}")
-    if proto == "shadowsocks2022":
-        lines.append(f"Method      : {SS2022_METHOD}")
-        lines.append(f"Server Key  : {resolved_ss2022_key or '-'}")
 
     lines.extend(
         [
@@ -2278,28 +2221,9 @@ def _find_credential_in_inbounds(proto: str, username: str) -> str:
                 continue
             if str(c.get("email") or "") != email:
                 continue
-            if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
-                return str(c.get("password") or "").strip()
-            return str(c.get("id") or "").strip()
-    return ""
-
-
-def _find_ss2022_server_key_in_inbounds() -> str:
-    ok, payload = _read_json(XRAY_INBOUNDS_CONF)
-    if not ok or not isinstance(payload, dict):
-        return ""
-    inbounds = payload.get("inbounds", [])
-    if not isinstance(inbounds, list):
-        return ""
-    for ib in inbounds:
-        if not _inbound_matches_proto(ib, "shadowsocks2022"):
-            continue
-        settings = ib.get("settings") if isinstance(ib, dict) else {}
-        if not isinstance(settings, dict):
-            continue
-        key = str(settings.get("password") or "").strip()
-        if key:
-            return key
+        if proto == "trojan":
+            return str(c.get("password") or "").strip()
+        return str(c.get("id") or "").strip()
     return ""
 
 
@@ -2435,15 +2359,12 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
 
     credential = _find_credential_in_inbounds(proto, username)
     if not credential:
-        if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
+        if proto == "trojan":
             credential = account_fields.get("Password", "").strip()
         else:
             credential = account_fields.get("UUID", "").strip()
     if not credential:
         return False, f"Credential tidak ditemukan untuk {username}@{proto}"
-    ss2022_server_key = ""
-    if proto == "shadowsocks2022":
-        ss2022_server_key = _find_ss2022_server_key_in_inbounds() or account_fields.get("Server Key", "").strip()
 
     domain_eff = str(domain or "").strip() or _detect_domain()
     ip_eff = str(ip or "").strip() or account_fields.get("IP", "").strip() or _detect_public_ipv4()
@@ -2463,7 +2384,6 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
         speed_enabled=speed_enabled,
         speed_down=speed_down,
         speed_up=speed_up,
-        ss2022_server_key=ss2022_server_key,
     )
 
     _write_text_atomic(account_target, content)
@@ -3179,7 +3099,7 @@ def _find_credential_from_account(proto: str, username: str) -> str:
     if acc is None:
         return ""
     fields = _read_account_fields(acc)
-    if proto in {"trojan", "shadowsocks", "shadowsocks2022"}:
+    if proto == "trojan":
         return fields.get("Password", "").strip()
     return fields.get("UUID", "").strip()
 
@@ -4599,14 +4519,14 @@ def op_network_warp_set_user_mode(proto: str, username: str, mode: str) -> tuple
     mode_n = str(mode or "").strip().lower()
 
     if proto_n not in PROTOCOLS:
-        return False, title, "Protocol harus vless/vmess/trojan/shadowsocks/shadowsocks2022."
+        return False, title, "Protocol harus vless/vmess/trojan."
     if not _is_valid_username(username_n):
         return False, title, "Username tidak valid."
     if mode_n not in {"direct", "warp", "off"}:
         return False, title, "Mode user harus direct/warp/off."
 
     email = _email(proto_n, username_n)
-    if re.match(r"^default@(vless|vmess|trojan|shadowsocks|shadowsocks2022)-(ws|hup|grpc)$", email):
+    if re.match(r"^default@(vless|vmess|trojan)-(ws|hup|grpc)$", email):
         return False, title, f"User default bersifat readonly: {email}"
 
     ok_apply, msg_apply = _apply_routing_transaction(

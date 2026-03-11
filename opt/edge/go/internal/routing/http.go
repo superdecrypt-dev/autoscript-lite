@@ -20,18 +20,12 @@ var knownRouteNames = map[string]struct{}{
 	"vless-ws":    {},
 	"vmess-ws":    {},
 	"trojan-ws":   {},
-	"ss-ws":       {},
-	"ss2022-ws":   {},
 	"vless-hup":   {},
 	"vmess-hup":   {},
 	"trojan-hup":  {},
-	"ss-hup":      {},
-	"ss2022-hup":  {},
 	"vless-grpc":  {},
 	"vmess-grpc":  {},
 	"trojan-grpc": {},
-	"ss-grpc":     {},
-	"ss2022-grpc": {},
 }
 
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {

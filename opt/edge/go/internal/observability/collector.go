@@ -490,6 +490,10 @@ func detectClassName(class detect.InitialClass) string {
 		return "tls_client_hello"
 	case detect.ClassSSH:
 		return "ssh"
+	case detect.ClassVLESSRaw:
+		return "vless_raw"
+	case detect.ClassTrojanRaw:
+		return "trojan_raw"
 	case detect.ClassTimeout:
 		return "timeout"
 	case detect.ClassPossibleHTTP:
