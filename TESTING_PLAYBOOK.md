@@ -56,8 +56,8 @@ printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
-- Menu `SSH & OVPN User` (`3)`) bisa dibuka, `List Users` tampil aman walau data kosong.
-- Menu `SSH & OVPN QAC` (`5)`) bisa dibuka walau data user masih kosong.
+- Menu `SSH Users` (`3)`) bisa dibuka, `List Users` tampil aman walau data kosong.
+- Menu `SSH QAC` (`5)`) bisa dibuka walau data user masih kosong.
 
 ### 3.3 Negative/Failure
 

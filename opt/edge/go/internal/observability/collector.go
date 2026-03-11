@@ -80,11 +80,8 @@ type StatusSnapshot struct {
 	MetricsListen             string                           `json:"metrics_listen"`
 	HTTPBackend               string                           `json:"http_backend"`
 	SSHBackend                string                           `json:"ssh_backend"`
-	OpenVPNBackend            string                           `json:"openvpn_backend"`
 	MetricsEnabled            bool                             `json:"metrics_enabled"`
 	ClassicTLSOn80            bool                             `json:"classic_tls_on_80"`
-	OpenVPNTCPEnabled         bool                             `json:"openvpn_tcp_enabled"`
-	OpenVPNTLSEnabled         bool                             `json:"openvpn_ssl_enabled"`
 	AcceptProxyProtocol       bool                             `json:"accept_proxy_protocol"`
 	TrustedProxyCIDRs         []string                         `json:"trusted_proxy_cidrs"`
 	DetectTimeoutMilliseconds int64                            `json:"detect_timeout_milliseconds"`
@@ -320,11 +317,8 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		MetricsListen:             listeners.MetricsAddr,
 		HTTPBackend:               cfg.HTTPBackendAddr(),
 		SSHBackend:                cfg.SSHBackendAddr(),
-		OpenVPNBackend:            cfg.OVPNBackendAddr(),
 		MetricsEnabled:            cfg.MetricsEnabled,
 		ClassicTLSOn80:            cfg.ClassicTLSOn80,
-		OpenVPNTCPEnabled:         cfg.OpenVPNTCPEnabled,
-		OpenVPNTLSEnabled:         cfg.OpenVPNTLSEnabled,
 		AcceptProxyProtocol:       cfg.AcceptProxyProtocol,
 		TrustedProxyCIDRs:         append([]string(nil), cfg.TrustedProxyCIDRs...),
 		DetectTimeoutMilliseconds: int64(cfg.DetectTimeout / time.Millisecond),
@@ -396,8 +390,6 @@ func (c *Collector) RenderPrometheus(cfg runtime.Config, listeners ListenerSnaps
 	writeSample(&out, "edge_mux_uptime_seconds", "", int64(time.Since(startedAt).Seconds()))
 	writeSample(&out, "edge_mux_metrics_enabled", "", boolInt(cfg.MetricsEnabled))
 	writeSample(&out, "edge_mux_classic_tls_on_80", "", boolInt(cfg.ClassicTLSOn80))
-	writeSample(&out, "edge_mux_openvpn_tcp_enabled", "", boolInt(cfg.OpenVPNTCPEnabled))
-	writeSample(&out, "edge_mux_openvpn_ssl_enabled", "", boolInt(cfg.OpenVPNTLSEnabled))
 	writeSample(&out, "edge_mux_accept_proxy_protocol", "", boolInt(cfg.AcceptProxyProtocol))
 	writeSample(&out, "edge_mux_max_connections", "", cfg.MaxConnections)
 	writeSample(&out, "edge_mux_max_connections_per_ip", "", cfg.MaxConnectionsPerIP)
@@ -467,8 +459,6 @@ func detectClassName(class detect.InitialClass) string {
 		return "tls_client_hello"
 	case detect.ClassSSH:
 		return "ssh"
-	case detect.ClassOpenVPN:
-		return "openvpn"
 	case detect.ClassTimeout:
 		return "timeout"
 	case detect.ClassPossibleHTTP:

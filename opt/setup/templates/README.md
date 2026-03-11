@@ -22,14 +22,6 @@ Yang sudah dipindah pada tahap awal:
 - `config/sshws-stunnel.conf`
 - `config/xray-speed-config.json`
 - `nginx/nginx.conf`
-- `systemd/ovpn-tcp.service`
-- `systemd/ovpnws-proxy.service`
-- `config/openvpn-runtime.env`
-- `config/openvpn/server-tcp.conf`
-- `config/openvpn/client-run-wrapper-tcp.sh`
-- `config/openvpn/client-tunnel-helper-tls.py`
-- `config/openvpn/client-tunnel-helper-ws.py`
-- `config/openvpn/client-run-wrapper.sh`
 
 Target berikutnya yang masih layak dipindah:
 - `systemd/xray.service.d/10-confdir.conf`

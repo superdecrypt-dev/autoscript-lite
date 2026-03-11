@@ -99,7 +99,7 @@ REPORT_DIR="/var/log/xray-manage"
 WARP_TIER_STATE_KEY="warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY="warp_plus_license_key"
 SSH_ACCOUNT_DIR="${ACCOUNT_ROOT}/ssh"
-SSH_QUOTA_DIR="${QUOTA_ROOT}/ssh-ovpn"
+SSH_QUOTA_DIR="${QUOTA_ROOT}/ssh"
 SSH_USERS_STATE_DIR="${SSH_QUOTA_DIR}"
 SSHWS_DROPBEAR_SERVICE="sshws-dropbear"
 SSHWS_STUNNEL_SERVICE="sshws-stunnel"
@@ -1231,7 +1231,7 @@ main_info_cache_refresh() {
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp
   local vless_count vmess_count trojan_count ss_count ss2022_count ssh_count
-  local edge_icon nginx_icon xray_icon ssh_icon ovpn_icon
+  local edge_icon nginx_icon xray_icon ssh_icon
 
   main_info_cache_refresh
 
@@ -1254,7 +1254,6 @@ main_menu_info_header_print() {
   nginx_icon="$(service_status_icon "nginx")"
   xray_icon="$(service_status_icon "xray")"
   ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
-  ovpn_icon="$(service_group_status_icon "ovpn-tcp.service" "ovpnws-proxy.service")"
 
   printf "%-11s : %s\n" "SYSTEM OS" "${os}"
   printf "%-11s : %s\n" "RAM" "${ram}"
@@ -1267,10 +1266,20 @@ main_menu_info_header_print() {
   printf "%-11s : %s\n" "WARP STATUS" "${warp}"
   hr
   main_menu_center_line "ACCOUNTS"
-  main_menu_center_line "VLESS=${vless_count} | VMESS=${vmess_count} | TROJAN=${trojan_count} | SS=${ss_count} | SS2022=${ss2022_count} | SSH=${ssh_count}"
+  main_menu_center_segments \
+    "VLESS ${vless_count}" \
+    "VMESS ${vmess_count}" \
+    "TROJAN ${trojan_count}" \
+    "SS ${ss_count}" \
+    "SS2022 ${ss2022_count}" \
+    "SSH ${ssh_count}"
   echo
   main_menu_center_line "SERVICES"
-  main_menu_center_line "Edge Mux ${edge_icon} | Nginx ${nginx_icon} | Xray ${xray_icon} | SSH ${ssh_icon} | OpenVPN ${ovpn_icon}"
+  main_menu_center_segments \
+    "Edge Mux ${edge_icon}" \
+    "Nginx ${nginx_icon}" \
+    "Xray ${xray_icon}" \
+    "SSH ${ssh_icon}"
   hr
 }
 
@@ -2261,6 +2270,20 @@ main_menu_center_line() {
   fi
   pad=$(( (w - ${#text}) / 2 ))
   printf '%*s%s\n' "${pad}" '' "${text}"
+}
+
+main_menu_center_segments() {
+  local joined=""
+  local sep="   "
+  local segment
+  for segment in "$@"; do
+    [[ -n "${segment}" ]] || continue
+    if [[ -n "${joined}" ]]; then
+      joined+="${sep}"
+    fi
+    joined+="${segment}"
+  done
+  main_menu_center_line "${joined}"
 }
 
 title() {
@@ -7299,9 +7322,7 @@ quota_menu() {
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MANAGE_REQUIRED_MODULES=(
   "features/network.sh"
-  "features/ssh_ovpn_qac.sh"
   "features/analytics.sh"
-  "features/openvpn.sh"
   "menus/maintenance_menu.sh"
   "menus/main_menu.sh"
   "app/main.sh"

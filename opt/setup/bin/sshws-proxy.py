@@ -17,11 +17,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 HANDSHAKE_TIMEOUT_DEFAULT = 10.0
-QAC_STATE_ROOT = Path("/opt/quota/ssh-ovpn")
+QAC_STATE_ROOT = Path("/opt/quota/ssh")
 QAC_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 QAC_SESSION_ROOT = Path("/run/autoscript/sshws-sessions")
-UNIFIED_QAC_RUNTIME_BIN = Path("/usr/local/bin/ssh-ovpn-qac-runtime")
 POLICY_REFRESH_SEC = 2.0
 RUNTIME_SESSION_HEARTBEAT_SEC = 15.0
 UNASSIGNED_RESOLVE_BURST_BYTES = 4096
@@ -203,26 +202,6 @@ def write_json_atomic_file(path, payload, mode=0o600):
         os.remove(tmp)
     except Exception:
       pass
-
-
-def sync_unified_ssh_runtime(username, quota_used=None, last_seen=None):
-  user = norm_user(username)
-  if not user or not UNIFIED_QAC_RUNTIME_BIN.is_file():
-    return
-  cmd = [str(UNIFIED_QAC_RUNTIME_BIN), "ssh-sync", "--user", user]
-  if quota_used is not None:
-    cmd.extend(["--quota-used-ssh", str(max(0, int(quota_used)))])
-  if last_seen is not None:
-    cmd.extend(["--last-seen-ssh", str(max(0, int(last_seen)))])
-  try:
-    subprocess.run(
-      cmd,
-      check=False,
-      stdout=subprocess.DEVNULL,
-      stderr=subprocess.DEVNULL,
-    )
-  except Exception:
-    pass
 
 
 def cleanup_runtime_session_root(root):
@@ -449,10 +428,20 @@ class QuotaManager:
 
   def _qf(self, username):
     u = norm_user(username)
+    return self.state_root / "{}@ssh.json".format(u)
+
+  def _legacy_qf(self, username):
+    u = norm_user(username)
     return self.state_root / "{}.json".format(u)
 
   def _resolve_qf(self, username):
-    return self._qf(username)
+    primary = self._qf(username)
+    if primary.is_file():
+      return primary
+    legacy = self._legacy_qf(username)
+    if legacy.is_file():
+      return legacy
+    return primary
 
   def _state_entries(self):
     try:
@@ -664,7 +653,6 @@ class QuotaManager:
           continue
         payload["quota_used"] = new_used
         self._write_json_atomic(qf, payload)
-        sync_unified_ssh_runtime(user, quota_used=new_used, last_seen=int(time.time()))
         changed.append(user)
     finally:
       try:

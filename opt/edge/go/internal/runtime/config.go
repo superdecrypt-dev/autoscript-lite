@@ -24,7 +24,7 @@ const (
 	defaultMetricsEnabled      = true
 	defaultTLSOn80             = true
 	defaultTLSHandshakeTimeout = 5 * time.Second
-	defaultSSHQuotaRoot        = "/opt/quota/ssh-ovpn"
+	defaultSSHQuotaRoot        = "/opt/quota/ssh"
 	defaultSSHDropbearUnit     = "sshws-dropbear"
 	defaultSSHQACEnforcer      = "/usr/local/bin/sshws-qac-enforcer"
 	defaultSSHSessionRoot      = "/run/autoscript/sshws-sessions"
@@ -39,9 +39,6 @@ const (
 	defaultRuntimeEnvFile      = "/etc/default/edge-runtime"
 	defaultAcceptProxyProtocol = false
 	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
-	defaultOpenVPNBackend      = "127.0.0.1:21194"
-	defaultOpenVPNTCPEnabled   = false
-	defaultOpenVPNTLSEnabled   = false
 )
 
 type Config struct {
@@ -71,9 +68,6 @@ type Config struct {
 	CooldownDuration    time.Duration
 	AcceptProxyProtocol bool
 	TrustedProxyCIDRs   []string
-	OVPNBackend         string
-	OpenVPNTCPEnabled   bool
-	OpenVPNTLSEnabled   bool
 }
 
 func LoadConfig() (Config, error) {
@@ -127,14 +121,6 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	openVPNTCPEnabled, err := envBool(source, "EDGE_OVPN_ENABLE_TCP", defaultOpenVPNTCPEnabled)
-	if err != nil {
-		return Config{}, err
-	}
-	openVPNTLSEnabled, err := envBool(source, "EDGE_OVPN_ENABLE_SSL", defaultOpenVPNTLSEnabled)
-	if err != nil {
-		return Config{}, err
-	}
 	metricsEnabled, err := envBool(source, "EDGE_METRICS_ENABLED", defaultMetricsEnabled)
 	if err != nil {
 		return Config{}, err
@@ -167,9 +153,6 @@ func LoadConfig() (Config, error) {
 		CooldownDuration:    cooldownDuration,
 		AcceptProxyProtocol: acceptProxyProtocol,
 		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
-		OVPNBackend:         normalizeAddr(envString(source, "EDGE_OVPN_TCP_BACKEND", defaultOpenVPNBackend), "127.0.0.1"),
-		OpenVPNTCPEnabled:   openVPNTCPEnabled,
-		OpenVPNTLSEnabled:   openVPNTLSEnabled,
 	}
 	return cfg, nil
 }
@@ -191,9 +174,6 @@ func (c Config) Validate() error {
 	}
 	if c.HTTPBackend == "" || c.SSHBackend == "" {
 		return errors.New("backend addresses must not be empty")
-	}
-	if (c.OpenVPNTCPEnabled || c.OpenVPNTLSEnabled) && c.OVPNBackend == "" {
-		return errors.New("OpenVPN backend address must not be empty when OpenVPN is enabled")
 	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
 		return errors.New("TLS cert and key must not be empty")
@@ -232,7 +212,6 @@ func (c Config) TLSListenAddr() string   { return c.PublicTLSAddr }
 func (c Config) MetricsAddr() string     { return c.MetricsListenAddr }
 func (c Config) HTTPBackendAddr() string { return c.HTTPBackend }
 func (c Config) SSHBackendAddr() string  { return c.SSHBackend }
-func (c Config) OVPNBackendAddr() string { return c.OVPNBackend }
 
 type envSource map[string]string
 

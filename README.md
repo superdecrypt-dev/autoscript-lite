@@ -8,17 +8,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 ```
 
 Catatan penting:
-- OpenVPN sekarang ikut aktif pada install standar, tidak lagi `opt-in`.
-- User harian SSH dan OpenVPN dikelola bersama lewat menu `SSH & OVPN User`.
-- Metadata aktif `SSH + OVPN` sekarang hanya berada di `/opt/quota/ssh-ovpn/<username>.json`.
-- Host lama yang masih mengandalkan metadata SSH legacy perlu recreate akun lewat sistem baru.
+- Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
+- Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
 
 ## Inti Install
 - `Xray-core`
 - `Edge Gateway` provider `go` sebagai ingress utama `80/443`
 - `nginx` backend internal `127.0.0.1:18080`
 - `SSH WS`, `SSH SSL/TLS`, dan `SSH Direct`
-- `OpenVPN TCP`, `OpenVPN SSL/TLS`, dan `OpenVPN WS`
 - `WARP`, `BadVPN UDPGW`, TLS, dan daemon observability
 - `manage.sh` untuk operasional harian
 - installer bot `Discord` dan `Telegram`
@@ -27,16 +24,13 @@ Catatan penting:
 - `VLESS`, `VMess`, `Trojan`, `Shadowsocks`, `Shadowsocks 2022`
 - transport `WS`, `HTTPUpgrade`, `gRPC`
 - `SSH WS`, `SSH SSL/TLS`, `SSH Direct`
-- `OpenVPN TCP`, `OpenVPN SSL/TLS`, `OpenVPN WS`
 
 ## Port Utama
-- publik `80/443`: ditangani `edge-mux` untuk `Xray`, `SSH`, dan `OpenVPN`
+- publik `80/443`: ditangani `edge-mux` untuk `Xray` dan `SSH`
 - `nginx` backend: `127.0.0.1:18080`
 - `SSH dropbear`: `127.0.0.1:22022`
 - `SSH stunnel`: `127.0.0.1:22443`
 - `SSH WS proxy`: `127.0.0.1:10015`
-- `OpenVPN core`: `127.0.0.1:21194`
-- `OpenVPN WS proxy`: `127.0.0.1:21195`
 - `BadVPN UDPGW`: `127.0.0.1:7300`
 
 ## Service Utama
@@ -46,24 +40,21 @@ Catatan penting:
 - `sshws-dropbear`
 - `sshws-stunnel`
 - `sshws-proxy`
-- `ovpn-tcp`
-- `ovpnws-proxy`
 - `badvpn-udpgw`
 - `xray-observe`
 - `xray-domain-guard`
 
 ## Catatan Operasional
 - Pergantian domain lewat `7) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
-- URL download bundle OpenVPN per user memakai format `https://domain/ovpn/<username>.zip`.
-- `SSH & OVPN QAC` memakai metadata unified yang sama untuk `quota`, `IP/Login limit`, `speed limit`, dan `expiry`.
+- `SSH QAC` mengatur `quota`, `IP/Login limit`, `speed limit`, dan `expiry` khusus untuk SSH.
 
 ## Menu Utama
 ```text
 1) Status
 2) Xray Users
-3) SSH & OVPN User
+3) SSH Users
 4) Xray QAC
-5) SSH & OVPN QAC
+5) SSH QAC
 6) Network
 7) Domain Control
 8) Speedtest

@@ -9,7 +9,6 @@ Yang sudah dipindah:
 - `xray-speed.py`
 - `xray-observe`
 - `xray-domain-guard`
-- `ovpnws-proxy.py`
 
 Kandidat berikutnya bila masih ada script inline baru:
 - utility Python/Bash tambahan yang saat ini masih dibuat langsung dari `setup.sh`

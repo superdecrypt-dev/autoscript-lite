@@ -71,7 +71,6 @@ install_sshws_stack() {
   ok "Pasang SSH WS stack..."
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
   [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
-  install_setup_bin_or_die "ssh-ovpn-qac-runtime.py" "/usr/local/bin/ssh-ovpn-qac-runtime" 0755
 
   local stunnel_bin=""
   if command -v stunnel4 >/dev/null 2>&1; then
@@ -173,7 +172,6 @@ install_sshws_qac_enforcer() {
   install -d -m 755 /etc/systemd/system
   write_sshws_runtime_env
 
-  install_setup_bin_or_die "ssh-ovpn-qac-runtime.py" "/usr/local/bin/ssh-ovpn-qac-runtime" 0755
   install_setup_bin_or_die "sshws-qac-enforcer.py" "/usr/local/bin/sshws-qac-enforcer" 0755
 
   render_setup_template_or_die \
@@ -190,7 +188,6 @@ install_sshws_qac_enforcer() {
   if systemctl enable --now sshws-qac-enforcer.timer >/dev/null 2>&1; then
     systemctl start sshws-qac-enforcer.service >/dev/null 2>&1 || true
     ok "SSH QAC enforcer aktif:"
-    ok "  - unified: /usr/local/bin/ssh-ovpn-qac-runtime"
     ok "  - binary: /usr/local/bin/sshws-qac-enforcer"
     ok "  - timer : sshws-qac-enforcer.timer (1 menit)"
   else

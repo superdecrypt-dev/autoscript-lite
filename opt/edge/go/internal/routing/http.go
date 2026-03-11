@@ -32,7 +32,6 @@ var knownRouteNames = map[string]struct{}{
 	"trojan-grpc": {},
 	"ss-grpc":     {},
 	"ss2022-grpc": {},
-	"openvpn-ws":  {},
 }
 
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {

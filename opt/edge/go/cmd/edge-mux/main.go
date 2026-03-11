@@ -32,7 +32,6 @@ type flagOverrides struct {
 	tlsListen   string
 	httpBackend string
 	sshBackend  string
-	ovpnBackend string
 	certFile    string
 	keyFile     string
 	timeoutMs   int
@@ -59,7 +58,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -67,7 +66,6 @@ func main() {
 		cfg.MetricsEnabled,
 		cfg.HTTPBackendAddr(),
 		cfg.SSHBackendAddr(),
-		cfg.OVPNBackendAddr(),
 		cfg.DetectTimeout,
 		cfg.TLSHandshakeTimeout,
 		cfg.ClassicTLSOn80,
@@ -206,7 +204,6 @@ func parseFlagOverrides() flagOverrides {
 	flag.StringVar(&overrides.tlsListen, "tls-listen", "", "public TLS listen address")
 	flag.StringVar(&overrides.httpBackend, "http-backend", "", "internal HTTP backend address")
 	flag.StringVar(&overrides.sshBackend, "ssh-backend", "", "internal SSH classic backend address")
-	flag.StringVar(&overrides.ovpnBackend, "ovpn-backend", "", "internal OpenVPN TCP backend address")
 	flag.StringVar(&overrides.certFile, "cert-file", "", "TLS certificate file")
 	flag.StringVar(&overrides.keyFile, "key-file", "", "TLS key file")
 	flag.IntVar(&overrides.timeoutMs, "detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
@@ -229,9 +226,6 @@ func (o flagOverrides) Apply(cfg *runtime.Config) {
 	}
 	if o.sshBackend != "" {
 		cfg.SSHBackend = o.sshBackend
-	}
-	if o.ovpnBackend != "" {
-		cfg.OVPNBackend = o.ovpnBackend
 	}
 	if o.certFile != "" {
 		cfg.TLSCertFile = o.certFile
@@ -406,14 +400,13 @@ func handleReloads(
 		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
-			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
 			newCfg.HTTPListenAddr(),
 			newCfg.TLSListenAddr(),
 			newCfg.MetricsAddr(),
 			newCfg.MetricsEnabled,
 			newCfg.HTTPBackendAddr(),
 			newCfg.SSHBackendAddr(),
-			newCfg.OVPNBackendAddr(),
 			newCfg.DetectTimeout,
 			newCfg.TLSHandshakeTimeout,
 			newCfg.ClassicTLSOn80,
@@ -582,15 +575,6 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		defer tlsConn.Close()
 		handleTLSPayloadConn(logger, cfg, collector, tlsConn, "http-inner")
 		return
-	case detect.ClassOpenVPN:
-		if cfg.OpenVPNTCPEnabled {
-			collector.ObserveRouteDecision("http-port", "openvpn-tcp", "openvpn", "", "", "", "")
-			bridgeToBackend(logger, cfg, collector, conn, cfg.OVPNBackendAddr(), initial, "http-port:openvpn-tcp", false)
-			return
-		}
-		collector.ObserveRouteDecision("http-port", "openvpn-disabled", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:openvpn-disabled", false)
-		return
 	case detect.ClassSSH:
 		collector.ObserveRouteDecision("http-port", "ssh-direct", "ssh", "", "", "", "")
 		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
@@ -649,15 +633,6 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		logger.Printf("edge-mux tls port timed out with partial plaintext http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
-	case detect.ClassOpenVPN:
-		if cfg.OpenVPNTCPEnabled {
-			collector.ObserveRouteDecision("tls-port", "openvpn-tcp", "openvpn", "", "", "", "")
-			bridgeToBackend(logger, cfg, collector, conn, cfg.OVPNBackendAddr(), initial, "tls-port:openvpn-tcp", false)
-			return
-		}
-		collector.ObserveRouteDecision("tls-port", "openvpn-disabled", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:openvpn-disabled", false)
-		return
 	case detect.ClassSSH:
 		collector.ObserveRouteDecision("tls-port", "ssh-direct", "ssh", "", "", "", "")
 		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
@@ -697,17 +672,6 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
 		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
 		return
-	case detect.ClassOpenVPN:
-		if cfg.OpenVPNTLSEnabled {
-			target = cfg.OVPNBackendAddr()
-			contextLabel = fmt.Sprintf("%s:openvpn-ssl", surface)
-			collector.ObserveRouteDecision(surface, "openvpn-ssl", "openvpn", "", "", alpn, sni)
-			break
-		}
-		target = cfg.SSHBackendAddr()
-		contextLabel = fmt.Sprintf("%s:openvpn-disabled", surface)
-		collector.ObserveRouteDecision(surface, "openvpn-disabled", "ssh", "", "", alpn, sni)
-		break
 	case detect.ClassTimeout:
 		target = cfg.SSHBackendAddr()
 		contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
@@ -754,8 +718,6 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "http"
 	case cfg.SSHBackendAddr():
 		return "ssh"
-	case cfg.OVPNBackendAddr():
-		return "openvpn"
 	default:
 		return "other"
 	}
@@ -853,7 +815,6 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 
 	addCheck("http", cfg.HTTPBackendAddr(), true)
 	addCheck("ssh", cfg.SSHBackendAddr(), true)
-	addCheck("openvpn", cfg.OVPNBackendAddr(), cfg.OpenVPNTCPEnabled || cfg.OpenVPNTLSEnabled)
 	return out
 }
 

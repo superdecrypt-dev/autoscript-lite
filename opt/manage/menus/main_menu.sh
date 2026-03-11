@@ -21,9 +21,9 @@ main_menu_terminal_width() {
 main_menu_render_single_column() {
   echo -e "  ${UI_ACCENT}1)${UI_RESET} Status"
   echo -e "  ${UI_ACCENT}2)${UI_RESET} Xray Users"
-  echo -e "  ${UI_ACCENT}3)${UI_RESET} SSH & OVPN User"
+  echo -e "  ${UI_ACCENT}3)${UI_RESET} SSH Users"
   echo -e "  ${UI_ACCENT}4)${UI_RESET} Xray QAC"
-  echo -e "  ${UI_ACCENT}5)${UI_RESET} SSH & OVPN QAC"
+  echo -e "  ${UI_ACCENT}5)${UI_RESET} SSH QAC"
   echo -e "  ${UI_ACCENT}6)${UI_RESET} Network"
   echo -e "  ${UI_ACCENT}7)${UI_RESET} Domain Control"
   echo -e "  ${UI_ACCENT}8)${UI_RESET} Speedtest"
@@ -40,7 +40,7 @@ main_menu_render_two_columns() {
   width="$(main_menu_terminal_width)"
 
   local -a left_nums=("1)" "2)" "3)" "4)" "5)" "6)" "7)")
-  local -a left_labels=("Status" "Xray Users" "SSH & OVPN User" "Xray QAC" "SSH & OVPN QAC" "Network" "Domain Control")
+  local -a left_labels=("Status" "Xray Users" "SSH Users" "Xray QAC" "SSH QAC" "Network" "Domain Control")
   local -a right_nums=("8)" "9)" "10)" "11)" "12)" "13)" "0)")
   local -a right_labels=("Speedtest" "Security" "Maintenance" "Traffic" "Discord Bot" "Telegram Bot" "Keluar")
   local i left_label_width=0 right_label_width=0
@@ -90,9 +90,9 @@ main_menu() {
     case "${c}" in
       1) run_action "Status" status_diagnostics_menu ;;
       2) run_action "Xray Users" user_menu ;;
-      3|ssh) run_action "SSH & OVPN User" ssh_menu ;;
+      3|ssh) run_action "SSH Users" ssh_menu ;;
       4|quota) run_action "Xray QAC" quota_menu ;;
-      5|sshquota|ssh-qac) run_action "SSH & OVPN QAC" ssh_quota_menu ;;
+      5|sshquota|ssh-qac) run_action "SSH QAC" ssh_quota_menu ;;
       6|network) run_action "Network" network_menu ;;
       7|domain) run_action "Domain Control" domain_control_menu ;;
       8|speedtest|speed) run_action "Speedtest" speedtest_menu ;;
