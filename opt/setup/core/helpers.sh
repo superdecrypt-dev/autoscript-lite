@@ -175,6 +175,15 @@ need_root() {
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Jalankan sebagai root."
 }
 
+is_container_env() {
+  if command -v systemd-detect-virt >/dev/null 2>&1; then
+    systemd-detect-virt --quiet --container && return 0
+  fi
+  [[ -f /.dockerenv ]] && return 0
+  grep -qaE '(lxc|docker|containerd|podman)' /proc/1/cgroup 2>/dev/null && return 0
+  return 1
+}
+
 ensure_runtime_lock_dirs() {
   install -d -m 700 /run/autoscript /run/autoscript/locks
 }

@@ -130,6 +130,11 @@ EOF
 setup_swap_2gb() {
   ok "Siapkan swap 2GB..."
 
+  if is_container_env; then
+    warn "Lingkungan kontainer terdeteksi. Swap dilewati."
+    return 0
+  fi
+
   if swapon --show 2>/dev/null | awk '{print $1}' | grep -qx "/swapfile"; then
     ok "Swap sudah aktif."
     return 0
@@ -144,6 +149,7 @@ setup_swap_2gb() {
   if ! swapon /swapfile >/dev/null 2>&1; then
     warn "Gagal mengaktifkan /swapfile (kernel/permission/fs constraint)."
   fi
+  touch /etc/fstab
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
   cat > /etc/sysctl.d/99-custom-vm.conf <<'EOF'

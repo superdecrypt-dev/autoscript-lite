@@ -4,12 +4,18 @@
 install_xray() {
   ok "Pasang Xray..."
   local xray_installer
+  local xray_installer_err
   xray_installer="$(mktemp)"
+  xray_installer_err="$(mktemp)"
   download_file_or_die "${XRAY_INSTALL_SCRIPT_URL}" "${xray_installer}" "" "xray installer script"
   chmod 700 "${xray_installer}"
-  bash "${xray_installer}" install >/dev/null \
-    || { rm -f "${xray_installer}" >/dev/null 2>&1 || true; die "Gagal install Xray dari ref ${XRAY_INSTALL_REF}."; }
+  if ! bash "${xray_installer}" install >/dev/null 2>"${xray_installer_err}"; then
+    cat "${xray_installer_err}" >&2 || true
+    rm -f "${xray_installer}" "${xray_installer_err}" >/dev/null 2>&1 || true
+    die "Gagal install Xray dari ref ${XRAY_INSTALL_REF}."
+  fi
   rm -f "${xray_installer}" >/dev/null 2>&1 || true
+  rm -f "${xray_installer_err}" >/dev/null 2>&1 || true
 
   command -v xray >/dev/null 2>&1 || die "Xray tidak terpasang."
   ok "Xray siap."
