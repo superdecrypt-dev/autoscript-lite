@@ -33,6 +33,9 @@ const (
 	defaultMaxConnectionsPerIP = 128
 	defaultAcceptRatePerIP     = 60
 	defaultAcceptRateWindow    = 10 * time.Second
+	defaultCooldownRejects     = 8
+	defaultCooldownWindow      = 30 * time.Second
+	defaultCooldownDuration    = 120 * time.Second
 	defaultRuntimeEnvFile      = "/etc/default/edge-runtime"
 	defaultAcceptProxyProtocol = false
 	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
@@ -63,6 +66,9 @@ type Config struct {
 	MaxConnectionsPerIP int
 	AcceptRatePerIP     int
 	AcceptRateWindow    time.Duration
+	CooldownRejects     int
+	CooldownWindow      time.Duration
+	CooldownDuration    time.Duration
 	AcceptProxyProtocol bool
 	TrustedProxyCIDRs   []string
 	OVPNBackend         string
@@ -93,6 +99,14 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cooldownWindow, err := envDurationSec(source, "EDGE_ABUSE_COOLDOWN_WINDOW_SEC", defaultCooldownWindow)
+	if err != nil {
+		return Config{}, err
+	}
+	cooldownDuration, err := envDurationSec(source, "EDGE_ABUSE_COOLDOWN_SEC", defaultCooldownDuration)
+	if err != nil {
+		return Config{}, err
+	}
 	maxConnections, err := envNonNegativeInt(source, "EDGE_MAX_CONNS", defaultMaxConnections)
 	if err != nil {
 		return Config{}, err
@@ -102,6 +116,10 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	acceptRatePerIP, err := envNonNegativeInt(source, "EDGE_ACCEPT_RATE_LIMIT_PER_IP", defaultAcceptRatePerIP)
+	if err != nil {
+		return Config{}, err
+	}
+	cooldownRejects, err := envNonNegativeInt(source, "EDGE_ABUSE_COOLDOWN_TRIGGER_REJECTS", defaultCooldownRejects)
 	if err != nil {
 		return Config{}, err
 	}
@@ -144,6 +162,9 @@ func LoadConfig() (Config, error) {
 		MaxConnectionsPerIP: maxConnectionsPerIP,
 		AcceptRatePerIP:     acceptRatePerIP,
 		AcceptRateWindow:    acceptRateWindow,
+		CooldownRejects:     cooldownRejects,
+		CooldownWindow:      cooldownWindow,
+		CooldownDuration:    cooldownDuration,
 		AcceptProxyProtocol: acceptProxyProtocol,
 		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
 		OVPNBackend:         normalizeAddr(envString(source, "EDGE_OVPN_TCP_BACKEND", defaultOpenVPNBackend), "127.0.0.1"),
@@ -189,8 +210,14 @@ func (c Config) Validate() error {
 	if c.AcceptRateWindow <= 0 {
 		return errors.New("accept rate window must be > 0")
 	}
+	if c.CooldownWindow <= 0 || c.CooldownDuration <= 0 {
+		return errors.New("abuse cooldown windows must be > 0")
+	}
 	if c.MaxConnections < 0 || c.MaxConnectionsPerIP < 0 || c.AcceptRatePerIP < 0 {
 		return errors.New("connection limits must be >= 0")
+	}
+	if c.CooldownRejects < 0 {
+		return errors.New("abuse cooldown trigger must be >= 0")
 	}
 	for _, cidr := range c.TrustedProxyCIDRs {
 		if _, err := parseCIDROrIP(cidr); err != nil {

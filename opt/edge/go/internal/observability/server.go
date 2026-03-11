@@ -18,6 +18,8 @@ type Server struct {
 	collector *Collector
 	configFn  func() edgeruntime.Config
 	stateFn   func() ListenerSnapshot
+	backendFn func(edgeruntime.Config) map[string]BackendHealthSnapshot
+	abuseFn   func() *AbuseSnapshot
 
 	mu   sync.Mutex
 	addr string
@@ -30,12 +32,16 @@ func NewServer(
 	collector *Collector,
 	configFn func() edgeruntime.Config,
 	stateFn func() ListenerSnapshot,
+	backendFn func(edgeruntime.Config) map[string]BackendHealthSnapshot,
+	abuseFn func() *AbuseSnapshot,
 ) *Server {
 	return &Server{
 		logger:    logger,
 		collector: collector,
 		configFn:  configFn,
 		stateFn:   stateFn,
+		backendFn: backendFn,
+		abuseFn:   abuseFn,
 	}
 }
 
@@ -128,7 +134,15 @@ func (s *Server) newHandler() http.Handler {
 		if s.stateFn != nil {
 			listeners = s.stateFn()
 		}
-		status := s.collector.Snapshot(cfg, listeners)
+		var backends map[string]BackendHealthSnapshot
+		if s.backendFn != nil {
+			backends = s.backendFn(cfg)
+		}
+		var abuse *AbuseSnapshot
+		if s.abuseFn != nil {
+			abuse = s.abuseFn()
+		}
+		status := s.collector.Snapshot(cfg, listeners, backends, abuse)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")

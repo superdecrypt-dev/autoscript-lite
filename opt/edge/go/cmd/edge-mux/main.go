@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -58,7 +59,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s ovpn_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -74,6 +75,9 @@ func main() {
 		cfg.MaxConnectionsPerIP,
 		cfg.AcceptRatePerIP,
 		cfg.AcceptRateWindow,
+		cfg.CooldownRejects,
+		cfg.CooldownWindow,
+		cfg.CooldownDuration,
 		cfg.AcceptProxyProtocol,
 	)
 
@@ -134,7 +138,26 @@ func main() {
 		}
 		return snapshot
 	}
-	metricsServer = observability.NewServer(logger, collector, live.Config, listenerState)
+	metricsServer = observability.NewServer(
+		logger,
+		collector,
+		live.Config,
+		listenerState,
+		func(current runtime.Config) map[string]observability.BackendHealthSnapshot {
+			return backendHealthSnapshot(current)
+		},
+		func() *observability.AbuseSnapshot {
+			snapshot := guard.Snapshot()
+			return &observability.AbuseSnapshot{
+				ActiveIPs:         snapshot.ActiveIPs,
+				ActiveConnections: snapshot.ActiveConnections,
+				RateTrackedIPs:    snapshot.RateTrackedIPs,
+				RejectTrackedIPs:  snapshot.RejectTrackedIPs,
+				CooldownBlockedIP: snapshot.CooldownBlockedIP,
+				BlockedUntilUnix:  snapshot.BlockedUntilUnix,
+			}
+		},
+	)
 	if err := metricsServer.Configure(cfg); err != nil {
 		_ = httpListener.Close()
 		_ = tlsListener.Close()
@@ -795,6 +818,43 @@ func safeRemote(conn net.Conn) string {
 		return "-"
 	}
 	return conn.RemoteAddr().String()
+}
+
+func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendHealthSnapshot {
+	out := make(map[string]observability.BackendHealthSnapshot)
+	addCheck := func(name, addr string, enabled bool) {
+		if strings.TrimSpace(addr) == "" {
+			return
+		}
+		if !enabled {
+			out[name] = observability.BackendHealthSnapshot{
+				Address: addr,
+				Healthy: false,
+				Reason:  "disabled",
+			}
+			return
+		}
+		dialer := net.Dialer{Timeout: 750 * time.Millisecond}
+		conn, err := dialer.Dial("tcp", addr)
+		if err != nil {
+			out[name] = observability.BackendHealthSnapshot{
+				Address: addr,
+				Healthy: false,
+				Reason:  err.Error(),
+			}
+			return
+		}
+		_ = conn.Close()
+		out[name] = observability.BackendHealthSnapshot{
+			Address: addr,
+			Healthy: true,
+		}
+	}
+
+	addCheck("http", cfg.HTTPBackendAddr(), true)
+	addCheck("ssh", cfg.SSHBackendAddr(), true)
+	addCheck("openvpn", cfg.OVPNBackendAddr(), cfg.OpenVPNTCPEnabled || cfg.OpenVPNTLSEnabled)
+	return out
 }
 
 func writeHTTPError(conn net.Conn, status int, text string) error {

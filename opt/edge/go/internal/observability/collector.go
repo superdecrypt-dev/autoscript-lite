@@ -44,40 +44,69 @@ type LastRouteSnapshot struct {
 	SNI        string `json:"sni,omitempty"`
 }
 
+type SurfaceSnapshot struct {
+	ActiveConnections    int64             `json:"active_connections"`
+	AcceptedTotal        uint64            `json:"accepted_total"`
+	RejectedTotal        uint64            `json:"rejected_total"`
+	ReadInitialErrors    uint64            `json:"read_initial_errors_total"`
+	IngressWrapErrors    uint64            `json:"ingress_wrap_errors_total"`
+	TLSHandshakeFailures uint64            `json:"tls_handshake_failures_total"`
+	DetectTotals         map[string]uint64 `json:"detect_totals,omitempty"`
+	RouteTotals          map[string]uint64 `json:"route_totals,omitempty"`
+}
+
+type BackendHealthSnapshot struct {
+	Address string `json:"address"`
+	Healthy bool   `json:"healthy"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type AbuseSnapshot struct {
+	ActiveIPs         int              `json:"active_ips"`
+	ActiveConnections int              `json:"active_connections"`
+	RateTrackedIPs    int              `json:"rate_tracked_ips"`
+	RejectTrackedIPs  int              `json:"reject_tracked_ips"`
+	CooldownBlockedIP int              `json:"cooldown_blocked_ips"`
+	BlockedUntilUnix  map[string]int64 `json:"blocked_until_unix,omitempty"`
+}
+
 type StatusSnapshot struct {
-	OK                        bool               `json:"ok"`
-	Provider                  string             `json:"provider"`
-	StartedAt                 string             `json:"started_at"`
-	UptimeSeconds             int64              `json:"uptime_seconds"`
-	PublicHTTPListen          string             `json:"public_http_listen"`
-	PublicTLSListen           string             `json:"public_tls_listen"`
-	MetricsListen             string             `json:"metrics_listen"`
-	HTTPBackend               string             `json:"http_backend"`
-	SSHBackend                string             `json:"ssh_backend"`
-	OpenVPNBackend            string             `json:"openvpn_backend"`
-	MetricsEnabled            bool               `json:"metrics_enabled"`
-	ClassicTLSOn80            bool               `json:"classic_tls_on_80"`
-	OpenVPNTCPEnabled         bool               `json:"openvpn_tcp_enabled"`
-	OpenVPNTLSEnabled         bool               `json:"openvpn_ssl_enabled"`
-	AcceptProxyProtocol       bool               `json:"accept_proxy_protocol"`
-	TrustedProxyCIDRs         []string           `json:"trusted_proxy_cidrs"`
-	DetectTimeoutMilliseconds int64              `json:"detect_timeout_milliseconds"`
-	TLSHandshakeTimeoutMS     int64              `json:"tls_handshake_timeout_milliseconds"`
-	MaxConnections            int                `json:"max_connections"`
-	MaxConnectionsPerIP       int                `json:"max_connections_per_ip"`
-	AcceptRatePerIP           int                `json:"accept_rate_limit_per_ip"`
-	AcceptRateWindowSeconds   int64              `json:"accept_rate_window_seconds"`
-	ReloadSuccess             uint64             `json:"reload_success"`
-	LastReloadUnix            int64              `json:"last_reload_unix"`
-	ActiveConnectionsTotal    int64              `json:"active_connections_total"`
-	ActiveConnectionsSurface  map[string]int64   `json:"active_connections_by_surface"`
-	ListenerUp                map[string]bool    `json:"listener_up"`
-	TLSCertificateSubject     string             `json:"tls_certificate_subject"`
-	TLSCertificateNotBefore   string             `json:"tls_certificate_not_before"`
-	TLSCertificateNotAfter    string             `json:"tls_certificate_not_after"`
-	TLSAdvertisedALPN         []string           `json:"tls_advertised_alpn"`
-	TLSMinVersion             string             `json:"tls_min_version"`
-	LastRoute                 *LastRouteSnapshot `json:"last_route,omitempty"`
+	OK                        bool                             `json:"ok"`
+	Provider                  string                           `json:"provider"`
+	StartedAt                 string                           `json:"started_at"`
+	UptimeSeconds             int64                            `json:"uptime_seconds"`
+	PublicHTTPListen          string                           `json:"public_http_listen"`
+	PublicTLSListen           string                           `json:"public_tls_listen"`
+	MetricsListen             string                           `json:"metrics_listen"`
+	HTTPBackend               string                           `json:"http_backend"`
+	SSHBackend                string                           `json:"ssh_backend"`
+	OpenVPNBackend            string                           `json:"openvpn_backend"`
+	MetricsEnabled            bool                             `json:"metrics_enabled"`
+	ClassicTLSOn80            bool                             `json:"classic_tls_on_80"`
+	OpenVPNTCPEnabled         bool                             `json:"openvpn_tcp_enabled"`
+	OpenVPNTLSEnabled         bool                             `json:"openvpn_ssl_enabled"`
+	AcceptProxyProtocol       bool                             `json:"accept_proxy_protocol"`
+	TrustedProxyCIDRs         []string                         `json:"trusted_proxy_cidrs"`
+	DetectTimeoutMilliseconds int64                            `json:"detect_timeout_milliseconds"`
+	TLSHandshakeTimeoutMS     int64                            `json:"tls_handshake_timeout_milliseconds"`
+	MaxConnections            int                              `json:"max_connections"`
+	MaxConnectionsPerIP       int                              `json:"max_connections_per_ip"`
+	AcceptRatePerIP           int                              `json:"accept_rate_limit_per_ip"`
+	AcceptRateWindowSeconds   int64                            `json:"accept_rate_window_seconds"`
+	ReloadSuccess             uint64                           `json:"reload_success"`
+	LastReloadUnix            int64                            `json:"last_reload_unix"`
+	ActiveConnectionsTotal    int64                            `json:"active_connections_total"`
+	ActiveConnectionsSurface  map[string]int64                 `json:"active_connections_by_surface"`
+	Surface                   map[string]SurfaceSnapshot       `json:"surface,omitempty"`
+	BackendHealth             map[string]BackendHealthSnapshot `json:"backend_health,omitempty"`
+	Abuse                     *AbuseSnapshot                   `json:"abuse,omitempty"`
+	ListenerUp                map[string]bool                  `json:"listener_up"`
+	TLSCertificateSubject     string                           `json:"tls_certificate_subject"`
+	TLSCertificateNotBefore   string                           `json:"tls_certificate_not_before"`
+	TLSCertificateNotAfter    string                           `json:"tls_certificate_not_after"`
+	TLSAdvertisedALPN         []string                         `json:"tls_advertised_alpn"`
+	TLSMinVersion             string                           `json:"tls_min_version"`
+	LastRoute                 *LastRouteSnapshot               `json:"last_route,omitempty"`
 }
 
 type Collector struct {
@@ -198,7 +227,7 @@ func (c *Collector) ObserveReloadSuccess() {
 	c.lastReloadUnix = now
 }
 
-func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot) StatusSnapshot {
+func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, backendHealth map[string]BackendHealthSnapshot, abuse *AbuseSnapshot) StatusSnapshot {
 	c.mu.Lock()
 	activeBySurface := make(map[string]int64, len(c.activeBySurface))
 	for key, value := range c.activeBySurface {
@@ -208,12 +237,78 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot) Sta
 	lastReloadUnix := c.lastReloadUnix
 	activeTotal := c.activeTotal
 	startedAt := c.startedAt
+	counterKeys := make([]sampleKey, 0, len(c.counters))
+	for key := range c.counters {
+		counterKeys = append(counterKeys, key)
+	}
+	counterValues := make([]uint64, len(counterKeys))
+	for i, key := range counterKeys {
+		counterValues[i] = c.counters[key]
+	}
 	var lastRoute *LastRouteSnapshot
 	if c.lastRoute != nil {
 		clone := *c.lastRoute
 		lastRoute = &clone
 	}
 	c.mu.Unlock()
+
+	surfaceStats := make(map[string]SurfaceSnapshot)
+	for surface, active := range activeBySurface {
+		stats := surfaceStats[surface]
+		stats.ActiveConnections = active
+		surfaceStats[surface] = stats
+	}
+	for i, key := range counterKeys {
+		lbl := parseLabelSet(key.labels)
+		surface := strings.TrimSpace(lbl["surface"])
+		if surface == "" {
+			continue
+		}
+		stats := surfaceStats[surface]
+		value := counterValues[i]
+		switch key.name {
+		case "edge_mux_connections_accepted_total":
+			stats.AcceptedTotal += value
+		case "edge_mux_connections_rejected_total":
+			stats.RejectedTotal += value
+		case "edge_mux_read_initial_errors_total":
+			stats.ReadInitialErrors += value
+		case "edge_mux_ingress_wrap_errors_total":
+			stats.IngressWrapErrors += value
+		case "edge_mux_tls_handshake_failures_total":
+			stats.TLSHandshakeFailures += value
+		case "edge_mux_detect_classifications_total":
+			if stats.DetectTotals == nil {
+				stats.DetectTotals = make(map[string]uint64)
+			}
+			stats.DetectTotals[fallback(lbl["class"], "unknown")] += value
+		case "edge_mux_route_decisions_total":
+			if stats.RouteTotals == nil {
+				stats.RouteTotals = make(map[string]uint64)
+			}
+			stats.RouteTotals[fallback(lbl["route"], "unknown")] += value
+		}
+		surfaceStats[surface] = stats
+	}
+
+	var backendCopy map[string]BackendHealthSnapshot
+	if len(backendHealth) > 0 {
+		backendCopy = make(map[string]BackendHealthSnapshot, len(backendHealth))
+		for key, value := range backendHealth {
+			backendCopy[key] = value
+		}
+	}
+	var abuseCopy *AbuseSnapshot
+	if abuse != nil {
+		clone := *abuse
+		if len(abuse.BlockedUntilUnix) > 0 {
+			clone.BlockedUntilUnix = make(map[string]int64, len(abuse.BlockedUntilUnix))
+			for key, value := range abuse.BlockedUntilUnix {
+				clone.BlockedUntilUnix[key] = value
+			}
+		}
+		abuseCopy = &clone
+	}
 
 	return StatusSnapshot{
 		OK:                        listeners.HTTPUp && listeners.TLSUp,
@@ -242,6 +337,9 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot) Sta
 		LastReloadUnix:            lastReloadUnix,
 		ActiveConnectionsTotal:    activeTotal,
 		ActiveConnectionsSurface:  activeBySurface,
+		Surface:                   surfaceStats,
+		BackendHealth:             backendCopy,
+		Abuse:                     abuseCopy,
 		ListenerUp: map[string]bool{
 			"http":    listeners.HTTPUp,
 			"tls":     listeners.TLSUp,
@@ -325,6 +423,27 @@ func (c *Collector) RenderPrometheus(cfg runtime.Config, listeners ListenerSnaps
 		writeSample(&out, key.name, key.labels, counterValues[i])
 	}
 	return out.Bytes()
+}
+
+func parseLabelSet(labelSet string) map[string]string {
+	out := make(map[string]string)
+	labelSet = strings.TrimSpace(labelSet)
+	if labelSet == "" {
+		return out
+	}
+	for _, part := range strings.Split(labelSet, ",") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"`)
+		if key != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func (c *Collector) incCounter(name, labelSet string) {

@@ -85,9 +85,6 @@ func (t *SSHRuntimeSessionTracker) run() {
 
 func (t *SSHRuntimeSessionTracker) update() {
 	username := t.resolveUsername()
-	if username == "" {
-		return
-	}
 	if err := os.MkdirAll(t.cfg.SessionRoot, 0o750); err != nil {
 		if t.logger != nil {
 			t.logger.Printf("edge-mux session mkdir failed root=%s: %v", t.cfg.SessionRoot, err)
@@ -115,8 +112,8 @@ func (t *SSHRuntimeSessionTracker) update() {
 	}
 	if t.activeFile == "" {
 		t.activeFile = target
-		triggerEnforcer(t.logger, t.cfg.EnforcerPath)
 	}
+	triggerEnforcer(t.logger, t.cfg.EnforcerPath)
 }
 
 func (t *SSHRuntimeSessionTracker) resolveUsername() string {

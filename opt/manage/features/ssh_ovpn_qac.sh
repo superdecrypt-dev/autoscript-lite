@@ -428,11 +428,22 @@ active_session_ovpn = max(0, to_int(runtime.get("active_session_ovpn"), 0))
 last_seen_ssh = max(0, to_int(runtime.get("last_seen_ssh_unix"), 0))
 last_seen_ovpn = max(0, to_int(runtime.get("last_seen_ovpn_unix"), 0))
 
+distinct_ips_ssh = runtime.get("distinct_ips_ssh")
+if not isinstance(distinct_ips_ssh, list):
+  distinct_ips_ssh = []
+distinct_ips_ovpn = runtime.get("distinct_ips_ovpn")
+if not isinstance(distinct_ips_ovpn, list):
+  distinct_ips_ovpn = []
+distinct_ips_ssh = [str(v).strip() for v in distinct_ips_ssh if str(v or "").strip()]
+distinct_ips_ovpn = [str(v).strip() for v in distinct_ips_ovpn if str(v or "").strip()]
+distinct_ips_total = sorted(set(distinct_ips_ssh) | set(distinct_ips_ovpn))
+
 quota_used_total = quota_used_ssh + quota_used_ovpn
 active_session_total = active_session_ssh + active_session_ovpn
 quota_exhausted_ssh = bool(quota_limit_ssh > 0 and quota_used_ssh >= quota_limit_ssh)
 quota_exhausted_ovpn = bool(quota_limit_ovpn > 0 and quota_used_ovpn >= quota_limit_ovpn)
-ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and active_session_total > ip_limit)
+ip_limit_metric = len(distinct_ips_total) if distinct_ips_total else active_session_total
+ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and ip_limit_metric > ip_limit)
 shared_access = bool(access_enabled and date_is_active(expired_at) and not ip_limit_locked)
 access_effective_ssh = bool(shared_access and not quota_exhausted_ssh)
 access_effective_ovpn = bool(shared_access and not quota_exhausted_ovpn)
@@ -507,19 +518,27 @@ payload = {
     "quota_used_ovpn_bytes": quota_used_ovpn,
     "active_session_ssh": active_session_ssh,
     "active_session_ovpn": active_session_ovpn,
+    "distinct_ips_ssh": distinct_ips_ssh,
+    "distinct_ips_ovpn": distinct_ips_ovpn,
     "last_seen_ssh_unix": last_seen_ssh,
     "last_seen_ovpn_unix": last_seen_ovpn,
   },
   "derived": {
     "quota_used_total_bytes": quota_used_total,
     "active_session_total": active_session_total,
+    "distinct_ip_total": len(distinct_ips_total),
+    "distinct_ips_total": distinct_ips_total,
     "quota_exhausted": bool(quota_exhausted_ssh),
     "quota_exhausted_ssh": bool(quota_exhausted_ssh),
     "quota_exhausted_ovpn": bool(quota_exhausted_ovpn),
     "ip_limit_locked": bool(ip_limit_locked),
+    "ip_limit_metric": ip_limit_metric,
     "access_effective": bool(access_effective_ssh),
     "access_effective_ssh": bool(access_effective_ssh),
     "access_effective_ovpn": bool(access_effective_ovpn),
+    "speed_limit_active_ssh": bool(speed_limit_enabled and speed_down > 0 and active_session_ssh > 0),
+    "speed_limit_active_ovpn": bool(speed_limit_enabled and speed_down > 0 and active_session_ovpn > 0),
+    "speed_limit_active_total": bool(speed_limit_enabled and speed_down > 0 and active_session_total > 0),
     "last_reason": last_reason,
     "last_reason_ssh": last_reason_ssh,
     "last_reason_ovpn": last_reason_ovpn,

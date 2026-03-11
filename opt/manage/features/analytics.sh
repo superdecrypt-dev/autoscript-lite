@@ -1419,6 +1419,7 @@ edge_runtime_status_menu() {
   local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
   local metrics_enabled metrics_listen health_text status_json metrics_text runtime_ok runtime_active runtime_reload runtime_last_reload runtime_listener_http runtime_listener_tls runtime_listener_metrics runtime_proxy_proto
   local runtime_tls_subject runtime_tls_not_after runtime_tls_alpn runtime_last_route
+  local runtime_backend_health runtime_abuse runtime_surface_public runtime_surface_inner
   local metric_accept_http metric_accept_tls metric_rejected_total
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
@@ -1518,6 +1519,43 @@ out("accept_proxy_protocol", "true" if data.get("accept_proxy_protocol") else "f
 out("tls_subject", str(data.get("tls_certificate_subject") or "-"))
 out("tls_not_after", str(data.get("tls_certificate_not_after") or "-"))
 out("tls_alpn", ",".join(data.get("tls_advertised_alpn") or []) or "-")
+backend_health = data.get("backend_health") or {}
+if isinstance(backend_health, dict) and backend_health:
+    parts = []
+    for key in ("http", "ssh", "openvpn"):
+        item = backend_health.get(key) or {}
+        addr = str(item.get("address") or "-")
+        healthy = bool(item.get("healthy"))
+        reason = str(item.get("reason") or "").strip()
+        part = f"{key}={'up' if healthy else 'down'}@{addr}"
+        if reason and not healthy:
+            part += f" ({reason})"
+        parts.append(part)
+    out("backend_health", " | ".join(parts) if parts else "-")
+else:
+    out("backend_health", "-")
+abuse = data.get("abuse") or {}
+if isinstance(abuse, dict) and abuse:
+    out(
+        "abuse",
+        f"active_ip={int(abuse.get('active_ips') or 0)} "
+        f"reject_track={int(abuse.get('reject_tracked_ips') or 0)} "
+        f"cooldown={int(abuse.get('cooldown_blocked_ips') or 0)}"
+    )
+else:
+    out("abuse", "-")
+surface = data.get("surface") or {}
+def surface_part(name):
+    item = surface.get(name) or {}
+    if not isinstance(item, dict) or not item:
+        return f"{name}=n/a"
+    return (
+        f"{name}:a={int(item.get('active_connections') or 0)}"
+        f"/ok={int(item.get('accepted_total') or 0)}"
+        f"/rej={int(item.get('rejected_total') or 0)}"
+    )
+out("surface_public", f"{surface_part('http-port')} | {surface_part('tls-port')}")
+out("surface_inner", f"{surface_part('http-inner')} | {surface_part('tls-inner')}")
 last_route = data.get("last_route") or {}
 if last_route:
     out(
@@ -1541,6 +1579,10 @@ PY
         runtime_tls_not_after="-"
         runtime_tls_alpn="-"
         runtime_last_route="-"
+        runtime_backend_health="-"
+        runtime_abuse="-"
+        runtime_surface_public="-"
+        runtime_surface_inner="-"
         while IFS='=' read -r key value; do
           case "${key}" in
             ok) runtime_ok="${value}" ;;
@@ -1554,6 +1596,10 @@ PY
             tls_subject) runtime_tls_subject="${value}" ;;
             tls_not_after) runtime_tls_not_after="${value}" ;;
             tls_alpn) runtime_tls_alpn="${value}" ;;
+            backend_health) runtime_backend_health="${value}" ;;
+            abuse) runtime_abuse="${value}" ;;
+            surface_public) runtime_surface_public="${value}" ;;
+            surface_inner) runtime_surface_inner="${value}" ;;
             last_route) runtime_last_route="${value}" ;;
           esac
         done <<< "${parsed}"
@@ -1567,6 +1613,10 @@ PY
         echo "TLS expire  : ${runtime_tls_not_after}"
         echo "ALPN        : ${runtime_tls_alpn}"
         echo "Listeners   : http=${runtime_listener_http} tls=${runtime_listener_tls} metrics=${runtime_listener_metrics}"
+        echo "Backends    : ${runtime_backend_health}"
+        echo "Abuse       : ${runtime_abuse}"
+        echo "Surface pub : ${runtime_surface_public}"
+        echo "Surface in  : ${runtime_surface_inner}"
         echo "Last route  : ${runtime_last_route}"
       else
         warn "python3 tidak tersedia, skip parsing /status edge"
@@ -1961,7 +2011,7 @@ openvpn_status_menu() {
   hr
 
   local env_file core_svc ws_svc speed_svc tcp_enabled ssl_enabled ws_enabled
-  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir speed_state_file default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible core_service_ok ws_service_required ws_service_ok
+  local tcp_bind tcp_port ws_bind ws_port ws_path clients_dir downloads_dir speed_state_file speed_state_summary default_profile default_ssl_profile default_ws_profile default_name default_token default_download_url default_download_file default_ws_path default_ws_alt_path client_count runtime_ready runtime_reason default_visible core_service_ok ws_service_required ws_service_ok
   env_file="$(openvpn_runtime_env_file)"
   core_svc="ovpn-tcp.service"
   ws_svc="ovpnws-proxy.service"
@@ -1987,6 +2037,7 @@ openvpn_status_menu() {
   default_ws_path="-"
   default_ws_alt_path="-"
   client_count="$(openvpn_client_count_value 2>/dev/null || echo "0")"
+  speed_state_summary="-"
   runtime_ready="false"
   runtime_reason="$(openvpn_manage_ready_reason 2>/dev/null || true)"
   if [[ -z "${runtime_reason}" ]]; then
@@ -2056,6 +2107,35 @@ openvpn_status_menu() {
   echo "Clients dir : ${clients_dir}"
   echo "ZIP dir     : ${downloads_dir}"
   echo "Speed state : ${speed_state_file}"
+  if have_cmd python3 && [[ -f "${speed_state_file}" ]]; then
+    speed_state_summary="$(
+      python3 - <<'PY' "${speed_state_file}" 2>/dev/null || true
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+ok = "ok" if bool(data.get("ok")) else "error"
+count = int(data.get("policy_count") or 0)
+applied = data.get("applied") or []
+users = []
+if isinstance(applied, list):
+    for item in applied[:3]:
+        if isinstance(item, dict):
+            username = str(item.get("username") or item.get("client_cn") or "").strip()
+            if username:
+                users.append(username)
+summary = f"{ok} | policy={count}"
+if users:
+    summary += f" | users={','.join(users)}"
+print(summary)
+PY
+    )"
+  fi
+  echo "Speed apply : ${speed_state_summary:-"-"}"
   echo "Managed     : ${client_count} client(s)"
   if [[ "${runtime_ready}" == "true" ]]; then
     echo "Default     : ${default_name}"
@@ -2648,7 +2728,7 @@ ssh_username_duplicate_reason() {
 
   local listed=""
   listed="$(
-    find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null \
+    find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -printf '%f\n' 2>/dev/null \
       | sed -E 's/@ssh\.json$//' \
       | sed -E 's/\.json$//' \
       | tr '[:upper:]' '[:lower:]' \
@@ -2700,6 +2780,7 @@ ssh_state_dirs_prepare() {
   mkdir -p "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" || true
 
+  find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '.tmp.*.json' -delete 2>/dev/null || true
   find "${QUOTA_ROOT}/ssh" -maxdepth 1 -type f \( -name '*.json' -o -name '*.json.lock' \) -delete 2>/dev/null || true
   find "/var/lib/xray-manage/ssh-users" -maxdepth 1 -type f -name '*.json' -delete 2>/dev/null || true
   find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' ! -name '*@ssh.txt' -delete 2>/dev/null || true
@@ -3950,8 +4031,9 @@ ssh_pick_managed_user() {
   local -a users=()
   while IFS= read -r u; do
     [[ -n "${u}" ]] || continue
+    ssh_ovpn_qac_username_valid "${u}" || continue
     users+=("${u}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
 
   if (( ${#users[@]} == 0 )); then
     warn "Belum ada akun SSH terkelola."
@@ -4091,6 +4173,8 @@ def norm_expired(v):
 rows = []
 if os.path.isdir(root):
   for name in os.listdir(root):
+    if name.startswith("."):
+      continue
     if not name.endswith(".json"):
       continue
     base = name[:-5]
@@ -5508,9 +5592,9 @@ sshws_active_session_detail() {
   local qf
   qf="$(ssh_user_state_file "${username}")"
   if [[ -f "${qf}" ]]; then
-    local fields qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total
+    local fields qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total _distinct_ssh _distinct_ovpn _distinct_total _ip_metric _speed_active_ssh _speed_active_ovpn _speed_active_total
     fields="$(ssh_qac_read_detail_fields "${qf}")"
-    IFS='|' read -r _ qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total <<<"${fields}"
+    IFS='|' read -r _ qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total _distinct_ssh _distinct_ovpn _distinct_total _ip_metric _speed_active_ssh _speed_active_ovpn _speed_active_total <<<"${fields}"
     hr
     printf "%-16s : %s\n" "Quota SSH" "${qssh_disp}"
     printf "%-16s : %s\n" "Quota OVPN" "${qovpn_disp}"
@@ -5592,6 +5676,303 @@ sshws_active_sessions_menu() {
   done
 }
 
+SSH_OVPN_SESSION_ROWS=()
+SSH_OVPN_SESSION_VIEW_INDEXES=()
+SSH_OVPN_SESSION_PAGE_SIZE=15
+SSH_OVPN_SESSION_PAGE=0
+SSH_OVPN_SESSION_QUERY=""
+
+ssh_ovpn_live_sessions_collect_rows() {
+  SSH_OVPN_SESSION_ROWS=()
+  local state_root
+  state_root="$(ssh_ovpn_qac_state_root_value)"
+  need_python3
+
+  local row
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    SSH_OVPN_SESSION_ROWS+=("${row}")
+  done < <(python3 - <<'PY' "${state_root}" 2>/dev/null || true
+import json
+import pathlib
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+now = int(time.time())
+
+def to_int(v, default=0):
+    try:
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, (int, float)):
+            return int(v)
+        s = str(v).strip()
+        if not s:
+            return default
+        return int(float(s))
+    except Exception:
+        return default
+
+def fmt_age(ts):
+    ts = max(0, to_int(ts, 0))
+    if ts <= 0 or now <= 0 or ts > now:
+        return "-"
+    delta = now - ts
+    if delta < 60:
+        return f"{delta}s"
+    if delta < 3600:
+        return f"{delta//60}m"
+    if delta < 86400:
+        return f"{delta//3600}h"
+    return f"{delta//86400}d"
+
+rows = []
+if root.is_dir():
+    for path in sorted(root.glob("*.json"), key=lambda item: item.name.lower()):
+        if path.name.startswith("."):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        username = str(data.get("username") or path.stem).strip() or path.stem
+        runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
+        derived = data.get("derived") if isinstance(data.get("derived"), dict) else {}
+        access_ssh = "ON" if bool(derived.get("access_effective_ssh", True)) else "OFF"
+        access_ovpn = "ON" if bool(derived.get("access_effective_ovpn", True)) else "OFF"
+        reason_ssh = str(derived.get("last_reason_ssh") or "-").strip() or "-"
+        reason_ovpn = str(derived.get("last_reason_ovpn") or "-").strip() or "-"
+        sessions_ssh = runtime.get("sessions_ssh") if isinstance(runtime.get("sessions_ssh"), list) else []
+        sessions_ovpn = runtime.get("sessions_ovpn") if isinstance(runtime.get("sessions_ovpn"), list) else []
+        for payload in sessions_ssh:
+            if not isinstance(payload, dict):
+                continue
+            rows.append([
+                username,
+                "ssh",
+                str(payload.get("surface") or "-").strip() or "-",
+                str(payload.get("client_ip") or "-").strip() or "-",
+                str(payload.get("detail") or "-").strip() or "-",
+                fmt_age(payload.get("updated_at_unix")),
+                access_ssh,
+                reason_ssh,
+            ])
+        for payload in sessions_ovpn:
+            if not isinstance(payload, dict):
+                continue
+            rows.append([
+                username,
+                "ovpn",
+                str(payload.get("surface") or "-").strip() or "-",
+                str(payload.get("client_ip") or "-").strip() or "-",
+                str(payload.get("detail") or "-").strip() or "-",
+                fmt_age(payload.get("updated_at_unix")),
+                access_ovpn,
+                reason_ovpn,
+            ])
+
+rows.sort(key=lambda item: (item[0].lower(), item[1], item[2], item[3], item[4]))
+for row in rows:
+    print("|".join(row))
+PY
+)
+}
+
+ssh_ovpn_live_sessions_apply_filter() {
+  SSH_OVPN_SESSION_VIEW_INDEXES=()
+  local q="${SSH_OVPN_SESSION_QUERY,,}"
+  local i row
+  for i in "${!SSH_OVPN_SESSION_ROWS[@]}"; do
+    row="${SSH_OVPN_SESSION_ROWS[$i]}"
+    if [[ -z "${q}" || "${row,,}" == *"${q}"* ]]; then
+      SSH_OVPN_SESSION_VIEW_INDEXES+=("${i}")
+    fi
+  done
+}
+
+ssh_ovpn_live_sessions_print_page() {
+  local page="${1:-0}"
+  local total="${#SSH_OVPN_SESSION_VIEW_INDEXES[@]}"
+  local pages=0
+  local display_pages=1
+  if (( total > 0 )); then
+    pages=$(( (total + SSH_OVPN_SESSION_PAGE_SIZE - 1) / SSH_OVPN_SESSION_PAGE_SIZE ))
+    display_pages="${pages}"
+  fi
+  if (( page < 0 )); then
+    page=0
+  fi
+  if (( pages > 0 && page >= pages )); then
+    page=$((pages - 1))
+  fi
+  SSH_OVPN_SESSION_PAGE="${page}"
+
+  echo "Live SSH & OVPN sessions: ${total} | page $((page + 1))/${display_pages}"
+  if [[ -n "${SSH_OVPN_SESSION_QUERY}" ]]; then
+    echo "Filter: '${SSH_OVPN_SESSION_QUERY}'"
+  fi
+  echo
+
+  if (( total == 0 )); then
+    echo "Tidak ada sesi SSH/OVPN aktif."
+    return 0
+  fi
+
+  printf "%-4s %-18s %-5s %-12s %-16s %-18s %-6s %-7s\n" "NO" "Username" "Proto" "Surface" "Client IP" "Detail" "Age" "Access"
+  hr
+
+  local start end i list_pos real_idx row username proto surface client_ip detail age access reason
+  start=$((page * SSH_OVPN_SESSION_PAGE_SIZE))
+  end=$((start + SSH_OVPN_SESSION_PAGE_SIZE))
+  if (( end > total )); then
+    end="${total}"
+  fi
+  for (( i=start; i<end; i++ )); do
+    list_pos="${i}"
+    real_idx="${SSH_OVPN_SESSION_VIEW_INDEXES[$list_pos]}"
+    row="${SSH_OVPN_SESSION_ROWS[$real_idx]}"
+    IFS='|' read -r username proto surface client_ip detail age access reason <<<"${row}"
+    printf "%-4s %-18s %-5s %-12s %-16s %-18s %-6s %-7s\n" "$((i - start + 1))" "${username}" "${proto}" "${surface}" "${client_ip}" "${detail}" "${age}" "${access}"
+  done
+}
+
+ssh_ovpn_live_session_detail() {
+  local view_no="${1:-}"
+  [[ "${view_no}" =~ ^[0-9]+$ ]] || { warn "Input bukan angka"; pause; return 0; }
+
+  local total page pages start end rows
+  total="${#SSH_OVPN_SESSION_VIEW_INDEXES[@]}"
+  if (( total <= 0 )); then
+    warn "Tidak ada sesi aktif."
+    pause
+    return 0
+  fi
+
+  page="${SSH_OVPN_SESSION_PAGE:-0}"
+  pages=$(( (total + SSH_OVPN_SESSION_PAGE_SIZE - 1) / SSH_OVPN_SESSION_PAGE_SIZE ))
+  if (( page < 0 )); then page=0; fi
+  if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+  start=$((page * SSH_OVPN_SESSION_PAGE_SIZE))
+  end=$((start + SSH_OVPN_SESSION_PAGE_SIZE))
+  if (( end > total )); then end="${total}"; fi
+  rows=$((end - start))
+
+  if (( view_no < 1 || view_no > rows )); then
+    warn "NO di luar range"
+    pause
+    return 0
+  fi
+
+  local list_pos real_idx row username proto surface client_ip detail age access reason
+  list_pos=$((start + view_no - 1))
+  real_idx="${SSH_OVPN_SESSION_VIEW_INDEXES[$list_pos]}"
+  row="${SSH_OVPN_SESSION_ROWS[$real_idx]}"
+  IFS='|' read -r username proto surface client_ip detail age access reason <<<"${row}"
+
+  title
+  echo "3) SSH & OVPN User > Live Session Detail"
+  hr
+  printf "%-16s : %s\n" "Username" "${username}"
+  printf "%-16s : %s\n" "Protocol" "${proto}"
+  printf "%-16s : %s\n" "Surface" "${surface}"
+  printf "%-16s : %s\n" "Client IP" "${client_ip}"
+  printf "%-16s : %s\n" "Detail" "${detail}"
+  printf "%-16s : %s\n" "Last Seen" "${age}"
+  printf "%-16s : %s\n" "Access" "${access}"
+  printf "%-16s : %s\n" "Reason" "${reason}"
+
+  local qf
+  qf="$(ssh_qac_state_file "${username}")"
+  if [[ -f "${qf}" ]]; then
+    local fields qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total distinct_ssh distinct_ovpn distinct_total ip_metric _speed_active_ssh _speed_active_ovpn speed_active_total
+    fields="$(ssh_qac_read_detail_fields "${qf}")"
+    IFS='|' read -r _ qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim _reason_ssh _reason_ovpn speed_state speed_down speed_up lock_state _access_ssh _access_ovpn _active_ssh _active_ovpn _active_total distinct_ssh distinct_ovpn distinct_total ip_metric _speed_active_ssh _speed_active_ovpn speed_active_total <<<"${fields}"
+    hr
+    printf "%-16s : %s\n" "Quota SSH" "${qssh_disp}"
+    printf "%-16s : %s\n" "Quota OVPN" "${qovpn_disp}"
+    printf "%-16s : %s\n" "Used SSH" "${ussh_disp}"
+    printf "%-16s : %s\n" "Used OVPN" "${uovpn_disp}"
+    printf "%-16s : %s\n" "Used Total" "${utotal_disp}"
+    printf "%-16s : %s\n" "Distinct Total IP" "${distinct_total}"
+    printf "%-16s : %s\n" "IP/Login Metric" "${ip_metric}"
+    printf "%-16s : %s\n" "Speed Active" "${speed_active_total}"
+    printf "%-16s : %s\n" "Metadata File" "${qf}"
+  fi
+  hr
+  pause
+}
+
+ssh_ovpn_live_sessions_menu() {
+  SSH_OVPN_SESSION_PAGE=0
+  SSH_OVPN_SESSION_QUERY=""
+  while true; do
+    ssh_ovpn_live_sessions_collect_rows
+    ssh_ovpn_live_sessions_apply_filter
+
+    title
+    echo "3) SSH & OVPN User > Live Sessions"
+    hr
+    ssh_ovpn_live_sessions_print_page "${SSH_OVPN_SESSION_PAGE}"
+    hr
+    echo "Ketik NO untuk detail, atau: search / clear / next / previous / refresh / 0"
+    hr
+
+    local c=""
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${c}"; then
+      return 0
+    fi
+
+    case "${c}" in
+      next|n)
+        local pages
+        pages=$(( (${#SSH_OVPN_SESSION_VIEW_INDEXES[@]} + SSH_OVPN_SESSION_PAGE_SIZE - 1) / SSH_OVPN_SESSION_PAGE_SIZE ))
+        if (( pages > 0 && SSH_OVPN_SESSION_PAGE < pages - 1 )); then
+          SSH_OVPN_SESSION_PAGE=$((SSH_OVPN_SESSION_PAGE + 1))
+        fi
+        ;;
+      previous|p|prev)
+        if (( SSH_OVPN_SESSION_PAGE > 0 )); then
+          SSH_OVPN_SESSION_PAGE=$((SSH_OVPN_SESSION_PAGE - 1))
+        fi
+        ;;
+      search)
+        if ! read -r -p "Filter username/proto/surface/ip (atau kembali): " c; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${c}"; then
+          continue
+        fi
+        SSH_OVPN_SESSION_QUERY="${c}"
+        SSH_OVPN_SESSION_PAGE=0
+        ;;
+      clear)
+        SSH_OVPN_SESSION_QUERY=""
+        SSH_OVPN_SESSION_PAGE=0
+        ;;
+      refresh|r)
+        ;;
+      *)
+        if [[ "${c}" =~ ^[0-9]+$ ]]; then
+          ssh_ovpn_live_session_detail "${c}"
+        else
+          warn "Pilihan tidak valid"
+          sleep 1
+        fi
+        ;;
+    esac
+  done
+}
+
 ssh_menu() {
   while true; do
     title
@@ -5607,7 +5988,7 @@ ssh_menu() {
     echo "  8) Restart SSH WS"
     echo "  9) Restart OpenVPN Core"
     echo "  10) Restart OpenVPN WS Proxy"
-    echo "  11) SSH Active Sessions"
+    echo "  11) Live Sessions"
     echo "  12) OpenVPN Core Log"
     echo "  13) OpenVPN WS Proxy Log"
     echo "  0) Back"
@@ -5627,7 +6008,7 @@ ssh_menu() {
       8) sshws_restart_menu "3) SSH & OVPN User > Restart SSH WS" ;;
       9) openvpn_restart_core_menu "3) SSH & OVPN User > Restart OpenVPN Core" ;;
       10) openvpn_restart_ws_menu "3) SSH & OVPN User > Restart OpenVPN WS Proxy" ;;
-      11) sshws_active_sessions_menu ;;
+      11) ssh_ovpn_live_sessions_menu ;;
       12) daemon_log_tail_show "ovpn-tcp.service" 40 ;;
       13) daemon_log_tail_show "ovpnws-proxy.service" 40 ;;
       0|kembali|k|back|b) break ;;
@@ -5954,10 +6335,14 @@ ssh_qac_collect_files() {
   SSH_QAC_FILES=()
   ssh_state_dirs_prepare
 
-  local f
+  local f base
   while IFS= read -r -d '' f; do
+    base="$(basename "${f}")"
+    base="${base%@ssh.json}"
+    base="${base%.json}"
+    ssh_ovpn_qac_username_valid "${base}" || continue
     SSH_QAC_FILES+=("${f}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 }
 
 ssh_qac_total_pages_for_indexes() {
@@ -6096,7 +6481,11 @@ PY
 
 ssh_qac_read_detail_fields() {
   # args: json_file
-  # prints: username|quota_ssh_disp|quota_ovpn_disp|used_ssh_disp|used_ovpn_disp|used_total_disp|expired_at_date|ip_limit_onoff|ip_limit_value|reason_ssh|reason_ovpn|speed_onoff|speed_down_mbit|speed_up_mbit|lock_state|access_ssh|access_ovpn|active_ssh|active_ovpn|active_total
+  # prints:
+  # username|quota_ssh_disp|quota_ovpn_disp|used_ssh_disp|used_ovpn_disp|used_total_disp|expired_at_date|
+  # ip_limit_onoff|ip_limit_value|reason_ssh|reason_ovpn|speed_onoff|speed_down_mbit|speed_up_mbit|
+  # lock_state|access_ssh|access_ovpn|active_ssh|active_ovpn|active_total|
+  # distinct_ssh|distinct_ovpn|distinct_total|ip_limit_metric|speed_active_ssh|speed_active_ovpn|speed_active_total
   local qf="$1"
   need_python3
   python3 - <<'PY' "${qf}"
@@ -6209,6 +6598,10 @@ quota_used_total = to_int(derived.get("quota_used_total_bytes"), quota_used_ssh 
 active_ssh = to_int(runtime.get("active_session_ssh"), 0)
 active_ovpn = to_int(runtime.get("active_session_ovpn"), 0)
 active_total = to_int(derived.get("active_session_total"), active_ssh + active_ovpn)
+distinct_ssh = len(runtime.get("distinct_ips_ssh") or []) if isinstance(runtime.get("distinct_ips_ssh"), list) else 0
+distinct_ovpn = len(runtime.get("distinct_ips_ovpn") or []) if isinstance(runtime.get("distinct_ips_ovpn"), list) else 0
+distinct_total = to_int(derived.get("distinct_ip_total"), distinct_ssh + distinct_ovpn)
+ip_limit_metric = to_int(derived.get("ip_limit_metric"), distinct_total if distinct_total > 0 else active_total)
 unit = str(policy.get("quota_unit") or unified.get("quota_unit") or "binary").strip().lower()
 bpg = 1000**3 if unit in ("decimal", "gb", "1000", "gigabyte") else 1024**3
 quota_ssh_disp = f"{fmt_gb(quota_limit_ssh / bpg)} GB"
@@ -6236,10 +6629,14 @@ if speed_up < 0:
 access_ssh = "ON" if to_bool(derived.get("access_effective_ssh"), True) else "OFF"
 access_ovpn = "ON" if to_bool(derived.get("access_effective_ovpn"), True) else "OFF"
 lock_disp = "ON" if (to_bool(status.get("manual_block")) or access_ssh == "OFF" or access_ovpn == "OFF") else "OFF"
+speed_active_ssh = "ON" if to_bool(derived.get("speed_limit_active_ssh")) else "OFF"
+speed_active_ovpn = "ON" if to_bool(derived.get("speed_limit_active_ovpn")) else "OFF"
+speed_active_total = "ON" if to_bool(derived.get("speed_limit_active_total")) else "OFF"
 print(
   f"{username}|{quota_ssh_disp}|{quota_ovpn_disp}|{quota_used_ssh_disp}|{quota_used_ovpn_disp}|{quota_used_total_disp}|{expired_date}|"
   f"{'ON' if ip_enabled else 'OFF'}|{ip_limit}|{reason_ssh}|{reason_ovpn}|"
-  f"{'ON' if speed_enabled else 'OFF'}|{fmt_mbit(speed_down)}|{fmt_mbit(speed_up)}|{lock_disp}|{access_ssh}|{access_ovpn}|{active_ssh}|{active_ovpn}|{active_total}"
+  f"{'ON' if speed_enabled else 'OFF'}|{fmt_mbit(speed_down)}|{fmt_mbit(speed_up)}|{lock_disp}|{access_ssh}|{access_ovpn}|{active_ssh}|{active_ovpn}|{active_total}|"
+  f"{distinct_ssh}|{distinct_ovpn}|{distinct_total}|{ip_limit_metric}|{speed_active_ssh}|{speed_active_ovpn}|{speed_active_total}"
 )
 PY
 }
@@ -6288,17 +6685,17 @@ policy = unified.get("policy") if isinstance(unified.get("policy"), dict) else {
 derived = unified.get("derived") if isinstance(unified.get("derived"), dict) else {}
 
 val = None
-  if unified:
-    if key == "ip_limit_enabled":
-      val = policy.get("ip_limit_enabled")
-    elif key == "speed_limit_enabled":
-      val = policy.get("speed_limit_enabled")
-    elif key == "quota_exhausted":
-      val = derived.get("quota_exhausted_ssh", derived.get("quota_exhausted"))
-    elif key == "ip_limit_locked":
-      val = derived.get("ip_limit_locked")
-    elif key == "account_locked":
-      val = not bool(derived.get("access_effective_ssh", policy.get("access_enabled", True)))
+if unified:
+  if key == "ip_limit_enabled":
+    val = policy.get("ip_limit_enabled")
+  elif key == "speed_limit_enabled":
+    val = policy.get("speed_limit_enabled")
+  elif key == "quota_exhausted":
+    val = derived.get("quota_exhausted_ssh", derived.get("quota_exhausted"))
+  elif key == "ip_limit_locked":
+    val = derived.get("ip_limit_locked")
+  elif key == "account_locked":
+    val = not bool(derived.get("access_effective_ssh", policy.get("access_enabled", True)))
 if val is None:
   val = status.get(key)
 if isinstance(val, bool):
@@ -6860,9 +7257,9 @@ ssh_qac_edit_flow() {
     echo "File  : ${qf}"
     hr
 
-    local fields username qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim reason_ssh reason_ovpn speed_state speed_down speed_up lock_state access_ssh access_ovpn active_ssh active_ovpn active_total
+    local fields username qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim reason_ssh reason_ovpn speed_state speed_down speed_up lock_state access_ssh access_ovpn active_ssh active_ovpn active_total distinct_ssh distinct_ovpn distinct_total ip_metric speed_active_ssh speed_active_ovpn speed_active_total
     fields="$(ssh_qac_read_detail_fields "${qf}")"
-    IFS='|' read -r username qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim reason_ssh reason_ovpn speed_state speed_down speed_up lock_state access_ssh access_ovpn active_ssh active_ovpn active_total <<<"${fields}"
+    IFS='|' read -r username qssh_disp qovpn_disp ussh_disp uovpn_disp utotal_disp exp_date ip_state ip_lim reason_ssh reason_ovpn speed_state speed_down speed_up lock_state access_ssh access_ovpn active_ssh active_ovpn active_total distinct_ssh distinct_ovpn distinct_total ip_metric speed_active_ssh speed_active_ovpn speed_active_total <<<"${fields}"
 
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
@@ -6882,9 +7279,16 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_ssh}"
     printf "%-${label_w}s : %s\n" "Active OVPN Sessions" "${active_ovpn}"
     printf "%-${label_w}s : %s\n" "Active Total" "${active_total}"
+    printf "%-${label_w}s : %s\n" "Distinct SSH IP" "${distinct_ssh}"
+    printf "%-${label_w}s : %s\n" "Distinct OVPN IP" "${distinct_ovpn}"
+    printf "%-${label_w}s : %s\n" "Distinct Total IP" "${distinct_total}"
+    printf "%-${label_w}s : %s\n" "IP/Login Metric" "${ip_metric}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
+    printf "%-${label_w}s : %s\n" "Speed Active SSH" "${speed_active_ssh}"
+    printf "%-${label_w}s : %s\n" "Speed Active OVPN" "${speed_active_ovpn}"
+    printf "%-${label_w}s : %s\n" "Speed Active Total" "${speed_active_total}"
     printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
 

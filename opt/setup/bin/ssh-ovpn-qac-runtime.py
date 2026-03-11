@@ -2,6 +2,7 @@
 import argparse
 import datetime
 import fcntl
+import ipaddress
 import json
 import os
 import pathlib
@@ -117,6 +118,75 @@ def norm_date(value):
     if not text or text == "-":
         return ""
     return text[:10]
+
+
+def normalize_ip(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    try:
+        return str(ipaddress.ip_address(text))
+    except Exception:
+        return ""
+
+
+def normalize_real_ip(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("["):
+        host = text.split("]", 1)[0].strip("[]")
+        return normalize_ip(host)
+    if ":" in text:
+        host, _, _port = text.rpartition(":")
+        if host:
+            parsed = normalize_ip(host)
+            if parsed:
+                return parsed
+    return normalize_ip(text)
+
+
+def normalize_ip_list(value):
+    out = []
+    seen = set()
+    if not isinstance(value, list):
+        return out
+    for raw in value:
+        ip = normalize_ip(raw)
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        out.append(ip)
+    return sorted(out)
+
+
+def normalize_session_rows(value, protocol):
+    rows = []
+    seen = set()
+    if not isinstance(value, list):
+        return rows
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        client_ip = normalize_ip(raw.get("client_ip") or raw.get("real_ip"))
+        if not client_ip:
+            continue
+        row = {
+            "protocol": str(protocol or raw.get("protocol") or "-").strip() or "-",
+            "surface": str(raw.get("surface") or raw.get("transport") or "-").strip() or "-",
+            "client_ip": client_ip,
+            "detail": str(raw.get("detail") or raw.get("virtual_ip") or raw.get("client_cn") or "-").strip() or "-",
+            "updated_at_unix": max(0, to_int(raw.get("updated_at_unix"), to_int(raw.get("updated_at"), 0))),
+        }
+        row_key = (row["protocol"], row["surface"], row["client_ip"], row["detail"])
+        if row_key in seen:
+            continue
+        seen.add(row_key)
+        rows.append(row)
+    rows.sort(key=lambda item: (item["protocol"], item["surface"], item["client_ip"], item["detail"]))
+    return rows
 
 
 def user_exists(username):
@@ -246,7 +316,15 @@ def ensure_state(username):
         "active_session_ovpn": max(0, to_int(current_runtime.get("active_session_ovpn"), 0)),
         "last_seen_ssh_unix": max(0, to_int(current_runtime.get("last_seen_ssh_unix"), 0)),
         "last_seen_ovpn_unix": max(0, to_int(current_runtime.get("last_seen_ovpn_unix"), 0)),
+        "distinct_ips_ssh": normalize_ip_list(current_runtime.get("distinct_ips_ssh")),
+        "distinct_ips_ovpn": normalize_ip_list(current_runtime.get("distinct_ips_ovpn")),
+        "sessions_ssh": normalize_session_rows(current_runtime.get("sessions_ssh"), "ssh"),
+        "sessions_ovpn": normalize_session_rows(current_runtime.get("sessions_ovpn"), "ovpn"),
     }
+
+    distinct_ips_total = sorted({*runtime["distinct_ips_ssh"], *runtime["distinct_ips_ovpn"]})
+    speed_limit_active_ssh = runtime["active_session_ssh"] if speed_limit_enabled and runtime["active_session_ssh"] > 0 else 0
+    speed_limit_active_ovpn = runtime["active_session_ovpn"] if speed_limit_enabled and runtime["active_session_ovpn"] > 0 else 0
 
     derived = {
         "quota_used_total_bytes": max(
@@ -262,6 +340,24 @@ def ensure_state(username):
                 current_derived.get("active_session_total"),
                 runtime["active_session_ssh"] + runtime["active_session_ovpn"],
             ),
+        ),
+        "distinct_ip_total": max(
+            0,
+            to_int(current_derived.get("distinct_ip_total"), len(distinct_ips_total)),
+        ),
+        "distinct_ips_total": distinct_ips_total,
+        "ip_limit_metric": max(
+            0,
+            to_int(
+                current_derived.get("ip_limit_metric"),
+                len(distinct_ips_total) if distinct_ips_total else runtime["active_session_ssh"] + runtime["active_session_ovpn"],
+            ),
+        ),
+        "speed_limit_active_ssh": max(0, to_int(current_derived.get("speed_limit_active_ssh"), speed_limit_active_ssh)),
+        "speed_limit_active_ovpn": max(0, to_int(current_derived.get("speed_limit_active_ovpn"), speed_limit_active_ovpn)),
+        "speed_limit_active_total": max(
+            0,
+            to_int(current_derived.get("speed_limit_active_total"), speed_limit_active_ssh + speed_limit_active_ovpn),
         ),
         "quota_exhausted": to_bool(current_derived.get("quota_exhausted")),
         "quota_exhausted_ssh": to_bool(current_derived.get("quota_exhausted_ssh")),
@@ -336,6 +432,13 @@ def ensure_state(username):
 def update_derived(payload):
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+    distinct_ips_ssh = normalize_ip_list(runtime.get("distinct_ips_ssh"))
+    distinct_ips_ovpn = normalize_ip_list(runtime.get("distinct_ips_ovpn"))
+    distinct_ips_total = sorted({*distinct_ips_ssh, *distinct_ips_ovpn})
+    speed_limit_enabled = False
+    policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+    if isinstance(policy, dict):
+        speed_limit_enabled = to_bool(policy.get("speed_limit_enabled"))
     derived["quota_used_total_bytes"] = max(
         0,
         to_int(runtime.get("quota_used_ssh_bytes"), 0) + to_int(runtime.get("quota_used_ovpn_bytes"), 0),
@@ -343,6 +446,21 @@ def update_derived(payload):
     derived["active_session_total"] = max(
         0,
         to_int(runtime.get("active_session_ssh"), 0) + to_int(runtime.get("active_session_ovpn"), 0),
+    )
+    derived["distinct_ip_total"] = len(distinct_ips_total)
+    derived["distinct_ips_total"] = distinct_ips_total
+    derived["ip_limit_metric"] = len(distinct_ips_total) if distinct_ips_total else max(0, to_int(derived.get("active_session_total"), 0))
+    derived["speed_limit_active_ssh"] = max(
+        0,
+        to_int(runtime.get("active_session_ssh"), 0) if speed_limit_enabled else 0,
+    )
+    derived["speed_limit_active_ovpn"] = max(
+        0,
+        to_int(runtime.get("active_session_ovpn"), 0) if speed_limit_enabled else 0,
+    )
+    derived["speed_limit_active_total"] = max(
+        0,
+        to_int(derived.get("speed_limit_active_ssh"), 0) + to_int(derived.get("speed_limit_active_ovpn"), 0),
     )
     if not str(derived.get("last_reason") or "").strip():
         derived["last_reason"] = "-"
@@ -369,6 +487,8 @@ def evaluate_policy(payload):
     ip_limit_enabled = to_bool(policy.get("ip_limit_enabled"))
     ip_limit = max(0, to_int(policy.get("ip_limit"), 0))
     active_total = max(0, to_int(derived.get("active_session_total"), 0))
+    distinct_ip_total = max(0, to_int(derived.get("distinct_ip_total"), 0))
+    ip_limit_metric = distinct_ip_total if distinct_ip_total > 0 else active_total
     access_requested = to_bool(policy.get("access_enabled"), True)
     expired_active = date_is_active(policy.get("expired_at"))
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
@@ -376,7 +496,7 @@ def evaluate_policy(payload):
 
     quota_exhausted_ssh = bool(quota_limit_ssh > 0 and quota_used_ssh >= quota_limit_ssh)
     quota_exhausted_ovpn = bool(quota_limit_ovpn > 0 and quota_used_ovpn >= quota_limit_ovpn)
-    ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and active_total > ip_limit)
+    ip_limit_locked = bool(ip_limit_enabled and ip_limit > 0 and ip_limit_metric > ip_limit)
 
     if manual_block:
         last_reason_ssh = "manual"
@@ -406,6 +526,7 @@ def evaluate_policy(payload):
     derived["quota_exhausted_ssh"] = quota_exhausted_ssh
     derived["quota_exhausted_ovpn"] = quota_exhausted_ovpn
     derived["ip_limit_locked"] = ip_limit_locked
+    derived["ip_limit_metric"] = ip_limit_metric
     derived["last_reason"] = last_reason
     derived["last_reason_ssh"] = last_reason_ssh
     derived["last_reason_ovpn"] = last_reason_ovpn
@@ -506,6 +627,16 @@ def cmd_ssh_sync(args):
             runtime["active_session_ssh"] = max(0, to_int(args.active_session_ssh, 0))
         if args.last_seen_ssh is not None:
             runtime["last_seen_ssh_unix"] = max(0, to_int(args.last_seen_ssh, 0))
+        if args.distinct_ips_ssh_json is not None:
+            try:
+                runtime["distinct_ips_ssh"] = normalize_ip_list(json.loads(args.distinct_ips_ssh_json))
+            except Exception:
+                runtime["distinct_ips_ssh"] = []
+        if args.sessions_ssh_json is not None:
+            try:
+                runtime["sessions_ssh"] = normalize_session_rows(json.loads(args.sessions_ssh_json), "ssh")
+            except Exception:
+                runtime["sessions_ssh"] = []
         if args.quota_exhausted is not None:
             derived["quota_exhausted"] = to_bool(args.quota_exhausted)
         if args.ip_limit_locked is not None:
@@ -519,8 +650,53 @@ def cmd_ssh_sync(args):
     return write_user_state(username, mutate)
 
 
+def parse_ovpn_routing(status_path):
+    routes = {}
+    try:
+        lines = pathlib.Path(status_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return routes
+
+    mode = ""
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if line == "ROUTING TABLE":
+            mode = "v1"
+            continue
+        if line.startswith("HEADER,ROUTING_TABLE,"):
+            mode = "v2"
+            continue
+        if line == "GLOBAL STATS" or line.startswith("GLOBAL_STATS,") or line == "END":
+            if mode:
+                break
+        if mode == "v1":
+            if line.startswith("Virtual Address,"):
+                continue
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 2:
+                continue
+            virtual_ip, common_name = parts[:2]
+        elif mode == "v2":
+            if not line.startswith("ROUTING_TABLE,"):
+                continue
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 3:
+                continue
+            _kind, virtual_ip, common_name = parts[:3]
+        else:
+            continue
+        common_name = str(common_name or "").strip()
+        virtual_ip = normalize_ip(virtual_ip)
+        if common_name and virtual_ip:
+            routes[common_name] = virtual_ip
+    return routes
+
+
 def parse_ovpn_status(status_path):
     sessions = []
+    route_map = parse_ovpn_routing(status_path)
     try:
         lines = pathlib.Path(status_path).read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception:
@@ -568,6 +744,8 @@ def parse_ovpn_status(status_path):
             {
                 "client_cn": cn,
                 "real_addr": str(real_addr or "").strip(),
+                "real_ip": normalize_real_ip(real_addr),
+                "virtual_ip": route_map.get(cn, ""),
                 "bytes_total": max(0, to_int(bytes_recv, 0)) + max(0, to_int(bytes_sent, 0)),
                 "connected_since": str(connected_key or "").strip(),
             }
@@ -662,6 +840,8 @@ def cmd_ovpn_sync_status(args):
             delta_total = 0
             next_snapshots = {}
             active = 0
+            distinct_ips = set()
+            session_rows = []
             for row in sessions_by_user.get(username, []):
                 key = "|".join(
                     [
@@ -679,9 +859,23 @@ def cmd_ovpn_sync_status(args):
                     "updated_at_unix": now_unix,
                 }
                 active += 1
+                real_ip = normalize_ip(row.get("real_ip"))
+                if real_ip:
+                    distinct_ips.add(real_ip)
+                session_rows.append(
+                    {
+                        "protocol": "ovpn",
+                        "surface": "ovpn-tcp",
+                        "client_ip": real_ip,
+                        "detail": str(row.get("virtual_ip") or row.get("client_cn") or "-").strip() or "-",
+                        "updated_at_unix": now_unix,
+                    }
+                )
 
             runtime["quota_used_ovpn_bytes"] = max(0, to_int(runtime.get("quota_used_ovpn_bytes"), 0) + delta_total)
             runtime["active_session_ovpn"] = max(0, active)
+            runtime["distinct_ips_ovpn"] = sorted(distinct_ips)
+            runtime["sessions_ovpn"] = normalize_session_rows(session_rows, "ovpn")
             if active > 0:
                 runtime["last_seen_ovpn_unix"] = now_unix
 
@@ -705,6 +899,8 @@ def build_parser():
     ssh_sync.add_argument("--quota-used-ssh")
     ssh_sync.add_argument("--active-session-ssh")
     ssh_sync.add_argument("--last-seen-ssh")
+    ssh_sync.add_argument("--distinct-ips-ssh-json")
+    ssh_sync.add_argument("--sessions-ssh-json")
     ssh_sync.add_argument("--quota-exhausted")
     ssh_sync.add_argument("--ip-limit-locked")
     ssh_sync.add_argument("--last-reason")
