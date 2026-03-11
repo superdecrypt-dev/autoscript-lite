@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply SSH Adblock nftables rules
+After=network-online.target ssh-adblock-dns.service
+Wants=network-online.target ssh-adblock-dns.service
+ConditionPathExists=__SSH_DNS_ADBLOCK_SYNC_BIN__
+
+[Service]
+Type=oneshot
+ExecStart=__SSH_DNS_ADBLOCK_SYNC_BIN__ --apply
+
+[Install]
+WantedBy=multi-user.target

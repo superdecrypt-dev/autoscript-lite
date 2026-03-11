@@ -176,6 +176,8 @@ source_setup_module "opt/setup/install/xray.sh"
 source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
+# shellcheck source=opt/setup/install/ssh_adblock.sh
+source_setup_module "opt/setup/install/ssh_adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
 
@@ -351,6 +353,7 @@ setup_post_domain_main() {
   fi
   install_sshws_stack
   install_sshws_qac_enforcer
+  install_ssh_dns_adblock_foundation
   install_badvpn_udpgw_stack
   install_management_scripts
   sync_manage_modules_layout

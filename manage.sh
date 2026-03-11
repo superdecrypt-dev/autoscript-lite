@@ -102,6 +102,15 @@ SSHWS_QAC_ENFORCER_TIMER="sshws-qac-enforcer.timer"
 SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
+SSH_DNS_ADBLOCK_ROOT="${SSH_DNS_ADBLOCK_ROOT:-/etc/autoscript/ssh-adblock}"
+SSH_DNS_ADBLOCK_CONFIG_FILE="${SSH_DNS_ADBLOCK_ROOT}/config.env"
+SSH_DNS_ADBLOCK_BLOCKLIST_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocked.domains"
+SSH_DNS_ADBLOCK_URLS_FILE="${SSH_DNS_ADBLOCK_ROOT}/source.urls"
+SSH_DNS_ADBLOCK_RENDERED_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocklist.generated.conf"
+SSH_DNS_ADBLOCK_DNSMASQ_CONF="${SSH_DNS_ADBLOCK_ROOT}/dnsmasq.conf"
+SSH_DNS_ADBLOCK_SERVICE="${SSH_DNS_ADBLOCK_SERVICE:-ssh-adblock-dns.service}"
+SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-ssh-adblock-sync.service}"
+SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/ssh-adblock-sync}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
@@ -109,7 +118,11 @@ SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
   "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}" \
-  "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"
+  "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}" \
+  "${SSH_DNS_ADBLOCK_ROOT}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" \
+  "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${SSH_DNS_ADBLOCK_URLS_FILE}" "${SSH_DNS_ADBLOCK_RENDERED_FILE}" \
+  "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" "${SSH_DNS_ADBLOCK_SERVICE}" \
+  "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
 MAIN_INFO_CACHE_TTL=300
@@ -267,6 +280,11 @@ for r in (routing.get("rules") or []):
 
 raise SystemExit(1)
 PY
+}
+
+ssh_dns_adblock_runtime_refresh_if_available() {
+  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || return 0
+  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1 || return 1
 }
 
 speed_policy_resync_after_warp_change() {

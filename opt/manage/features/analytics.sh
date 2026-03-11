@@ -3787,6 +3787,7 @@ ssh_add_user_menu() {
   fi
 
   ssh_qac_enforce_now_warn "${username}" || true
+  ssh_dns_adblock_runtime_refresh_if_available || true
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
     ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info."
     pause
@@ -3852,6 +3853,7 @@ ssh_delete_user_menu() {
         "${SSH_USERS_STATE_DIR}/${username}.json" \
         "$(ssh_account_info_file "${username}")" \
         "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
+  ssh_dns_adblock_runtime_refresh_if_available || true
   log "Akun SSH '${username}' dihapus."
   pause
 }

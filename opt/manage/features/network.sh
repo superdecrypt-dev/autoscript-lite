@@ -1480,7 +1480,131 @@ PY
   return 0
 }
 
-adblock_menu() {
+ssh_dns_adblock_config_get() {
+  need_python3
+  [[ -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" ]] || {
+    printf 'enabled=0\ndns_port=-\n'
+    return 0
+  }
+  python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" 2>/dev/null || true
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = {}
+try:
+  text = path.read_text(encoding="utf-8")
+except Exception:
+  text = ""
+for line in text.splitlines():
+  line = line.strip()
+  if not line or line.startswith("#") or "=" not in line:
+    continue
+  k, v = line.split("=", 1)
+  data[k.strip()] = v.strip()
+
+print(f"enabled={data.get('SSH_DNS_ADBLOCK_ENABLED', '0')}")
+print(f"dns_port={data.get('SSH_DNS_ADBLOCK_PORT', '-')}")
+PY
+}
+
+ssh_dns_adblock_config_set_enabled() {
+  local value="${1:-0}"
+  need_python3
+  [[ "${value}" == "0" || "${value}" == "1" ]] || return 1
+  local tmp
+  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_CONFIG_FILE}")" 2>/dev/null || true
+  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-config.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-config.$$"
+  python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" "${tmp}" "${value}"
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+value = sys.argv[3]
+lines = []
+found = False
+if src.exists():
+  try:
+    lines = src.read_text(encoding="utf-8").splitlines()
+  except Exception:
+    lines = []
+out = []
+for line in lines:
+  if line.strip().startswith("SSH_DNS_ADBLOCK_ENABLED="):
+    out.append(f"SSH_DNS_ADBLOCK_ENABLED={value}")
+    found = True
+  else:
+    out.append(line)
+if not found:
+  out.append(f"SSH_DNS_ADBLOCK_ENABLED={value}")
+dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+PY
+  local rc=$?
+  if (( rc == 0 )); then
+    mv -f "${tmp}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" || {
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      return 1
+    }
+    chmod 644 "${SSH_DNS_ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || true
+  else
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+  fi
+  return "${rc}"
+}
+
+ssh_dns_adblock_status_get() {
+  local cfg status users_output users_count
+  cfg="$(ssh_dns_adblock_config_get)"
+  status="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --status 2>/dev/null || true)"
+  users_output="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --show-users 2>/dev/null || true)"
+  users_count="$(printf '%s\n' "${users_output}" | sed '/^$/d' | wc -l | awk '{print $1}')"
+  printf '%s\n' "${cfg}"
+  printf '%s\n' "${status}"
+  printf 'users_count=%s\n' "${users_count:-0}"
+}
+
+ssh_dns_adblock_apply_now() {
+  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || {
+    warn "ssh-adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
+    return 1
+  }
+  if ! systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
+    systemctl start "${SSH_DNS_ADBLOCK_SERVICE}" >/dev/null 2>&1 || true
+  fi
+  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1
+}
+
+ssh_dns_adblock_show_bound_users() {
+  title
+  echo "5) Network > Adblock > SSH Adblock > Bound Users"
+  hr
+  if [[ ! -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]]; then
+    warn "ssh-adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
+    hr
+    pause
+    return 0
+  fi
+  local rows
+  rows="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --show-users 2>/dev/null || true)"
+  if [[ -z "${rows//[[:space:]]/}" ]]; then
+    echo "Belum ada user SSH terkelola yang terikat ke SSH Adblock."
+    hr
+    pause
+    return 0
+  fi
+  printf "%-20s %-8s\n" "Username" "UID"
+  hr
+  while IFS='|' read -r username uid; do
+    [[ -n "${username}" ]] || continue
+    printf "%-20s %-8s\n" "${username}" "${uid}"
+  done <<<"${rows}"
+  hr
+  pause
+}
+
+xray_adblock_menu() {
   need_python3
   while true; do
     local st enabled outbound duplicates asset_status
@@ -1529,6 +1653,221 @@ adblock_menu() {
         ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
+    esac
+  done
+}
+
+ssh_dns_adblock_menu() {
+  while true; do
+    local st enabled dns_port dns_service sync_service nft_table users_count entries
+    st="$(ssh_dns_adblock_status_get)"
+    enabled="$(printf '%s\n' "${st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
+    dns_port="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
+    dns_service="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+    sync_service="$(printf '%s\n' "${st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+    nft_table="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+    users_count="$(printf '%s\n' "${st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
+  entries="$(printf '%s\n' "${st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
+  local source_urls
+  source_urls="$(printf '%s\n' "${st}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
+
+    title
+    echo "5) Network > Adblock > SSH Adblock"
+    hr
+    printf "Rule Status   : %s\n" "$([[ "${enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+    printf "DNS Service   : %s\n" "${dns_service:--}"
+    printf "Sync Service  : %s\n" "${sync_service:--}"
+    printf "NFT Table     : %s\n" "${nft_table:--}"
+    printf "Managed Users : %s\n" "${users_count:-0}"
+    printf "Blocklist     : %s entries\n" "${entries:-0}"
+    printf "URL Sources   : %s\n" "${source_urls:-0}"
+    printf "DNS Port      : %s\n" "${dns_port:--}"
+    hr
+    echo "  1) Enable"
+    echo "  2) Disable"
+    echo "  3) Add URL"
+    echo "  4) Delete URL"
+    echo "  5) Update URL"
+    echo "  6) Show bound users"
+    echo "  0) Back"
+    hr
+    read -r -p "Pilih: " c
+    case "${c}" in
+      1)
+        if ! ssh_dns_adblock_config_set_enabled 1; then
+          warn "Gagal mengaktifkan SSH Adblock."
+          pause
+          continue
+        fi
+        if ssh_dns_adblock_apply_now; then
+          log "SSH Adblock diaktifkan."
+        else
+          warn "SSH Adblock gagal diterapkan."
+        fi
+        pause
+        ;;
+      2)
+        if ! ssh_dns_adblock_config_set_enabled 0; then
+          warn "Gagal menonaktifkan SSH Adblock."
+          pause
+          continue
+        fi
+        if ssh_dns_adblock_apply_now; then
+          log "SSH Adblock dinonaktifkan."
+        else
+          warn "SSH Adblock gagal disinkronkan."
+        fi
+        pause
+        ;;
+      3)
+        ssh_dns_adblock_url_add_menu
+        ;;
+      4)
+        ssh_dns_adblock_url_delete_menu
+        ;;
+      5)
+        if ssh_dns_adblock_apply_now; then
+          log "SSH Adblock URL sources diperbarui."
+        else
+          warn "SSH Adblock URL sources gagal diperbarui."
+        fi
+        pause
+        ;;
+      6)
+        ssh_dns_adblock_show_bound_users
+        ;;
+      0|kembali|k|back|b) break ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_dns_adblock_urls_list() {
+  [[ -f "${SSH_DNS_ADBLOCK_URLS_FILE}" ]] || return 0
+  grep -E '^[[:space:]]*https?://' "${SSH_DNS_ADBLOCK_URLS_FILE}" 2>/dev/null | sed 's/^[[:space:]]*//'
+}
+
+ssh_dns_adblock_url_normalize() {
+  local url="${1:-}"
+  url="$(printf '%s' "${url}" | tr -d '[:space:]')"
+  [[ "${url}" =~ ^https?://.+$ ]] || return 1
+  printf '%s\n' "${url}"
+}
+
+ssh_dns_adblock_url_add_menu() {
+  title
+  echo "5) Network > Adblock > SSH Adblock > Add URL"
+  hr
+  echo "Sumber URL harus berbentuk http:// atau https://"
+  hr
+  local input normalized
+  if ! read -r -p "URL (atau kembali): " input; then
+    echo
+    return 0
+  fi
+  if is_back_choice "${input}"; then
+    return 0
+  fi
+  normalized="$(ssh_dns_adblock_url_normalize "${input}")" || {
+    warn "URL tidak valid."
+    pause
+    return 0
+  }
+  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+  touch "${SSH_DNS_ADBLOCK_URLS_FILE}"
+  if ssh_dns_adblock_urls_list | grep -Fxq "${normalized}"; then
+    warn "URL sudah ada."
+    pause
+    return 0
+  fi
+  printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_URLS_FILE}"
+  if ssh_dns_adblock_apply_now; then
+    log "URL SSH Adblock ditambahkan."
+  else
+    warn "URL ditambahkan, tapi refresh SSH Adblock gagal."
+  fi
+  pause
+}
+
+ssh_dns_adblock_url_delete_menu() {
+  title
+  echo "5) Network > Adblock > SSH Adblock > Delete URL"
+  hr
+  local -a urls=()
+  local line choice idx tmp
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    urls+=("${line}")
+  done < <(ssh_dns_adblock_urls_list)
+  if ((${#urls[@]} == 0)); then
+    echo "Belum ada URL source SSH Adblock."
+    hr
+    pause
+    return 0
+  fi
+  local i=1
+  for line in "${urls[@]}"; do
+    printf "  %d) %s\n" "${i}" "${line}"
+    i=$((i + 1))
+  done
+  hr
+  if ! read -r -p "Hapus nomor berapa (atau kembali): " choice; then
+    echo
+    return 0
+  fi
+  if is_back_choice "${choice}"; then
+    return 0
+  fi
+  [[ "${choice}" =~ ^[0-9]+$ ]] || {
+    warn "Pilihan tidak valid."
+    pause
+    return 0
+  }
+  idx=$((choice - 1))
+  if (( idx < 0 || idx >= ${#urls[@]} )); then
+    warn "Nomor di luar range."
+    pause
+    return 0
+  fi
+  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-urls.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-urls.$$"
+  : > "${tmp}"
+  for i in "${!urls[@]}"; do
+    if (( i == idx )); then
+      continue
+    fi
+    printf '%s\n' "${urls[$i]}" >> "${tmp}"
+  done
+  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}"
+  chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
+  if ssh_dns_adblock_apply_now; then
+    log "URL SSH Adblock dihapus."
+  else
+    warn "URL dihapus, tapi refresh SSH Adblock gagal."
+  fi
+  pause
+}
+
+adblock_menu() {
+  local -a items=(
+    "1|Xray Adblock"
+    "2|SSH Adblock"
+    "0|Back"
+  )
+  while true; do
+    ui_menu_screen_begin "5) Network > Adblock"
+    ui_menu_render_options items 76
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      break
+    fi
+    case "${c}" in
+      1) xray_adblock_menu ;;
+      2) ssh_dns_adblock_menu ;;
+      0|kembali|k|back|b) break ;;
+      *) invalid_choice ;;
     esac
   done
 }

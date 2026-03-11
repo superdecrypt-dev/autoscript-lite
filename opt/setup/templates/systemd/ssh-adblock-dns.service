@@ -1,0 +1,14 @@
+[Unit]
+Description=SSH Adblock (dnsmasq)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=__SSH_DNS_ADBLOCK_DNSMASQ_CONF__
+
+[Service]
+Type=simple
+ExecStart=__DNSMASQ_BIN__ --keep-in-foreground --conf-file=__SSH_DNS_ADBLOCK_DNSMASQ_CONF__
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
