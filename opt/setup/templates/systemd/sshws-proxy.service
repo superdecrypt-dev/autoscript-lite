@@ -2,6 +2,7 @@
 Description=SSH websocket proxy service
 After=network-online.target sshws-dropbear.service
 Requires=sshws-dropbear.service
+PartOf=sshws-dropbear.service
 Wants=network-online.target
 
 [Service]

@@ -56,18 +56,25 @@ type SurfaceSnapshot struct {
 }
 
 type BackendHealthSnapshot struct {
-	Address string `json:"address"`
-	Healthy bool   `json:"healthy"`
-	Reason  string `json:"reason,omitempty"`
+	Address       string `json:"address"`
+	Healthy       bool   `json:"healthy"`
+	Status        string `json:"status,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	LatencyMS     int64  `json:"latency_ms,omitempty"`
+	CheckedAtUnix int64  `json:"checked_at_unix,omitempty"`
 }
 
 type AbuseSnapshot struct {
-	ActiveIPs         int              `json:"active_ips"`
-	ActiveConnections int              `json:"active_connections"`
-	RateTrackedIPs    int              `json:"rate_tracked_ips"`
-	RejectTrackedIPs  int              `json:"reject_tracked_ips"`
-	CooldownBlockedIP int              `json:"cooldown_blocked_ips"`
-	BlockedUntilUnix  map[string]int64 `json:"blocked_until_unix,omitempty"`
+	ActiveIPs         int               `json:"active_ips"`
+	ActiveConnections int               `json:"active_connections"`
+	RateTrackedIPs    int               `json:"rate_tracked_ips"`
+	RejectTrackedIPs  int               `json:"reject_tracked_ips"`
+	CooldownBlockedIP int               `json:"cooldown_blocked_ips"`
+	BlockedUntilUnix  map[string]int64  `json:"blocked_until_unix,omitempty"`
+	BlockedReason     map[string]string `json:"blocked_reason,omitempty"`
+	BlockedSurface    map[string]string `json:"blocked_surface,omitempty"`
+	RejectReasons     map[string]uint64 `json:"reject_reasons,omitempty"`
+	RejectSurfaces    map[string]uint64 `json:"reject_surfaces,omitempty"`
 }
 
 type StatusSnapshot struct {
@@ -302,6 +309,30 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 			clone.BlockedUntilUnix = make(map[string]int64, len(abuse.BlockedUntilUnix))
 			for key, value := range abuse.BlockedUntilUnix {
 				clone.BlockedUntilUnix[key] = value
+			}
+		}
+		if len(abuse.BlockedReason) > 0 {
+			clone.BlockedReason = make(map[string]string, len(abuse.BlockedReason))
+			for key, value := range abuse.BlockedReason {
+				clone.BlockedReason[key] = value
+			}
+		}
+		if len(abuse.BlockedSurface) > 0 {
+			clone.BlockedSurface = make(map[string]string, len(abuse.BlockedSurface))
+			for key, value := range abuse.BlockedSurface {
+				clone.BlockedSurface[key] = value
+			}
+		}
+		if len(abuse.RejectReasons) > 0 {
+			clone.RejectReasons = make(map[string]uint64, len(abuse.RejectReasons))
+			for key, value := range abuse.RejectReasons {
+				clone.RejectReasons[key] = value
+			}
+		}
+		if len(abuse.RejectSurfaces) > 0 {
+			clone.RejectSurfaces = make(map[string]uint64, len(abuse.RejectSurfaces))
+			for key, value := range abuse.RejectSurfaces {
+				clone.RejectSurfaces[key] = value
 			}
 		}
 		abuseCopy = &clone

@@ -2,6 +2,7 @@
 Description=Stunnel local TLS bridge for SSH WebSocket
 After=sshws-dropbear.service
 Requires=sshws-dropbear.service
+PartOf=sshws-dropbear.service
 
 [Service]
 Type=simple

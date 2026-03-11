@@ -153,6 +153,10 @@ func main() {
 				RejectTrackedIPs:  snapshot.RejectTrackedIPs,
 				CooldownBlockedIP: snapshot.CooldownBlockedIP,
 				BlockedUntilUnix:  snapshot.BlockedUntilUnix,
+				BlockedReason:     snapshot.BlockedReason,
+				BlockedSurface:    snapshot.BlockedSurface,
+				RejectReasons:     snapshot.RejectReasons,
+				RejectSurfaces:    snapshot.RejectSurfaces,
 			}
 		},
 	)
@@ -569,6 +573,7 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		tlsConn, err := tlsServer.AcceptBufferedTLSConn(conn, initial)
 		if err != nil {
 			collector.ObserveTLSHandshakeFailure("http-port")
+			guard.ObserveFailure(cfg, conn.RemoteAddr(), "http-port", "tls_handshake")
 			logger.Printf("edge-mux tls-on-80 handshake failed: %v", err)
 			return
 		}
@@ -618,6 +623,7 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		tlsConn, err := server.AcceptBufferedTLSConn(conn, initial)
 		if err != nil {
 			collector.ObserveTLSHandshakeFailure("tls-port")
+			guard.ObserveFailure(cfg, conn.RemoteAddr(), "tls-port", "tls_handshake")
 			logger.Printf("edge-mux tls handshake failed from %s: %v", safeRemote(conn), err)
 			return
 		}
@@ -691,7 +697,7 @@ func admitConn(logger *log.Logger, guard *abuse.Guard, collector *observability.
 	if guard == nil {
 		return collector.TrackConnection(surface), true
 	}
-	ip, release, err := guard.Acquire(cfg, conn.RemoteAddr())
+	ip, reason, release, err := guard.Acquire(cfg, conn.RemoteAddr(), surface)
 	if err == nil {
 		if release == nil {
 			release = func() {}
@@ -703,8 +709,11 @@ func admitConn(logger *log.Logger, guard *abuse.Guard, collector *observability.
 		}, true
 	}
 	if errors.Is(err, abuse.ErrRejected) {
-		collector.ObserveReject(surface, "abuse")
-		logger.Printf("edge-mux connection rejected surface=%s remote=%s ip=%s", surface, safeRemote(conn), ip)
+		if strings.TrimSpace(reason) == "" {
+			reason = "abuse"
+		}
+		collector.ObserveReject(surface, reason)
+		logger.Printf("edge-mux connection rejected surface=%s remote=%s ip=%s reason=%s", surface, safeRemote(conn), ip, reason)
 		return nil, false
 	}
 	collector.ObserveReject(surface, "guard_error")
@@ -788,28 +797,42 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 		if strings.TrimSpace(addr) == "" {
 			return
 		}
+		nowUnix := time.Now().Unix()
 		if !enabled {
 			out[name] = observability.BackendHealthSnapshot{
-				Address: addr,
-				Healthy: false,
-				Reason:  "disabled",
+				Address:       addr,
+				Healthy:       false,
+				Status:        "disabled",
+				Reason:        "disabled",
+				CheckedAtUnix: nowUnix,
 			}
 			return
 		}
 		dialer := net.Dialer{Timeout: 750 * time.Millisecond}
+		started := time.Now()
 		conn, err := dialer.Dial("tcp", addr)
 		if err != nil {
 			out[name] = observability.BackendHealthSnapshot{
-				Address: addr,
-				Healthy: false,
-				Reason:  err.Error(),
+				Address:       addr,
+				Healthy:       false,
+				Status:        "down",
+				Reason:        err.Error(),
+				CheckedAtUnix: nowUnix,
 			}
 			return
 		}
+		latency := time.Since(started).Milliseconds()
 		_ = conn.Close()
+		status := "up"
+		if latency >= 250 {
+			status = "degraded"
+		}
 		out[name] = observability.BackendHealthSnapshot{
-			Address: addr,
-			Healthy: true,
+			Address:       addr,
+			Healthy:       true,
+			Status:        status,
+			LatencyMS:     latency,
+			CheckedAtUnix: nowUnix,
 		}
 	}
 

@@ -1356,6 +1356,170 @@ edge_runtime_tls_backend_required() {
   [[ "${active}" == "true" && "${provider}" == "nginx-stream" ]]
 }
 
+edge_runtime_metrics_addr() {
+  edge_runtime_get_env EDGE_METRICS_LISTEN 2>/dev/null || echo "127.0.0.1:9910"
+}
+
+edge_runtime_print_observability_summary() {
+  local addr="${1:-}"
+  [[ -n "${addr}" ]] || addr="$(edge_runtime_metrics_addr)"
+
+  if ! have_cmd curl; then
+    warn "curl tidak tersedia, skip observability edge"
+    return 0
+  fi
+  if ! have_cmd python3; then
+    warn "python3 tidak tersedia, skip observability edge"
+    return 0
+  fi
+
+  local status_tmp
+  status_tmp="$(mktemp)"
+  if ! curl -fsS --max-time 2 "http://${addr}/status" >"${status_tmp}" 2>/dev/null; then
+    rm -f "${status_tmp}"
+    warn "Status ${addr} : unavailable"
+    return 0
+  fi
+
+  python3 - <<'PY' "${addr}" "${status_tmp}"
+import json
+import pathlib
+import sys
+
+addr = sys.argv[1]
+path = pathlib.Path(sys.argv[2])
+try:
+  data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+  print(f"[manage][WARN] Status {addr} : invalid JSON")
+  raise SystemExit(0)
+
+def to_int(v, default=0):
+  try:
+    if v is None:
+      return default
+    if isinstance(v, bool):
+      return int(v)
+    if isinstance(v, (int, float)):
+      return int(v)
+    s = str(v).strip()
+    if not s:
+      return default
+    return int(float(s))
+  except Exception:
+    return default
+
+def yesno(v):
+  return "up" if bool(v) else "down"
+
+def join_map(mapping):
+  if not isinstance(mapping, dict) or not mapping:
+    return "-"
+  parts = []
+  for key in sorted(mapping):
+    parts.append(f"{key}={mapping[key]}")
+  return ", ".join(parts)
+
+def join_abuse_blocks(until_map, reason_map, surface_map):
+  if not isinstance(until_map, dict) or not until_map:
+    return "-"
+  parts = []
+  for ip in sorted(until_map):
+    reason = "-"
+    surface = "-"
+    if isinstance(reason_map, dict):
+      reason = str(reason_map.get(ip) or "-").strip() or "-"
+    if isinstance(surface_map, dict):
+      surface = str(surface_map.get(ip) or "-").strip() or "-"
+    parts.append(f"{ip}({reason}/{surface})")
+  return ", ".join(parts) if parts else "-"
+
+def backend_status_text(row):
+  if not isinstance(row, dict):
+    return "-"
+  status = str(row.get("status") or "").strip().lower()
+  healthy = bool(row.get("healthy"))
+  if not status:
+    status = "up" if healthy else "down"
+  latency = to_int(row.get("latency_ms"), -1)
+  reason = str(row.get("reason") or "").strip()
+  address = str(row.get("address") or "-").strip() or "-"
+  parts = [status]
+  if latency >= 0 and status in ("up", "degraded"):
+    parts.append(f"{latency}ms")
+  if status in ("down", "disabled") and reason:
+    parts.append(reason)
+  parts.append(address)
+  return " | ".join(parts)
+
+surface = data.get("surface")
+listeners = data.get("listener_up") if isinstance(data.get("listener_up"), dict) else {}
+last_route = data.get("last_route") if isinstance(data.get("last_route"), dict) else {}
+backend_health = data.get("backend_health") if isinstance(data.get("backend_health"), dict) else {}
+abuse = data.get("abuse") if isinstance(data.get("abuse"), dict) else {}
+
+print(f"[manage] Status {addr} : ok ✅")
+print(f"Runtime OK  : {'true' if bool(data.get('ok')) else 'false'}")
+print(f"Active conn : {to_int(data.get('active_connections_total'), 0)}")
+print(
+  "Listeners   : "
+  f"http={yesno(listeners.get('http'))} "
+  f"tls={yesno(listeners.get('tls'))} "
+  f"metrics={yesno(listeners.get('metrics'))}"
+)
+if last_route:
+  print(
+    "Last route  : "
+    f"{last_route.get('surface') or '-'} | "
+    f"{last_route.get('route') or '-'} | "
+    f"{last_route.get('backend') or '-'}"
+  )
+
+if backend_health:
+  print("Backends:")
+  for name in sorted(backend_health):
+    print(f"  {name:<18} {backend_status_text(backend_health.get(name))}")
+
+if abuse:
+  print(
+    "Abuse: "
+    f"active_ip={to_int(abuse.get('active_ips'), 0)} "
+    f"active_conn={to_int(abuse.get('active_connections'), 0)} "
+    f"rate_tracked={to_int(abuse.get('rate_tracked_ips'), 0)} "
+    f"reject_tracked={to_int(abuse.get('reject_tracked_ips'), 0)} "
+    f"cooldown={to_int(abuse.get('cooldown_blocked_ips'), 0)}"
+  )
+  reject_reasons = join_map(abuse.get("reject_reasons"))
+  reject_surfaces = join_map(abuse.get("reject_surfaces"))
+  blocked = join_abuse_blocks(
+    abuse.get("blocked_until_unix"),
+    abuse.get("blocked_reason"),
+    abuse.get("blocked_surface"),
+  )
+  print(f"  reasons            {reject_reasons}")
+  print(f"  surfaces           {reject_surfaces}")
+  print(f"  blocked            {blocked}")
+
+if isinstance(surface, dict) and surface:
+  print("Surface:")
+  for name in sorted(surface):
+    row = surface.get(name)
+    if not isinstance(row, dict):
+      continue
+    active = to_int(row.get("active_connections"), 0)
+    accepted = to_int(row.get("accepted_total"), 0)
+    rejected = to_int(row.get("rejected_total"), 0)
+    detect = join_map(row.get("detect_totals"))
+    routes = join_map(row.get("route_totals"))
+    print(
+      f"  {name:<18} "
+      f"act={active} acc={accepted} rej={rejected} "
+      f"detect={detect} route={routes}"
+    )
+PY
+  rm -f "${status_tmp}"
+}
+
 edge_runtime_status_menu() {
   title
   echo "10) Maintenance > Edge Gateway Status"
@@ -1447,6 +1611,8 @@ edge_runtime_status_menu() {
     warn "ss tidak tersedia, skip cek listener edge"
   fi
 
+  hr
+  edge_runtime_print_observability_summary "$(edge_runtime_metrics_addr)"
   hr
   pause
 }
@@ -2548,6 +2714,12 @@ payload["status"] = {
   "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
   "ip_limit": ip_limit,
   "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+  "ip_limit_metric": to_int(status.get("ip_limit_metric"), 0),
+  "distinct_ip_count": to_int(status.get("distinct_ip_count"), 0),
+  "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
+  "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
+  "active_sessions_runtime": to_int(status.get("active_sessions_runtime"), 0),
+  "active_sessions_dropbear": to_int(status.get("active_sessions_dropbear"), 0),
   "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
   "speed_down_mbit": speed_down,
   "speed_up_mbit": speed_up,
@@ -2719,6 +2891,12 @@ payload["status"] = {
   "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
   "ip_limit": ip_limit,
   "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+  "ip_limit_metric": to_int(status.get("ip_limit_metric"), 0),
+  "distinct_ip_count": to_int(status.get("distinct_ip_count"), 0),
+  "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
+  "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
+  "active_sessions_runtime": to_int(status.get("active_sessions_runtime"), 0),
+  "active_sessions_dropbear": to_int(status.get("active_sessions_dropbear"), 0),
   "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
   "speed_down_mbit": speed_down,
   "speed_up_mbit": speed_up,
@@ -3987,6 +4165,54 @@ def _parse_port(addr):
   except Exception:
     return -1
 
+def _fmt_age(created_at, updated_at):
+  now = int(time.time())
+  base = 0
+  try:
+    base = int(created_at or 0)
+  except Exception:
+    base = 0
+  if base <= 0:
+    try:
+      base = int(updated_at or 0)
+    except Exception:
+      base = 0
+  if base <= 0 or now <= base:
+    return "-"
+  secs = now - base
+  if secs < 60:
+    return f"{secs}s"
+  mins, rem = divmod(secs, 60)
+  if mins < 60:
+    return f"{mins}m"
+  hours, rem_m = divmod(mins, 60)
+  if hours < 24:
+    return f"{hours}h{rem_m:02d}m"
+  days, rem_h = divmod(hours, 24)
+  return f"{days}d{rem_h:02d}h"
+
+def _fmt_ts(ts):
+  try:
+    value = int(ts or 0)
+  except Exception:
+    value = 0
+  if value <= 0:
+    return "-"
+  return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+
+def _mode_label(transport, source):
+  t = str(transport or "").strip().lower()
+  s = str(source or "").strip().lower()
+  if "ssh-ws" in t or s == "sshws-proxy":
+    return "SSH WS"
+  if "tls-port" in t:
+    return "SSH SSL/TLS"
+  if "http-port" in t:
+    return "SSH Direct"
+  if "ssh" in t:
+    return "SSH"
+  return "SSH"
+
 def normalize_ip(v):
   s = str(v or "").strip()
   if not s:
@@ -4108,12 +4334,17 @@ if session_root and os.path.isdir(session_root):
         continue
     except Exception:
       continue
-    port = _parse_port(payload.get("backend_local_port") or name[:-5])
+    port = _parse_port(payload.get("backend_local_port") or payload.get("local_port") or name[:-5])
     if port <= 0:
       continue
     runtime_by_port[port] = {
       "username": norm_user(payload.get("username")),
       "client_ip": normalize_ip(payload.get("client_ip")) or "-",
+      "source": str(payload.get("source") or "runtime").strip() or "runtime",
+      "backend": str(payload.get("backend") or "dropbear").strip() or "dropbear",
+      "transport": str(payload.get("transport") or "").strip(),
+      "created_at": int(float(payload.get("created_at") or 0)),
+      "updated_at": int(float(payload.get("updated_at") or 0)),
     }
 
 rows = []
@@ -4154,11 +4385,22 @@ if dropbear_port > 0:
       username = _username_from_pid(pid, proc_info, children) or runtime_meta.get("username") or "unknown"
       if peer_port > 0:
         runtime_ports_seen.add(peer_port)
+      source = runtime_meta.get("source") or "dropbear-scan"
+      backend = runtime_meta.get("backend") or "dropbear"
+      transport = runtime_meta.get("transport") or ""
+      created_at = runtime_meta.get("created_at") or 0
+      updated_at = runtime_meta.get("updated_at") or 0
       rows.append({
         "username": username,
+        "mode": _mode_label(transport, source),
         "peer": peer,
         "pid": str(pid),
         "client_ip": runtime_meta.get("client_ip") or "-",
+        "state": "mapped" if runtime_meta else "socket-only",
+        "source": source,
+        "backend": backend,
+        "created_at": int(created_at or 0),
+        "updated_at": int(updated_at or 0),
         "_sort_pid": pid,
       })
 
@@ -4167,9 +4409,15 @@ for port, runtime_meta in sorted(runtime_by_port.items()):
     continue
   rows.append({
     "username": runtime_meta.get("username") or "unknown",
+    "mode": _mode_label(runtime_meta.get("transport"), runtime_meta.get("source")),
     "peer": "runtime-port:{}".format(port),
     "pid": "-",
     "client_ip": runtime_meta.get("client_ip") or "-",
+    "state": "runtime-only",
+    "source": runtime_meta.get("source") or "runtime",
+    "backend": runtime_meta.get("backend") or "dropbear",
+    "created_at": int(runtime_meta.get("created_at") or 0),
+    "updated_at": int(runtime_meta.get("updated_at") or 0),
     "_sort_pid": 0,
   })
 
@@ -4182,12 +4430,19 @@ for row in rows:
   meta = meta_map.get(row["username"], {})
   print("|".join([
     row["username"],
+    row.get("mode") or "SSH",
     row["client_ip"],
     row["peer"],
     str(row["pid"]),
     str(counts.get(row["username"], 1)),
     str(meta.get("reason") or "-"),
     str(meta.get("lock") or "OFF"),
+    _fmt_age(row.get("created_at"), row.get("updated_at")),
+    row.get("state") or "-",
+    row.get("backend") or "dropbear",
+    row.get("source") or "-",
+    _fmt_ts(row.get("created_at")),
+    _fmt_ts(row.get("updated_at")),
   ]))
 PY
 )
@@ -4203,6 +4458,41 @@ sshws_active_sessions_apply_filter() {
       SSHWS_SESSION_VIEW_INDEXES+=("${i}")
     fi
   done
+  sshws_active_sessions_update_summary
+}
+
+sshws_active_sessions_update_summary() {
+  SSHWS_SESSION_DISTINCT_IPS=0
+  SSHWS_SESSION_MODE_SUMMARY="-"
+  local -A ips=()
+  local -A modes=()
+  local real_idx row mode client_ip
+  for real_idx in "${SSHWS_SESSION_VIEW_INDEXES[@]}"; do
+    row="${SSHWS_SESSION_ROWS[$real_idx]}"
+    IFS='|' read -r _ mode client_ip _ <<<"${row}"
+    if [[ -n "${client_ip}" && "${client_ip}" != "-" ]]; then
+      ips["${client_ip}"]=1
+    fi
+    if [[ -n "${mode}" ]]; then
+      modes["${mode}"]=$(( ${modes["${mode}"]:-0} + 1 ))
+    fi
+  done
+  SSHWS_SESSION_DISTINCT_IPS="${#ips[@]}"
+  local parts=()
+  local label
+  for label in "SSH WS" "SSH SSL/TLS" "SSH Direct" "SSH"; do
+    if [[ -n "${modes["${label}"]:-}" ]]; then
+      parts+=("${label}=${modes["${label}"]}")
+    fi
+  done
+  if ((${#parts[@]} > 0)); then
+    local joined="${parts[0]}"
+    local i
+    for (( i=1; i<${#parts[@]}; i++ )); do
+      joined+=" | ${parts[$i]}"
+    done
+    SSHWS_SESSION_MODE_SUMMARY="${joined}"
+  fi
 }
 
 sshws_active_sessions_print_page() {
@@ -4222,22 +4512,25 @@ sshws_active_sessions_print_page() {
   fi
   SSHWS_SESSION_PAGE="${page}"
 
-  echo "Active SSH sessions: ${total} | page $((page + 1))/${display_pages}"
+  echo "Active SSH sessions: ${total} | Distinct IPs: ${SSHWS_SESSION_DISTINCT_IPS:-0} | page $((page + 1))/${display_pages}"
   if [[ -n "${SSHWS_SESSION_QUERY}" ]]; then
     echo "Filter: '${SSHWS_SESSION_QUERY}'"
   fi
-  echo "Peer biasanya loopback mapping proxy -> dropbear. Jika korelasi socket gagal, runtime-port akan ditampilkan."
+  if [[ "${SSHWS_SESSION_MODE_SUMMARY:-"-"}" != "-" ]]; then
+    echo "Modes: ${SSHWS_SESSION_MODE_SUMMARY}"
+  fi
+  echo "State runtime-only/socket-only akan muncul jika korelasi socket belum lengkap."
   echo
 
   if (( total == 0 )); then
-    echo "Tidak ada sesi SSH WS aktif."
+    echo "Tidak ada sesi SSH aktif."
     return 0
   fi
 
-  printf "%-4s %-18s %-16s %-21s %-7s %-6s %-10s %-6s\n" "NO" "Username" "Client IP" "Peer" "PID" "Sess" "Reason" "Lock"
+  printf "%-4s %-18s %-14s %-16s %-8s %-6s %-6s\n" "NO" "Username" "Mode" "Client IP" "Age" "Sess" "Lock"
   hr
 
-  local start end i list_pos real_idx row username client_ip peer pid sess reason lock
+  local start end i list_pos real_idx row username mode client_ip peer pid sess reason lock age
   start=$((page * SSHWS_SESSION_PAGE_SIZE))
   end=$((start + SSHWS_SESSION_PAGE_SIZE))
   if (( end > total )); then
@@ -4247,8 +4540,8 @@ sshws_active_sessions_print_page() {
     list_pos="${i}"
     real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
     row="${SSHWS_SESSION_ROWS[$real_idx]}"
-    IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
-    printf "%-4s %-18s %-16s %-21s %-7s %-6s %-10s %-6s\n" "$((i - start + 1))" "${username}" "${client_ip}" "${peer}" "${pid}" "${sess}" "${reason}" "${lock}"
+    IFS='|' read -r username mode client_ip peer pid sess reason lock age _ <<<"${row}"
+    printf "%-4s %-18s %-14s %-16s %-8s %-6s %-6s\n" "$((i - start + 1))" "${username}" "${mode}" "${client_ip}" "${age}" "${sess}" "${lock}"
   done
 }
 
@@ -4279,19 +4572,26 @@ sshws_active_session_detail() {
     return 0
   fi
 
-  local list_pos real_idx row username client_ip peer pid sess reason lock
+  local list_pos real_idx row username mode client_ip peer pid sess reason lock age state backend source started updated
   list_pos=$((start + view_no - 1))
   real_idx="${SSHWS_SESSION_VIEW_INDEXES[$list_pos]}"
   row="${SSHWS_SESSION_ROWS[$real_idx]}"
-  IFS='|' read -r username client_ip peer pid sess reason lock <<<"${row}"
+  IFS='|' read -r username mode client_ip peer pid sess reason lock age state backend source started updated <<<"${row}"
 
   title
   echo "3) SSH Users > Session Detail"
   hr
   printf "%-16s : %s\n" "Username" "${username}"
+  printf "%-16s : %s\n" "Mode" "${mode}"
   printf "%-16s : %s\n" "Client IP" "${client_ip}"
+  printf "%-16s : %s\n" "State" "${state}"
+  printf "%-16s : %s\n" "Source" "${source}"
+  printf "%-16s : %s\n" "Backend" "${backend}"
   printf "%-16s : %s\n" "Peer" "${peer}"
   printf "%-16s : %s\n" "Dropbear PID" "${pid}"
+  printf "%-16s : %s\n" "Started" "${started}"
+  printf "%-16s : %s\n" "Updated" "${updated}"
+  printf "%-16s : %s\n" "Age" "${age}"
   printf "%-16s : %s\n" "Active Sessions" "${sess}"
   printf "%-16s : %s\n" "Block Reason" "${reason}"
   printf "%-16s : %s\n" "Account Lock" "${lock}"
@@ -4428,6 +4728,8 @@ SSHWS_SESSION_VIEW_INDEXES=()
 SSHWS_SESSION_PAGE_SIZE=10
 SSHWS_SESSION_PAGE=0
 SSHWS_SESSION_QUERY=""
+SSHWS_SESSION_DISTINCT_IPS=0
+SSHWS_SESSION_MODE_SUMMARY="-"
 SSHWS_RUNTIME_SESSION_DIR="/run/autoscript/sshws-sessions"
 SSHWS_RUNTIME_ENV_FILE="/etc/default/sshws-runtime"
 
@@ -4882,7 +5184,7 @@ PY
 
 ssh_qac_read_detail_fields() {
   # args: json_file
-  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_onoff|ip_limit_value|block_reason|speed_onoff|speed_down_mbit|speed_up_mbit|lock_state
+  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_onoff|ip_limit_value|block_reason|speed_onoff|speed_down_mbit|speed_up_mbit|lock_state|distinct_ip_count|ip_limit_metric|distinct_ips|active_sessions_total|active_sessions_runtime|active_sessions_dropbear
   local qf="$1"
   need_python3
   python3 - <<'PY' "${qf}"
@@ -4938,6 +5240,16 @@ def to_bool(v):
     return bool(v)
   s = str(v or "").strip().lower()
   return s in ("1", "true", "yes", "on", "y")
+
+def ips_to_text(v):
+  if not isinstance(v, list):
+    return "-"
+  out = []
+  for item in v:
+    text = str(item or "").strip()
+    if text:
+      out.append(text)
+  return ", ".join(out) if out else "-"
 
 def fmt_gb(v):
   try:
@@ -5017,11 +5329,29 @@ if speed_down < 0:
 if speed_up < 0:
   speed_up = 0.0
 
+distinct_ip_count = to_int(status.get("distinct_ip_count"), 0)
+if distinct_ip_count < 0:
+  distinct_ip_count = 0
+ip_limit_metric = to_int(status.get("ip_limit_metric"), 0)
+if ip_limit_metric < 0:
+  ip_limit_metric = 0
+active_sessions_total = to_int(status.get("active_sessions_total"), 0)
+if active_sessions_total < 0:
+  active_sessions_total = 0
+active_sessions_runtime = to_int(status.get("active_sessions_runtime"), 0)
+if active_sessions_runtime < 0:
+  active_sessions_runtime = 0
+active_sessions_dropbear = to_int(status.get("active_sessions_dropbear"), 0)
+if active_sessions_dropbear < 0:
+  active_sessions_dropbear = 0
+distinct_ips = ips_to_text(status.get("distinct_ips"))
+
 lock_disp = "ON" if to_bool(status.get("account_locked")) else "OFF"
 print(
   f"{username}|{quota_limit_disp}|{quota_used_disp}|{expired_date}|"
   f"{'ON' if ip_enabled else 'OFF'}|{ip_limit}|{reason_disp}|"
-  f"{'ON' if speed_enabled else 'OFF'}|{fmt_mbit(speed_down)}|{fmt_mbit(speed_up)}|{lock_disp}"
+  f"{'ON' if speed_enabled else 'OFF'}|{fmt_mbit(speed_down)}|{fmt_mbit(speed_up)}|{lock_disp}|"
+  f"{distinct_ip_count}|{ip_limit_metric}|{distinct_ips}|{active_sessions_total}|{active_sessions_runtime}|{active_sessions_dropbear}"
 )
 PY
 }
@@ -5532,12 +5862,33 @@ ssh_qac_edit_flow() {
     hr
 
     local fields username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state
+    local distinct_ip_count ip_limit_metric distinct_ips active_sessions_total active_sessions_runtime active_sessions_dropbear
     fields="$(ssh_qac_read_detail_fields "${qf}")"
-    IFS='|' read -r username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state <<<"${fields}"
+    IFS='|' read -r \
+      username \
+      ql_disp \
+      qu_disp \
+      exp_date \
+      ip_state \
+      ip_lim \
+      block_reason \
+      speed_state \
+      speed_down \
+      speed_up \
+      lock_state \
+      distinct_ip_count \
+      ip_limit_metric \
+      distinct_ips \
+      active_sessions_total \
+      active_sessions_runtime \
+      active_sessions_dropbear <<<"${fields}"
 
-    local active_sessions
-    active_sessions="$(ssh_active_sessions_count "${username}")"
-    [[ "${active_sessions}" =~ ^[0-9]+$ ]] || active_sessions="0"
+    [[ "${distinct_ip_count}" =~ ^[0-9]+$ ]] || distinct_ip_count="0"
+    [[ "${ip_limit_metric}" =~ ^[0-9]+$ ]] || ip_limit_metric="0"
+    [[ "${active_sessions_total}" =~ ^[0-9]+$ ]] || active_sessions_total="0"
+    [[ "${active_sessions_runtime}" =~ ^[0-9]+$ ]] || active_sessions_runtime="0"
+    [[ "${active_sessions_dropbear}" =~ ^[0-9]+$ ]] || active_sessions_dropbear="0"
+    [[ -n "${distinct_ips}" ]] || distinct_ips="-"
 
     local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
@@ -5546,9 +5897,14 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
+    printf "%-${label_w}s : %s\n" "Distinct Client IPs" "${distinct_ip_count}"
+    printf "%-${label_w}s : %s\n" "Tracked Client IPs" "${distinct_ips}"
+    printf "%-${label_w}s : %s\n" "IP/Login Metric" "${ip_limit_metric}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions}"
+    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions_total}"
+    printf "%-${label_w}s : %s\n" "Runtime Sessions" "${active_sessions_runtime}"
+    printf "%-${label_w}s : %s\n" "Dropbear Sessions" "${active_sessions_dropbear}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
@@ -5903,6 +6259,27 @@ daemon_log_tail_show() {
   pause
 }
 
+sshws_restart_after_dropbear() {
+  local dropbear_svc="$1"
+  local stunnel_svc="$2"
+  local proxy_svc="$3"
+
+  if ! svc_exists "${dropbear_svc}"; then
+    warn "${dropbear_svc} tidak terpasang"
+    return 1
+  fi
+
+  svc_restart "${dropbear_svc}" || return 1
+
+  local d
+  for d in "${stunnel_svc}" "${proxy_svc}"; do
+    if svc_exists "${d}"; then
+      svc_restart "${d}" || warn "Gagal restart ${d} setelah ${dropbear_svc}."
+    fi
+  done
+  return 0
+}
+
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
   title
@@ -6038,7 +6415,7 @@ daemon_status_menu() {
     8) daemon_log_tail_show xray-limit-ip 20 ;;
     9) daemon_log_tail_show xray-speed 20 ;;
     10)
-      if svc_exists "${sshws_dropbear_svc}"; then svc_restart "${sshws_dropbear_svc}" ; else warn "${sshws_dropbear_svc} tidak terpasang" ; fi
+      sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}" || true
       pause
       ;;
     11)

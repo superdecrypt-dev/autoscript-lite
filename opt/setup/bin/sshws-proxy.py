@@ -682,13 +682,19 @@ class ConnectionContext:
     self._policy_cached = None
     self._policy_cached_at = 0.0
     self._session_written_at = 0.0
+    self._created_at = int(time.time())
 
   def write_runtime_session(self, username=""):
     if self._session_path is None:
       return
     payload = {
       "backend_local_port": int(self.backend_local_port),
+      "backend": "dropbear",
+      "backend_target": "{}:{}".format(BACKEND_HOST, BACKEND_PORT),
+      "transport": "ssh-ws",
+      "source": "sshws-proxy",
       "proxy_pid": int(os.getpid()),
+      "created_at": int(self._created_at),
       "updated_at": int(time.time()),
     }
     user = norm_user(username or self._username)

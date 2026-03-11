@@ -177,7 +177,7 @@ def set_user_shell(username, shell_path):
 def runtime_session_stats(username):
   user = norm_user(username)
   if not user or not SESSION_ROOT.is_dir():
-    return None, None
+    return None, None, []
   total = 0
   ips = set()
   try:
@@ -189,11 +189,12 @@ def runtime_session_stats(username):
         if ip:
           ips.add(ip)
   except Exception:
-    return None, None
-  return total, len(ips)
+    return None, None, []
+  ip_list = sorted(ips, key=lambda value: (":" in value, value))
+  return total, len(ip_list), ip_list
 
 def active_sessions_from_runtime(username):
-  total, _ = runtime_session_stats(username)
+  total, _, _ = runtime_session_stats(username)
   return total
 
 _DROPBEAR_ROWS_CACHE = None
@@ -330,10 +331,12 @@ def active_sessions(username):
 def active_login_metric(username):
   if not username or not user_exists(username):
     return 0
-  runtime_count, runtime_ip_count = runtime_session_stats(username)
+  runtime_count, runtime_ip_count, _ = runtime_session_stats(username)
   dropbear_count = active_sessions_from_dropbear(username)
   if runtime_count is not None:
-    return max(int(runtime_count), int(runtime_ip_count or 0), int(dropbear_count))
+    if int(runtime_ip_count or 0) > 0:
+      return int(runtime_ip_count)
+    return max(int(runtime_count), int(dropbear_count))
   return active_sessions(username)
 
 def lock_user(username, status=None):
@@ -487,6 +490,12 @@ def normalize_payload(path):
     "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
     "ip_limit": ip_limit,
     "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
+    "ip_limit_metric": to_int(status.get("ip_limit_metric"), 0),
+    "distinct_ip_count": to_int(status.get("distinct_ip_count"), 0),
+    "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
+    "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
+    "active_sessions_runtime": to_int(status.get("active_sessions_runtime"), 0),
+    "active_sessions_dropbear": to_int(status.get("active_sessions_dropbear"), 0),
     "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
     "speed_down_mbit": speed_down,
     "speed_up_mbit": speed_up,
@@ -507,10 +516,25 @@ def enforce_user(path):
   ip_limit = to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
+  runtime_count, runtime_ip_count, runtime_ips = runtime_session_stats(username)
+  dropbear_count = active_sessions_from_dropbear(username)
+  if runtime_count is None:
+    runtime_count = 0
+  if runtime_ip_count is None:
+    runtime_ip_count = 0
+  status["active_sessions_runtime"] = int(runtime_count)
+  status["active_sessions_dropbear"] = int(dropbear_count)
+  status["active_sessions_total"] = max(int(runtime_count), int(dropbear_count))
+  status["distinct_ip_count"] = int(runtime_ip_count)
+  status["distinct_ips"] = runtime_ips
+  if runtime_ip_count > 0:
+    status["ip_limit_metric"] = int(runtime_ip_count)
+  else:
+    status["ip_limit_metric"] = max(int(runtime_count), int(dropbear_count))
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    status["ip_limit_locked"] = active_login_metric(username) > ip_limit
+    status["ip_limit_locked"] = to_int(status.get("ip_limit_metric"), 0) > ip_limit
   else:
     status["ip_limit_locked"] = False
 

@@ -21,9 +21,11 @@ type SSHRuntimeSessionTracker struct {
 	localPort  int
 	clientIP   string
 	transport  string
+	backend    string
 	resolver   UsernameResolver
 	heartbeat  time.Duration
 	sessionID  string
+	createdAt  int64
 	done       chan struct{}
 	onceStart  sync.Once
 	onceStop   sync.Once
@@ -40,9 +42,11 @@ func NewSSHRuntimeSessionTracker(logger *log.Logger, cfg SSHQuotaConfig, localPo
 		localPort: localPort,
 		clientIP:  normalizeSessionIP(clientIP),
 		transport: strings.TrimSpace(transport),
+		backend:   "dropbear",
 		resolver:  resolver,
 		heartbeat: cfg.SessionHeartbeat,
 		sessionID: fmt.Sprintf("edge-%d-%d-%s", os.Getpid(), localPort, randomHex(4)),
+		createdAt: time.Now().Unix(),
 		done:      make(chan struct{}),
 	}
 }
@@ -96,8 +100,10 @@ func (t *SSHRuntimeSessionTracker) update() {
 		"username":   username,
 		"client_ip":  t.clientIP,
 		"transport":  t.transport,
+		"backend":    t.backend,
 		"local_port": t.localPort,
 		"proxy_pid":  os.Getpid(),
+		"created_at": t.createdAt,
 		"updated_at": time.Now().Unix(),
 		"source":     "edge-mux",
 	}
