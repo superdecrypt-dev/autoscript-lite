@@ -526,7 +526,6 @@ write_xray_config() {
           "quic"
         ]
       }
-    },
     }
   ],
   "outbounds": [
