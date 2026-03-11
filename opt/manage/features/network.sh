@@ -370,7 +370,7 @@ PY
     "xray tidak aktif setelah update routing default. Config di-rollback ke backup: ${backup}" \
     "Konfigurasi xray invalid setelah update routing default. Config di-rollback ke backup: ${backup}"
 
-  speed_policy_resync_after_egress_change || return 1
+  speed_policy_resync_after_warp_change || return 1
 }
 
 xray_routing_rule_toggle_user_outbound() {
@@ -2608,18 +2608,19 @@ warp_tier_menu() {
 }
 
 warp_controls_menu() {
+  local -a items=(
+    "1|WARP Status"
+    "2|Restart WARP"
+    "3|WARP Global"
+    "4|Per User"
+    "5|Per Inbound"
+    "6|Per Domain"
+    "7|WARP Tier"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "6) Network > WARP Controls"
-    hr
-    echo "  1) WARP (wireproxy) status"
-    echo "  2) Restart WARP (wireproxy)"
-    echo "  3) WARP Global"
-    echo "  4) WARP per-user"
-    echo "  5) WARP per-protocol inbounds"
-    echo "  6) WARP per-Geosite/Domain"
-    echo "  7) WARP Tier (Free/Plus)"
-    echo "  0) Back"
+    ui_menu_screen_begin "6) Network > WARP"
+    ui_menu_render_options items 76
     hr
     read -r -p "Pilih: " c
     case "${c}" in
@@ -3460,16 +3461,17 @@ network_diagnostics_menu() {
 }
 
 network_menu() {
+  local -a items=(
+    "1|WARP"
+    "2|DNS"
+    "3|DNS Editor"
+    "4|Checks"
+    "5|Adblock"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "6) Network"
-    hr
-    echo "  1) WARP"
-    echo "  2) DNS"
-    echo "  3) DNS Editor"
-    echo "  4) Checks"
-    echo "  5) Adblock"
-    echo "  0) Back"
+    ui_menu_screen_begin "6) Network"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -3547,13 +3549,14 @@ speedtest_show_version() {
 }
 
 speedtest_menu() {
+  local -a items=(
+    "1|Run Speedtest"
+    "2|Version"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "8) Speedtest"
-    hr
-    echo "  1) Run Speedtest"
-    echo "  2) Version"
-    echo "  0) Back"
+    ui_menu_screen_begin "8) Speedtest"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo

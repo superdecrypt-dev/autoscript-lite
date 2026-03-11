@@ -2,27 +2,28 @@
 # Maintenance
 # -------------------------
 maintenance_menu() {
+  local -a items=(
+    "1|Restart Xray"
+    "2|Restart Nginx"
+    "3|Restart Core"
+    "4|Xray Logs"
+    "5|Nginx Logs"
+    "6|WARP Status"
+    "7|Restart WARP"
+    "8|Xray Daemons"
+    "9|SSH WS Status"
+    "10|Restart SSH WS"
+    "11|SSH WS Diagnose"
+    "12|Edge Status"
+    "13|Restart Edge"
+    "14|Edge Info"
+    "15|BadVPN Status"
+    "16|Restart BadVPN"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "10) Maintenance"
-    hr
-    echo "  1) Restart Xray"
-    echo "  2) Restart Nginx"
-    echo "  3) Restart Core Services"
-    echo "  4) Xray Logs"
-    echo "  5) Nginx Logs"
-    echo "  6) WARP Status"
-    echo "  7) Restart WARP"
-    echo "  8) Xray Daemons"
-    echo "  9) SSH WS Status"
-    echo "  10) Restart SSH WS"
-    echo "  11) SSH WS Diagnostics"
-    echo "  12) Edge Gateway Status"
-    echo "  13) Restart Edge Gateway"
-    echo "  14) Edge Gateway Info"
-    echo "  15) BadVPN UDPGW Status"
-    echo "  16) Restart BadVPN UDPGW"
-    echo "  0) Back"
+    ui_menu_screen_begin "10) Maintenance"
+    ui_menu_render_options items 84
     hr
     if ! read -r -p "Pilih: " c; then
       echo

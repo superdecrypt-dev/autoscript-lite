@@ -51,7 +51,7 @@ opt/setup/
     xray.sh
     sshws.sh
     network.sh
-    observability.sh
+    domain_guard.sh
     management.sh
   templates/
     README.md
@@ -88,13 +88,13 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
    - target modul: `install/sshws.sh`
 11. `install_xray_speed_limiter_foundation`
     - target modul: `install/xray.sh`
-12. `install_observability_alerting`, `install_domain_cert_guard`
-    - target modul: `install/observability.sh`
+12. `setup_logrotate`, `install_domain_cert_guard`
+    - target modul: `install/domain_guard.sh`
 13. `install_management_scripts`, `sync_manage_modules_layout`,
     `install_bot_installer_if_present`
     - target modul: `install/management.sh`
 14. `setup_logrotate`, `sanity_check`, `cleanup`
-    - target modul: `install/bootstrap.sh`, `install/observability.sh`
+    - target modul: `install/bootstrap.sh`, `install/domain_guard.sh`
 
 ## Tahapan Refactor
 

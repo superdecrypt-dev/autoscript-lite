@@ -13,10 +13,10 @@ trap 'rc=$?; echo "[ERROR] line ${LINENO}: command failed (exit ${rc})" >&2; exi
 # =========================
 # Setup-only autoscript:
 # Xray + Nginx (nginx.org repo) + acme.sh
-# VLESS/VMess/Trojan over WS/HTTPUpgrade/gRPC
+# Default transport layout uses Edge Gateway on shared 80/443
 # Public paths fixed, internal ports & paths randomized
 # Cert saved to /opt/cert/fullchain.pem & /opt/cert/privkey.pem
-# Supports: Ubuntu >= 20.04, Debian >= 11, KVM only
+# Supports: Ubuntu >= 20.04, Debian >= 11
 # =========================
 
 GREEN='\033[0;32m'
@@ -176,8 +176,8 @@ source_setup_module "opt/setup/install/xray.sh"
 source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
-# shellcheck source=opt/setup/install/observability.sh
-source_setup_module "opt/setup/install/observability.sh"
+# shellcheck source=opt/setup/install/domain_guard.sh
+source_setup_module "opt/setup/install/domain_guard.sh"
 
 trap run_exit_cleanups EXIT
 sanity_check() {

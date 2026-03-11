@@ -143,8 +143,10 @@ else
   UI_ACCENT=''
   UI_MUTED=''
   UI_WARN=''
-  UI_ERR=''
+UI_ERR=''
 fi
+
+MAIN_INFO_REMOTE_LOOKUPS="${MAIN_INFO_REMOTE_LOOKUPS:-0}"
 
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
@@ -267,8 +269,8 @@ raise SystemExit(1)
 PY
 }
 
-speed_policy_resync_after_egress_change() {
-  # WARP global direct/warp mempengaruhi jalur dasar speed-mark outbounds.
+speed_policy_resync_after_warp_change() {
+  # Perubahan WARP global mempengaruhi jalur dasar speed-mark outbounds.
   # Wajib sinkron ulang supaya speed user tidak memakai topology sebelumnya.
   # Walau policy kosong, tetap perlu sync bila artefak speed historis masih tertinggal.
   local need_sync="false"
@@ -1090,13 +1092,13 @@ main_info_uptime_get() {
 
 main_info_ip_quiet_get() {
   local ip=""
-  if have_cmd curl; then
-    ip="$(curl -4fsSL --max-time 4 "https://api.ipify.org" 2>/dev/null || true)"
-  elif have_cmd wget; then
-    ip="$(wget -qO- --timeout=4 "https://api.ipify.org" 2>/dev/null || true)"
-  fi
-  if [[ -z "${ip}" || ! "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    ip="$(detect_public_ip)"
+  ip="$(detect_public_ip)"
+  if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ -z "${ip}" || "${ip}" == "0.0.0.0" ]]; then
+    if have_cmd curl; then
+      ip="$(curl -4fsSL --max-time 4 "https://api.ipify.org" 2>/dev/null || true)"
+    elif have_cmd wget; then
+      ip="$(wget -qO- --timeout=4 "https://api.ipify.org" 2>/dev/null || true)"
+    fi
   fi
   if [[ "${ip}" == "0.0.0.0" ]]; then
     ip="-"
@@ -1118,7 +1120,7 @@ main_info_geo_lookup() {
       ;;
   esac
 
-  if [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && have_cmd curl && have_cmd jq; then
+  if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && have_cmd curl && have_cmd jq; then
     json="$(curl -fsSL --max-time 6 "https://ipwho.is/${ip}" 2>/dev/null || true)"
     if [[ -n "${json}" ]]; then
       country="$(echo "${json}" | jq -r 'if .success == true then (.country // "-") else "-" end' 2>/dev/null || true)"
@@ -1231,15 +1233,15 @@ main_menu_info_header_print() {
   xray_icon="$(service_status_icon "xray")"
   ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
 
-  printf "%-11s : %s\n" "SYSTEM OS" "${os}"
-  printf "%-11s : %s\n" "RAM" "${ram}"
-  printf "%-11s : %s\n" "UPTIME" "${up}"
-  printf "%-11s : %s\n" "IP VPS" "${ip}"
-  printf "%-11s : %s\n" "ISP" "${isp}"
-  printf "%-11s : %s\n" "COUNTRY" "${country}"
-  printf "%-11s : %s\n" "DOMAIN" "${domain}"
-  printf "%-11s : %s\n" "TLS EXPIRED" "${tls}"
-  printf "%-11s : %s\n" "WARP STATUS" "${warp}"
+  printf "%-12s : %s\n" "System OS" "${os}"
+  printf "%-12s : %s\n" "RAM" "${ram}"
+  printf "%-12s : %s\n" "Uptime" "${up}"
+  printf "%-12s : %s\n" "IP VPS" "${ip}"
+  printf "%-12s : %s\n" "ISP" "${isp}"
+  printf "%-12s : %s\n" "Country" "${country}"
+  printf "%-12s : %s\n" "Domain" "${domain}"
+  printf "%-12s : %s\n" "TLS Expired" "${tls}"
+  printf "%-12s : %s\n" "WARP Status" "${warp}"
   hr
   main_menu_center_line "ACCOUNTS"
   main_menu_center_segments \
@@ -2145,17 +2147,18 @@ domain_control_guard_renew_if_needed() {
 }
 
 domain_control_menu() {
+  local -a items=(
+    "1|Set Domain"
+    "2|Current Domain"
+    "3|Guard Check"
+    "4|Guard Renew"
+    "0|Back"
+  )
   while true; do
-    title
-    echo -e "${UI_BOLD}${UI_ACCENT}7) Domain Control${UI_RESET}"
+    ui_menu_screen_begin "7) Domain Control"
+    ui_menu_render_options items 76
     hr
-    echo -e "  ${UI_ACCENT}1)${UI_RESET} Set Domain"
-    echo -e "  ${UI_ACCENT}2)${UI_RESET} Current Domain"
-    echo -e "  ${UI_ACCENT}3)${UI_RESET} Guard Check"
-    echo -e "  ${UI_ACCENT}4)${UI_RESET} Guard Renew"
-    echo -e "  ${UI_ACCENT}0)${UI_RESET} Back"
-    hr
-    if ! read -r -p "Pilih (1-4/0): " c; then
+    if ! read -r -p "Pilih: " c; then
       echo
       break
     fi
@@ -2228,13 +2231,24 @@ hr() {
   echo -e "${UI_MUTED}${line}${UI_RESET}"
 }
 
+ui_menu_terminal_width() {
+  local width="${COLUMNS:-}"
+  if [[ ! "${width}" =~ ^[0-9]+$ ]] || (( width < 40 )); then
+    if command -v tput >/dev/null 2>&1; then
+      width="$(tput cols 2>/dev/null || true)"
+    fi
+  fi
+  if [[ ! "${width}" =~ ^[0-9]+$ ]] || (( width < 40 )); then
+    width=80
+  fi
+  printf '%s\n' "${width}"
+}
+
 main_menu_center_line() {
   local text="$1"
-  local w="${COLUMNS:-80}"
+  local w
   local pad
-  if [[ ! "${w}" =~ ^[0-9]+$ ]]; then
-    w=80
-  fi
+  w="$(ui_menu_terminal_width)"
   if (( w < 60 )); then
     w=60
   fi
@@ -2258,6 +2272,128 @@ main_menu_center_segments() {
     joined+="${segment}"
   done
   main_menu_center_line "${joined}"
+}
+
+ui_menu_screen_begin() {
+  local title_text="$1"
+  local subtitle="${2:-}"
+  title
+  main_menu_center_line "${title_text}"
+  if [[ -n "${subtitle}" ]]; then
+    echo -e "${UI_MUTED}${subtitle}${UI_RESET}"
+  fi
+  hr
+}
+
+ui_menu_render_single_column() {
+  local ref_name="$1"
+  local -n menu_items="${ref_name}"
+  local item key label
+  for item in "${menu_items[@]}"; do
+    IFS='|' read -r key label <<<"${item}"
+    printf "  %b%s)%b %s\n" "${UI_ACCENT}" "${key}" "${UI_RESET}" "${label}"
+  done
+}
+
+ui_menu_render_two_columns() {
+  local ref_name="$1"
+  local -n menu_items="${ref_name}"
+  local width split total left_count right_count
+  local left_num_width=0 right_num_width=0 left_label_width=0 right_label_width=0
+  local i left_key left_label right_key right_label
+  width="$(ui_menu_terminal_width)"
+  total="${#menu_items[@]}"
+  split=$(( (total + 1) / 2 ))
+  left_count="${split}"
+  right_count=$(( total - split ))
+
+  for (( i=0; i<left_count; i++ )); do
+    IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    (( ${#left_key} > left_num_width )) && left_num_width=${#left_key}
+    (( ${#left_label} > left_label_width )) && left_label_width=${#left_label}
+  done
+  for (( i=0; i<right_count; i++ )); do
+    IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+    (( ${#right_key} > right_num_width )) && right_num_width=${#right_key}
+    (( ${#right_label} > right_label_width )) && right_label_width=${#right_label}
+  done
+
+  local min_width=$(( 2 + left_num_width + 2 + left_label_width + 4 ))
+  if (( right_count > 0 )); then
+    min_width=$(( min_width + right_num_width + 2 + right_label_width ))
+  fi
+  if (( width < min_width )); then
+    ui_menu_render_single_column "${ref_name}"
+    return 0
+  fi
+
+  for (( i=0; i<left_count; i++ )); do
+    IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    if (( i < right_count )); then
+      IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+      printf "  %b%*s)%b %-*s  %b%*s)%b %s\n" \
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label_width}" "${left_label}" \
+        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_label}"
+    else
+      printf "  %b%*s)%b %s\n" \
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label}"
+    fi
+  done
+}
+
+ui_menu_render_two_columns_fixed() {
+  local ref_name="$1"
+  local -n menu_items="${ref_name}"
+  local split total left_count right_count
+  local left_num_width=0 right_num_width=0 left_label_width=0 right_label_width=0
+  local shared_label_width=0
+  local i left_key left_label right_key right_label
+  total="${#menu_items[@]}"
+  split=$(( (total + 1) / 2 ))
+  left_count="${split}"
+  right_count=$(( total - split ))
+
+  for (( i=0; i<left_count; i++ )); do
+    IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    (( ${#left_key} > left_num_width )) && left_num_width=${#left_key}
+    (( ${#left_label} > left_label_width )) && left_label_width=${#left_label}
+  done
+  for (( i=0; i<right_count; i++ )); do
+    IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+    (( ${#right_key} > right_num_width )) && right_num_width=${#right_key}
+    (( ${#right_label} > right_label_width )) && right_label_width=${#right_label}
+  done
+
+  shared_label_width="${left_label_width}"
+  (( right_label_width > shared_label_width )) && shared_label_width="${right_label_width}"
+  shared_label_width=$(( shared_label_width + 2 ))
+
+  for (( i=0; i<left_count; i++ )); do
+    IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    if (( i < right_count )); then
+      IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+      printf "  %b%*s)%b %-*s  %b%*s)%b %s\n" \
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${shared_label_width}" "${left_label}" \
+        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_label}"
+    else
+      printf "  %b%*s)%b %s\n" \
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label}"
+    fi
+  done
+}
+
+ui_menu_render_options() {
+  local ref_name="$1"
+  local -n menu_items="${ref_name}"
+  local threshold="${2:-72}"
+  local width count
+  width="$(ui_menu_terminal_width)"
+  count="${#menu_items[@]}"
+  if (( count >= 4 && width >= threshold )); then
+    ui_menu_render_two_columns "${ref_name}"
+  else
+    ui_menu_render_single_column "${ref_name}"
+  fi
 }
 
 title() {
@@ -3139,12 +3275,13 @@ sanity_check_now() {
 }
 
 status_diagnostics_menu() {
+  local -a items=(
+    "1|Core Check"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "1) Status"
-    hr
-    echo "  1) Core Check"
-    echo "  0) Back"
+    ui_menu_screen_begin "1) Status"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -5810,15 +5947,16 @@ user_list_menu() {
 }
 
 user_menu() {
+  local -a items=(
+    "1|Add User"
+    "2|Delete User"
+    "3|Set Expiry"
+    "4|List Users"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "2) Xray Users"
-    hr
-    echo "  1) Add User"
-    echo "  2) Delete User"
-    echo "  3) Set Expiry"
-    echo "  4) List Users"
-    echo "  0) Back"
+    ui_menu_screen_begin "2) Xray Users"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -6971,9 +7109,7 @@ quota_menu() {
   QUOTA_QUERY=""
 
   while true; do
-    title
-    echo "4) Xray QAC"
-    hr
+    ui_menu_screen_begin "4) Xray QAC"
 
     quota_collect_files
     quota_build_view_indexes

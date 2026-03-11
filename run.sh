@@ -17,10 +17,14 @@ export PATH
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_USE_LOCAL_SOURCE="${RUN_USE_LOCAL_SOURCE:-0}"
 REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript.git}"
+REPO_DEFAULT_BRANCH="${REPO_DEFAULT_BRANCH:-main}"
+REPO_REF="${REPO_REF:-}"
 REPO_DIR="${REPO_DIR:-/opt/autoscript}"
 if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
   REPO_DIR="${SCRIPT_DIR}"
 fi
+RUN_STATE_DIR="${RUN_STATE_DIR:-/var/lib/autoscript-run}"
+RUN_REPO_REF_FILE="${RUN_REPO_REF_FILE:-${RUN_STATE_DIR}/repo-ref}"
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
@@ -47,7 +51,7 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/install/sshws.sh"
   "opt/setup/install/edge.sh"
   "opt/setup/install/badvpn.sh"
-  "opt/setup/install/observability.sh"
+  "opt/setup/install/domain_guard.sh"
   "opt/setup/templates/config/edge-runtime.env"
   "opt/setup/templates/config/badvpn-runtime.env"
   "opt/setup/templates/systemd/edge-mux.service"
@@ -78,6 +82,46 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 hr() { echo "------------------------------------------------------------"; }
+
+ensure_run_state_dir() {
+  mkdir -p "${RUN_STATE_DIR}"
+  chmod 700 "${RUN_STATE_DIR}" 2>/dev/null || true
+}
+
+load_effective_repo_ref() {
+  if [[ -n "${REPO_REF}" ]]; then
+    printf '%s\n' "${REPO_REF}"
+    return 0
+  fi
+  if [[ -r "${RUN_REPO_REF_FILE}" ]]; then
+    local saved=""
+    saved="$(head -n1 "${RUN_REPO_REF_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "${saved}" == pinned:* ]]; then
+      saved="${saved#pinned:}"
+    else
+      # Format lama yang menyimpan HEAD mentah dianggap legacy dan diabaikan,
+      # supaya host tidak diam-diam terkunci ke commit lama.
+      saved=""
+    fi
+    if [[ -n "${saved}" ]]; then
+      printf '%s\n' "${saved}"
+      return 0
+    fi
+  fi
+  printf '%s\n' ""
+}
+
+persist_repo_ref() {
+  local ref="$1"
+  [[ -n "${ref}" ]] || return 0
+  ensure_run_state_dir
+  printf 'pinned:%s\n' "${ref}" > "${RUN_REPO_REF_FILE}"
+  chmod 600 "${RUN_REPO_REF_FILE}" 2>/dev/null || true
+}
+
+clear_repo_ref_pin() {
+  rm -f -- "${RUN_REPO_REF_FILE}" 2>/dev/null || true
+}
 
 repo_has_local_changes() {
   local dir="$1"
@@ -188,6 +232,7 @@ sync_tree_atomic() {
 
 reclone_repo_with_backup() {
   local target="$1"
+  local ref="${2:-}"
   local backup=""
   backup="${target}.backup.$(date +%Y%m%d%H%M%S)"
 
@@ -198,6 +243,15 @@ reclone_repo_with_backup() {
   if ! git clone --depth=1 "${REPO_URL}" "${target}" 2>&1; then
     die "Gagal re-clone repositori setelah backup. Backup tersedia di: ${backup}"
   fi
+  if [[ -n "${ref}" ]]; then
+    local fetch_err=""
+    if ! fetch_err="$(git -C "${target}" fetch --depth=1 origin "${ref}" 2>&1)"; then
+      die "Gagal mengambil ref repositori setelah backup: ${ref}\n  Detail git: ${fetch_err}\n  Backup tersedia di: ${backup}"
+    fi
+    git -C "${target}" checkout --detach FETCH_HEAD >/dev/null 2>&1 \
+      || die "Gagal checkout ref repositori setelah backup: ${ref}\n  Backup tersedia di: ${backup}"
+  fi
+  persist_repo_ref "$(git -C "${target}" rev-parse HEAD 2>/dev/null || true)"
   ok "Repo bersih siap."
   ok "Backup lama: ${backup}"
 }
@@ -255,6 +309,13 @@ check_deps() {
 # Langkah instalasi
 # -------------------------
 clone_repo() {
+  local effective_ref=""
+  local current_head=""
+  local fetch_err=""
+  local clone_err=""
+
+  effective_ref="$(load_effective_repo_ref)"
+
   if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
     preflight_repo_layout "${REPO_DIR}"
     log "Source lokal: ${REPO_DIR}"
@@ -272,27 +333,59 @@ clone_repo() {
   fi
 
   if [[ -d "${REPO_DIR}/.git" ]]; then
-    log "Update repo di ${REPO_DIR} ..."
-    if ! git -C "${REPO_DIR}" pull --ff-only origin main 2>&1; then
-      if repo_has_local_changes "${REPO_DIR}"; then
-        warn "Update repo gagal: working tree kotor."
-        reclone_repo_with_backup "${REPO_DIR}"
-        return 0
+    current_head="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
+    if [[ -n "${effective_ref}" ]]; then
+      if [[ "${current_head}" != "${effective_ref}" ]]; then
+        log "Sinkronkan repo ke ref tersimpan ${effective_ref} ..."
+        if repo_has_local_changes "${REPO_DIR}"; then
+          warn "Repo lokal kotor dan ref berbeda dari state tersimpan."
+          reclone_repo_with_backup "${REPO_DIR}" "${effective_ref}"
+          return 0
+        fi
+        if ! fetch_err="$(git -C "${REPO_DIR}" fetch --depth=1 origin "${effective_ref}" 2>&1)"; then
+          die "Gagal mengambil ref repositori: ${effective_ref}\n  Detail git: ${fetch_err}"
+        fi
+        git -C "${REPO_DIR}" checkout --detach FETCH_HEAD >/dev/null 2>&1 \
+          || die "Gagal checkout ref repositori: ${effective_ref}"
+      else
+        log "Repo sudah terkunci di ref ${effective_ref}."
       fi
-      die "Gagal update repositori di ${REPO_DIR}. Penyebab bukan perubahan lokal; cek koneksi/remote lalu coba lagi."
+    else
+      log "Update repo di ${REPO_DIR} ..."
+      if ! git -C "${REPO_DIR}" pull --ff-only origin "${REPO_DEFAULT_BRANCH}" 2>&1; then
+        if repo_has_local_changes "${REPO_DIR}"; then
+          warn "Update repo gagal: working tree kotor."
+          reclone_repo_with_backup "${REPO_DIR}"
+          return 0
+        fi
+        die "Gagal update repositori di ${REPO_DIR}. Penyebab bukan perubahan lokal; cek koneksi/remote lalu coba lagi."
+      fi
+      clear_repo_ref_pin
     fi
     preflight_repo_layout "${REPO_DIR}"
-    ok "Repo updated."
+    if [[ -n "${effective_ref}" ]]; then
+      persist_repo_ref "$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    ok "Repo siap."
     return 0
   fi
 
   log "Clone repo ke ${REPO_DIR} ..."
-  local clone_err=""
   if ! clone_err="$(git clone --depth=1 "${REPO_URL}" "${REPO_DIR}" 2>&1)"; then
     if grep -Eqi 'could not create work tree dir|permission denied|operation not permitted|read-only file system' <<<"${clone_err}"; then
       die "Gagal mengkloning repositori: ${REPO_URL}\n  Penyebab: path tujuan tidak bisa ditulis (${REPO_DIR}). Cek permission/ownership direktori.\n  Detail git: ${clone_err}"
     fi
     die "Gagal mengkloning repositori: ${REPO_URL}\n  Pastikan server memiliki koneksi internet dan URL repo benar.\n  Detail git: ${clone_err}"
+  fi
+  if [[ -n "${effective_ref}" ]]; then
+    if ! fetch_err="$(git -C "${REPO_DIR}" fetch --depth=1 origin "${effective_ref}" 2>&1)"; then
+      die "Gagal mengambil ref repositori: ${effective_ref}\n  Detail git: ${fetch_err}"
+    fi
+    git -C "${REPO_DIR}" checkout --detach FETCH_HEAD >/dev/null 2>&1 \
+      || die "Gagal checkout ref repositori: ${effective_ref}"
+    persist_repo_ref "$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  else
+    clear_repo_ref_pin
   fi
   preflight_repo_layout "${REPO_DIR}"
   ok "Repo siap."

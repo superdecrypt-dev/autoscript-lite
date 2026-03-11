@@ -396,15 +396,16 @@ traffic_analytics_export_json() {
 }
 
 traffic_analytics_menu() {
+  local -a items=(
+    "1|Overview"
+    "2|Top Users"
+    "3|Search User"
+    "4|Export JSON"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "11) Traffic"
-    hr
-    echo "  1) Overview"
-    echo "  2) Top Users"
-    echo "  3) Search User"
-    echo "  4) Export JSON"
-    echo "  0) Back"
+    ui_menu_screen_begin "11) Traffic"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -1148,15 +1149,16 @@ security_overview_menu() {
 }
 
 fail2ban_menu() {
+  local -a items=(
+    "1|TLS & Cert"
+    "2|Fail2ban"
+    "3|Hardening"
+    "4|Overview"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "9) Security"
-    hr
-    echo "  1) TLS & Cert"
-    echo "  2) Fail2ban"
-    echo "  3) Hardening"
-    echo "  4) Overview"
-    echo "  0) Back"
+    ui_menu_screen_begin "9) Security"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -4681,19 +4683,20 @@ sshws_active_sessions_menu() {
 }
 
 ssh_menu() {
+  local -a items=(
+    "1|Add User"
+    "2|Delete User"
+    "3|Set Expiry"
+    "4|Reset Password"
+    "5|List Users"
+    "6|SSH WS Status"
+    "7|Restart SSH WS"
+    "8|Active Sessions"
+    "0|Back"
+  )
   while true; do
-    title
-    echo "3) SSH Users"
-    hr
-    echo "  1) Add User"
-    echo "  2) Delete User"
-    echo "  3) Set Expiry"
-    echo "  4) Reset Password"
-    echo "  5) List Users"
-    echo "  6) SSH WS Status"
-    echo "  7) Restart SSH WS"
-    echo "  8) Active Sessions"
-    echo "  0) Back"
+    ui_menu_screen_begin "3) SSH Users"
+    ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
       echo
@@ -6179,9 +6182,7 @@ ssh_quota_menu() {
   SSH_QAC_QUERY=""
 
   while true; do
-    title
-    echo "5) SSH QAC"
-    hr
+    ui_menu_screen_begin "5) SSH QAC"
 
     ssh_qac_enforce_now_warn || true
     ssh_qac_collect_files
@@ -6282,9 +6283,7 @@ sshws_restart_after_dropbear() {
 
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
-  title
-  echo "12) Install BOT Discord"
-  hr
+  ui_menu_screen_begin "12) Discord Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Discord tidak ditemukan / tidak executable:"
@@ -6309,9 +6308,7 @@ install_discord_bot_menu() {
 
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
-  title
-  echo "13) Install BOT Telegram"
-  hr
+  ui_menu_screen_begin "13) Telegram Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Telegram tidak ditemukan / tidak executable:"
