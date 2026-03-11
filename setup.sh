@@ -407,6 +407,7 @@ main() {
   ensure_stdin_available
   validate_sshws_ports_config
   check_os
+  domain_menu_v2
   install_base_deps
   need_python3
   install_extra_deps
@@ -424,7 +425,6 @@ main() {
   setup_wgcf
   setup_wireproxy
   cleanup_wgcf_files
-  domain_menu_v2
   setup_run_post_domain_with_spinner
 }
 
