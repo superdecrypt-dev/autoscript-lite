@@ -44,8 +44,8 @@ Sudah tercakup di bagian preflight.
 
 ```bash
 printf "0\n" | timeout 20 bash manage.sh
-printf "3\n4\n0\n0\n" | timeout 30 bash manage.sh
-printf "5\n0\n0\n" | timeout 30 bash manage.sh
+printf "2\n5\n0\n0\n" | timeout 30 bash manage.sh
+printf "4\n0\n0\n" | timeout 30 bash manage.sh
 bash install-discord-bot.sh status
 printf "0\n" | timeout 20 bash install-discord-bot.sh menu
 bash install-telegram-bot.sh status
@@ -55,8 +55,8 @@ printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
-- Menu `SSH Users` (`3)`) bisa dibuka, `List Users` tampil aman walau data kosong.
-- Menu `SSH QAC` (`5)`) bisa dibuka walau data user masih kosong.
+- Menu `SSH Users` (`2)`) bisa dibuka, `List Users` tampil aman walau data kosong.
+- Menu `SSH QAC` (`4)`) bisa dibuka walau data user masih kosong.
 
 ### 3.3 Negative/Failure
 
@@ -239,7 +239,7 @@ Catatan:
 ### 4.3 Checklist Manual /panel (Rekomendasi Terbaru)
 Gunakan checklist ini saat regresi fitur bot terbaru:
 
-1. Menu `1) Status & Diagnostics`
+1. Menu status
 - `View Status`
 - `Run Xray Test`
 - `View TLS Info`
@@ -247,7 +247,7 @@ Gunakan checklist ini saat regresi fitur bot terbaru:
 - `View Observe Stat`
 - `View Alert Log`
 
-2. Menu `5) Domain Control`
+2. Menu domain
 - `View Domain Info`
 - `Run Guard Check`
 - `View Guard Stat`
@@ -255,7 +255,7 @@ Gunakan checklist ini saat regresi fitur bot terbaru:
 - `View Nginx Name`
 - `Refresh Accounts`
 
-3. Menu `9) Traffic Analytics`
+3. Menu traffic
 - `View Overview`
 - `View Top Users` (isi limit)
 - `Search User` (isi query)
@@ -320,7 +320,7 @@ curl -fsS --max-time 8 \
 Catatan:
 - Endpoint `/health` backend Telegram wajib header secret internal.
 - Default aman proyek ini adalah `ENABLE_DANGEROUS_ACTIONS=false`.
-- Action menu `6) Network Controls` tetap perlu diuji untuk regresi WARP parity.
+- Action menu network tetap perlu diuji untuk regresi WARP parity.
 
 ### 6.1 Gate Wajib
 1. Jalankan `bash bot-telegram/scripts/gate-all.sh`.
@@ -349,15 +349,15 @@ Ekspektasi:
 1. Jalankan `/panel`.
 2. Pastikan keyboard menu utama tampil penuh dan tidak ada button yang mati/error.
 3. Uji menu read-only aman berikut:
-   - `1) Status & Diagnostics`
-   - `2) Xray Management`
-   - `3) SSH Management`
-   - `4) Xray QAC`
-   - `5) SSH QAC`
-   - `6) Network Controls`
-   - `7) Domain Control`
-   - `9) Security`
-   - `10) Maintenance`
+   - status
+   - xray management
+   - ssh management
+   - xray qac
+   - ssh qac
+   - network
+   - domain control
+   - security
+   - maintenance
 4. Jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan button dangerous memang tidak muncul.
 5. Jika mode staging mengizinkan dangerous actions, uji satu action aman-berubah per area yang relevan, lalu rollback hasilnya.
 6. Jalankan `/cleanup`.
@@ -366,53 +366,53 @@ Ekspektasi:
 ### 6.3 Checklist Manual /panel (Rekomendasi Terbaru)
 Gunakan checklist ini saat regresi menu Telegram:
 
-1. Menu `1) Status & Diagnostics`
+1. Menu status
 - `Overview`
 - `Run Xray Test`
 - `View TLS Info`
 
-2. Menu `2) Xray Management`
+2. Menu xray management
 - `List Managed Users`
 - `Search User`
 - `View Account Info`
 
-3. Menu `3) SSH Management`
+3. Menu ssh management
 - `List Managed SSH Users`
 - `View Account Info`
 - `Active SSH Sessions`
 - `SSH WS Service Status`
 - `Edge Gateway Status`
 
-4. Menu `4) Xray QAC`
+4. Menu xray qac
 - `Summary`
 - `Detail` untuk satu user
 
-5. Menu `5) SSH QAC`
+5. Menu ssh qac
 - `Summary`
 - `Detail` untuk satu user
 
-6. Menu `6) Network Controls`
+6. Menu network
 - `View WARP Status`
 - `View WARP Tier`
 - jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan action setter/toggle tidak muncul
 
-7. Menu `7) Domain Control`
+7. Menu domain control
 - `View Domain Info`
 - `View Nginx Name`
 
-8. Menu `9) Security`
+8. Menu security
 - `Security Overview`
 - `TLS Certificate Info`
 - `Fail2ban Overview`
 
-9. Menu `10) Maintenance`
+9. Menu maintenance
 - `SSH WS Diagnostics`
 - `SSH WS Status`
 - `Edge Gateway Status`
 - `Edge Gateway Info`
 - `Daemon Status`
 
-10. Menu `12) Backup/Restore`
+10. Menu backup/restore
 - `List Backups`
 - jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan create/restore tidak muncul
 

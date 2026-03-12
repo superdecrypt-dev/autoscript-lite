@@ -5,13 +5,13 @@
 Menambahkan adblock untuk dua jalur yang berbeda sifatnya:
 
 - `Xray`: adblock berbasis routing domain yang memang sudah natural di core Xray.
-- `SSH`: adblock berbasis DNS/egrss untuk trafik yang keluar dari sesi SSH.
+- `SSH`: adblock berbasis DNS/egress untuk trafik yang keluar dari sesi SSH.
 
 Dokumen ini sengaja memisahkan dua jalur tersebut karena mekanismenya tidak sama.
 
 ## Ringkasan Keputusan
 
-### Xray
+### Xray Adblock
 
 Tetap memakai model yang sudah cocok dengan repo ini:
 
@@ -74,7 +74,7 @@ Bukan ingress SSH.
 
 ### Model
 
-- user mengaktifkan `5) Network > Adblock`
+- user mengaktifkan `5) Network > Adblock > Xray Adblock`
 - menu menulis rule ke routing Xray
 - domain yang match `ext:custom.dat:adblock` diarahkan ke outbound `blocked`
 
@@ -218,12 +218,12 @@ Isi:
 - `Disable`
 - `Status`
 
-### SSH
+### SSH Adblock
 
 Opsi terbaik:
 
-- tetap taruh di `5) Network`
-- submenu baru: `SSH Adblock`
+- tetap taruh di `5) Network > Adblock`
+- submenu user-facing: `SSH Adblock`
 
 Isi:
 
@@ -231,6 +231,9 @@ Isi:
 - `Disable`
 - `Status`
 - `Show bound users`
+- `Add URL`
+- `Delete URL`
+- `Update URL`
 
 Jangan taruh di `SSH Users`, karena adblock ini sifatnya policy jaringan, bukan lifecycle user.
 

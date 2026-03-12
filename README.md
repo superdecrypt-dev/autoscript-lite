@@ -16,13 +16,14 @@ Catatan penting:
 - `Edge Gateway` provider `go` sebagai ingress utama `80/443`
 - `nginx` backend internal `127.0.0.1:18080`
 - `SSH WS`, `SSH SSL/TLS`, dan `SSH Direct`
+- `VLESS TCP+TLS` dan `Trojan TCP+TLS` via `Edge Gateway`
 - `WARP`, `BadVPN UDPGW`, TLS, dan `xray-domain-guard`
 - `manage.sh` untuk operasional harian
 - installer bot `Discord` dan `Telegram`
 
 ## Protokol
-- `VLESS`, `VMess`, `Trojan`, `Shadowsocks`, `Shadowsocks 2022`
-- transport `WS`, `HTTPUpgrade`, `gRPC`
+- `VLESS`, `VMess`, `Trojan`
+- transport `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS` (khusus `VLESS` dan `Trojan`)
 - `SSH WS`, `SSH SSL/TLS`, `SSH Direct`
 
 ## Port Utama
@@ -44,24 +45,24 @@ Catatan penting:
 - `xray-domain-guard`
 
 ## Catatan Operasional
-- Pergantian domain lewat `7) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
+- Pergantian domain lewat `6) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
 - `SSH QAC` mengatur `quota`, `IP/Login limit`, `speed limit`, dan `expiry` khusus untuk SSH.
 
 ## Menu Utama
 ```text
-1) Status
-2) Xray Users
-3) SSH Users
-4) Xray QAC
-5) SSH QAC
-6) Network
-7) Domain Control
-8) Speedtest
-9) Security
-10) Maintenance
-11) Traffic
-12) Discord Bot
-13) Telegram Bot
+1) Xray Users
+2) SSH Users
+3) Xray QAC
+4) SSH QAC
+5) Network
+6) Domain Control
+7) Speedtest
+8) Security
+9) Maintenance
+10) Traffic
+11) Discord Bot
+12) Telegram Bot
+0) Keluar
 ```
 
 ## Bot
