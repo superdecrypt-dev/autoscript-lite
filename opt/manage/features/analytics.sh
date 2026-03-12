@@ -557,7 +557,7 @@ cert_menu_renew() {
 
   echo "Domain terdeteksi: ${domain}"
   hr
-  echo "Menjalankan acme.sh renew..."
+  echo "Menjalankan acme.sh renew untuk domain aktif..."
   echo
 
   local renew_ok="false"
@@ -565,7 +565,7 @@ cert_menu_renew() {
   local renew_log
   renew_log="$(mktemp)"
 
-  if "${acme}" --cron --force 2>&1 | tee "${renew_log}"; then
+  if "${acme}" --renew -d "${domain}" --force 2>&1 | tee "${renew_log}"; then
     renew_ok="true"
   else
     if grep -Eqi "port 80 is already used|Please stop it first" "${renew_log}"; then
@@ -603,7 +603,7 @@ cert_menu_renew() {
         fi
       done
     else
-      warn "acme.sh --cron --force gagal, mencoba renew domain spesifik..."
+      warn "acme.sh renew domain aktif gagal, mencoba ulang..."
       if "${acme}" --renew -d "${domain}" --force 2>&1; then
         renew_ok="true"
       fi
@@ -2783,7 +2783,7 @@ created = str(created_at or "").strip() or str(payload.get("created_at") or "").
 if created:
   created = created[:10]
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+  created = datetime.datetime.now().strftime("%Y-%m-%d")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
@@ -2960,7 +2960,7 @@ created = str(created_at or "").strip() or str(payload.get("created_at") or "").
 if created:
   created = created[:10]
 if not created:
-  created = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+  created = datetime.datetime.now().strftime("%Y-%m-%d")
 
 expired = norm_date(expired_at) or norm_date(payload.get("expired_at")) or "-"
 token = pick_unique_token(os.path.dirname(state_file) or ".", state_file, payload.get("sshws_token"))
@@ -3123,7 +3123,7 @@ ssh_account_info_write() {
   [[ -n "${ip}" ]] || ip="-"
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
-  [[ -n "${created_at}" ]] || created_at="$(date -u '+%Y-%m-%d')"
+  [[ -n "${created_at}" ]] || created_at="$(date '+%Y-%m-%d')"
   [[ -n "${expired_at}" ]] || expired_at="-"
 
   quota_limit_disp="$(python3 - <<'PY' "${quota_bytes}"
@@ -3146,7 +3146,7 @@ import sys
 from datetime import datetime
 v = (sys.argv[1] or "").strip()
 if not v:
-  print(datetime.utcnow().strftime("%Y-%m-%d"))
+  print(datetime.now().strftime("%Y-%m-%d"))
   raise SystemExit(0)
 for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
   try:
@@ -3165,14 +3165,14 @@ PY
   valid_until="${expired_at}"
   expired_disp="$(python3 - <<'PY' "${expired_at}"
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 v = (sys.argv[1] or "").strip()
 if not v or v == "-":
   print("unlimited")
   raise SystemExit(0)
 try:
   dt = datetime.strptime(v[:10], "%Y-%m-%d").date()
-  today = datetime.now(timezone.utc).date()
+  today = datetime.now().date()
   days = (dt - today).days
   if days < 0:
     days = 0
@@ -3751,13 +3751,13 @@ ssh_add_user_menu() {
   esac
 
   local expired_at created_at
-  expired_at="$(date -u -d "+${active_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
+  expired_at="$(date -d "+${active_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
   if [[ -z "${expired_at}" ]]; then
     warn "Gagal menghitung tanggal expiry SSH."
     pause
     return 0
   fi
-  created_at="$(date -u '+%Y-%m-%d')"
+  created_at="$(date '+%Y-%m-%d')"
 
   if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
     warn "Gagal membuat user Linux '${username}'."
@@ -3943,7 +3943,7 @@ ssh_extend_expiry_menu() {
         pause
         return 0
       fi
-      new_expiry="$(date -u -d "+${add_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
+      new_expiry="$(date -d "+${add_days} days" '+%Y-%m-%d' 2>/dev/null || true)"
       ;;
     2)
       if ! read -r -p "Tanggal expiry baru (YYYY-MM-DD): " new_expiry; then
@@ -3953,12 +3953,12 @@ ssh_extend_expiry_menu() {
       if is_back_choice "${new_expiry}"; then
         return 0
       fi
-      if ! date -u -d "${new_expiry}" '+%Y-%m-%d' >/dev/null 2>&1; then
+      if ! date -d "${new_expiry}" '+%Y-%m-%d' >/dev/null 2>&1; then
         warn "Format tanggal tidak valid."
         pause
         return 0
       fi
-      new_expiry="$(date -u -d "${new_expiry}" '+%Y-%m-%d' 2>/dev/null || true)"
+      new_expiry="$(date -d "${new_expiry}" '+%Y-%m-%d' 2>/dev/null || true)"
       ;;
     *)
       invalid_choice
@@ -3981,7 +3981,7 @@ ssh_extend_expiry_menu() {
   local created_at
   created_at="$(ssh_user_state_created_at_get "${username}")"
   if [[ -z "${created_at}" ]]; then
-    created_at="$(date -u '+%Y-%m-%d')"
+    created_at="$(date '+%Y-%m-%d')"
   fi
   if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
     warn "Metadata SSH gagal diperbarui untuk '${username}'."

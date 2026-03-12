@@ -97,9 +97,9 @@ validate_email_user() {
 
 is_default_xray_email_or_tag() {
   # Default/bawaan Xray (disembunyikan dari menu WARP per-user):
-  # default@(vless|vmess|trojan)-(ws|hup|grpc)
+  # default@(vless|vmess|trojan)-(tcp|ws|hup|grpc)
   local s="${1:-}"
-  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(ws|hup|grpc)$ ]]
+  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(tcp|ws|hup|grpc)$ ]]
 }
 
 is_readonly_geosite_domain() {
@@ -4061,7 +4061,9 @@ dns=cfg.get('dns')
 if not isinstance(dns, dict):
   dns={}
 
-if val:
+if val.lower() in {"off", "clear", "none", "-", "default"}:
+  dns.pop('queryStrategy', None)
+elif val:
   dns['queryStrategy']=val
 
 cfg['dns']=dns
@@ -4218,7 +4220,7 @@ dns_settings_menu() {
         pause
         ;;
       3)
-        read -r -p "Query Strategy (UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6) (atau kembali): " qs
+        read -r -p "Query Strategy (UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6, clear=hapus) (atau kembali): " qs
         if is_back_choice "${qs}"; then
           continue
         fi
@@ -4227,6 +4229,11 @@ dns_settings_menu() {
           UseIP|UseIPv4|UseIPv6|PreferIPv4|PreferIPv6)
             xray_dns_set_query_strategy "${qs}"
             log "Query Strategy updated: ${qs}"
+            pause
+            ;;
+          off|OFF|clear|CLEAR|none|NONE|-|default|DEFAULT)
+            xray_dns_set_query_strategy "clear"
+            log "Query Strategy dihapus."
             pause
             ;;
           *)

@@ -4567,8 +4567,8 @@ write_account_artifacts() {
   local domain ip created expired geo geo_ip isp country
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
-  created="$(date -u '+%Y-%m-%d %H:%M')"
-  expired="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -u '+%Y-%m-%d')"
+  created="$(date '+%Y-%m-%d %H:%M')"
+  expired="$(date -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date '+%Y-%m-%d')"
   geo="$(main_info_geo_lookup "${ip}")"
   IFS='|' read -r geo_ip isp country <<<"${geo}"
   [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
@@ -5162,9 +5162,9 @@ if created_at:
     elif len(s) >= 10 and s[4:5] == "-" and s[7:8] == "-":
       created_at = s[:10]
     else:
-      created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+      created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 else:
-  created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+  created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 expired_at = str(meta.get("expired_at") or existing.get("Valid Until") or "").strip()
 expired_at = expired_at[:10] if expired_at else "-"
 
@@ -6013,10 +6013,10 @@ PY
       # Hitung dari expiry saat ini, jika sudah lewat hitung dari hari ini
       new_expiry="$(python3 - <<'PY' "${current_expiry}" "${add_days}"
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 exp_str = sys.argv[1].strip()
 add = int(sys.argv[2])
-today = datetime.now(timezone.utc).date()
+today = datetime.now().date()
 try:
   base = datetime.fromisoformat(exp_str[:10]).date()
   # Jika sudah expired, mulai dari hari ini
