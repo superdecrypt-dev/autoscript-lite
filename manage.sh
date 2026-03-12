@@ -779,7 +779,7 @@ account_info_probe_domain_from_any_account_file() {
     [[ -d "${dir}" ]] || continue
     f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
     [[ -n "${f}" ]] || continue
-    dom="$(grep -E '^Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^Domain[[:space:]]*:[[:space:]]*//' || true)"
+    dom="$(grep -E '^[[:space:]]*Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*Domain[[:space:]]*:[[:space:]]*//' || true)"
     dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
     if [[ -n "${dom}" ]]; then
       echo "${dom}"
@@ -790,7 +790,7 @@ account_info_probe_domain_from_any_account_file() {
   if [[ -d "${dir}" ]]; then
     f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
     if [[ -n "${f}" ]]; then
-      dom="$(grep -E '^Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^Domain[[:space:]]*:[[:space:]]*//' || true)"
+      dom="$(grep -E '^[[:space:]]*Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*Domain[[:space:]]*:[[:space:]]*//' || true)"
       dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
       if [[ -n "${dom}" ]]; then
         echo "${dom}"
@@ -954,31 +954,31 @@ account_info_compat_needs_refresh() {
       return 0
     fi
 
-    if ! grep -Eq '^Links Import:[[:space:]]*$' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*(Links Import:|=== LINKS IMPORT ===)[[:space:]]*$' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^  gRPC[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*gRPC[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^ISP[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*ISP[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^Country[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*Country[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path(?:[[:space:]]+(WS|HUP|Service))?[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path Alt[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path(?:[[:space:]]+(WS|HUP|Service))?[[:space:]]+Alt[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
 
-    if ! grep -Eq '^[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Port[[:space:]]*:' "${f}" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9+]+)?[[:space:]]+(?:WS|HUP|gRPC|TCP\+TLS[[:space:]]+Port|Port)[[:space:]]*:' "${f}" 2>/dev/null; then
       return 0
     fi
   done
@@ -4515,13 +4515,14 @@ write_account_artifacts() {
   ensure_account_quota_dirs
   need_python3
 
-  local domain ip created expired geo isp country
+  local domain ip created expired geo geo_ip isp country
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
   created="$(date -u '+%Y-%m-%d %H:%M')"
   expired="$(date -u -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -u '+%Y-%m-%d')"
   geo="$(main_info_geo_lookup "${ip}")"
-  IFS='|' read -r isp country <<<"${geo}"
+  IFS='|' read -r geo_ip isp country <<<"${geo}"
+  [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
 
@@ -4594,6 +4595,20 @@ def path_alt_placeholder(path):
   if not raw.startswith("/"):
     raw = "/" + raw
   return f"/<bebas>{raw}"
+
+
+def service_alt_placeholder(service):
+  raw = str(service or "").strip()
+  if not raw or raw == "-":
+    return "-"
+  return f"<bebas>/{raw.lstrip('/')}"
+
+def section_line(label, value, width):
+  return f"  {label:<{width}} : {value}"
+
+def append_link_block(lines, label, value):
+  lines.append(f"    {label:<12} :")
+  lines.append(str(value or "-"))
 
 def is_public_ipv4(raw):
   try:
@@ -4713,41 +4728,71 @@ quota_gb_disp = fmt_gb(quota_gb)
 proto_disp = proto_label(proto)
 ws_path = public_proto.get("ws", "") or "/"
 ws_path_alt = path_alt_placeholder(ws_path)
+hup_path = public_proto.get("httpupgrade", "") or "/"
+hup_path_alt = path_alt_placeholder(hup_path)
+grpc_service = public_proto.get("grpc", "") or "-"
+grpc_service_alt = service_alt_placeholder(grpc_service)
+created_disp = created_at[:10] if len(created_at) >= 10 and created_at[4:5] == "-" and created_at[7:8] == "-" else created_at
+running_labels = [
+  f"{proto_disp} WS",
+  f"{proto_disp} HUP",
+  f"{proto_disp} gRPC",
+  f"{proto_disp} Path WS",
+  f"{proto_disp} Path WS Alt",
+  f"{proto_disp} Path HUP",
+  f"{proto_disp} Path HUP Alt",
+  f"{proto_disp} Path Service",
+  f"{proto_disp} Path Service Alt",
+]
+if proto in TCP_TLS_PROTOCOLS:
+  running_labels.append(f"{proto_disp} TCP+TLS Port")
+running_label_width = max(len(label) for label in running_labels)
 
 # Write account txt
 lines=[]
 lines.append("=== XRAY ACCOUNT INFO ===")
-lines.append(f"Domain      : {domain}")
-lines.append(f"IP          : {ip}")
-lines.append(f"ISP         : {isp or '-'}")
-lines.append(f"Country     : {country or '-'}")
-lines.append(f"Username    : {username}")
-lines.append(f"Protocol    : {proto}")
+lines.append(f"  Domain      : {domain}")
+lines.append(f"  IP          : {ip}")
+lines.append(f"  ISP         : {isp or '-'}")
+lines.append(f"  Country     : {country or '-'}")
+lines.append(f"  Username    : {username}")
+lines.append(f"  Protocol    : {proto}")
 if proto in ("vless","vmess"):
-  lines.append(f"UUID        : {cred}")
+  lines.append(f"  UUID        : {cred}")
 else:
-  lines.append(f"Password    : {cred}")
-lines.append(f"Quota Limit : {quota_gb_disp} GB")
-lines.append(f"Expired     : {days} days")
-lines.append(f"Valid Until : {expired_at}")
-lines.append(f"Created     : {created_at}")
-lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
+  lines.append(f"  Password    : {cred}")
+lines.append(f"  Quota Limit : {quota_gb_disp} GB")
+lines.append(f"  Expired     : {days} days")
+lines.append(f"  Valid Until : {expired_at}")
+lines.append(f"  Created     : {created_disp}")
+lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
 if speed_enabled:
-  lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
+  lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
-  lines.append("Speed Limit : OFF")
-lines.append(f"{proto_disp} Path : {ws_path}")
-lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
-lines.append(f"{proto_disp} Port : 443 & 80")
-if proto in TCP_TLS_PROTOCOLS:
-  lines.append(f"{proto_disp} TCP+TLS Port : 443")
+  lines.append("  Speed Limit : OFF")
 lines.append("")
-lines.append("Links Import:")
+lines.append("=== RUNNING ON PORT & PATH ===")
+lines.append(section_line(f"{proto_disp} WS", "443 & 80", running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", "443 & 80", running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", "443", running_label_width))
+if proto in TCP_TLS_PROTOCOLS:
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443", running_label_width))
+lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
+lines.append(section_line(f"{proto_disp} Path WS Alt", ws_path_alt, running_label_width))
+lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_width))
+lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_label_width))
+lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
+lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
+lines.append("")
+lines.append("=== LINKS IMPORT ===")
 if "tcp" in links:
-  lines.append(f"  TCP+TLS    : {links.get('tcp','-')}")
-lines.append(f"  WebSocket   : {links.get('ws','-')}")
-lines.append(f"  HTTPUpgrade : {links.get('httpupgrade','-')}")
-lines.append(f"  gRPC        : {links.get('grpc','-')}")
+  append_link_block(lines, "TCP+TLS", links.get('tcp','-'))
+  lines.append("")
+append_link_block(lines, "WebSocket", links.get('ws','-'))
+lines.append("")
+append_link_block(lines, "HTTPUpgrade", links.get('httpupgrade','-'))
+lines.append("")
+append_link_block(lines, "gRPC", links.get('grpc','-'))
 lines.append("")
 
 write_text_atomic(acc_file, "\n".join(lines))
@@ -4816,14 +4861,15 @@ account_info_refresh_for_user() {
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   if [[ -z "${ip}" ]]; then
     if [[ -f "${acc_file}" ]]; then
-      ip="$(grep -E '^IP[[:space:]]*:' "${acc_file}" | head -n1 | sed -E 's/^IP[[:space:]]*:[[:space:]]*//' || true)"
+      ip="$(grep -E '^[[:space:]]*IP[[:space:]]*:' "${acc_file}" | head -n1 | sed -E 's/^[[:space:]]*IP[[:space:]]*:[[:space:]]*//' || true)"
     fi
     [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   fi
 
-  local rc=0 geo isp country
+  local rc=0 geo geo_ip isp country
   geo="$(main_info_geo_lookup "${ip}")"
-  IFS='|' read -r isp country <<<"${geo}"
+  IFS='|' read -r geo_ip isp country <<<"${geo}"
+  [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
   set +e
@@ -4911,6 +4957,22 @@ def path_alt_placeholder(path):
   if not raw.startswith("/"):
     raw = "/" + raw
   return f"/<bebas>{raw}"
+
+
+def service_alt_placeholder(service):
+  raw = str(service or "").strip()
+  if not raw or raw == "-":
+    return "-"
+  return f"<bebas>/{raw.lstrip('/')}"
+
+
+def section_line(label, value, width):
+  return f"  {label:<{width}} : {value}"
+
+
+def append_link_block(lines, label, value):
+  lines.append(f"    {label:<12} :")
+  lines.append(str(value or "-"))
 
 
 def is_public_ipv4(raw):
@@ -5187,6 +5249,25 @@ public_proto = PUBLIC_PATHS.get(proto, {})
 proto_disp = PROTO_LABELS.get(proto, proto.title() or "Xray")
 ws_path = public_proto.get("ws", "") or "/"
 ws_path_alt = path_alt_placeholder(ws_path)
+hup_path = public_proto.get("httpupgrade", "") or "/"
+hup_path_alt = path_alt_placeholder(hup_path)
+grpc_service = public_proto.get("grpc", "") or "-"
+grpc_service_alt = service_alt_placeholder(grpc_service)
+created_disp = created_at[:10] if len(created_at) >= 10 and created_at[4:5] == "-" and created_at[7:8] == "-" else created_at
+running_labels = [
+  f"{proto_disp} WS",
+  f"{proto_disp} HUP",
+  f"{proto_disp} gRPC",
+  f"{proto_disp} Path WS",
+  f"{proto_disp} Path WS Alt",
+  f"{proto_disp} Path HUP",
+  f"{proto_disp} Path HUP Alt",
+  f"{proto_disp} Path Service",
+  f"{proto_disp} Path Service Alt",
+]
+if proto in TCP_TLS_PROTOCOLS:
+  running_labels.append(f"{proto_disp} TCP+TLS Port")
+running_label_width = max(len(label) for label in running_labels)
 nets = ["ws", "httpupgrade", "grpc"]
 if proto in TCP_TLS_PROTOCOLS:
   nets = ["tcp"] + nets
@@ -5201,37 +5282,48 @@ for net in nets:
 
 lines = []
 lines.append("=== XRAY ACCOUNT INFO ===")
-lines.append(f"Domain      : {domain}")
-lines.append(f"IP          : {ip}")
-lines.append(f"ISP         : {isp}")
-lines.append(f"Country     : {country}")
-lines.append(f"Username    : {username}")
-lines.append(f"Protocol    : {proto}")
+lines.append(f"  Domain      : {domain}")
+lines.append(f"  IP          : {ip}")
+lines.append(f"  ISP         : {isp}")
+lines.append(f"  Country     : {country}")
+lines.append(f"  Username    : {username}")
+lines.append(f"  Protocol    : {proto}")
 if proto in ("vless", "vmess"):
-  lines.append(f"UUID        : {cred}")
+  lines.append(f"  UUID        : {cred}")
 else:
-  lines.append(f"Password    : {cred}")
-lines.append(f"Quota Limit : {quota_gb_disp} GB")
-lines.append(f"Expired     : {days} days")
-lines.append(f"Valid Until : {expired_at}")
-lines.append(f"Created     : {created_at}")
-lines.append(f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
+  lines.append(f"  Password    : {cred}")
+lines.append(f"  Quota Limit : {quota_gb_disp} GB")
+lines.append(f"  Expired     : {days} days")
+lines.append(f"  Valid Until : {expired_at}")
+lines.append(f"  Created     : {created_disp}")
+lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
 if speed_enabled:
-  lines.append(f"Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
+  lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
-  lines.append("Speed Limit : OFF")
-lines.append(f"{proto_disp} Path : {ws_path}")
-lines.append(f"{proto_disp} Path Alt : {ws_path_alt}")
-lines.append(f"{proto_disp} Port : 443 & 80")
-if proto in TCP_TLS_PROTOCOLS:
-  lines.append(f"{proto_disp} TCP+TLS Port : 443")
+  lines.append("  Speed Limit : OFF")
 lines.append("")
-lines.append("Links Import:")
+lines.append("=== RUNNING ON PORT & PATH ===")
+lines.append(section_line(f"{proto_disp} WS", "443 & 80", running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", "443 & 80", running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", "443", running_label_width))
+if proto in TCP_TLS_PROTOCOLS:
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443", running_label_width))
+lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
+lines.append(section_line(f"{proto_disp} Path WS Alt", ws_path_alt, running_label_width))
+lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_width))
+lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_label_width))
+lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
+lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
+lines.append("")
+lines.append("=== LINKS IMPORT ===")
 if "tcp" in links:
-  lines.append(f"  TCP+TLS    : {links.get('tcp', '-')}")
-lines.append(f"  WebSocket   : {links.get('ws', '-')}")
-lines.append(f"  HTTPUpgrade : {links.get('httpupgrade', '-')}")
-lines.append(f"  gRPC        : {links.get('grpc', '-')}")
+  append_link_block(lines, "TCP+TLS", links.get('tcp', '-'))
+  lines.append("")
+append_link_block(lines, "WebSocket", links.get('ws', '-'))
+lines.append("")
+append_link_block(lines, "HTTPUpgrade", links.get('httpupgrade', '-'))
+lines.append("")
+append_link_block(lines, "gRPC", links.get('grpc', '-'))
 lines.append("")
 
 os.makedirs(os.path.dirname(acc_file) or ".", exist_ok=True)

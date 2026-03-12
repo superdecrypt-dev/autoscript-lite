@@ -1313,6 +1313,10 @@ badvpn_runtime_ports() {
   local ports_raw
   ports_raw="$(badvpn_runtime_get_env BADVPN_UDPGW_PORTS 2>/dev/null || echo "7300 7400 7500 7600 7700 7800 7900")"
   ports_raw="${ports_raw//,/ }"
+  ports_raw="${ports_raw%\"}"
+  ports_raw="${ports_raw#\"}"
+  ports_raw="${ports_raw%\'}"
+  ports_raw="${ports_raw#\'}"
   awk '
     {
       for (i = 1; i <= NF; i++) {
@@ -3106,14 +3110,15 @@ ssh_account_info_write() {
     password_out="(hidden)"
   fi
 
-  local acc_file domain ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
+  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
+  local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
   ip="$(detect_public_ip_ipapi)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   geo="$(main_info_geo_lookup "${ip}")"
-  isp="${geo%%|*}"
-  country="${geo##*|}"
+  IFS='|' read -r geo_ip isp country <<<"${geo}"
+  [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
   [[ -n "${domain}" ]] || domain="-"
   [[ -n "${ip}" ]] || ip="-"
   [[ -n "${isp}" ]] || isp="-"
@@ -3210,6 +3215,13 @@ PY
   ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
   ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
   badvpn_port_disp="$(badvpn_public_port_label)"
+  running_label_width=16
+  printf -v running_ssh_ws_path '%-*s : %s' "${running_label_width}" "SSH WS Path" "${sshws_main_disp}"
+  printf -v running_ssh_ws_alt '%-*s : %s' "${running_label_width}" "SSH WS Path Alt" "${sshws_alt_path}"
+  printf -v running_ssh_ws_port '%-*s : %s' "${running_label_width}" "SSH WS Port" "${sshws_ports_disp}"
+  printf -v running_ssh_direct '%-*s : %s' "${running_label_width}" "SSH Direct Port" "${ssh_direct_ports_disp}"
+  printf -v running_ssh_ssl_tls '%-*s : %s' "${running_label_width}" "SSH SSL/TLS Port" "${ssh_ssl_tls_ports_disp}"
+  printf -v running_badvpn '%-*s : %s' "${running_label_width}" "BadVPN UDPGW" "${badvpn_port_disp}"
 
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
@@ -3227,18 +3239,18 @@ IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
 
 === RUNNING ON PORT ===
-SSH WS Path : ${sshws_main_disp}
-SSH WS Path Alt : ${sshws_alt_path}
-SSH WS Port : ${sshws_ports_disp}
-SSH Direct Port : ${ssh_direct_ports_disp}
-SSH SSL/TLS Port : ${ssh_ssl_tls_ports_disp}
-BadVPN UDPGW: ${badvpn_port_disp}
+${running_ssh_ws_path}
+${running_ssh_ws_alt}
+${running_ssh_ws_port}
+${running_ssh_direct}
+${running_ssh_ssl_tls}
+${running_badvpn}
 
 === STANDARD PAYLOAD ===
-Payload WS (Prefixed):
+Payload WS:
     GET ${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 
-Payload SNI+WS+Proxy (Prefixed):
+Payload WSS:
     GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 EOF
   then
