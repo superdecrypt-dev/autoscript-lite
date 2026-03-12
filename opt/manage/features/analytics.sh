@@ -1,21 +1,24 @@
 # shellcheck shell=bash
 # Traffic Analytics
-# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan}/*.json
+# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan,ssh}/*.json
 # - Menggunakan quota_used sebagai dasar traffic usage.
 # -------------------------
 traffic_analytics_dataset_build_to_file() {
   # args: output_json_file
   local out_file="$1"
   need_python3
-  python3 - <<'PY' "${QUOTA_ROOT}" "${out_file}" "${QUOTA_PROTO_DIRS[@]}"
+  python3 - <<'PY' "${QUOTA_ROOT}" "${SSH_QUOTA_DIR}" "${out_file}" "${QUOTA_PROTO_DIRS[@]}"
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
 quota_root = sys.argv[1]
-out_file = sys.argv[2]
-protos = [p.strip() for p in sys.argv[3:] if p.strip()]
+ssh_quota_dir = sys.argv[2]
+out_file = sys.argv[3]
+protos = [p.strip() for p in sys.argv[4:] if p.strip()]
+if "ssh" not in protos:
+  protos.append("ssh")
 
 def to_int(v, default=0):
   try:
@@ -36,7 +39,7 @@ entries = []
 proto_summary = {p: {"users": 0, "used_bytes": 0, "quota_bytes": 0} for p in protos}
 
 for proto in protos:
-  pdir = os.path.join(quota_root, proto)
+  pdir = ssh_quota_dir if proto == "ssh" else os.path.join(quota_root, proto)
   if not os.path.isdir(pdir):
     continue
 
@@ -180,7 +183,7 @@ print()
 print("By Protocol:")
 
 protocols = data.get("protocols") or {}
-for proto in ("vless", "vmess", "trojan"):
+for proto in ("vless", "vmess", "trojan", "ssh"):
   info = protocols.get(proto) or {}
   users = int(info.get("users") or 0)
   used = int(info.get("used_bytes") or 0)
@@ -1314,12 +1317,26 @@ badvpn_runtime_ports() {
     {
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
-          out = out (out ? " " : "") $i
+          ports[++count] = $i + 0
         }
       }
     }
     END {
-      if (out != "") print out
+      if (count > 0) {
+        for (i = 1; i <= count; i++) {
+          for (j = i + 1; j <= count; j++) {
+            if (ports[j] < ports[i]) {
+              tmp = ports[i]
+              ports[i] = ports[j]
+              ports[j] = tmp
+            }
+          }
+        }
+        for (i = 1; i <= count; i++) {
+          out = out (out ? " " : "") ports[i]
+        }
+        print out
+      }
     }
   ' <<< "${ports_raw}"
 }
@@ -5958,18 +5975,15 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
-    printf "%-${label_w}s : %s\n" "Distinct Client IPs" "${distinct_ip_count}"
-    printf "%-${label_w}s : %s\n" "Tracked Client IPs" "${distinct_ips}"
+    printf "%-${label_w}s : %s\n" "IP Unik Aktif" "${distinct_ip_count}"
+    printf "%-${label_w}s : %s\n" "Daftar IP Aktif" "${distinct_ips}"
     printf "%-${label_w}s : %s\n" "IP/Login Metric" "${ip_limit_metric}"
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
-    printf "%-${label_w}s : %s\n" "Active SSH Sessions" "${active_sessions_total}"
-    printf "%-${label_w}s : %s\n" "Runtime Sessions" "${active_sessions_runtime}"
-    printf "%-${label_w}s : %s\n" "Dropbear Sessions" "${active_sessions_dropbear}"
+    printf "%-${label_w}s : %s\n" "Sesi Aktif" "${active_sessions_total}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
-    printf "%-${label_w}s : %s\n" "Traffic Scope" "$(ssh_qac_traffic_scope_label)"
     hr
 
     echo "  1) View JSON"
