@@ -623,6 +623,159 @@ import os
 import sys
 
 src, outdir = sys.argv[1:3]
+speed_outbound_prefix = "speed-mark-"
+speed_rule_marker_prefix = "dummy-speed-user-"
+managed_routing_markers = {
+  "dummy-block-user",
+  "dummy-quota-user",
+  "dummy-limit-user",
+  "dummy-warp-user",
+  "dummy-direct-user",
+}
+
+def load_json_if_exists(path, fallback):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      return json.load(f)
+  except Exception:
+    return fallback
+
+def client_email(client):
+  if not isinstance(client, dict):
+    return ""
+  return str(client.get("email") or "").strip()
+
+def is_managed_client(client):
+  email = client_email(client)
+  return bool(email) and not email.startswith("default@")
+
+def preserve_clients_by_proto(cfg):
+  preserved = {"vless": {}, "vmess": {}, "trojan": {}}
+  for inbound in cfg.get("inbounds") or []:
+    if not isinstance(inbound, dict):
+      continue
+    proto = str(inbound.get("protocol") or "").strip().lower()
+    if proto not in preserved:
+      continue
+    settings = inbound.get("settings") or {}
+    clients = settings.get("clients")
+    if not isinstance(clients, list):
+      continue
+    for client in clients:
+      if not is_managed_client(client):
+        continue
+      email = client_email(client)
+      preserved[proto].setdefault(email, client)
+  return {proto: list(items.values()) for proto, items in preserved.items()}
+
+def merge_clients_into_inbounds(inbounds, preserved_clients):
+  for inbound in inbounds:
+    if not isinstance(inbound, dict):
+      continue
+    proto = str(inbound.get("protocol") or "").strip().lower()
+    proto_clients = preserved_clients.get(proto) or []
+    if not proto_clients:
+      continue
+    settings = inbound.get("settings") or {}
+    clients = settings.get("clients")
+    if not isinstance(clients, list):
+      continue
+    seen = {client_email(client) for client in clients if client_email(client)}
+    for client in proto_clients:
+      email = client_email(client)
+      if not email or email in seen:
+        continue
+      clients.append(client)
+      seen.add(email)
+    settings["clients"] = clients
+    inbound["settings"] = settings
+
+def preserve_routing_state(cfg):
+  marker_users = {marker: [] for marker in managed_routing_markers}
+  speed_rules = []
+  for rule in (cfg.get("routing") or {}).get("rules") or []:
+    if not isinstance(rule, dict) or rule.get("type") != "field":
+      continue
+    users = rule.get("user")
+    if not isinstance(users, list):
+      continue
+    for marker in managed_routing_markers:
+      if marker in users:
+        marker_users[marker].extend(
+          [
+            user for user in users
+            if isinstance(user, str) and user and user != marker
+          ]
+        )
+    has_speed_marker = any(
+      isinstance(user, str) and user.startswith(speed_rule_marker_prefix)
+      for user in users
+    )
+    outbound_tag = str(rule.get("outboundTag") or "").strip()
+    if has_speed_marker and outbound_tag.startswith(speed_outbound_prefix):
+      speed_rules.append(rule)
+  deduped_marker_users = {}
+  for marker, users in marker_users.items():
+    seen = set()
+    deduped = []
+    for user in users:
+      if user in seen:
+        continue
+      seen.add(user)
+      deduped.append(user)
+    deduped_marker_users[marker] = deduped
+  return deduped_marker_users, speed_rules
+
+def merge_routing_state(routing, marker_users, speed_rules):
+  rules = routing.get("rules")
+  if not isinstance(rules, list):
+    return
+  for rule in rules:
+    if not isinstance(rule, dict):
+      continue
+    users = rule.get("user")
+    if not isinstance(users, list):
+      continue
+    marker = next((item for item in users if item in managed_routing_markers), None)
+    if not marker:
+      continue
+    merged = [marker]
+    merged.extend([user for user in users if isinstance(user, str) and user and user != marker])
+    for user in marker_users.get(marker) or []:
+      if user not in merged:
+        merged.append(user)
+    rule["user"] = merged
+
+  if speed_rules:
+    def is_protected_rule(rule):
+      if not isinstance(rule, dict) or rule.get("type") != "field":
+        return False
+      outbound_tag = str(rule.get("outboundTag") or "").strip()
+      return outbound_tag in ("api", "blocked")
+
+    insert_idx = len(rules)
+    for idx, rule in enumerate(rules):
+      if is_protected_rule(rule):
+        continue
+      insert_idx = idx
+      break
+    rules[insert_idx:insert_idx] = speed_rules
+    routing["rules"] = rules
+
+def preserve_speed_outbounds(cfg):
+  preserved = []
+  seen = set()
+  for outbound in cfg.get("outbounds") or []:
+    if not isinstance(outbound, dict):
+      continue
+    tag = str(outbound.get("tag") or "").strip()
+    if not tag.startswith(speed_outbound_prefix):
+      continue
+    if tag in seen:
+      continue
+    seen.add(tag)
+    preserved.append(outbound)
+  return preserved
 
 with open(src, "r", encoding="utf-8") as f:
   cfg = json.load(f)
@@ -631,13 +784,25 @@ routing = cfg.get("routing") or {}
 inbounds_fresh = cfg.get("inbounds") or []
 if not isinstance(inbounds_fresh, list):
   inbounds_fresh = []
+outbounds_fresh = cfg.get("outbounds") or []
+if not isinstance(outbounds_fresh, list):
+  outbounds_fresh = []
+
+existing_inbounds = load_json_if_exists(os.path.join(outdir, "10-inbounds.json"), {})
+existing_outbounds = load_json_if_exists(os.path.join(outdir, "20-outbounds.json"), {})
+existing_routing = load_json_if_exists(os.path.join(outdir, "30-routing.json"), {})
+
+merge_clients_into_inbounds(inbounds_fresh, preserve_clients_by_proto(existing_inbounds))
+marker_users, speed_rules = preserve_routing_state(existing_routing)
+merge_routing_state(routing, marker_users, speed_rules)
+outbounds_fresh.extend(preserve_speed_outbounds(existing_outbounds))
 
 parts = [
   ("00-log.json", {"log": cfg.get("log") or {}}),
   ("01-api.json", {"api": cfg.get("api") or {}}),
   ("02-dns.json", {"dns": cfg.get("dns") or {}}),
   ("10-inbounds.json", {"inbounds": inbounds_fresh}),
-  ("20-outbounds.json", {"outbounds": cfg.get("outbounds") or []}),
+  ("20-outbounds.json", {"outbounds": outbounds_fresh}),
   ("30-routing.json", {"routing": routing}),
   ("40-policy.json", {"policy": cfg.get("policy") or {}}),
   ("50-stats.json", {"stats": cfg.get("stats") or {}}),

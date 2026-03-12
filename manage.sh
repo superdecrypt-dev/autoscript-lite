@@ -3799,11 +3799,9 @@ for ib in inbounds:
   st["clients"] = clients
   ib["settings"] = st
 
-if removed == 0:
-  raise SystemExit(f"Tidak menemukan user untuk dihapus: {email} ({proto})")
-
 routing = (rt_cfg.get("routing") or {})
 rules = routing.get("rules")
+routing_changed = False
 if isinstance(rules, list):
   markers = {"dummy-block-user","dummy-quota-user","dummy-limit-user","dummy-warp-user","dummy-direct-user"}
   speed_marker_prefix = "dummy-speed-user-"
@@ -3818,9 +3816,17 @@ if isinstance(rules, list):
       managed = any(isinstance(x, str) and x.startswith(speed_marker_prefix) for x in u)
     if not managed:
       continue
-    r["user"] = [x for x in u if x != email]
+    new_users = [x for x in u if x != email]
+    if new_users != u:
+      routing_changed = True
+    r["user"] = new_users
   routing["rules"] = rules
   rt_cfg["routing"] = routing
+
+changed = removed > 0 or routing_changed
+if not changed:
+  print("changed=0")
+  raise SystemExit(0)
 
 with open(inb_dst, "w", encoding="utf-8") as f:
   json.dump(inb_cfg, f, ensure_ascii=False, indent=2)
