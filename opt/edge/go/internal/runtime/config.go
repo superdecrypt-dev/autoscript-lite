@@ -18,6 +18,8 @@ const (
 	defaultMetricsListenAddr   = "127.0.0.1:9910"
 	defaultHTTPBackend         = "127.0.0.1:18080"
 	defaultSSHBackend          = "127.0.0.1:22022"
+	defaultSSHTLSBackend       = "127.0.0.1:22443"
+	defaultSSHWSBackend        = "127.0.0.1:10015"
 	defaultVLESSRawBackend     = "127.0.0.1:28080"
 	defaultTrojanRawBackend    = "127.0.0.1:28081"
 	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
@@ -51,6 +53,8 @@ type Config struct {
 	MetricsListenAddr   string
 	HTTPBackend         string
 	SSHBackend          string
+	SSHTLSBackend       string
+	SSHWSBackend        string
 	VLESSRawBackend     string
 	TrojanRawBackend    string
 	TLSCertFile         string
@@ -138,6 +142,8 @@ func LoadConfig() (Config, error) {
 		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
 		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
 		SSHBackend:          normalizeAddr(envString(source, "EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
+		SSHTLSBackend:       normalizeAddr(envString(source, "EDGE_SSH_TLS_BACKEND", defaultSSHTLSBackend), "127.0.0.1"),
+		SSHWSBackend:        normalizeAddr(envString(source, "EDGE_SSH_WS_BACKEND", defaultSSHWSBackend), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		TLSCertFile:         envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
@@ -178,7 +184,7 @@ func (c Config) Validate() error {
 			return errors.New("EDGE_METRICS_LISTEN must stay local-only (loopback)")
 		}
 	}
-	if c.HTTPBackend == "" || c.SSHBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
+	if c.HTTPBackend == "" || c.SSHBackend == "" || c.SSHTLSBackend == "" || c.SSHWSBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
 		return errors.New("backend addresses must not be empty")
 	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
@@ -218,6 +224,8 @@ func (c Config) TLSListenAddr() string        { return c.PublicTLSAddr }
 func (c Config) MetricsAddr() string          { return c.MetricsListenAddr }
 func (c Config) HTTPBackendAddr() string      { return c.HTTPBackend }
 func (c Config) SSHBackendAddr() string       { return c.SSHBackend }
+func (c Config) SSHTLSBackendAddr() string    { return c.SSHTLSBackend }
+func (c Config) SSHWSBackendAddr() string     { return c.SSHWSBackend }
 func (c Config) VLESSRawBackendAddr() string  { return c.VLESSRawBackend }
 func (c Config) TrojanRawBackendAddr() string { return c.TrojanRawBackend }
 

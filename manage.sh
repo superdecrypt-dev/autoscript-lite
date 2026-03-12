@@ -159,7 +159,7 @@ else
 UI_ERR=''
 fi
 
-MAIN_INFO_REMOTE_LOOKUPS="${MAIN_INFO_REMOTE_LOOKUPS:-0}"
+MAIN_INFO_REMOTE_LOOKUPS="${MAIN_INFO_REMOTE_LOOKUPS:-1}"
 
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
@@ -1110,8 +1110,17 @@ main_info_uptime_get() {
 
 main_info_ip_quiet_get() {
   local ip=""
-  ip="$(detect_public_ip)"
-  if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ -z "${ip}" || "${ip}" == "0.0.0.0" ]]; then
+  if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && have_cmd curl && have_cmd jq; then
+    local json
+    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/?fields=status,query" 2>/dev/null || true)"
+    if [[ -n "${json}" ]]; then
+      ip="$(echo "${json}" | jq -r 'if .status == "success" then (.query // "-") else "-" end' 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "${ip}" || "${ip}" == "-" || "${ip}" == "0.0.0.0" ]]; then
+    ip="$(detect_public_ip)"
+  fi
+  if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ -z "${ip}" || "${ip}" == "0.0.0.0" || "${ip}" == "-" ]]; then
     if have_cmd curl; then
       ip="$(curl -4fsSL --max-time 4 "https://api.ipify.org" 2>/dev/null || true)"
     elif have_cmd wget; then
@@ -1126,21 +1135,22 @@ main_info_ip_quiet_get() {
 }
 
 main_info_geo_lookup() {
-  # args: ip -> prints: isp|country
+  # args: ip -> prints: ip|isp|country
   local ip="$1"
   local isp="-" country="-"
   local json
 
   case "${ip}" in
     ""|"-"|"0.0.0.0"|"127."*|"10."*|"192.168."*|"172.16."*|"172.17."*|"172.18."*|"172.19."*|"172.2"?.*|"172.30."*|"172.31."*)
-      echo "-|-"
+      echo "${ip}|-|-"
       return 0
       ;;
   esac
 
   if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && have_cmd curl && have_cmd jq; then
-    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/${ip}?fields=status,country,isp" 2>/dev/null || true)"
+    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/${ip}?fields=status,query,country,isp" 2>/dev/null || true)"
     if [[ -n "${json}" ]]; then
+      ip="$(echo "${json}" | jq -r 'if .status == "success" then (.query // "-") else "'"${ip}"'" end' 2>/dev/null || true)"
       country="$(echo "${json}" | jq -r 'if .status == "success" then (.country // "-") else "-" end' 2>/dev/null || true)"
       isp="$(echo "${json}" | jq -r 'if .status == "success" then (.isp // "-") else "-" end' 2>/dev/null || true)"
     fi
@@ -1162,7 +1172,8 @@ main_info_geo_lookup() {
 
   [[ -n "${isp}" && "${isp}" != "null" ]] || isp="-"
   [[ -n "${country}" && "${country}" != "null" ]] || country="-"
-  echo "${isp}|${country}"
+  [[ -n "${ip}" && "${ip}" != "null" ]] || ip="-"
+  echo "${ip}|${isp}|${country}"
 }
 
 main_info_tls_expired_get() {
@@ -1231,10 +1242,11 @@ main_info_cache_refresh() {
 
   ip="${MAIN_INFO_CACHE_IP}"
   geo="$(main_info_geo_lookup "${ip}")"
-  isp="${geo%%|*}"
-  country="${geo##*|}"
+  IFS='|' read -r ip isp country <<< "${geo}"
+  [[ -n "${ip}" ]] || ip="-"
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
+  MAIN_INFO_CACHE_IP="${ip}"
   MAIN_INFO_CACHE_ISP="${isp}"
   MAIN_INFO_CACHE_COUNTRY="${country}"
   MAIN_INFO_CACHE_TS="${now}"

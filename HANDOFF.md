@@ -50,7 +50,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `nginx` berjalan di backend internal `127.0.0.1:18080`
     - SSH Direct kini tersedia sebagai surface resmi `SSH Direct` di `80/443`
     - SSH klasik TLS kini tersedia sebagai surface resmi `SSH SSL/TLS` di `80/443`
-    - BadVPN UDPGW kini tersedia sebagai fitur tambahan SSH di `127.0.0.1:7300`
+    - BadVPN UDPGW kini tersedia sebagai fitur tambahan SSH di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
   - Surface operasional baru:
     - `Maintenance > Edge Gateway Status`
     - `Maintenance > Restart Edge Gateway`
@@ -131,7 +131,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
     - `nginx-stream` sudah lolos smoke high-port dan cutover live, tetapi tetap diposisikan experimental/non-default
   - runtime BadVPN:
     - `badvpn-udpgw.service` -> `active`
-    - listener lokal di `127.0.0.1:7300`
+    - listener lokal di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
   - Validasi modular installer terbaru:
     - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
     - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-domain-guard` -> PASS

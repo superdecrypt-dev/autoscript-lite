@@ -70,26 +70,86 @@ func IsSSHBanner(b []byte) bool {
 	return bytes.HasPrefix(trimmed, []byte("SSH-"))
 }
 
+func allBytesZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0x00 {
+			return false
+		}
+	}
+	return true
+}
+
+func isRFC4122UUID(b []byte) bool {
+	if len(b) != 16 {
+		return false
+	}
+	if allBytesZero(b) {
+		return false
+	}
+	version := b[6] >> 4
+	if version < 1 || version > 8 {
+		return false
+	}
+	return b[8]&0xc0 == 0x80
+}
+
+func isValidDomainName(b []byte) bool {
+	if len(b) == 0 || len(b) > 253 {
+		return false
+	}
+	labelLen := 0
+	last := byte(0)
+	for i, ch := range b {
+		switch {
+		case (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'):
+			labelLen++
+		case ch == '-':
+			if i == 0 || i == len(b)-1 || last == '.' {
+				return false
+			}
+			labelLen++
+		case ch == '.':
+			if i == 0 || i == len(b)-1 || last == '.' || last == '-' || labelLen == 0 || labelLen > 63 {
+				return false
+			}
+			labelLen = 0
+		default:
+			return false
+		}
+		last = ch
+	}
+	return labelLen > 0 && labelLen <= 63 && last != '-'
+}
+
+func isASCIIHex(b []byte) bool {
+	for _, ch := range b {
+		switch {
+		case ch >= '0' && ch <= '9':
+		case ch >= 'a' && ch <= 'f':
+		case ch >= 'A' && ch <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func IsVLESSRequest(b []byte) bool {
 	if len(b) < 24 {
 		return false
 	}
 	version := b[0]
-	if version != 0x00 && version != 0x01 {
+	if version != 0x00 {
 		return false
 	}
 	uuid := b[1:17]
-	allZero := true
-	for _, v := range uuid {
-		if v != 0x00 {
-			allZero = false
-			break
-		}
-	}
-	if allZero {
+	if !isRFC4122UUID(uuid) {
 		return false
 	}
 	addonsLen := int(b[17])
+	if addonsLen > 255 {
+		return false
+	}
 	pos := 18 + addonsLen
 	if len(b) < pos+4 {
 		return false
@@ -102,44 +162,99 @@ func IsVLESSRequest(b []byte) bool {
 	if len(b) < pos+2+1 {
 		return false
 	}
-	pos += 2 // port
+	port := int(b[pos])<<8 | int(b[pos+1])
+	if port <= 0 {
+		return false
+	}
+	pos += 2
 	addrType := b[pos]
 	pos++
 	switch addrType {
 	case 0x01:
-		return len(b) >= pos+4
+		if len(b) < pos+4 {
+			return false
+		}
+		return !allBytesZero(b[pos : pos+4])
 	case 0x02:
 		if len(b) < pos+1 {
 			return false
 		}
 		addrLen := int(b[pos])
 		pos++
-		return addrLen > 0 && len(b) >= pos+addrLen
+		if addrLen == 0 || len(b) < pos+addrLen {
+			return false
+		}
+		return isValidDomainName(b[pos : pos+addrLen])
 	case 0x03:
-		return len(b) >= pos+16
+		if len(b) < pos+16 {
+			return false
+		}
+		return !allBytesZero(b[pos : pos+16])
 	default:
 		return false
 	}
 }
 
 func IsTrojanRequest(b []byte) bool {
-	if len(b) < 58 {
+	if len(b) < 64 {
 		return false
 	}
-	for i := 0; i < 56; i++ {
-		ch := b[i]
-		switch {
-		case ch >= '0' && ch <= '9':
-		case ch >= 'a' && ch <= 'f':
-		case ch >= 'A' && ch <= 'F':
-		default:
-			return false
-		}
+	if !isASCIIHex(b[:56]) {
+		return false
 	}
 	if b[56] != '\r' || b[57] != '\n' {
 		return false
 	}
-	return true
+	pos := 58
+	if len(b) < pos+1+1+2 {
+		return false
+	}
+	command := b[pos]
+	if command != 0x01 && command != 0x03 {
+		return false
+	}
+	pos++
+	addrType := b[pos]
+	pos++
+	switch addrType {
+	case 0x01:
+		if len(b) < pos+4+2+2 {
+			return false
+		}
+		if allBytesZero(b[pos : pos+4]) {
+			return false
+		}
+		pos += 4
+	case 0x03:
+		if len(b) < pos+1 {
+			return false
+		}
+		addrLen := int(b[pos])
+		pos++
+		if addrLen == 0 || len(b) < pos+addrLen+2+2 {
+			return false
+		}
+		if !isValidDomainName(b[pos : pos+addrLen]) {
+			return false
+		}
+		pos += addrLen
+	case 0x04:
+		if len(b) < pos+16+2+2 {
+			return false
+		}
+		if allBytesZero(b[pos : pos+16]) {
+			return false
+		}
+		pos += 16
+	default:
+		return false
+	}
+	port := int(b[pos])<<8 | int(b[pos+1])
+	if port <= 0 {
+		return false
+	}
+	pos += 2
+	return len(b) >= pos+2 && b[pos] == '\r' && b[pos+1] == '\n'
 }
 
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {

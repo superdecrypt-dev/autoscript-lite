@@ -318,14 +318,31 @@ sanity_check() {
   fi
 
   if badvpn_runtime_expected 2>/dev/null; then
-    if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:7300([[:space:]]|$)'; then
-      ok "check: badvpn 7300 listening"
+    local badvpn_ports badvpn_ports_label badvpn_missing="" port
+    badvpn_ports="$(awk -F= '
+      $1 == "BADVPN_UDPGW_PORTS" {
+        gsub(/"/, "", $2)
+        gsub(/,/, " ", $2)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+        print $2
+        exit
+      }
+    ' /etc/default/badvpn-udpgw 2>/dev/null)"
+    [[ -n "${badvpn_ports}" ]] || badvpn_ports="7300 7400 7500 7600 7700 7800 7900"
+    badvpn_ports_label="$(printf '%s\n' "${badvpn_ports}" | sed 's/ /, /g')"
+    for port in ${badvpn_ports}; do
+      if ! ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
+        badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
+      fi
+    done
+    if [[ -z "${badvpn_missing}" ]]; then
+      ok "check: badvpn ${badvpn_ports_label} listening"
     else
-      warn "check: badvpn 7300 not listening"
+      warn "check: badvpn ${badvpn_ports_label} missing ${badvpn_missing}"
       failed=1
     fi
   else
-    warn "check: badvpn 7300 optional (prebuilt tidak tersedia)"
+    warn "check: badvpn 7300, 7400, 7500, 7600, 7700, 7800, 7900 optional (prebuilt tidak tersedia)"
   fi
 
   if [[ "$failed" -ne 0 ]]; then

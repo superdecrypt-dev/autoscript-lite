@@ -51,6 +51,7 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/install/sshws.sh"
   "opt/setup/install/edge.sh"
   "opt/setup/install/badvpn.sh"
+  "opt/setup/bin/badvpn-udpgw-launcher.sh"
   "opt/setup/install/domain_guard.sh"
   "opt/setup/templates/config/edge-runtime.env"
   "opt/setup/templates/config/badvpn-runtime.env"

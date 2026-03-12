@@ -830,7 +830,7 @@ def _ssh_ssl_tls_public_ports_label() -> str:
 
 
 def _badvpn_public_port_label() -> str:
-    return "7300"
+    return "7300, 7400, 7500, 7600, 7700, 7800, 7900"
 
 
 def _path_alt_placeholder(path: str) -> str:

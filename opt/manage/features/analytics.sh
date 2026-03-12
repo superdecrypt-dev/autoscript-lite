@@ -1306,6 +1306,34 @@ badvpn_runtime_env_file() {
   printf '%s\n' "/etc/default/badvpn-udpgw"
 }
 
+badvpn_runtime_ports() {
+  local ports_raw
+  ports_raw="$(badvpn_runtime_get_env BADVPN_UDPGW_PORTS 2>/dev/null || echo "7300 7400 7500 7600 7700 7800 7900")"
+  ports_raw="${ports_raw//,/ }"
+  awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          out = out (out ? " " : "") $i
+        }
+      }
+    }
+    END {
+      if (out != "") print out
+    }
+  ' <<< "${ports_raw}"
+}
+
+badvpn_public_port_label() {
+  local ports
+  ports="$(badvpn_runtime_ports)"
+  if svc_exists badvpn-udpgw || [[ -r "$(badvpn_runtime_env_file)" ]]; then
+    printf '%s\n' "${ports}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 badvpn_runtime_get_env() {
   local key="$1"
   local env_file
@@ -1718,16 +1746,17 @@ badvpn_status_menu() {
   echo "9) Maintenance > BadVPN UDPGW Status"
   hr
 
-  local env_file port max_clients max_conn sndbuf svc
+  local env_file ports_raw ports_label max_clients max_conn sndbuf svc
   svc="badvpn-udpgw.service"
   env_file="$(badvpn_runtime_env_file)"
-  port="$(badvpn_runtime_get_env BADVPN_UDPGW_PORT 2>/dev/null || echo "7300")"
+  ports_raw="$(badvpn_runtime_ports)"
+  ports_label="$(printf '%s\n' "${ports_raw}" | sed 's/ /, /g')"
   max_clients="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CLIENTS 2>/dev/null || echo "512")"
   max_conn="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT 2>/dev/null || echo "8")"
   sndbuf="$(badvpn_runtime_get_env BADVPN_UDPGW_BUFFER_SIZE 2>/dev/null || echo "1048576")"
 
   echo "Runtime env : ${env_file}"
-  echo "Listen port : 127.0.0.1:${port}"
+  echo "Listen port : 127.0.0.1:${ports_label}"
   echo "Max clients : ${max_clients}"
   echo "Max conn    : ${max_conn}"
   echo "Sock sndbuf : ${sndbuf}"
@@ -1741,10 +1770,16 @@ badvpn_status_menu() {
 
   hr
   if have_cmd ss; then
-    if ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
-      log "UDPGW 127.0.0.1:${port} : LISTENING ✅"
+    local badvpn_missing="" port
+    for port in ${ports_raw}; do
+      if ! ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
+        badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
+      fi
+    done
+    if [[ -z "${badvpn_missing}" ]]; then
+      log "UDPGW 127.0.0.1:${ports_label} : LISTENING ✅"
     else
-      warn "UDPGW 127.0.0.1:${port} : NOT listening ❌"
+      warn "UDPGW 127.0.0.1:${ports_label} : MISSING ${badvpn_missing} ❌"
     fi
   else
     warn "ss tidak tersedia, skip cek port TCP UDPGW"
@@ -3025,16 +3060,6 @@ ssh_ssl_tls_public_ports_label() {
 ssh_direct_public_ports_label() {
   if edge_runtime_enabled_for_public_ports; then
     ssh_ws_public_ports_label
-  else
-    printf '%s\n' "-"
-  fi
-}
-
-badvpn_public_port_label() {
-  local port
-  port="$(badvpn_runtime_get_env BADVPN_UDPGW_PORT 2>/dev/null || echo "7300")"
-  if svc_exists badvpn-udpgw || [[ -r "$(badvpn_runtime_env_file)" ]]; then
-    printf '%s\n' "${port}"
   else
     printf '%s\n' "-"
   fi

@@ -18,18 +18,18 @@ Rilis ini menambahkan `badvpn-udpgw` sebagai fitur tambahan untuk ekosistem SSH.
   - `/etc/default/badvpn-udpgw`
   - `badvpn-udpgw.service`
 - Runtime default:
-  - listen lokal di `127.0.0.1:7300`
+  - listen lokal di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
 
 3. Surface operasional
 - `Maintenance` sekarang punya:
   - `BadVPN UDPGW Status`
   - `Restart BadVPN UDPGW`
 - `SSH ACCOUNT INFO` sekarang menampilkan:
-  - `BadVPN UDPGW : 7300`
+  - `BadVPN UDPGW : 7300, 7400, 7500, 7600, 7700, 7800, 7900`
 
 ### Hasil Validasi
 - `badvpn-udpgw.service` -> `active`
-- listener lokal `127.0.0.1:7300` -> `LISTENING`
+- listener lokal `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` -> `LISTENING`
 - menu maintenance live berhasil membaca status service dan port runtime
 
 ## Rilis 2026-03-09 (SSH Edge QAC Kini Termasuk Speed Lintas Transport)

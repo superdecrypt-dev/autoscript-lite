@@ -5,7 +5,10 @@ BADVPN_RUNTIME_ENV_FILE="${BADVPN_RUNTIME_ENV_FILE:-/etc/default/badvpn-udpgw}"
 BADVPN_RUNTIME_ENV_TEMPLATE="${SETUP_TEMPLATE_SRC_DIR}/config/badvpn-runtime.env"
 BADVPN_SERVICE_TEMPLATE="${SETUP_TEMPLATE_SRC_DIR}/systemd/badvpn-udpgw.service"
 BADVPN_BIN_INSTALL_PATH="${BADVPN_BIN_INSTALL_PATH:-/usr/local/bin/badvpn-udpgw}"
+BADVPN_LAUNCHER_SRC="${SCRIPT_DIR}/opt/setup/bin/badvpn-udpgw-launcher.sh"
+BADVPN_LAUNCHER_INSTALL_PATH="${BADVPN_LAUNCHER_INSTALL_PATH:-/usr/local/bin/badvpn-udpgw-launcher}"
 BADVPN_SERVICE_NAME="${BADVPN_SERVICE_NAME:-badvpn-udpgw.service}"
+BADVPN_UDPGW_PORTS_DEFAULT="${BADVPN_UDPGW_PORTS_DEFAULT:-7300 7400 7500 7600 7700 7800 7900}"
 
 badvpn_runtime_expected() {
   badvpn_prebuilt_ready
@@ -37,7 +40,7 @@ write_badvpn_runtime_env() {
     render_setup_template_or_die "config/badvpn-runtime.env" "${BADVPN_RUNTIME_ENV_FILE}" 0644
   else
     cat > "${BADVPN_RUNTIME_ENV_FILE}" <<'EOF'
-BADVPN_UDPGW_PORT=7300
+BADVPN_UDPGW_PORTS="7300 7400 7500 7600 7700 7800 7900"
 BADVPN_UDPGW_MAX_CLIENTS=512
 BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT=8
 BADVPN_UDPGW_BUFFER_SIZE=1048576
@@ -61,6 +64,8 @@ install_badvpn_udpgw_stack() {
   install -d -m 755 "$(dirname "${BADVPN_BIN_INSTALL_PATH}")"
   install -m 0755 "${bin}" "${BADVPN_BIN_INSTALL_PATH}"
   chown root:root "${BADVPN_BIN_INSTALL_PATH}" 2>/dev/null || true
+  install -m 0755 "${BADVPN_LAUNCHER_SRC}" "${BADVPN_LAUNCHER_INSTALL_PATH}"
+  chown root:root "${BADVPN_LAUNCHER_INSTALL_PATH}" 2>/dev/null || true
 
   write_badvpn_runtime_env
   render_setup_template_or_die \
@@ -68,6 +73,7 @@ install_badvpn_udpgw_stack() {
     "/etc/systemd/system/${BADVPN_SERVICE_NAME}" \
     0644 \
     "BADVPN_BIN_INSTALL_PATH=${BADVPN_BIN_INSTALL_PATH}" \
+    "BADVPN_LAUNCHER_INSTALL_PATH=${BADVPN_LAUNCHER_INSTALL_PATH}" \
     "BADVPN_RUNTIME_ENV_FILE=${BADVPN_RUNTIME_ENV_FILE}"
 
   systemctl daemon-reload >/dev/null 2>&1 || true

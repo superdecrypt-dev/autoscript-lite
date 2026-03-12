@@ -31,7 +31,7 @@ Catatan penting:
 - `SSH dropbear`: `127.0.0.1:22022`
 - `SSH stunnel`: `127.0.0.1:22443`
 - `SSH WS proxy`: `127.0.0.1:10015`
-- `BadVPN UDPGW`: `127.0.0.1:7300`
+- `BadVPN UDPGW`: `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
 
 ## Service Utama
 - `edge-mux`

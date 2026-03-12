@@ -187,7 +187,7 @@ python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 
 ### 6.6 Cek Edge Gateway dan BadVPN
 ```bash
-rg -n "EDGE_PROVIDER|edge-mux|SSH Direct|SSH SSL/TLS|badvpn|udpgw|7300" \
+rg -n "EDGE_PROVIDER|edge-mux|SSH Direct|SSH SSL/TLS|badvpn|udpgw|7300|7900" \
   setup.sh opt/setup/install/edge.sh opt/setup/install/badvpn.sh opt/edge opt/manage README.md HANDOFF.md
 go -C opt/edge/go build ./...
 test -s opt/edge/dist/edge-mux-linux-amd64
@@ -202,7 +202,7 @@ test -s opt/badvpn/dist/badvpn-udpgw-linux-arm64
 systemctl is-active xray nginx edge-mux sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer xray-speed xray-domain-guard.timer badvpn-udpgw.service
 nginx -t
 /usr/local/bin/xray run -test -confdir /usr/local/etc/xray/conf.d
-ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:18080\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b|127\\.0\\.0\\.1:7300\\b)'
+ss -ltnp | rg '(:80\\b|:443\\b|127\\.0\\.0\\.1:18080\\b|127\\.0\\.0\\.1:10015\\b|127\\.0\\.0\\.1:22022\\b|127\\.0\\.0\\.1:22443\\b|127\\.0\\.0\\.1:7300\\b|127\\.0\\.0\\.1:7900\\b)'
 ```
 
 Khusus SSH WS:
@@ -221,7 +221,7 @@ Ekspektasi:
 Tambahan host edge aktif:
 - `edge-mux` harus `active`
 - `nginx` harus listen di `127.0.0.1:18080`
-- `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300`
+- `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
 
 ## 8. Format Hasil Audit
 
