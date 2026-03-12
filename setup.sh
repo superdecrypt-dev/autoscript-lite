@@ -351,6 +351,22 @@ sanity_check() {
 }
 
 setup_post_domain_main() {
+  need_python3
+  install_extra_deps
+  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
+  validate_sshws_ports_config
+  install_speedtest_snap
+  enable_cron_service
+  setup_time_sync_chrony
+  install_fail2ban_aggressive
+  enable_bbr
+  setup_swap_2gb
+  tune_ulimit
+  install_wgcf
+  install_wireproxy
+  setup_wgcf
+  setup_wireproxy
+  cleanup_wgcf_files
   install_nginx_official_repo
   write_nginx_main_conf
   install_acme_and_issue_cert
@@ -432,22 +448,6 @@ main() {
   check_os
   install_base_deps
   domain_menu_v2
-  need_python3
-  install_extra_deps
-  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
-  validate_sshws_ports_config
-  install_speedtest_snap
-  enable_cron_service
-  setup_time_sync_chrony
-  install_fail2ban_aggressive
-  enable_bbr
-  setup_swap_2gb
-  tune_ulimit
-  install_wgcf
-  install_wireproxy
-  setup_wgcf
-  setup_wireproxy
-  cleanup_wgcf_files
   setup_run_post_domain_with_spinner
 }
 
