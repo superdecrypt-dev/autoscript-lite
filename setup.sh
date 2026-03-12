@@ -70,7 +70,6 @@ ACME_DEFAULT_CA="${ACME_DEFAULT_CA:-letsencrypt}"
 XRAY_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh"
 ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
 ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
-CUSTOM_GEOSITE_URL="${CUSTOM_GEOSITE_URL:-https://github.com/superdecrypt-dev/custom-geosite-xray/raw/main/custom.dat}"
 XRAY_ASSET_DIR="/usr/local/share/xray"
 CUSTOM_GEOSITE_DEST="${XRAY_ASSET_DIR}/custom.dat"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -176,8 +175,8 @@ source_setup_module "opt/setup/install/xray.sh"
 source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
-# shellcheck source=opt/setup/install/ssh_adblock.sh
-source_setup_module "opt/setup/install/ssh_adblock.sh"
+# shellcheck source=opt/setup/install/adblock.sh
+source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
 
@@ -387,7 +386,6 @@ setup_post_domain_main() {
   setup_run_step "Issue sertifikat" install_acme_and_issue_cert
   setup_run_step "Install Xray" install_xray
   setup_run_step "Siapkan updater geodata" setup_xray_geodata_updater
-  setup_run_step "Install geosite adblock" install_custom_geosite_adblock
   setup_run_step "Preflight Edge Gateway" edge_runtime_preflight_or_die
   setup_run_step "Tulis config Xray" write_xray_config
   setup_run_step "Tulis config modular Xray" write_xray_modular_configs

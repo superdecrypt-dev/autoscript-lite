@@ -3675,14 +3675,9 @@ ssh_add_user_menu() {
 
   local ip_toggle ip_enabled="false" ip_limit="0"
   echo "Limit IP? (on/off)"
-  if ! read -r -p "IP Limit (on/off) (atau kembali): " ip_toggle; then
-    echo
+  if ! read_required_on_off ip_toggle "IP Limit (on/off) (atau kembali): "; then
     return 0
   fi
-  if is_back_word_choice "${ip_toggle}"; then
-    return 0
-  fi
-  ip_toggle="${ip_toggle,,}"
   case "${ip_toggle}" in
     on)
       ip_enabled="true"
@@ -3709,14 +3704,9 @@ ssh_add_user_menu() {
 
   local speed_toggle speed_enabled="false" speed_down="0" speed_up="0"
   echo "Limit speed per user? (on/off)"
-  if ! read -r -p "Speed Limit (on/off) (atau kembali): " speed_toggle; then
-    echo
+  if ! read_required_on_off speed_toggle "Speed Limit (on/off) (atau kembali): "; then
     return 0
   fi
-  if is_back_word_choice "${speed_toggle}"; then
-    return 0
-  fi
-  speed_toggle="${speed_toggle,,}"
   case "${speed_toggle}" in
     on)
       speed_enabled="true"

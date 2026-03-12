@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Adblock update every __ADBLOCK_AUTO_UPDATE_DAYS__ day(s)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=__ADBLOCK_AUTO_UPDATE_DAYS__d
+AccuracySec=5min
+Unit=__ADBLOCK_AUTO_UPDATE_SERVICE__
+Persistent=true
+
+[Install]
+WantedBy=timers.target

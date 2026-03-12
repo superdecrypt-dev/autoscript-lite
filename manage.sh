@@ -109,8 +109,10 @@ SSH_DNS_ADBLOCK_URLS_FILE="${SSH_DNS_ADBLOCK_ROOT}/source.urls"
 SSH_DNS_ADBLOCK_RENDERED_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocklist.generated.conf"
 SSH_DNS_ADBLOCK_DNSMASQ_CONF="${SSH_DNS_ADBLOCK_ROOT}/dnsmasq.conf"
 SSH_DNS_ADBLOCK_SERVICE="${SSH_DNS_ADBLOCK_SERVICE:-ssh-adblock-dns.service}"
-SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-ssh-adblock-sync.service}"
-SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/ssh-adblock-sync}"
+SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-adblock-sync.service}"
+SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/adblock-sync}"
+ADBLOCK_AUTO_UPDATE_SERVICE="${ADBLOCK_AUTO_UPDATE_SERVICE:-adblock-update.service}"
+ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
@@ -122,7 +124,8 @@ SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/ssh-adblock
   "${SSH_DNS_ADBLOCK_ROOT}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" \
   "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${SSH_DNS_ADBLOCK_URLS_FILE}" "${SSH_DNS_ADBLOCK_RENDERED_FILE}" \
   "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" "${SSH_DNS_ADBLOCK_SERVICE}" \
-  "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}"
+  "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}" \
+  "${ADBLOCK_AUTO_UPDATE_SERVICE}" "${ADBLOCK_AUTO_UPDATE_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
 MAIN_INFO_CACHE_TTL=300
@@ -675,6 +678,32 @@ is_yes() {
   local v="${1:-}"
   v="$(echo "${v}" | tr '[:upper:]' '[:lower:]')"
   [[ "${v}" == "y" || "${v}" == "yes" || "${v}" == "1" || "${v}" == "on" || "${v}" == "true" ]]
+}
+
+read_required_on_off() {
+  # args: out_var_name prompt
+  local -n _out_ref="$1"
+  local prompt="${2:-Input (on/off): }"
+  local value
+  while true; do
+    if ! read -r -p "${prompt}" value; then
+      echo
+      return 1
+    fi
+    if is_back_choice "${value}"; then
+      return 2
+    fi
+    value="${value,,}"
+    case "${value}" in
+      on|off)
+        _out_ref="${value}"
+        return 0
+        ;;
+      *)
+        warn "Input wajib on/off. Silakan isi 'on' atau 'off'."
+        ;;
+    esac
+  done
 }
 
 is_back_choice() {
@@ -2814,6 +2843,7 @@ PY
 }
 
 account_collect_files() {
+  local proto_filter="${1:-}"
   ACCOUNT_FILES=()
   ACCOUNT_FILE_PROTOS=()
 
@@ -2822,6 +2852,9 @@ account_collect_files() {
   declare -A has_at=()
 
   for proto in "${ACCOUNT_PROTO_DIRS[@]}"; do
+    if [[ -n "${proto_filter}" && "${proto}" != "${proto_filter}" ]]; then
+      continue
+    fi
     dir="${ACCOUNT_ROOT}/${proto}"
     [[ -d "${dir}" ]] || continue
     while IFS= read -r -d '' f; do
@@ -2967,8 +3000,9 @@ PY
 }
 
 account_print_table_page() {
-  # args: page
+  # args: page [proto_filter]
   local page="${1:-0}"
+  local proto_filter="${2:-}"
   local total="${#ACCOUNT_FILES[@]}"
   local pages
   pages="$(account_total_pages)"
@@ -2986,8 +3020,13 @@ account_print_table_page() {
   end=$((start + ACCOUNT_PAGE_SIZE))
   if (( end > total )); then end="${total}"; fi
 
-  printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "NO" "PROTO" "USERNAME" "QUOTA" "VALID UNTIL" "IP"
-  printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "----" "--------" "------------------" "----------" "-------------------" "-------"
+  if [[ -n "${proto_filter}" ]]; then
+    printf "%-4s %-18s %-10s %-19s %-7s\n" "NO" "USERNAME" "QUOTA" "VALID UNTIL" "IP"
+    printf "%-4s %-18s %-10s %-19s %-7s\n" "----" "------------------" "----------" "-------------------" "-------"
+  else
+    printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "NO" "PROTO" "USERNAME" "QUOTA" "VALID UNTIL" "IP"
+    printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "----" "--------" "------------------" "----------" "-------------------" "-------"
+  fi
 
   for (( i=start; i<end; i++ )); do
     f="${ACCOUNT_FILES[$i]}"
@@ -3011,7 +3050,11 @@ account_print_table_page() {
     # BUG-17 fix: display page-relative row number (i - start + 1) so that
     # page 2 starts at NO=1, not NO=11. This matches user expectation when
     # entering a row number to select.
-    printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "$((i - start + 1))" "${proto}" "${username}" "${quota_gb} GB" "${expired}" "${ip_show}"
+    if [[ -n "${proto_filter}" ]]; then
+      printf "%-4s %-18s %-10s %-19s %-7s\n" "$((i - start + 1))" "${username}" "${quota_gb} GB" "${expired}" "${ip_show}"
+    else
+      printf "%-4s %-8s %-18s %-10s %-19s %-7s\n" "$((i - start + 1))" "${proto}" "${username}" "${quota_gb} GB" "${expired}" "${ip_show}"
+    fi
   done
 
   echo
@@ -5435,16 +5478,49 @@ delete_account_artifacts() {
 
 
 user_add_menu() {
+  local proto
+  title
+  echo "Xray Users > Add User"
+  hr
+
+  ensure_account_quota_dirs
+  need_python3
+
+  echo "Pilih protocol:"
+  proto_list_menu_print
+  hr
+  if ! read -r -p "Protocol (1-5/kembali): " p; then
+    echo
+    return 0
+  fi
+  if is_back_choice "${p}"; then
+    return 0
+  fi
+  proto="$(proto_menu_pick_to_value "${p}")"
+  if [[ -z "${proto}" ]]; then
+    warn "Protocol tidak valid"
+    pause
+    return 0
+  fi
+
   local page=0
   while true; do
     title
     echo "Xray Users > Add User"
     hr
-    echo "Daftar akun (10 per halaman):"
+    echo "Protocol terpilih: ${proto}"
+    echo "Daftar akun ${proto} (10 per halaman):"
     hr
-    account_collect_files
+    account_collect_files "${proto}"
     ACCOUNT_PAGE="${page}"
-    account_print_table_page "${ACCOUNT_PAGE}"
+    if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+      account_print_table_page "${ACCOUNT_PAGE}" "${proto}"
+    else
+      echo "  (Belum ada akun ${proto} terkelola)"
+      echo "  Ketik lanjut untuk membuat akun baru."
+      echo
+      echo "Halaman: 0/0  | Total akun: 0"
+    fi
     hr
     echo "Ketik: lanjut / next / previous / kembali"
     if ! read -r -p "Pilihan: " nav; then
@@ -5471,27 +5547,8 @@ user_add_menu() {
   title
   echo "Xray Users > Add User"
   hr
-
-  ensure_account_quota_dirs
-  need_python3
-
-  echo "Pilih protocol:"
-  proto_list_menu_print
+  echo "Protocol : ${proto}"
   hr
-  if ! read -r -p "Protocol (1-5/kembali): " p; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${p}"; then
-    return 0
-  fi
-  local proto
-  proto="$(proto_menu_pick_to_value "${p}")"
-  if [[ -z "${proto}" ]]; then
-    warn "Protocol tidak valid"
-    pause
-    return 0
-  fi
 
   if ! read -r -p "Username (atau kembali): " username; then
     echo
@@ -5561,17 +5618,14 @@ user_add_menu() {
   quota_gb="${quota_gb_num}"
   quota_bytes="$(bytes_from_gb "${quota_gb_num}")"
 
+  local ip_toggle=""
   echo "Limit IP? (on/off)"
-  if ! read -r -p "IP Limit (on/off) (atau kembali): " ip_toggle; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${ip_toggle}"; then
+  if ! read_required_on_off ip_toggle "IP Limit (on/off) (atau kembali): "; then
     return 0
   fi
   local ip_enabled="false"
   local ip_limit="0"
-  if is_yes "${ip_toggle}"; then
+  if [[ "${ip_toggle}" == "on" ]]; then
     ip_enabled="true"
     if ! read -r -p "Limit IP (angka) (atau kembali): " ip_limit; then
       echo
@@ -5587,18 +5641,15 @@ user_add_menu() {
     fi
   fi
 
+  local speed_toggle=""
   echo "Limit speed per user? (on/off)"
-  if ! read -r -p "Speed Limit (on/off) (atau kembali): " speed_toggle; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${speed_toggle}"; then
+  if ! read_required_on_off speed_toggle "Speed Limit (on/off) (atau kembali): "; then
     return 0
   fi
   local speed_enabled="false"
   local speed_down_mbit="0"
   local speed_up_mbit="0"
-  if is_yes "${speed_toggle}"; then
+  if [[ "${speed_toggle}" == "on" ]]; then
     speed_enabled="true"
 
     if ! read -r -p "Speed Download Mbps (contoh: 20 atau 20mbit) (atau kembali): " speed_down; then

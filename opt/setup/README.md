@@ -81,8 +81,7 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
 8. `install_edge_provider_stack`
    - target modul: `install/edge.sh`
 9. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
-   `configure_xray_service_confdir`, `setup_xray_geodata_updater`,
-   `install_custom_geosite_adblock`
+   `configure_xray_service_confdir`, `setup_xray_geodata_updater`
    - target modul: `install/xray.sh`
 10. `install_sshws_stack`, `install_sshws_qac_enforcer`
    - target modul: `install/sshws.sh`

@@ -1,0 +1,12 @@
+[Unit]
+Description=Update Adblock artifacts
+After=network-online.target xray.service ssh-adblock-dns.service
+Wants=network-online.target
+ConditionPathExists=__SSH_DNS_ADBLOCK_SYNC_BIN__
+
+[Service]
+Type=oneshot
+ExecStart=__SSH_DNS_ADBLOCK_SYNC_BIN__ --update --reload-xray-if-enabled
+
+[Install]
+WantedBy=multi-user.target

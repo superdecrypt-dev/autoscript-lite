@@ -746,23 +746,14 @@ setup_xray_geodata_updater() {
 set -euo pipefail
 
 URL="${XRAY_INSTALL_SCRIPT_URL}"
-CUSTOM_URL="${CUSTOM_GEOSITE_URL}"
-CUSTOM_DEST="${CUSTOM_GEOSITE_DEST}"
 tmp="\$(mktemp)"
-tmp_custom="\$(mktemp)"
 cleanup() {
   rm -f "\${tmp}" >/dev/null 2>&1 || true
-  rm -f "\${tmp_custom}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 curl -fsSL --connect-timeout 15 --max-time 120 "\${URL}" -o "\${tmp}"
 bash "\${tmp}" install-geodata >/dev/null 2>&1
-
-mkdir -p "\$(dirname "\${CUSTOM_DEST}")"
-curl -fsSL --connect-timeout 15 --max-time 120 "\${CUSTOM_URL}" -o "\${tmp_custom}"
-[[ -s "\${tmp_custom}" ]] || { echo "[xray-update-geodata] custom.dat kosong: \${CUSTOM_URL}" >&2; exit 1; }
-install -m 644 "\${tmp_custom}" "\${CUSTOM_DEST}"
 EOF
 
   chmod +x /usr/local/bin/xray-update-geodata
@@ -781,23 +772,6 @@ EOF
   /usr/local/bin/xray-update-geodata || die "Gagal update geodata pertama kali (cek koneksi ke github.com)."
   ok "Geodata awal selesai."
 
-}
-
-install_custom_geosite_adblock() {
-  ok "Unduh geosite custom..."
-  mkdir -p "${XRAY_ASSET_DIR}"
-
-  local tmp
-  tmp="$(mktemp)"
-  download_file_or_die "${CUSTOM_GEOSITE_URL}" "${tmp}" "" "custom geosite"
-  [[ -s "${tmp}" ]] || {
-    rm -f "${tmp}" >/dev/null 2>&1 || true
-    die "File custom geosite kosong: ${CUSTOM_GEOSITE_URL}"
-  }
-
-  install -m 644 "${tmp}" "${CUSTOM_GEOSITE_DEST}"
-  rm -f "${tmp}" >/dev/null 2>&1 || true
-  ok "custom.dat tersimpan."
 }
 
 install_xray_speed_limiter_foundation() {

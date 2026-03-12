@@ -11,15 +11,20 @@ Dokumen ini sengaja memisahkan dua jalur tersebut karena mekanismenya tidak sama
 
 ## Ringkasan Keputusan
 
-### Xray Adblock
+### Shared Source
 
-Tetap memakai model yang sudah cocok dengan repo ini:
+Source of truth adblock disatukan:
 
-- asset geosite: `ext:custom.dat:adblock`
-- rule routing domain
-- outbound `blocked`
+- manual domain list
+- URL sources
+- merged domain cache
 
-Ini adalah bentuk adblock yang paling bersih untuk Xray.
+Lalu source yang sama dibangun menjadi dua artifact runtime:
+
+- `Xray`: `custom.dat` dengan entry `ext:custom.dat:adblock`
+- `SSH`: blocklist `dnsmasq`
+
+Jadi yang fleksibel adalah source-nya, bukan artifact runtime-nya.
 
 ### SSH
 
@@ -74,9 +79,10 @@ Bukan ingress SSH.
 
 ### Model
 
-- user mengaktifkan `5) Network > Adblock > Xray Adblock`
-- menu menulis rule ke routing Xray
-- domain yang match `ext:custom.dat:adblock` diarahkan ke outbound `blocked`
+- user mengelola source bersama dari `5) Network > Adblock`
+- menu `Update Adblock` membangun ulang `custom.dat`
+- rule routing Xray tetap memakai `ext:custom.dat:adblock`
+- domain yang match diarahkan ke outbound `blocked`
 
 ### State yang dipakai
 
@@ -155,15 +161,23 @@ table inet autoscript_ssh_adblock {
 
 ### Sumber blocklist
 
-Ada dua pilihan yang sehat:
+Model yang dipakai sekarang:
 
-1. blocklist lokal sederhana:
-   - file domain adblock sendiri
-2. generate dari asset `custom.dat` menjadi daftar domain plain untuk `dnsmasq`
+1. user mengubah source bersama:
+   - daftar domain manual
+   - daftar URL source
+2. menu `Update Adblock` akan:
+   - fetch semua URL source
+   - normalize + dedup
+   - simpan hasil ke merged list
+   - build `custom.dat` untuk Xray
+   - build blocklist `dnsmasq` untuk SSH
 
-Untuk repo ini, fase awal lebih aman memakai file domain adblock plain terpisah untuk SSH.
+Dengan model ini:
 
-Jangan langsung memaksa parser `custom.dat` ke `dnsmasq` sampai benar-benar perlu.
+- `Add/Delete` tetap fleksibel
+- `Update` menjadi satu-satunya langkah berat
+- Xray tidak dipaksa memuat 1 juta domain inline ke config routing
 
 ### Status yang perlu ditampilkan di menu
 
@@ -206,34 +220,38 @@ Tetapi itu harus dianggap hardening tambahan, bukan bagian fase pertama.
 
 ## UX yang Disarankan
 
-Supaya tetap sederhana, adblock cukup muncul di dua tempat:
-
-### Xray
+Supaya tetap sederhana, adblock cukup muncul di satu jalur user-facing:
 
 - `5) Network > Adblock`
 
-Isi:
+Isi menu gabungan:
 
-- `Enable`
-- `Disable`
-- `Status`
-
-### SSH Adblock
-
-Opsi terbaik:
-
-- tetap taruh di `5) Network > Adblock`
-- submenu user-facing: `SSH Adblock`
-
-Isi:
-
-- `Enable`
-- `Disable`
-- `Status`
+- `Enable Adblock`
+- `Disable Adblock`
+- `Add Domain`
+- `Delete Domain`
+- `Add URL Source`
+- `Delete URL Source`
+- `Update Adblock`
+- `Toggle Auto Update`
+- `Set Auto Update Interval`
 - `Show bound users`
-- `Add URL`
-- `Delete URL`
-- `Update URL`
+
+Semantik menu:
+
+- `Add/Delete` hanya mengubah source dan menandai status `dirty`
+- `Update Adblock` fetch + merge + build artifact runtime
+- `Enable Adblock` akan otomatis memaksa `Update` dulu jika source masih `dirty`
+- `Disable Adblock` hanya mematikan enforcement runtime, source tetap disimpan
+- `Toggle Auto Update` mengaktifkan atau menonaktifkan timer harian untuk `Update Adblock`
+- `Set Auto Update Interval` mengatur interval dalam satuan hari, misalnya `1`, `3`, atau `7`
+
+Implementasi internal tetap dua backend:
+
+- `Xray Adblock` untuk routing `ext:custom.dat:adblock`
+- `SSH Adblock` untuk DNS sinkhole + `nftables` per UID
+
+Jadi yang disatukan adalah jalur UX dan kontrol user-facing, bukan dipaksa menjadi satu mesin enforcement yang sama.
 
 Jangan taruh di `SSH Users`, karena adblock ini sifatnya policy jaringan, bukan lifecycle user.
 
@@ -241,20 +259,21 @@ Jangan taruh di `SSH Users`, karena adblock ini sifatnya policy jaringan, bukan 
 
 ### Fase 1
 
-Matangkan `Xray Adblock`:
+Satukan jalur UX dan source adblock:
 
-- pastikan ON/OFF stabil
-- tambah status asset/blocklist
-- tambah whitelist jika perlu
+- satu menu
+- source manual + URL
+- status `dirty`
+- update artifact terpadu
 
 ### Fase 2
 
-Tambahkan `SSH Adblock` dasar:
+Matangkan runtime enforcement:
 
-- install `dnsmasq`
-- file blocklist SSH
+- `custom.dat` build lokal untuk Xray
+- `dnsmasq` blocklist untuk SSH
 - `nftables` redirect per UID SSH
-- menu ON/OFF/Status
+- reload service yang relevan saat artifact berubah
 
 ### Fase 3
 
