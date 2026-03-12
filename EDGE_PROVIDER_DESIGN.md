@@ -48,8 +48,7 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
 
 ### Out of scope
 
-- Quota/speed/IP limit untuk jalur `SSH SSL/TLS`.
-- Migrasi bot Discord/Telegram ke surface edge baru.
+- Surface bot Discord/Telegram untuk fitur edge baru.
 - Kompatibilitas penuh semua client exotic tanpa validasi bertahap.
 
 ## Baseline Saat Ini

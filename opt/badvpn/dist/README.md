@@ -7,10 +7,11 @@ File yang diharapkan:
 - `badvpn-udpgw-linux-arm64`
 
 Status saat ini:
-- placeholder only
-- belum ada binary yang dibundel
+- binary prebuilt sudah dibundel
+- installer memilih binary sesuai arsitektur host
+- runtime live sudah dipakai oleh setup normal
 
-Saat implementasi aktif, installer akan:
+Saat setup normal, installer akan:
 1. deteksi arsitektur host
 2. pilih binary yang cocok
 3. install ke `/usr/local/bin/badvpn-udpgw`
