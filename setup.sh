@@ -350,60 +350,77 @@ sanity_check() {
   fi
 }
 
+SETUP_PROGRESS_FILE=""
+
+setup_set_progress() {
+  local label="$1"
+  [[ -n "${SETUP_PROGRESS_FILE:-}" ]] || return 0
+  printf '%s\n' "${label}" > "${SETUP_PROGRESS_FILE}"
+}
+
+setup_run_step() {
+  local label="$1"
+  shift || true
+  setup_set_progress "${label}"
+  "$@"
+}
+
 setup_post_domain_main() {
-  need_python3
-  install_extra_deps
+  setup_run_step "Validasi Python" need_python3
+  setup_run_step "Install dependency tambahan" install_extra_deps
   # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
-  validate_sshws_ports_config
-  install_speedtest_snap
-  enable_cron_service
-  setup_time_sync_chrony
-  install_fail2ban_aggressive
-  enable_bbr
-  setup_swap_2gb
-  tune_ulimit
-  install_wgcf
-  install_wireproxy
-  setup_wgcf
-  setup_wireproxy
-  cleanup_wgcf_files
-  install_nginx_official_repo
-  write_nginx_main_conf
-  install_acme_and_issue_cert
-  install_xray
-  setup_xray_geodata_updater
-  install_custom_geosite_adblock
-  edge_runtime_preflight_or_die
-  write_xray_config
-  write_xray_modular_configs
-  configure_xray_service_confdir
-  write_nginx_config
-  install_edge_provider_stack
+  setup_run_step "Validasi port SSH WS" validate_sshws_ports_config
+  setup_run_step "Install speedtest" install_speedtest_snap
+  setup_run_step "Aktifkan cron" enable_cron_service
+  setup_run_step "Aktifkan chrony" setup_time_sync_chrony
+  setup_run_step "Install fail2ban" install_fail2ban_aggressive
+  setup_run_step "Aktifkan BBR" enable_bbr
+  setup_run_step "Siapkan swap" setup_swap_2gb
+  setup_run_step "Atur ulimit" tune_ulimit
+  setup_run_step "Install wgcf" install_wgcf
+  setup_run_step "Install wireproxy" install_wireproxy
+  setup_run_step "Siapkan wgcf" setup_wgcf
+  setup_run_step "Siapkan wireproxy" setup_wireproxy
+  setup_run_step "Bersihkan file wgcf" cleanup_wgcf_files
+  setup_run_step "Install repo nginx" install_nginx_official_repo
+  setup_run_step "Tulis config utama nginx" write_nginx_main_conf
+  setup_run_step "Issue sertifikat" install_acme_and_issue_cert
+  setup_run_step "Install Xray" install_xray
+  setup_run_step "Siapkan updater geodata" setup_xray_geodata_updater
+  setup_run_step "Install geosite adblock" install_custom_geosite_adblock
+  setup_run_step "Preflight Edge Gateway" edge_runtime_preflight_or_die
+  setup_run_step "Tulis config Xray" write_xray_config
+  setup_run_step "Tulis config modular Xray" write_xray_modular_configs
+  setup_run_step "Konfigurasi service Xray" configure_xray_service_confdir
+  setup_run_step "Tulis config nginx" write_nginx_config
+  setup_run_step "Install Edge Gateway" install_edge_provider_stack
+  setup_set_progress "Sinkron domain Xray"
   if sync_xray_domain_file "${DOMAIN}"; then
     ok "Compat domain file tersimpan: ${XRAY_DOMAIN_FILE}"
   else
     warn "Gagal menulis compat domain file: ${XRAY_DOMAIN_FILE}"
   fi
-  install_sshws_stack
-  install_sshws_qac_enforcer
-  install_ssh_dns_adblock_foundation
-  install_badvpn_udpgw_stack
-  install_management_scripts
-  sync_manage_modules_layout
-  sync_setup_runtime_layout
-  install_xray_speed_limiter_foundation
-  install_domain_cert_guard
-  setup_logrotate
-  configure_fail2ban_aggressive_jails
-  sanity_check
+  setup_run_step "Install SSH WS" install_sshws_stack
+  setup_run_step "Install SSH QAC enforcer" install_sshws_qac_enforcer
+  setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
+  setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
+  setup_run_step "Install management scripts" install_management_scripts
+  setup_run_step "Sinkron modul manage" sync_manage_modules_layout
+  setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
+  setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
+  setup_run_step "Install domain guard" install_domain_cert_guard
+  setup_run_step "Konfigurasi logrotate" setup_logrotate
+  setup_run_step "Konfigurasi jail fail2ban" configure_fail2ban_aggressive_jails
+  setup_run_step "Sanity check" sanity_check
 }
 
 setup_run_post_domain_with_spinner() {
-  local setup_log_dir setup_log_file setup_pid rc
+  local setup_log_dir setup_log_file setup_status_file setup_pid rc
   setup_log_dir="/var/log/autoscript"
   mkdir -p "${setup_log_dir}"
   chmod 755 "${setup_log_dir}" 2>/dev/null || true
   setup_log_file="${setup_log_dir}/setup-$(date +%Y%m%d-%H%M%S).log"
+  setup_status_file="${setup_log_dir}/setup-status-$(date +%Y%m%d-%H%M%S).txt"
 
   echo
   ui_hr
@@ -418,20 +435,23 @@ setup_run_post_domain_with_spinner() {
   echo
 
   (
+    SETUP_PROGRESS_FILE="${setup_status_file}"
     setup_post_domain_main
   ) >"${setup_log_file}" 2>&1 &
   setup_pid=$!
 
   set +e
-  ui_spinner_wait "${setup_pid}" "Menyiapkan layanan inti"
+  ui_spinner_wait "${setup_pid}" "Menyiapkan layanan inti" "${setup_status_file}"
   rc=$?
   set -e
   if (( rc == 0 )); then
+    rm -f "${setup_status_file}" >/dev/null 2>&1 || true
     ok "Setup selesai."
     ui_subtle "Log setup tersimpan di ${setup_log_file}"
     return 0
   fi
 
+  rm -f "${setup_status_file}" >/dev/null 2>&1 || true
   warn "Setup gagal. Potongan log terakhir:"
   ui_hr
   tail -n 60 "${setup_log_file}" 2>/dev/null || true

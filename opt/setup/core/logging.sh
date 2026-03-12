@@ -76,8 +76,10 @@ ui_section_title() {
 ui_spinner_wait() {
   local pid="$1"
   local label="${2:-Memproses}"
+  local status_file="${3:-}"
   local start_ts now elapsed frame_idx rc
   local -a frames=('|' '/' '-' '\\')
+  local current_label
 
   if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
     return 1
@@ -93,7 +95,13 @@ ui_spinner_wait() {
   while kill -0 "${pid}" 2>/dev/null; do
     now="$(date +%s 2>/dev/null || echo "${start_ts}")"
     elapsed=$(( now - start_ts ))
-    printf '\r%b' "${frames[$frame_idx]} ${label} ${DIM}(${elapsed}s)${NC}"
+    current_label="${label}"
+    if [[ -n "${status_file}" && -r "${status_file}" ]]; then
+      local status_line=""
+      status_line="$(head -n1 "${status_file}" 2>/dev/null | tr -d '\r' || true)"
+      [[ -n "${status_line}" ]] && current_label="${status_line}"
+    fi
+    printf '\r%b' "${frames[$frame_idx]} ${current_label} ${DIM}(${elapsed}s)${NC}"
     frame_idx=$(( (frame_idx + 1) % ${#frames[@]} ))
     sleep 0.12
   done
