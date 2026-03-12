@@ -568,6 +568,10 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "http-port", initial, "", "")
 		collector.ObserveRouteDecision("http-port", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		if decision.Status > 0 {
+			_ = writeHTTPError(conn, decision.Status, decision.Text)
+			return
+		}
 		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassTLSClientHello:
@@ -638,6 +642,10 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "")
 		collector.ObserveRouteDecision("tls-port-plaintext", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		if decision.Status > 0 {
+			_ = writeHTTPError(conn, decision.Status, decision.Text)
+			return
+		}
 		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassPossibleHTTP:
@@ -676,6 +684,10 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
 		collector.ObserveRouteDecision(surface, decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		if decision.Status > 0 {
+			_ = writeHTTPError(tlsConn, decision.Status, decision.Text)
+			return
+		}
 		target = decision.Backend
 		sendHTTP502 = true
 		contextLabel = decision.Context
@@ -757,6 +769,8 @@ type httpRouteDecision struct {
 	Path    string
 	ALPN    string
 	SNI     string
+	Status  int
+	Text    string
 }
 
 func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, sni string) httpRouteDecision {
@@ -770,6 +784,10 @@ func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, s
 		decision.Route = routing.RouteLabel(req, alpn)
 		decision.Host = req.Host
 		decision.Path = req.Path
+		if decision.Route == "websocket-other" {
+			decision.Status = 401
+			decision.Text = "Unauthorized"
+		}
 	} else if alpn == "h2" {
 		decision.Route = "http2"
 	}
