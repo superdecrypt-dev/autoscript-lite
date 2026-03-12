@@ -34,14 +34,34 @@ type ListenerSnapshot struct {
 }
 
 type LastRouteSnapshot struct {
-	SeenAtUnix int64  `json:"seen_at_unix"`
-	Surface    string `json:"surface"`
-	Route      string `json:"route"`
-	Backend    string `json:"backend"`
-	Host       string `json:"host,omitempty"`
-	Path       string `json:"path,omitempty"`
-	ALPN       string `json:"alpn,omitempty"`
-	SNI        string `json:"sni,omitempty"`
+	SeenAtUnix    int64  `json:"seen_at_unix"`
+	Surface       string `json:"surface"`
+	DetectClass   string `json:"detect_class,omitempty"`
+	Route         string `json:"route"`
+	Backend       string `json:"backend"`
+	BackendAddr   string `json:"backend_addr,omitempty"`
+	BackendStatus string `json:"backend_status,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	HTTPStatus    int    `json:"http_status,omitempty"`
+	Host          string `json:"host,omitempty"`
+	Path          string `json:"path,omitempty"`
+	ALPN          string `json:"alpn,omitempty"`
+	SNI           string `json:"sni,omitempty"`
+}
+
+type RouteDecisionEvent struct {
+	Surface       string
+	DetectClass   string
+	Route         string
+	Backend       string
+	BackendAddr   string
+	BackendStatus string
+	Reason        string
+	HTTPStatus    int
+	Host          string
+	Path          string
+	ALPN          string
+	SNI           string
 }
 
 type SurfaceSnapshot struct {
@@ -89,6 +109,10 @@ type StatusSnapshot struct {
 	SSHBackend                string                           `json:"ssh_backend"`
 	SSHTLSBackend             string                           `json:"ssh_tls_backend"`
 	SSHWSBackend              string                           `json:"ssh_ws_backend"`
+	VLESSRawBackend           string                           `json:"vless_raw_backend"`
+	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
+	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
+	TrojanRawBackendSource    string                           `json:"trojan_raw_backend_source,omitempty"`
 	MetricsEnabled            bool                             `json:"metrics_enabled"`
 	ClassicTLSOn80            bool                             `json:"classic_tls_on_80"`
 	AcceptProxyProtocol       bool                             `json:"accept_proxy_protocol"`
@@ -201,22 +225,28 @@ func (c *Collector) ObserveBridgeError(context string) {
 	c.incCounter("edge_mux_bridge_errors_total", labels("context", context))
 }
 
-func (c *Collector) ObserveRouteDecision(surface, route, backend, host, path, alpn, sni string) {
-	route = fallback(route, "unknown")
-	backend = fallback(backend, "unknown")
-	alpn = fallback(alpn, "none")
+func (c *Collector) ObserveRouteDecision(event RouteDecisionEvent) {
+	surface := fallback(event.Surface, "unknown")
+	route := fallback(event.Route, "unknown")
+	backend := fallback(event.Backend, "unknown")
+	alpn := fallback(event.ALPN, "none")
 	c.incCounter("edge_mux_route_decisions_total", labels("surface", surface, "route", route, "backend", backend, "alpn", alpn))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastRoute = &LastRouteSnapshot{
-		SeenAtUnix: time.Now().Unix(),
-		Surface:    truncate(surface, 64),
-		Route:      truncate(route, 64),
-		Backend:    truncate(backend, 32),
-		Host:       truncate(host, 255),
-		Path:       truncate(path, 255),
-		ALPN:       truncate(alpn, 32),
-		SNI:        truncate(sni, 255),
+		SeenAtUnix:    time.Now().Unix(),
+		Surface:       truncate(surface, 64),
+		DetectClass:   truncate(event.DetectClass, 32),
+		Route:         truncate(route, 64),
+		Backend:       truncate(backend, 32),
+		BackendAddr:   truncate(event.BackendAddr, 128),
+		BackendStatus: truncate(event.BackendStatus, 32),
+		Reason:        truncate(event.Reason, 128),
+		HTTPStatus:    event.HTTPStatus,
+		Host:          truncate(event.Host, 255),
+		Path:          truncate(event.Path, 255),
+		ALPN:          truncate(alpn, 32),
+		SNI:           truncate(event.SNI, 255),
 	}
 }
 
@@ -361,6 +391,10 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		SSHBackend:                cfg.SSHBackendAddr(),
 		SSHTLSBackend:             cfg.SSHTLSBackendAddr(),
 		SSHWSBackend:              cfg.SSHWSBackendAddr(),
+		VLESSRawBackend:           cfg.VLESSRawBackendAddr(),
+		VLESSRawBackendSource:     cfg.VLESSRawSource,
+		TrojanRawBackend:          cfg.TrojanRawBackendAddr(),
+		TrojanRawBackendSource:    cfg.TrojanRawSource,
 		MetricsEnabled:            cfg.MetricsEnabled,
 		ClassicTLSOn80:            cfg.ClassicTLSOn80,
 		AcceptProxyProtocol:       cfg.AcceptProxyProtocol,

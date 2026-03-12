@@ -41,6 +41,7 @@ const (
 	defaultCooldownWindow      = 30 * time.Second
 	defaultCooldownDuration    = 120 * time.Second
 	defaultRuntimeEnvFile      = "/etc/default/edge-runtime"
+	defaultXrayInboundsFile    = "/usr/local/etc/xray/conf.d/10-inbounds.json"
 	defaultAcceptProxyProtocol = false
 	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
 )
@@ -57,6 +58,9 @@ type Config struct {
 	SSHWSBackend        string
 	VLESSRawBackend     string
 	TrojanRawBackend    string
+	XrayInboundsFile    string
+	VLESSRawSource      string
+	TrojanRawSource     string
 	TLSCertFile         string
 	TLSKeyFile          string
 	DetectTimeout       time.Duration
@@ -146,6 +150,9 @@ func LoadConfig() (Config, error) {
 		SSHWSBackend:        normalizeAddr(envString(source, "EDGE_SSH_WS_BACKEND", defaultSSHWSBackend), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
+		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
+		VLESSRawSource:      "env:EDGE_XRAY_VLESS_RAW_BACKEND",
+		TrojanRawSource:     "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
 		TLSCertFile:         envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
 		TLSKeyFile:          envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
 		DetectTimeout:       timeout,
@@ -165,6 +172,9 @@ func LoadConfig() (Config, error) {
 		CooldownDuration:    cooldownDuration,
 		AcceptProxyProtocol: acceptProxyProtocol,
 		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
+	}
+	if refreshed, _, err := RefreshDiscoveredRawBackends(cfg); err == nil {
+		cfg = refreshed
 	}
 	return cfg, nil
 }

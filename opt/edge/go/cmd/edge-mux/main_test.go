@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/observability"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
 )
 
@@ -34,5 +36,56 @@ func TestDecideHTTPRouteKnownSSHWebSocketPathPassesThrough(t *testing.T) {
 	}
 	if decision.Status != 0 {
 		t.Fatalf("status = %d, want 0", decision.Status)
+	}
+}
+
+func TestRouteBlockedByHealthUsesSpecificBackendKey(t *testing.T) {
+	cfg := runtime.Config{
+		SSHBackend:       "127.0.0.1:22022",
+		SSHTLSBackend:    "127.0.0.1:22443",
+		SSHWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:  "127.0.0.1:33175",
+		TrojanRawBackend: "127.0.0.1:48778",
+	}
+	health := &backendHealthState{}
+	health.Set(map[string]observability.BackendHealthSnapshot{
+		"ssh": {
+			Address: "direct=127.0.0.1:22022, tls=127.0.0.1:22443, ws=127.0.0.1:10015",
+			Healthy: false,
+			Status:  "degraded",
+		},
+		"ssh-direct": {
+			Address: "127.0.0.1:22022",
+			Healthy: true,
+			Status:  "up",
+		},
+	})
+
+	if _, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+		t.Fatalf("routeBlockedByHealth() = true, want false for healthy ssh-direct backend")
+	}
+}
+
+func TestRouteDecisionEventUsesSpecificBackendStatus(t *testing.T) {
+	cfg := runtime.Config{
+		SSHBackend:       "127.0.0.1:22022",
+		VLESSRawBackend:  "127.0.0.1:33175",
+		TrojanRawBackend: "127.0.0.1:48778",
+	}
+	health := &backendHealthState{}
+	health.Set(map[string]observability.BackendHealthSnapshot{
+		"vless": {
+			Address: "127.0.0.1:33175",
+			Healthy: false,
+			Status:  "down",
+		},
+	})
+
+	event := routeDecisionEvent(cfg, health, detect.ClassVLESSRaw, cfg.VLESSRawBackendAddr(), "vless-tcp", "", "", "", "", "", 0)
+	if event.Backend != "vless" {
+		t.Fatalf("Backend = %q, want vless", event.Backend)
+	}
+	if event.BackendStatus != "down" {
+		t.Fatalf("BackendStatus = %q, want down", event.BackendStatus)
 	}
 }

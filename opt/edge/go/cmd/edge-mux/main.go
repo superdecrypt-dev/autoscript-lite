@@ -59,7 +59,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s trojan_raw_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -70,7 +70,9 @@ func main() {
 		cfg.SSHTLSBackendAddr(),
 		cfg.SSHWSBackendAddr(),
 		cfg.VLESSRawBackendAddr(),
+		cfg.VLESSRawSource,
 		cfg.TrojanRawBackendAddr(),
+		cfg.TrojanRawSource,
 		cfg.DetectTimeout,
 		cfg.TLSHandshakeTimeout,
 		cfg.ClassicTLSOn80,
@@ -117,6 +119,7 @@ func main() {
 
 	guard := abuse.NewGuard()
 	collector := observability.NewCollector(time.Now())
+	backendHealth := newBackendHealthState(cfg)
 	var metricsServer *observability.Server
 	listenerState := func() observability.ListenerSnapshot {
 		snapshot := observability.ListenerSnapshot{
@@ -147,7 +150,7 @@ func main() {
 		live.Config,
 		listenerState,
 		func(current runtime.Config) map[string]observability.BackendHealthSnapshot {
-			return backendHealthSnapshot(current)
+			return backendHealth.Snapshot()
 		},
 		func() *observability.AbuseSnapshot {
 			snapshot := guard.Snapshot()
@@ -187,13 +190,16 @@ func main() {
 	}
 
 	start("http-listener", func(ctx context.Context) error {
-		return serveHTTPMux(ctx, logger, live, tlsState, httpListener, guard, collector)
+		return serveHTTPMux(ctx, logger, live, tlsState, httpListener, guard, collector, backendHealth)
 	})
 	start("tls-listener", func(ctx context.Context) error {
-		return serveTLSMux(ctx, logger, live, tlsState, tlsListener, guard, collector)
+		return serveTLSMux(ctx, logger, live, tlsState, tlsListener, guard, collector, backendHealth)
 	})
 	start("reload-loop", func(ctx context.Context) error {
-		return handleReloads(ctx, logger, live, tlsState, httpListener, tlsListener, metricsServer, collector, loadConfig, hupCh)
+		return handleReloads(ctx, logger, live, tlsState, httpListener, tlsListener, metricsServer, collector, backendHealth, loadConfig, hupCh)
+	})
+	start("backend-monitor", func(ctx context.Context) error {
+		return monitorBackendState(ctx, logger, live, backendHealth)
 	})
 
 	select {
@@ -367,6 +373,7 @@ func handleReloads(
 	tlsListener *reloadableListener,
 	metricsServer *observability.Server,
 	collector *observability.Collector,
+	backendHealth *backendHealthState,
 	loadConfig func() (runtime.Config, error),
 	hupCh <-chan os.Signal,
 ) error {
@@ -403,19 +410,26 @@ func handleReloads(
 			continue
 		}
 		live.Set(newCfg)
+		if backendHealth != nil {
+			backendHealth.Refresh(newCfg)
+		}
 		if err := metricsServer.Configure(newCfg); err != nil {
 			collector.ObserveReloadFailure("metrics")
 			logger.Printf("edge-mux reload metrics reconfigure failed addr=%s: %v", newCfg.MetricsAddr(), err)
 		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
-			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
 			newCfg.HTTPListenAddr(),
 			newCfg.TLSListenAddr(),
 			newCfg.MetricsAddr(),
 			newCfg.MetricsEnabled,
 			newCfg.HTTPBackendAddr(),
 			newCfg.SSHBackendAddr(),
+			newCfg.VLESSRawBackendAddr(),
+			newCfg.VLESSRawSource,
+			newCfg.TrojanRawBackendAddr(),
+			newCfg.TrojanRawSource,
 			newCfg.DetectTimeout,
 			newCfg.TLSHandshakeTimeout,
 			newCfg.ClassicTLSOn80,
@@ -431,6 +445,7 @@ func serveHTTPMux(
 	listener *reloadableListener,
 	guard *abuse.Guard,
 	collector *observability.Collector,
+	backendHealth *backendHealthState,
 ) error {
 	for {
 		conn, err := listener.Accept(ctx)
@@ -448,7 +463,7 @@ func serveHTTPMux(
 			_ = conn.Close()
 			continue
 		}
-		go handleHTTPPortConn(logger, cfg, tlsLive.Current(), guard, collector, wrapped)
+		go handleHTTPPortConn(logger, cfg, tlsLive.Current(), guard, collector, backendHealth, wrapped)
 	}
 }
 
@@ -460,6 +475,7 @@ func serveTLSMux(
 	listener *reloadableListener,
 	guard *abuse.Guard,
 	collector *observability.Collector,
+	backendHealth *backendHealthState,
 ) error {
 	for {
 		conn, err := listener.Accept(ctx)
@@ -477,14 +493,18 @@ func serveTLSMux(
 			_ = conn.Close()
 			continue
 		}
-		go handleTLSPortConn(logger, cfg, tlsLive.Current(), guard, collector, wrapped)
+		go handleTLSPortConn(logger, cfg, tlsLive.Current(), guard, collector, backendHealth, wrapped)
 	}
 }
 
-func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
+func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, health *backendHealthState, left net.Conn, target string, leftPrefix []byte, contextLabel string, sendHTTP502 bool) {
+	started := time.Now()
 	backend, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
 		collector.ObserveBackendDialFailure(backendLabel(cfg, target), contextLabel)
+		if health != nil {
+			health.MarkDialFailure(backendHealthKey(cfg, target), target, err)
+		}
 		logger.Printf("edge-mux backend dial failed target=%s context=%s: %v", target, contextLabel, err)
 		if sendHTTP502 {
 			_ = writeHTTPError(left, 502, "Bad Gateway")
@@ -492,6 +512,9 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 		return
 	}
 	defer backend.Close()
+	if health != nil {
+		health.MarkDialSuccess(backendHealthKey(cfg, target), target, time.Since(started))
+	}
 
 	var stats proxy.BridgeStats
 	if target == cfg.SSHBackendAddr() {
@@ -548,7 +571,7 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 	}
 }
 
-func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, conn net.Conn) {
+func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, health *backendHealthState, conn net.Conn) {
 	defer conn.Close()
 	release, ok := admitConn(logger, guard, collector, cfg, conn, "http-port")
 	if !ok {
@@ -567,12 +590,23 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 	switch class {
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "http-port", initial, "", "")
-		collector.ObserveRouteDecision("http-port", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status)
+		event.Surface = "http-port"
 		if decision.Status > 0 {
+			emitRouteDecision(logger, collector, conn, event)
 			_ = writeHTTPError(conn, decision.Status, decision.Text)
 			return
 		}
-		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.Backend); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			event.HTTPStatus = 502
+			emitRouteDecision(logger, collector, conn, event)
+			_ = writeHTTPError(conn, 502, "Bad Gateway")
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassTLSClientHello:
 		if !cfg.ClassicTLSOn80 || tlsServer == nil {
@@ -587,27 +621,51 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 			return
 		}
 		defer tlsConn.Close()
-		handleTLSPayloadConn(logger, cfg, collector, tlsConn, "http-inner")
+		handleTLSPayloadConn(logger, cfg, collector, health, tlsConn, "http-inner")
 		return
 	case detect.ClassSSH:
-		collector.ObserveRouteDecision("http-port", "ssh-direct", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0)
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		collector.ObserveRouteDecision("http-port", "ssh-direct-timeout", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0)
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		collector.ObserveRouteDecision("http-port", "ssh-direct-unknown", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0)
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
 	}
 }
 
-func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, conn net.Conn) {
+func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, health *backendHealthState, conn net.Conn) {
 	defer conn.Close()
 	release, ok := admitConn(logger, guard, collector, cfg, conn, "tls-port")
 	if !ok {
@@ -637,37 +695,72 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 			return
 		}
 		defer tlsConn.Close()
-		handleTLSPayloadConn(logger, cfg, collector, tlsConn, "tls-inner")
+		handleTLSPayloadConn(logger, cfg, collector, health, tlsConn, "tls-inner")
 		return
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "")
-		collector.ObserveRouteDecision("tls-port-plaintext", decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
+		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status)
+		event.Surface = "tls-port-plaintext"
 		if decision.Status > 0 {
+			emitRouteDecision(logger, collector, conn, event)
 			_ = writeHTTPError(conn, decision.Status, decision.Text)
 			return
 		}
-		bridgeToBackend(logger, cfg, collector, conn, decision.Backend, initial, decision.Context, true)
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.Backend); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			event.HTTPStatus = 502
+			emitRouteDecision(logger, collector, conn, event)
+			_ = writeHTTPError(conn, 502, "Bad Gateway")
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux tls port timed out with partial plaintext http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassSSH:
-		collector.ObserveRouteDecision("tls-port", "ssh-direct", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0)
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		collector.ObserveRouteDecision("tls-port", "ssh-direct-timeout", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0)
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
 		return
 	default:
-		collector.ObserveRouteDecision("tls-port", "ssh-direct-unknown", "ssh", "", "", "", "")
-		bridgeToBackend(logger, cfg, collector, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0)
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+			event.BackendStatus = backendStatus(snapshot, true)
+			event.Reason = "backend_unhealthy"
+			emitRouteDecision(logger, collector, conn, event)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
 		return
 	}
 }
 
-func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, tlsConn net.Conn, surface string) {
+func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *observability.Collector, health *backendHealthState, tlsConn net.Conn, surface string) {
 	initial, class, err := detect.ReadInitial(tlsConn, cfg.DetectTimeout, detect.MaxPeekBytes)
 	if err != nil {
 		collector.ObserveReadInitialError(surface)
@@ -680,14 +773,19 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 	target := cfg.SSHBackendAddr()
 	sendHTTP502 := false
 	contextLabel := fmt.Sprintf("%s:default", surface)
+	route := "unknown"
+	host := ""
+	path := ""
+	httpStatus := 0
+	reason := ""
 	switch class {
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
-		collector.ObserveRouteDecision(surface, decision.Route, backendLabel(cfg, decision.Backend), decision.Host, decision.Path, decision.ALPN, decision.SNI)
-		if decision.Status > 0 {
-			_ = writeHTTPError(tlsConn, decision.Status, decision.Text)
-			return
-		}
+		route = decision.Route
+		host = decision.Host
+		path = decision.Path
+		httpStatus = decision.Status
+		reason = decision.Text
 		target = decision.Backend
 		sendHTTP502 = true
 		contextLabel = decision.Context
@@ -697,25 +795,45 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 		return
 	case detect.ClassTimeout:
 		target = cfg.SSHBackendAddr()
+		route = "ssh-timeout"
 		contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
-		collector.ObserveRouteDecision(surface, "ssh-timeout", "ssh", "", "", alpn, sni)
 	case detect.ClassSSH:
 		target = cfg.SSHBackendAddr()
+		route = "ssh"
 		contextLabel = fmt.Sprintf("%s:ssh", surface)
-		collector.ObserveRouteDecision(surface, "ssh", "ssh", "", "", alpn, sni)
 	case detect.ClassVLESSRaw:
 		target = cfg.VLESSRawBackendAddr()
+		route = "vless-tcp"
 		contextLabel = fmt.Sprintf("%s:vless-tcp", surface)
-		collector.ObserveRouteDecision(surface, "vless-tcp", "vless", "", "", alpn, sni)
 	case detect.ClassTrojanRaw:
 		target = cfg.TrojanRawBackendAddr()
+		route = "trojan-tcp"
 		contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
-		collector.ObserveRouteDecision(surface, "trojan-tcp", "trojan", "", "", alpn, sni)
 	default:
+		route = "unknown"
 		contextLabel = fmt.Sprintf("%s:unknown", surface)
-		collector.ObserveRouteDecision(surface, "unknown", backendLabel(cfg, target), "", "", alpn, sni)
 	}
-	bridgeToBackend(logger, cfg, collector, tlsConn, target, initial, contextLabel, sendHTTP502)
+	event := routeDecisionEvent(cfg, health, class, target, route, host, path, alpn, sni, reason, httpStatus)
+	event.Surface = surface
+	if httpStatus > 0 {
+		emitRouteDecision(logger, collector, tlsConn, event)
+		_ = writeHTTPError(tlsConn, httpStatus, reason)
+		return
+	}
+	if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
+		event.BackendStatus = backendStatus(snapshot, true)
+		if sendHTTP502 {
+			event.HTTPStatus = 502
+		}
+		event.Reason = "backend_unhealthy"
+		emitRouteDecision(logger, collector, tlsConn, event)
+		if sendHTTP502 {
+			_ = writeHTTPError(tlsConn, 502, "Bad Gateway")
+		}
+		return
+	}
+	emitRouteDecision(logger, collector, tlsConn, event)
+	bridgeToBackend(logger, cfg, collector, health, tlsConn, target, initial, contextLabel, sendHTTP502)
 }
 
 func admitConn(logger *log.Logger, guard *abuse.Guard, collector *observability.Collector, cfg runtime.Config, conn net.Conn, surface string) (func(), bool) {
@@ -759,6 +877,54 @@ func backendLabel(cfg runtime.Config, target string) string {
 	default:
 		return "other"
 	}
+}
+
+func routeDecisionEvent(cfg runtime.Config, health *backendHealthState, class detect.InitialClass, target string, route, host, path, alpn, sni, reason string, httpStatus int) observability.RouteDecisionEvent {
+	healthKey := backendHealthKey(cfg, target)
+	backendState := "unknown"
+	if snapshot, ok := health.Lookup(healthKey); ok {
+		backendState = backendStatus(snapshot, true)
+	}
+	return observability.RouteDecisionEvent{
+		Surface:       "",
+		DetectClass:   routeDetectClassName(class),
+		Route:         route,
+		Backend:       backendLabel(cfg, target),
+		BackendAddr:   target,
+		BackendStatus: backendState,
+		Reason:        reason,
+		HTTPStatus:    httpStatus,
+		Host:          host,
+		Path:          path,
+		ALPN:          alpn,
+		SNI:           sni,
+	}
+}
+
+func routeDetectClassName(class detect.InitialClass) string {
+	switch class {
+	case detect.ClassHTTP:
+		return "http"
+	case detect.ClassTLSClientHello:
+		return "tls_client_hello"
+	case detect.ClassSSH:
+		return "ssh"
+	case detect.ClassVLESSRaw:
+		return "vless_raw"
+	case detect.ClassTrojanRaw:
+		return "trojan_raw"
+	case detect.ClassTimeout:
+		return "timeout"
+	case detect.ClassPossibleHTTP:
+		return "possible_http"
+	default:
+		return "unknown"
+	}
+}
+
+func emitRouteDecision(logger *log.Logger, collector *observability.Collector, conn net.Conn, event observability.RouteDecisionEvent) {
+	collector.ObserveRouteDecision(event)
+	logRouteDecision(logger, conn, event)
 }
 
 type httpRouteDecision struct {
