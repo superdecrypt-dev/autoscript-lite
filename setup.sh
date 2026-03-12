@@ -389,7 +389,10 @@ setup_run_post_domain_with_spinner() {
   chmod 755 "${setup_log_dir}" 2>/dev/null || true
   setup_log_file="${setup_log_dir}/setup-$(date +%Y%m%d-%H%M%S).log"
 
-  ui_header "Menyiapkan Server"
+  echo
+  ui_hr
+  ui_section_title "Menyiapkan Server"
+  ui_hr
   ui_subtle "Domain     : ${DOMAIN}"
   ui_subtle "Transport  : Edge Gateway + Xray + SSH"
   ui_subtle "Output log : ${setup_log_file}"
@@ -427,8 +430,8 @@ main() {
   ensure_stdin_available
   validate_sshws_ports_config
   check_os
-  domain_menu_v2
   install_base_deps
+  domain_menu_v2
   need_python3
   install_extra_deps
   # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
