@@ -3225,6 +3225,8 @@ Valid Until : ${valid_until}
 Created     : ${created_disp}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
+
+=== RUNNING ON PORT ===
 SSH WS Path : ${sshws_main_disp}
 SSH WS Path Alt : ${sshws_alt_path}
 SSH WS Port : ${sshws_ports_disp}
@@ -3232,24 +3234,12 @@ SSH Direct Port : ${ssh_direct_ports_disp}
 SSH SSL/TLS Port : ${ssh_ssl_tls_ports_disp}
 BadVPN UDPGW: ${badvpn_port_disp}
 
-Standard Payload:
-Payload WSS:
-    GET ${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
-
-Payload WS:
-    GET ${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]
-
+=== STANDARD PAYLOAD ===
 Payload WS (Prefixed):
     GET ${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 
-Payload SNI+WS+Proxy:
-    GET wss://[host]${sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
-
 Payload SNI+WS+Proxy (Prefixed):
     GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
-
-Catatan:
-    Path SSH WS wajib memakai token per-user. Format yang didukung: /<token> atau /<bebas>/<token>. Payload lama ke path / tanpa token tidak dipakai lagi.
 EOF
   then
     return 1
