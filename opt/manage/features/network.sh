@@ -1777,24 +1777,26 @@ adblock_auto_update_set_days() {
 }
 
 adblock_auto_update_days_menu() {
-  title
-  echo "5) Network > Adblock > Set Auto Update Interval"
-  hr
-  echo "Masukkan jumlah hari. Contoh: 1, 3, 7"
-  hr
   local input
-  if ! read -r -p "Interval hari (atau kembali): " input; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${input}"; then
-    return 0
-  fi
-  if ! adblock_auto_update_set_days "${input}"; then
+  while true; do
+    title
+    echo "5) Network > Adblock > Set Auto Update Interval"
+    hr
+    echo "Masukkan jumlah hari. Contoh: 1, 3, 7"
+    hr
+    if ! read -r -p "Interval hari (atau kembali): " input; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${input}"; then
+      return 0
+    fi
+    if adblock_auto_update_set_days "${input}"; then
+      pause
+      return 0
+    fi
     pause
-    return 0
-  fi
-  pause
+  done
 }
 
 adblock_manual_domains_list() {
@@ -1842,96 +1844,103 @@ adblock_manual_domain_normalize() {
 }
 
 adblock_manual_domain_add_menu() {
-  title
-  echo "5) Network > Adblock > Add Domain"
-  hr
-  echo "Masukkan domain plain. Contoh: ads.example.com"
-  hr
   local input normalized
-  if ! read -r -p "Domain (atau kembali): " input; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${input}"; then
-    return 0
-  fi
-  normalized="$(adblock_manual_domain_normalize "${input}")" || {
-    warn "Domain tidak valid."
+  while true; do
+    title
+    echo "5) Network > Adblock > Add Domain"
+    hr
+    echo "Masukkan domain plain. Contoh: ads.example.com"
+    hr
+    if ! read -r -p "Domain (atau kembali): " input; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${input}"; then
+      return 0
+    fi
+    normalized="$(adblock_manual_domain_normalize "${input}")" || {
+      warn "Domain tidak valid."
+      pause
+      continue
+    }
+    mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
+    touch "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
+    if adblock_manual_domains_list | grep -Fxq "${normalized}"; then
+      warn "Domain sudah ada."
+      pause
+      continue
+    fi
+    printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
+    if adblock_mark_dirty; then
+      log "Domain Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
+    else
+      warn "Domain ditambahkan, tetapi status dirty gagal ditandai."
+    fi
     pause
     return 0
-  }
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
-  touch "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
-  if adblock_manual_domains_list | grep -Fxq "${normalized}"; then
-    warn "Domain sudah ada."
-    pause
-    return 0
-  fi
-  printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
-  if adblock_mark_dirty; then
-    log "Domain Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
-  else
-    warn "Domain ditambahkan, tetapi status dirty gagal ditandai."
-  fi
-  pause
+  done
 }
 
 adblock_manual_domain_delete_menu() {
-  title
-  echo "5) Network > Adblock > Delete Domain"
-  hr
   local -a domains=()
   local line choice idx tmp i
-  while IFS= read -r line; do
-    [[ -n "${line}" ]] || continue
-    domains+=("${line}")
-  done < <(adblock_manual_domains_list)
-  if ((${#domains[@]} == 0)); then
-    echo "Belum ada domain manual Adblock."
+  while true; do
+    title
+    echo "5) Network > Adblock > Delete Domain"
     hr
-    pause
-    return 0
-  fi
-  for i in "${!domains[@]}"; do
-    printf "  %d) %s\n" "$((i + 1))" "${domains[$i]}"
-  done
-  hr
-  if ! read -r -p "Hapus nomor berapa (atau kembali): " choice; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${choice}"; then
-    return 0
-  fi
-  [[ "${choice}" =~ ^[0-9]+$ ]] || {
-    warn "Pilihan tidak valid."
-    pause
-    return 0
-  }
-  idx=$((choice - 1))
-  if (( idx < 0 || idx >= ${#domains[@]} )); then
-    warn "Nomor di luar range."
-    pause
-    return 0
-  fi
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-domains.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-domains.$$"
-  : > "${tmp}"
-  for i in "${!domains[@]}"; do
-    if (( i == idx )); then
+    domains=()
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] || continue
+      domains+=("${line}")
+    done < <(adblock_manual_domains_list)
+    if ((${#domains[@]} == 0)); then
+      echo "Belum ada domain manual Adblock."
+      hr
+      pause
+      return 0
+    fi
+    for i in "${!domains[@]}"; do
+      printf "  %d) %s\n" "$((i + 1))" "${domains[$i]}"
+    done
+    hr
+    if ! read -r -p "Hapus nomor berapa (atau kembali): " choice; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${choice}"; then
+      return 0
+    fi
+    [[ "${choice}" =~ ^[0-9]+$ ]] || {
+      warn "Pilihan tidak valid."
+      pause
+      continue
+    }
+    idx=$((choice - 1))
+    if (( idx < 0 || idx >= ${#domains[@]} )); then
+      warn "Nomor di luar range."
+      pause
       continue
     fi
-    printf '%s\n' "${domains[$i]}" >> "${tmp}"
+    tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-domains.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-domains.$$"
+    : > "${tmp}"
+    for i in "${!domains[@]}"; do
+      if (( i == idx )); then
+        continue
+      fi
+      printf '%s\n' "${domains[$i]}" >> "${tmp}"
+    done
+    mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
+    mv -f "${tmp}" "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
+    chmod 644 "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
+    if adblock_mark_dirty; then
+      log "Domain Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
+    else
+      warn "Domain dihapus, tetapi status dirty gagal ditandai."
+    fi
+    pause
+    return 0
   done
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
-  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
-  chmod 644 "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
-  if adblock_mark_dirty; then
-    log "Domain Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
-  else
-    warn "Domain dihapus, tetapi status dirty gagal ditandai."
-  fi
-  pause
 }
 
 adblock_enable_all() {
@@ -2190,98 +2199,105 @@ ssh_dns_adblock_url_normalize() {
 }
 
 ssh_dns_adblock_url_add_menu() {
-  title
-  echo "5) Network > Adblock > Add URL Source"
-  hr
-  echo "Sumber URL harus berbentuk http:// atau https://"
-  hr
   local input normalized
-  if ! read -r -p "URL (atau kembali): " input; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${input}"; then
-    return 0
-  fi
-  normalized="$(ssh_dns_adblock_url_normalize "${input}")" || {
-    warn "URL tidak valid."
+  while true; do
+    title
+    echo "5) Network > Adblock > Add URL Source"
+    hr
+    echo "Sumber URL harus berbentuk http:// atau https://"
+    hr
+    if ! read -r -p "URL (atau kembali): " input; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${input}"; then
+      return 0
+    fi
+    normalized="$(ssh_dns_adblock_url_normalize "${input}")" || {
+      warn "URL tidak valid."
+      pause
+      continue
+    }
+    mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+    touch "${SSH_DNS_ADBLOCK_URLS_FILE}"
+    if ssh_dns_adblock_urls_list | grep -Fxq "${normalized}"; then
+      warn "URL sudah ada."
+      pause
+      continue
+    fi
+    printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_URLS_FILE}"
+    if adblock_mark_dirty; then
+      log "URL source Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
+    else
+      warn "URL ditambahkan, tetapi status dirty gagal ditandai."
+    fi
     pause
     return 0
-  }
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
-  touch "${SSH_DNS_ADBLOCK_URLS_FILE}"
-  if ssh_dns_adblock_urls_list | grep -Fxq "${normalized}"; then
-    warn "URL sudah ada."
-    pause
-    return 0
-  fi
-  printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_URLS_FILE}"
-  if adblock_mark_dirty; then
-    log "URL source Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
-  else
-    warn "URL ditambahkan, tetapi status dirty gagal ditandai."
-  fi
-  pause
+  done
 }
 
 ssh_dns_adblock_url_delete_menu() {
-  title
-  echo "5) Network > Adblock > Delete URL Source"
-  hr
   local -a urls=()
-  local line choice idx tmp
-  while IFS= read -r line; do
-    [[ -n "${line}" ]] || continue
-    urls+=("${line}")
-  done < <(ssh_dns_adblock_urls_list)
-  if ((${#urls[@]} == 0)); then
-    echo "Belum ada URL source Adblock."
+  local line choice idx tmp i
+  while true; do
+    title
+    echo "5) Network > Adblock > Delete URL Source"
     hr
-    pause
-    return 0
-  fi
-  local i=1
-  for line in "${urls[@]}"; do
-    printf "  %d) %s\n" "${i}" "${line}"
-    i=$((i + 1))
-  done
-  hr
-  if ! read -r -p "Hapus nomor berapa (atau kembali): " choice; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${choice}"; then
-    return 0
-  fi
-  [[ "${choice}" =~ ^[0-9]+$ ]] || {
-    warn "Pilihan tidak valid."
-    pause
-    return 0
-  }
-  idx=$((choice - 1))
-  if (( idx < 0 || idx >= ${#urls[@]} )); then
-    warn "Nomor di luar range."
-    pause
-    return 0
-  fi
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-urls.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-urls.$$"
-  : > "${tmp}"
-  for i in "${!urls[@]}"; do
-    if (( i == idx )); then
+    urls=()
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] || continue
+      urls+=("${line}")
+    done < <(ssh_dns_adblock_urls_list)
+    if ((${#urls[@]} == 0)); then
+      echo "Belum ada URL source Adblock."
+      hr
+      pause
+      return 0
+    fi
+    i=1
+    for line in "${urls[@]}"; do
+      printf "  %d) %s\n" "${i}" "${line}"
+      i=$((i + 1))
+    done
+    hr
+    if ! read -r -p "Hapus nomor berapa (atau kembali): " choice; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${choice}"; then
+      return 0
+    fi
+    [[ "${choice}" =~ ^[0-9]+$ ]] || {
+      warn "Pilihan tidak valid."
+      pause
+      continue
+    }
+    idx=$((choice - 1))
+    if (( idx < 0 || idx >= ${#urls[@]} )); then
+      warn "Nomor di luar range."
+      pause
       continue
     fi
-    printf '%s\n' "${urls[$i]}" >> "${tmp}"
+    tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-urls.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-urls.$$"
+    : > "${tmp}"
+    for i in "${!urls[@]}"; do
+      if (( i == idx )); then
+        continue
+      fi
+      printf '%s\n' "${urls[$i]}" >> "${tmp}"
+    done
+    mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+    mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}"
+    chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
+    if adblock_mark_dirty; then
+      log "URL source Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
+    else
+      warn "URL dihapus, tetapi status dirty gagal ditandai."
+    fi
+    pause
+    return 0
   done
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
-  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}"
-  chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
-  if adblock_mark_dirty; then
-    log "URL source Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
-  else
-    warn "URL dihapus, tetapi status dirty gagal ditandai."
-  fi
-  pause
 }
 
 adblock_menu() {

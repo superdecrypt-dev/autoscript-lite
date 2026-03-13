@@ -12,7 +12,9 @@ func TestNormalizeBlocklistLine(t *testing.T) {
 
 	cases := map[string]string{
 		"ads.example.com":              "ads.example.com",
+		"0.0.0.0":                      "",
 		"0.0.0.0 tracker.example.net":  "tracker.example.net",
+		"0.r.msn.com":                  "0.r.msn.com",
 		"||doubleclick.net^":           "doubleclick.net",
 		"https://ads.example.org/path": "ads.example.org",
 		"@@||allowed.example.com^":     "",

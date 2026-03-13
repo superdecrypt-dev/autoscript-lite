@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -333,6 +334,8 @@ func normalizeDomain(value string) string {
 	case !strings.Contains(domain, "."):
 		return ""
 	case strings.Contains(domain, ".."):
+		return ""
+	case net.ParseIP(domain) != nil:
 		return ""
 	default:
 		return domain
