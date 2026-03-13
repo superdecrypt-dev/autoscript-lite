@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared Adblock foundation for setup runtime.
 
+ADBLOCK_DIST_DIR="${SCRIPT_DIR}/opt/adblock/dist"
 SSH_DNS_ADBLOCK_ROOT="${SSH_DNS_ADBLOCK_ROOT:-/etc/autoscript/ssh-adblock}"
 SSH_DNS_ADBLOCK_CONFIG_FILE="${SSH_DNS_ADBLOCK_ROOT}/config.env"
 SSH_DNS_ADBLOCK_BLOCKLIST_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocked.domains"
@@ -19,6 +20,26 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 ADBLOCK_AUTO_UPDATE_DAYS="${ADBLOCK_AUTO_UPDATE_DAYS:-1}"
 SSH_DNS_ADBLOCK_NFT_TABLE="${SSH_DNS_ADBLOCK_NFT_TABLE:-autoscript_ssh_adblock}"
 SSH_DNS_ADBLOCK_STATE_ROOT="${SSH_DNS_ADBLOCK_STATE_ROOT:-${SSH_QUOTA_DIR:-/opt/quota/ssh}}"
+
+adblock_go_arch_label() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s\n' "amd64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+adblock_expected_binary_path() {
+  local arch
+  arch="$(adblock_go_arch_label)" || return 1
+  printf '%s/adblock-sync-linux-%s\n' "${ADBLOCK_DIST_DIR}" "${arch}"
+}
+
+adblock_prebuilt_ready() {
+  local bin
+  bin="$(adblock_expected_binary_path)" || return 1
+  [[ -f "${bin}" && -s "${bin}" ]]
+}
 
 adblock_config_render_preserving_runtime_state() {
   local rendered merged
@@ -179,16 +200,21 @@ adblock_cleanup_legacy_sync_runtime() {
 install_ssh_dns_adblock_foundation() {
   ok "Pasang fondasi SSH Adblock..."
   command -v python3 >/dev/null 2>&1 || die "python3 dibutuhkan untuk SSH Adblock."
+  adblock_prebuilt_ready || die "Binary prebuilt adblock-sync belum tersedia untuk arsitektur host."
   local dnsmasq_bin=""
+  local adblock_bin=""
   local adblock_auto_update_days_effective=""
   dnsmasq_bin="$(command -v dnsmasq 2>/dev/null || true)"
+  adblock_bin="$(adblock_expected_binary_path)" || die "Arsitektur host belum didukung untuk adblock-sync."
   [[ -n "${dnsmasq_bin}" ]] || die "dnsmasq tidak ditemukan. Pastikan dnsmasq-base terpasang."
   command -v nft >/dev/null 2>&1 || die "nft tidak ditemukan. Pastikan nftables terpasang."
 
   install -d -m 755 /etc/systemd/system
   install -d -m 755 "${SSH_DNS_ADBLOCK_ROOT}"
 
-  install_setup_bin_or_die "adblock-sync.py" "${SSH_DNS_ADBLOCK_SYNC_BIN}" 0755
+  install -d -m 755 "$(dirname "${SSH_DNS_ADBLOCK_SYNC_BIN}")"
+  install -m 0755 "${adblock_bin}" "${SSH_DNS_ADBLOCK_SYNC_BIN}"
+  chown root:root "${SSH_DNS_ADBLOCK_SYNC_BIN}" 2>/dev/null || true
 
   adblock_config_render_preserving_runtime_state
 

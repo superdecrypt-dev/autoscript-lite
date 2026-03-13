@@ -21,11 +21,16 @@ Prinsip:
   - `bin/`
   - `templates/`
 - Tambahan aktif:
+  - `opt/adblock/`
   - `opt/badvpn/`
+  - `install/adblock.sh`
   - `install/badvpn.sh`
+  - `templates/systemd/adblock-sync.service`
+  - `templates/systemd/adblock-update.service`
   - `templates/systemd/badvpn-udpgw.service`
   - `templates/config/badvpn-runtime.env`
 - `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
+- `install/adblock.sh` sekarang sudah dipakai untuk jalur `Shared Adblock`.
 - `install/badvpn.sh` sekarang sudah dipakai untuk jalur `BadVPN UDPGW`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
 - Validasi minimum yang sudah lolos:

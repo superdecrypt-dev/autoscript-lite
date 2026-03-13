@@ -1791,8 +1791,10 @@ sync_setup_runtime_layout() {
   local fallback_root="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
   local fallback_modules_root="${SETUP_FALLBACK_MODULES_ROOT:-${fallback_root}/opt/setup}"
   local setup_src="${SETUP_MODULES_ROOT:-${SCRIPT_DIR}/opt/setup}"
+  local adblock_src="${SCRIPT_DIR}/opt/adblock"
   local edge_src="${SCRIPT_DIR}/opt/edge"
   local badvpn_src="${SCRIPT_DIR}/opt/badvpn"
+  local fallback_adblock_root="${fallback_root}/opt/adblock"
   local fallback_edge_root="${fallback_root}/opt/edge"
   local fallback_badvpn_root="${fallback_root}/opt/badvpn"
 
@@ -1800,6 +1802,15 @@ sync_setup_runtime_layout() {
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
 
   sync_tree_atomic "${setup_src}" "${fallback_modules_root}" "modul setup ${fallback_modules_root}"
+  if [[ -d "${adblock_src}" ]]; then
+    sync_tree_atomic "${adblock_src}" "${fallback_adblock_root}" "asset adblock ${fallback_adblock_root}"
+    find "${fallback_adblock_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${fallback_adblock_root}" -type f -name '*.go' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_adblock_root}" -type f -name '*.mod' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_adblock_root}" -type f -name '*.sum' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_adblock_root}" -type f -name 'adblock-sync-linux-*' -exec chmod 755 {} + 2>/dev/null || true
+    chown -R root:root "${fallback_adblock_root}" 2>/dev/null || true
+  fi
   if [[ -d "${edge_src}" ]]; then
     sync_tree_atomic "${edge_src}" "${fallback_edge_root}" "asset edge ${fallback_edge_root}"
     find "${fallback_edge_root}" -type d -exec chmod 755 {} + 2>/dev/null || true

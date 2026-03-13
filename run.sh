@@ -249,6 +249,7 @@ preflight_repo_layout() {
 
   arch_suffix="$(run_prebuilt_arch_suffix 2>/dev/null || true)"
   if [[ -n "${arch_suffix}" ]]; then
+    [[ -f "${root}/opt/adblock/dist/adblock-sync-linux-${arch_suffix}" ]] || missing+=("opt/adblock/dist/adblock-sync-linux-${arch_suffix}")
     [[ -f "${root}/opt/edge/dist/edge-mux-linux-${arch_suffix}" ]] || missing+=("opt/edge/dist/edge-mux-linux-${arch_suffix}")
     [[ -f "${root}/opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}" ]] || missing+=("opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}")
   fi
