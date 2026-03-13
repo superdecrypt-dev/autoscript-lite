@@ -404,6 +404,7 @@ setup_post_domain_main() {
   setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Sinkron modul manage" sync_manage_modules_layout
+  setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
   setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
   setup_run_step "Install domain guard" install_domain_cert_guard

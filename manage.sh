@@ -4814,7 +4814,7 @@ lines.append(f"  Quota Limit : {quota_gb_disp} GB")
 lines.append(f"  Expired     : {days} days")
 lines.append(f"  Valid Until : {expired_at}")
 lines.append(f"  Created     : {created_disp}")
-lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
+lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_enabled and ip_limit_int > 0 else ""))
 if speed_enabled:
   lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
@@ -5345,7 +5345,7 @@ lines.append(f"  Quota Limit : {quota_gb_disp} GB")
 lines.append(f"  Expired     : {days} days")
 lines.append(f"  Valid Until : {expired_at}")
 lines.append(f"  Created     : {created_disp}")
-lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_limit_int > 0 else ""))
+lines.append(f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit_int})" if ip_enabled and ip_limit_int > 0 else ""))
 if speed_enabled:
   lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
