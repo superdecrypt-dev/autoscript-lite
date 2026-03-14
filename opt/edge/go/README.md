@@ -42,8 +42,11 @@ Binary `edge-mux` akan:
   - HTTP/WebSocket -> backend HTTP internal
   - non-HTTP / timeout singkat -> backend SSH klasik
 - route decision berbasis `Host/path/ALPN/SNI`
+- override route berbasis `SNI` exact-match lewat `EDGE_SNI_ROUTES`
+- passthrough TLS exact-match berbasis `SNI` lewat `EDGE_SNI_PASSTHROUGH`
 - bridge stream dasar dua arah
 - hot reload `cert/config` via `SIGHUP`
+- route map `EDGE_SNI_ROUTES` dan `EDGE_SNI_PASSTHROUGH` ikut hot reload tanpa restart penuh
 - hardening anti-abuse dasar
 - parity session SSH untuk jalur direct/TLS
 
@@ -61,6 +64,12 @@ Saat `EDGE_METRICS_ENABLED=true`, `edge-mux` akan membuka endpoint lokal-only:
 - ALPN yang diiklankan
 - listener runtime
 - route decision terakhir yang terlihat
+- source route terakhir (`detect`, `sni`, atau `passthrough`) dan alias `SNI` yang match
+- map `EDGE_SNI_ROUTES` aktif jika dikonfigurasi
+- map `EDGE_SNI_PASSTHROUGH` aktif jika dikonfigurasi
+- `backend_health` juga mencakup target passthrough unik dengan key `passthrough:<host:port>`
+- metrics juga punya counter khusus passthrough untuk `route hits`, `health blocks`, dan `backend dial failures`
+- `configured_routes` menampilkan tabel route eksplisit `host -> mode -> backend -> target`
 
 Default listen:
 

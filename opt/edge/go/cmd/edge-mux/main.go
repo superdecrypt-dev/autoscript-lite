@@ -59,7 +59,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		cfg.HTTPListenAddr(),
 		cfg.TLSListenAddr(),
@@ -73,6 +73,8 @@ func main() {
 		cfg.VLESSRawSource,
 		cfg.TrojanRawBackendAddr(),
 		cfg.TrojanRawSource,
+		formatSNIRoutes(cfg.SNIRoutes),
+		formatSNIBackendMap(cfg.SNIPassthrough),
 		cfg.DetectTimeout,
 		cfg.TLSHandshakeTimeout,
 		cfg.ClassicTLSOn80,
@@ -419,7 +421,7 @@ func handleReloads(
 		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
-			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
 			newCfg.HTTPListenAddr(),
 			newCfg.TLSListenAddr(),
 			newCfg.MetricsAddr(),
@@ -430,6 +432,8 @@ func handleReloads(
 			newCfg.VLESSRawSource,
 			newCfg.TrojanRawBackendAddr(),
 			newCfg.TrojanRawSource,
+			formatSNIRoutes(newCfg.SNIRoutes),
+			formatSNIBackendMap(newCfg.SNIPassthrough),
 			newCfg.DetectTimeout,
 			newCfg.TLSHandshakeTimeout,
 			newCfg.ClassicTLSOn80,
@@ -590,7 +594,7 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 	switch class {
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "http-port", initial, "", "")
-		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status)
+		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status, "detect", "")
 		event.Surface = "http-port"
 		if decision.Status > 0 {
 			emitRouteDecision(logger, collector, conn, event)
@@ -598,11 +602,7 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 			return
 		}
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.Backend); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			event.HTTPStatus = 502
-			emitRouteDecision(logger, collector, conn, event)
-			_ = writeHTTPError(conn, 502, "Bad Gateway")
+			emitBlockedRoute(logger, collector, conn, event, snapshot, true)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
@@ -624,24 +624,20 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		handleTLSPayloadConn(logger, cfg, collector, health, tlsConn, "http-inner")
 		return
 	case detect.ClassSSH:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
@@ -652,12 +648,10 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
@@ -683,6 +677,18 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 
 	switch class {
 	case detect.ClassTLSClientHello:
+		sni, _ := detect.ExtractTLSServerName(initial)
+		if decision, ok := resolveSNIPassthroughDecision(cfg, sni, "tls-port"); ok {
+			event := routeDecisionEvent(cfg, health, class, decision.target, decision.route, "", "", "", sni, decision.reason, 0, decision.routeSource, decision.matchedRoute)
+			event.Surface = "tls-port"
+			if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.target); blocked {
+				emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+				return
+			}
+			emitRouteDecision(logger, collector, conn, event)
+			bridgeToBackend(logger, cfg, collector, health, conn, decision.target, initial, decision.contextLabel, false)
+			return
+		}
 		if server == nil {
 			logger.Printf("edge-mux tls server unavailable for %s", safeRemote(conn))
 			return
@@ -699,7 +705,7 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		return
 	case detect.ClassHTTP:
 		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "")
-		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status)
+		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status, "detect", "")
 		event.Surface = "tls-port-plaintext"
 		if decision.Status > 0 {
 			emitRouteDecision(logger, collector, conn, event)
@@ -707,11 +713,7 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 			return
 		}
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.Backend); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			event.HTTPStatus = 502
-			emitRouteDecision(logger, collector, conn, event)
-			_ = writeHTTPError(conn, 502, "Bad Gateway")
+			emitBlockedRoute(logger, collector, conn, event, snapshot, true)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
@@ -722,36 +724,30 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassSSH:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0)
+		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
-			event.BackendStatus = backendStatus(snapshot, true)
-			event.Reason = "backend_unhealthy"
-			emitRouteDecision(logger, collector, conn, event)
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
@@ -770,70 +766,138 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 	collector.ObserveDetect(surface, class)
 	alpn := negotiatedALPN(tlsConn)
 	sni := negotiatedSNI(tlsConn)
-	target := cfg.SSHBackendAddr()
-	sendHTTP502 := false
-	contextLabel := fmt.Sprintf("%s:default", surface)
-	route := "unknown"
-	host := ""
-	path := ""
-	httpStatus := 0
-	reason := ""
-	switch class {
-	case detect.ClassHTTP:
-		decision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
-		route = decision.Route
-		host = decision.Host
-		path = decision.Path
-		httpStatus = decision.Status
-		reason = decision.Text
-		target = decision.Backend
-		sendHTTP502 = true
-		contextLabel = decision.Context
-	case detect.ClassPossibleHTTP:
+	decision := decideTLSPayloadRoute(cfg, surface, initial, class, alpn, sni)
+	if decision.status == 408 {
 		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
 		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
 		return
-	case detect.ClassTimeout:
-		target = cfg.SSHBackendAddr()
-		route = "ssh-timeout"
-		contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
-	case detect.ClassSSH:
-		target = cfg.SSHBackendAddr()
-		route = "ssh"
-		contextLabel = fmt.Sprintf("%s:ssh", surface)
-	case detect.ClassVLESSRaw:
-		target = cfg.VLESSRawBackendAddr()
-		route = "vless-tcp"
-		contextLabel = fmt.Sprintf("%s:vless-tcp", surface)
-	case detect.ClassTrojanRaw:
-		target = cfg.TrojanRawBackendAddr()
-		route = "trojan-tcp"
-		contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
-	default:
-		route = "unknown"
-		contextLabel = fmt.Sprintf("%s:unknown", surface)
 	}
-	event := routeDecisionEvent(cfg, health, class, target, route, host, path, alpn, sni, reason, httpStatus)
+	event := routeDecisionEvent(cfg, health, class, decision.target, decision.route, decision.host, decision.path, alpn, sni, decision.reason, decision.status, decision.routeSource, decision.matchedRoute)
 	event.Surface = surface
-	if httpStatus > 0 {
+	if decision.status > 0 {
 		emitRouteDecision(logger, collector, tlsConn, event)
-		_ = writeHTTPError(tlsConn, httpStatus, reason)
+		_ = writeHTTPError(tlsConn, decision.status, decision.reason)
 		return
 	}
-	if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
-		event.BackendStatus = backendStatus(snapshot, true)
-		if sendHTTP502 {
-			event.HTTPStatus = 502
-		}
-		event.Reason = "backend_unhealthy"
-		emitRouteDecision(logger, collector, tlsConn, event)
-		if sendHTTP502 {
-			_ = writeHTTPError(tlsConn, 502, "Bad Gateway")
-		}
+	if snapshot, blocked := routeBlockedByHealth(health, cfg, decision.target); blocked {
+		emitBlockedRoute(logger, collector, tlsConn, event, snapshot, decision.sendHTTP502)
 		return
 	}
 	emitRouteDecision(logger, collector, tlsConn, event)
-	bridgeToBackend(logger, cfg, collector, health, tlsConn, target, initial, contextLabel, sendHTTP502)
+	bridgeToBackend(logger, cfg, collector, health, tlsConn, decision.target, initial, decision.contextLabel, decision.sendHTTP502)
+}
+
+type tlsRouteDecision struct {
+	target       string
+	contextLabel string
+	route        string
+	routeSource  string
+	matchedRoute string
+	host         string
+	path         string
+	reason       string
+	status       int
+	sendHTTP502  bool
+}
+
+func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, class detect.InitialClass, alpn, sni string) tlsRouteDecision {
+	if decision, ok := resolveSNIRouteDecision(cfg, sni, surface); ok {
+		if req, parsed := routing.ParseHTTPRequest(initial); parsed {
+			decision.host = req.Host
+			decision.path = req.Path
+		}
+		return decision
+	}
+
+	decision := tlsRouteDecision{
+		target:       cfg.SSHBackendAddr(),
+		contextLabel: fmt.Sprintf("%s:default", surface),
+		route:        "unknown",
+		routeSource:  "detect",
+	}
+	switch class {
+	case detect.ClassHTTP:
+		httpDecision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
+		decision.target = httpDecision.Backend
+		decision.contextLabel = httpDecision.Context
+		decision.route = httpDecision.Route
+		decision.host = httpDecision.Host
+		decision.path = httpDecision.Path
+		decision.reason = httpDecision.Text
+		decision.status = httpDecision.Status
+		decision.sendHTTP502 = true
+	case detect.ClassPossibleHTTP:
+		decision.status = 408
+		decision.reason = "Request Timeout"
+	case detect.ClassTimeout:
+		decision.target = cfg.SSHBackendAddr()
+		decision.route = "ssh-timeout"
+		decision.contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
+	case detect.ClassSSH:
+		decision.target = cfg.SSHBackendAddr()
+		decision.route = "ssh"
+		decision.contextLabel = fmt.Sprintf("%s:ssh", surface)
+	case detect.ClassVLESSRaw:
+		decision.target = cfg.VLESSRawBackendAddr()
+		decision.route = "vless-tcp"
+		decision.contextLabel = fmt.Sprintf("%s:vless-tcp", surface)
+	case detect.ClassTrojanRaw:
+		decision.target = cfg.TrojanRawBackendAddr()
+		decision.route = "trojan-tcp"
+		decision.contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
+	default:
+		decision.route = "unknown"
+		decision.contextLabel = fmt.Sprintf("%s:unknown", surface)
+	}
+	return decision
+}
+
+func resolveSNIRouteDecision(cfg runtime.Config, sni, surface string) (tlsRouteDecision, bool) {
+	alias, ok := cfg.ResolveSNIRoute(sni)
+	if !ok {
+		return tlsRouteDecision{}, false
+	}
+	routeSuffix := strings.ReplaceAll(alias, "_", "-")
+	decision := tlsRouteDecision{
+		route:        "sni-" + routeSuffix,
+		contextLabel: fmt.Sprintf("%s:sni-%s", surface, routeSuffix),
+		routeSource:  "sni",
+		matchedRoute: alias,
+		reason:       "sni_match",
+	}
+	switch alias {
+	case "http":
+		decision.target = cfg.HTTPBackendAddr()
+		decision.sendHTTP502 = true
+	case "ssh_direct":
+		decision.target = cfg.SSHBackendAddr()
+	case "ssh_tls":
+		decision.target = cfg.SSHTLSBackendAddr()
+	case "ssh_ws":
+		decision.target = cfg.SSHWSBackendAddr()
+		decision.sendHTTP502 = true
+	case "vless_tcp":
+		decision.target = cfg.VLESSRawBackendAddr()
+	case "trojan_tcp":
+		decision.target = cfg.TrojanRawBackendAddr()
+	default:
+		return tlsRouteDecision{}, false
+	}
+	return decision, true
+}
+
+func resolveSNIPassthroughDecision(cfg runtime.Config, sni, surface string) (tlsRouteDecision, bool) {
+	target, ok := cfg.ResolveSNIPassthrough(sni)
+	if !ok {
+		return tlsRouteDecision{}, false
+	}
+	return tlsRouteDecision{
+		target:       target,
+		contextLabel: fmt.Sprintf("%s:sni-passthrough", surface),
+		route:        "sni-passthrough",
+		routeSource:  "passthrough",
+		reason:       "sni_passthrough",
+	}, true
 }
 
 func admitConn(logger *log.Logger, guard *abuse.Guard, collector *observability.Collector, cfg runtime.Config, conn net.Conn, surface string) (func(), bool) {
@@ -870,16 +934,23 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "http"
 	case cfg.SSHBackendAddr():
 		return "ssh"
+	case cfg.SSHTLSBackendAddr():
+		return "ssh-tls"
+	case cfg.SSHWSBackendAddr():
+		return "ssh-ws"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
 	case cfg.TrojanRawBackendAddr():
 		return "trojan"
 	default:
+		if cfg.IsPassthroughBackend(target) {
+			return "passthrough"
+		}
 		return "other"
 	}
 }
 
-func routeDecisionEvent(cfg runtime.Config, health *backendHealthState, class detect.InitialClass, target string, route, host, path, alpn, sni, reason string, httpStatus int) observability.RouteDecisionEvent {
+func routeDecisionEvent(cfg runtime.Config, health *backendHealthState, class detect.InitialClass, target string, route, host, path, alpn, sni, reason string, httpStatus int, routeSource, matchedRoute string) observability.RouteDecisionEvent {
 	healthKey := backendHealthKey(cfg, target)
 	backendState := "unknown"
 	if snapshot, ok := health.Lookup(healthKey); ok {
@@ -888,7 +959,9 @@ func routeDecisionEvent(cfg runtime.Config, health *backendHealthState, class de
 	return observability.RouteDecisionEvent{
 		Surface:       "",
 		DetectClass:   routeDetectClassName(class),
+		RouteSource:   routeSource,
 		Route:         route,
+		MatchedRoute:  matchedRoute,
 		Backend:       backendLabel(cfg, target),
 		BackendAddr:   target,
 		BackendStatus: backendState,
@@ -973,6 +1046,38 @@ func negotiatedSNI(conn net.Conn) string {
 		return tlsConn.ConnectionState().ServerName
 	}
 	return ""
+}
+
+func formatSNIRoutes(routes map[string]string) string {
+	if len(routes) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(routes))
+	for host := range routes {
+		keys = append(keys, host)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, host := range keys {
+		parts = append(parts, host+"="+routes[host])
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatSNIBackendMap(routes map[string]string) string {
+	if len(routes) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(routes))
+	for host := range routes {
+		keys = append(keys, host)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, host := range keys {
+		parts = append(parts, host+"="+routes[host])
+	}
+	return strings.Join(parts, ",")
 }
 
 func sshQuotaConfig(cfg runtime.Config) accounting.SSHQuotaConfig {
@@ -1107,11 +1212,35 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 	addCheck("ssh-ws", cfg.SSHWSBackendAddr(), true)
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
+	for _, target := range uniquePassthroughTargets(cfg) {
+		addCheck(passthroughBackendHealthKey(target), target, true)
+	}
 	aggregateGroup("ssh", map[string]observability.BackendHealthSnapshot{
 		"direct": out["ssh-direct"],
 		"tls":    out["ssh-tls"],
 		"ws":     out["ssh-ws"],
 	})
+	return out
+}
+
+func uniquePassthroughTargets(cfg runtime.Config) []string {
+	if len(cfg.SNIPassthrough) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(cfg.SNIPassthrough))
+	out := make([]string, 0, len(cfg.SNIPassthrough))
+	for _, target := range cfg.SNIPassthrough {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	sort.Strings(out)
 	return out
 }
 

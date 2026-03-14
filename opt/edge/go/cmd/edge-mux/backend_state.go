@@ -171,8 +171,19 @@ func backendHealthKey(cfg runtime.Config, target string) string {
 	case cfg.TrojanRawBackendAddr():
 		return "trojan"
 	default:
+		if cfg.IsPassthroughBackend(target) {
+			return passthroughBackendHealthKey(target)
+		}
 		return ""
 	}
+}
+
+func passthroughBackendHealthKey(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	return "passthrough:" + target
 }
 
 func backendStatus(snapshot observability.BackendHealthSnapshot, ok bool) string {
@@ -201,14 +212,53 @@ func routeBlockedByHealth(health *backendHealthState, cfg runtime.Config, target
 	return snapshot, true
 }
 
+func healthBlockReason(snapshot observability.BackendHealthSnapshot, ok bool) string {
+	status := backendStatus(snapshot, ok)
+	switch status {
+	case "down":
+		return "backend_down"
+	case "disabled":
+		return "backend_disabled"
+	case "degraded":
+		if !snapshot.Healthy {
+			return "backend_degraded"
+		}
+	}
+	return "backend_unhealthy"
+}
+
+func healthBlockResponse(sendHTTP502 bool) string {
+	if sendHTTP502 {
+		return "http_502"
+	}
+	return "close"
+}
+
+func emitBlockedRoute(logger *log.Logger, collector *observability.Collector, conn net.Conn, event observability.RouteDecisionEvent, snapshot observability.BackendHealthSnapshot, sendHTTP502 bool) {
+	event.BackendStatus = backendStatus(snapshot, true)
+	event.Reason = healthBlockReason(snapshot, true)
+	if sendHTTP502 {
+		event.HTTPStatus = 502
+	}
+	if collector != nil {
+		collector.ObserveHealthRouteBlock(event.Surface, event.Route, event.Backend, event.BackendStatus, healthBlockResponse(sendHTTP502), event.Reason)
+	}
+	emitRouteDecision(logger, collector, conn, event)
+	if sendHTTP502 {
+		_ = writeHTTPError(conn, 502, "Bad Gateway")
+	}
+}
+
 func logRouteDecision(logger *log.Logger, conn net.Conn, event observability.RouteDecisionEvent) {
 	if logger == nil {
 		return
 	}
 	logger.Printf(
-		"edge-mux route surface=%s class=%s route=%s backend=%s backend_addr=%s backend_status=%s http_status=%d reason=%s host=%q path=%q alpn=%s sni=%q remote=%s",
+		"edge-mux route surface=%s class=%s route_source=%s matched_route=%s route=%s backend=%s backend_addr=%s backend_status=%s http_status=%d reason=%s host=%q path=%q alpn=%s sni=%q remote=%s",
 		logValue(event.Surface, 64),
 		logValue(event.DetectClass, 32),
+		logValue(event.RouteSource, 16),
+		logValue(event.MatchedRoute, 64),
 		logValue(event.Route, 64),
 		logValue(event.Backend, 32),
 		logValue(event.BackendAddr, 128),

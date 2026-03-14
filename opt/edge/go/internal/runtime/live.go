@@ -12,7 +12,7 @@ type Live struct {
 
 func NewLive(cfg Config) *Live {
 	live := &Live{}
-	live.current.Store(cfg)
+	live.current.Store(cfg.Clone())
 	return live
 }
 
@@ -21,7 +21,7 @@ func (l *Live) Config() Config {
 		return Config{}
 	}
 	if cfg, ok := l.current.Load().(Config); ok {
-		return cfg
+		return cfg.Clone()
 	}
 	return Config{}
 }
@@ -32,7 +32,7 @@ func (l *Live) Set(cfg Config) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.current.Store(cfg)
+	l.current.Store(cfg.Clone())
 }
 
 func (l *Live) Reload(load func() (Config, error)) (Config, Config, error) {
@@ -48,6 +48,7 @@ func (l *Live) Reload(load func() (Config, error)) (Config, Config, error) {
 	if err != nil {
 		return oldCfg, Config{}, err
 	}
-	l.current.Store(newCfg)
-	return oldCfg, newCfg, nil
+	stored := newCfg.Clone()
+	l.current.Store(stored)
+	return oldCfg, stored.Clone(), nil
 }

@@ -37,7 +37,9 @@ type LastRouteSnapshot struct {
 	SeenAtUnix    int64  `json:"seen_at_unix"`
 	Surface       string `json:"surface"`
 	DetectClass   string `json:"detect_class,omitempty"`
+	RouteSource   string `json:"route_source,omitempty"`
 	Route         string `json:"route"`
+	MatchedRoute  string `json:"matched_route,omitempty"`
 	Backend       string `json:"backend"`
 	BackendAddr   string `json:"backend_addr,omitempty"`
 	BackendStatus string `json:"backend_status,omitempty"`
@@ -52,7 +54,9 @@ type LastRouteSnapshot struct {
 type RouteDecisionEvent struct {
 	Surface       string
 	DetectClass   string
+	RouteSource   string
 	Route         string
+	MatchedRoute  string
 	Backend       string
 	BackendAddr   string
 	BackendStatus string
@@ -68,11 +72,17 @@ type SurfaceSnapshot struct {
 	ActiveConnections    int64             `json:"active_connections"`
 	AcceptedTotal        uint64            `json:"accepted_total"`
 	RejectedTotal        uint64            `json:"rejected_total"`
+	HealthBlockedTotal   uint64            `json:"health_blocked_total"`
+	PassthroughRouteHits uint64            `json:"passthrough_route_hits_total"`
+	PassthroughBlocks    uint64            `json:"passthrough_health_blocks_total"`
+	PassthroughDialFails uint64            `json:"passthrough_backend_dial_failures_total"`
 	ReadInitialErrors    uint64            `json:"read_initial_errors_total"`
 	IngressWrapErrors    uint64            `json:"ingress_wrap_errors_total"`
 	TLSHandshakeFailures uint64            `json:"tls_handshake_failures_total"`
 	DetectTotals         map[string]uint64 `json:"detect_totals,omitempty"`
 	RouteTotals          map[string]uint64 `json:"route_totals,omitempty"`
+	HealthBlockReasons   map[string]uint64 `json:"health_block_reasons,omitempty"`
+	HealthBlockResponse  map[string]uint64 `json:"health_block_response,omitempty"`
 }
 
 type BackendHealthSnapshot struct {
@@ -82,6 +92,16 @@ type BackendHealthSnapshot struct {
 	Reason        string `json:"reason,omitempty"`
 	LatencyMS     int64  `json:"latency_ms,omitempty"`
 	CheckedAtUnix int64  `json:"checked_at_unix,omitempty"`
+}
+
+type ConfiguredRouteSnapshot struct {
+	Host        string `json:"host"`
+	Mode        string `json:"mode"`
+	RouteAlias  string `json:"route_alias,omitempty"`
+	Route       string `json:"route"`
+	Backend     string `json:"backend"`
+	BackendAddr string `json:"backend_addr"`
+	HealthKey   string `json:"health_key,omitempty"`
 }
 
 type AbuseSnapshot struct {
@@ -117,6 +137,9 @@ type StatusSnapshot struct {
 	ClassicTLSOn80            bool                             `json:"classic_tls_on_80"`
 	AcceptProxyProtocol       bool                             `json:"accept_proxy_protocol"`
 	TrustedProxyCIDRs         []string                         `json:"trusted_proxy_cidrs"`
+	SNIRoutes                 map[string]string                `json:"sni_routes,omitempty"`
+	SNIPassthrough            map[string]string                `json:"sni_passthrough,omitempty"`
+	ConfiguredRoutes          []ConfiguredRouteSnapshot        `json:"configured_routes,omitempty"`
 	DetectTimeoutMilliseconds int64                            `json:"detect_timeout_milliseconds"`
 	TLSHandshakeTimeoutMS     int64                            `json:"tls_handshake_timeout_milliseconds"`
 	MaxConnections            int                              `json:"max_connections"`
@@ -210,6 +233,31 @@ func (c *Collector) ObserveTLSHandshakeFailure(surface string) {
 
 func (c *Collector) ObserveBackendDialFailure(backend, context string) {
 	c.incCounter("edge_mux_backend_dial_failures_total", labels("backend", backend, "context", context))
+	if strings.TrimSpace(backend) == "passthrough" {
+		c.incCounter("edge_mux_passthrough_backend_dial_failures_total", labels(
+			"surface", passthroughSurfaceFromContext(context),
+			"context", fallback(context, "unknown"),
+		))
+	}
+}
+
+func (c *Collector) ObserveHealthRouteBlock(surface, route, backend, backendStatus, response, reason string) {
+	c.incCounter("edge_mux_route_health_blocks_total", labels(
+		"surface", fallback(surface, "unknown"),
+		"route", fallback(route, "unknown"),
+		"backend", fallback(backend, "unknown"),
+		"backend_status", fallback(backendStatus, "unknown"),
+		"response", fallback(response, "close"),
+		"reason", fallback(reason, "backend_unhealthy"),
+	))
+	if strings.TrimSpace(backend) == "passthrough" {
+		c.incCounter("edge_mux_passthrough_health_blocks_total", labels(
+			"surface", fallback(surface, "unknown"),
+			"backend_status", fallback(backendStatus, "unknown"),
+			"response", fallback(response, "close"),
+			"reason", fallback(reason, "backend_unhealthy"),
+		))
+	}
 }
 
 func (c *Collector) ObserveBridgeBytes(context string, leftToRight, rightToLeft uint64) {
@@ -230,14 +278,27 @@ func (c *Collector) ObserveRouteDecision(event RouteDecisionEvent) {
 	route := fallback(event.Route, "unknown")
 	backend := fallback(event.Backend, "unknown")
 	alpn := fallback(event.ALPN, "none")
-	c.incCounter("edge_mux_route_decisions_total", labels("surface", surface, "route", route, "backend", backend, "alpn", alpn))
+	routeSource := fallback(event.RouteSource, "detect")
+	matchedRoute := strings.TrimSpace(event.MatchedRoute)
+	c.incCounter("edge_mux_route_decisions_total", labels("surface", surface, "route", route, "backend", backend, "alpn", alpn, "source", routeSource))
+	if routeSource == "sni" && matchedRoute != "" {
+		c.incCounter("edge_mux_sni_route_matches_total", labels("surface", surface, "route_alias", matchedRoute, "backend", backend))
+	}
+	if routeSource == "passthrough" || backend == "passthrough" {
+		c.incCounter("edge_mux_passthrough_route_hits_total", labels(
+			"surface", surface,
+			"target", fallback(event.BackendAddr, "unknown"),
+		))
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastRoute = &LastRouteSnapshot{
 		SeenAtUnix:    time.Now().Unix(),
 		Surface:       truncate(surface, 64),
 		DetectClass:   truncate(event.DetectClass, 32),
+		RouteSource:   truncate(routeSource, 16),
 		Route:         truncate(route, 64),
+		MatchedRoute:  truncate(matchedRoute, 64),
 		Backend:       truncate(backend, 32),
 		BackendAddr:   truncate(event.BackendAddr, 128),
 		BackendStatus: truncate(event.BackendStatus, 32),
@@ -323,6 +384,22 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 				stats.RouteTotals = make(map[string]uint64)
 			}
 			stats.RouteTotals[fallback(lbl["route"], "unknown")] += value
+		case "edge_mux_passthrough_route_hits_total":
+			stats.PassthroughRouteHits += value
+		case "edge_mux_route_health_blocks_total":
+			stats.HealthBlockedTotal += value
+			if stats.HealthBlockReasons == nil {
+				stats.HealthBlockReasons = make(map[string]uint64)
+			}
+			stats.HealthBlockReasons[fallback(lbl["reason"], "backend_unhealthy")] += value
+			if stats.HealthBlockResponse == nil {
+				stats.HealthBlockResponse = make(map[string]uint64)
+			}
+			stats.HealthBlockResponse[fallback(lbl["response"], "close")] += value
+		case "edge_mux_passthrough_health_blocks_total":
+			stats.PassthroughBlocks += value
+		case "edge_mux_passthrough_backend_dial_failures_total":
+			stats.PassthroughDialFails += value
 		}
 		surfaceStats[surface] = stats
 	}
@@ -399,6 +476,9 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		ClassicTLSOn80:            cfg.ClassicTLSOn80,
 		AcceptProxyProtocol:       cfg.AcceptProxyProtocol,
 		TrustedProxyCIDRs:         append([]string(nil), cfg.TrustedProxyCIDRs...),
+		SNIRoutes:                 cloneStringMap(cfg.SNIRoutes),
+		SNIPassthrough:            cloneStringMap(cfg.SNIPassthrough),
+		ConfiguredRoutes:          configuredRouteTable(cfg),
 		DetectTimeoutMilliseconds: int64(cfg.DetectTimeout / time.Millisecond),
 		TLSHandshakeTimeoutMS:     int64(cfg.TLSHandshakeTimeout / time.Millisecond),
 		MaxConnections:            cfg.MaxConnections,
@@ -423,6 +503,83 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		TLSAdvertisedALPN:       append([]string(nil), listeners.TLSAdvertisedALPN...),
 		TLSMinVersion:           listeners.TLSMinVersion,
 		LastRoute:               lastRoute,
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func configuredRouteTable(cfg runtime.Config) []ConfiguredRouteSnapshot {
+	total := len(cfg.SNIRoutes) + len(cfg.SNIPassthrough)
+	if total == 0 {
+		return nil
+	}
+	entries := make([]ConfiguredRouteSnapshot, 0, total)
+	for host, alias := range cfg.SNIRoutes {
+		backend, addr, healthKey, ok := configuredSNIRouteTarget(cfg, alias)
+		if !ok {
+			continue
+		}
+		entries = append(entries, ConfiguredRouteSnapshot{
+			Host:        host,
+			Mode:        "route",
+			RouteAlias:  alias,
+			Route:       "sni-" + strings.ReplaceAll(alias, "_", "-"),
+			Backend:     backend,
+			BackendAddr: addr,
+			HealthKey:   healthKey,
+		})
+	}
+	for host, target := range cfg.SNIPassthrough {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		entries = append(entries, ConfiguredRouteSnapshot{
+			Host:        host,
+			Mode:        "passthrough",
+			Route:       "sni-passthrough",
+			Backend:     "passthrough",
+			BackendAddr: target,
+			HealthKey:   "passthrough:" + target,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Host == entries[j].Host {
+			if entries[i].Mode == entries[j].Mode {
+				return entries[i].Route < entries[j].Route
+			}
+			return entries[i].Mode < entries[j].Mode
+		}
+		return entries[i].Host < entries[j].Host
+	})
+	return entries
+}
+
+func configuredSNIRouteTarget(cfg runtime.Config, alias string) (backend, addr, healthKey string, ok bool) {
+	switch strings.TrimSpace(alias) {
+	case "http":
+		return "http", cfg.HTTPBackendAddr(), "http", true
+	case "ssh_direct":
+		return "ssh", cfg.SSHBackendAddr(), "ssh-direct", true
+	case "ssh_tls":
+		return "ssh-tls", cfg.SSHTLSBackendAddr(), "ssh-tls", true
+	case "ssh_ws":
+		return "ssh-ws", cfg.SSHWSBackendAddr(), "ssh-ws", true
+	case "vless_tcp":
+		return "vless", cfg.VLESSRawBackendAddr(), "vless", true
+	case "trojan_tcp":
+		return "trojan", cfg.TrojanRawBackendAddr(), "trojan", true
+	default:
+		return "", "", "", false
 	}
 }
 
@@ -548,6 +705,20 @@ func detectClassName(class detect.InitialClass) string {
 	default:
 		return "unknown"
 	}
+}
+
+func passthroughSurfaceFromContext(context string) string {
+	context = strings.TrimSpace(context)
+	if context == "" {
+		return "unknown"
+	}
+	if surface, _, ok := strings.Cut(context, ":"); ok {
+		surface = strings.TrimSpace(surface)
+		if surface != "" {
+			return surface
+		}
+	}
+	return "unknown"
 }
 
 func labels(pairs ...string) string {

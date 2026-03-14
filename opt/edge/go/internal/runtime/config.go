@@ -46,6 +46,15 @@ const (
 	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
 )
 
+var validSNIRouteAliases = map[string]struct{}{
+	"http":       {},
+	"ssh_direct": {},
+	"ssh_tls":    {},
+	"ssh_ws":     {},
+	"vless_tcp":  {},
+	"trojan_tcp": {},
+}
+
 type Config struct {
 	Provider            string
 	PublicHTTPAddr      string
@@ -80,6 +89,8 @@ type Config struct {
 	CooldownDuration    time.Duration
 	AcceptProxyProtocol bool
 	TrustedProxyCIDRs   []string
+	SNIRoutes           map[string]string
+	SNIPassthrough      map[string]string
 }
 
 func LoadConfig() (Config, error) {
@@ -137,6 +148,14 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	sniRoutes, err := envSNIRoutes(source, "EDGE_SNI_ROUTES")
+	if err != nil {
+		return Config{}, err
+	}
+	sniPassthrough, err := envSNIBackendMap(source, "EDGE_SNI_PASSTHROUGH")
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Provider:            envString(source, "EDGE_PROVIDER", defaultProvider),
@@ -172,6 +191,8 @@ func LoadConfig() (Config, error) {
 		CooldownDuration:    cooldownDuration,
 		AcceptProxyProtocol: acceptProxyProtocol,
 		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
+		SNIRoutes:           sniRoutes,
+		SNIPassthrough:      sniPassthrough,
 	}
 	if refreshed, _, err := RefreshDiscoveredRawBackends(cfg); err == nil {
 		cfg = refreshed
@@ -226,6 +247,28 @@ func (c Config) Validate() error {
 			return fmt.Errorf("invalid trusted proxy CIDR %q: %w", cidr, err)
 		}
 	}
+	for host, alias := range c.SNIRoutes {
+		if _, err := normalizeSNIHost(host); err != nil {
+			return fmt.Errorf("invalid EDGE_SNI_ROUTES host %q: %w", host, err)
+		}
+		if _, err := normalizeSNIRouteAlias(alias); err != nil {
+			return fmt.Errorf("invalid EDGE_SNI_ROUTES alias %q for host %q: %w", alias, host, err)
+		}
+	}
+	for host, target := range c.SNIPassthrough {
+		if _, err := normalizeSNIHost(host); err != nil {
+			return fmt.Errorf("invalid EDGE_SNI_PASSTHROUGH host %q: %w", host, err)
+		}
+		if strings.TrimSpace(target) == "" {
+			return fmt.Errorf("invalid EDGE_SNI_PASSTHROUGH target for host %q: empty backend", host)
+		}
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			return fmt.Errorf("invalid EDGE_SNI_PASSTHROUGH target %q for host %q: %w", target, host, err)
+		}
+		if _, exists := c.SNIRoutes[host]; exists {
+			return fmt.Errorf("host %q cannot exist in both EDGE_SNI_ROUTES and EDGE_SNI_PASSTHROUGH", host)
+		}
+	}
 	return nil
 }
 
@@ -239,23 +282,121 @@ func (c Config) SSHWSBackendAddr() string     { return c.SSHWSBackend }
 func (c Config) VLESSRawBackendAddr() string  { return c.VLESSRawBackend }
 func (c Config) TrojanRawBackendAddr() string { return c.TrojanRawBackend }
 
+func (c Config) Clone() Config {
+	clone := c
+	if len(c.TrustedProxyCIDRs) > 0 {
+		clone.TrustedProxyCIDRs = append([]string(nil), c.TrustedProxyCIDRs...)
+	}
+	if len(c.SNIRoutes) > 0 {
+		clone.SNIRoutes = make(map[string]string, len(c.SNIRoutes))
+		for host, alias := range c.SNIRoutes {
+			clone.SNIRoutes[host] = alias
+		}
+	}
+	if len(c.SNIPassthrough) > 0 {
+		clone.SNIPassthrough = make(map[string]string, len(c.SNIPassthrough))
+		for host, target := range c.SNIPassthrough {
+			clone.SNIPassthrough[host] = target
+		}
+	}
+	return clone
+}
+
+func (c Config) ResolveSNIRoute(serverName string) (string, bool) {
+	host, err := normalizeSNIHost(serverName)
+	if err != nil {
+		return "", false
+	}
+	alias, ok := c.SNIRoutes[host]
+	if !ok {
+		return "", false
+	}
+	return alias, true
+}
+
+func (c Config) ResolveSNIPassthrough(serverName string) (string, bool) {
+	host, err := normalizeSNIHost(serverName)
+	if err != nil {
+		return "", false
+	}
+	target, ok := c.SNIPassthrough[host]
+	if !ok {
+		return "", false
+	}
+	return target, true
+}
+
+func (c Config) CloneSNIRoutes() map[string]string {
+	if len(c.SNIRoutes) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(c.SNIRoutes))
+	for host, alias := range c.SNIRoutes {
+		out[host] = alias
+	}
+	return out
+}
+
+func (c Config) CloneSNIPassthrough() map[string]string {
+	if len(c.SNIPassthrough) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(c.SNIPassthrough))
+	for host, target := range c.SNIPassthrough {
+		out[host] = target
+	}
+	return out
+}
+
+func (c Config) IsPassthroughBackend(target string) bool {
+	for _, backend := range c.SNIPassthrough {
+		if backend == target {
+			return true
+		}
+	}
+	return false
+}
+
 type envSource map[string]string
 
 func loadEnvSource() envSource {
-	source := make(envSource)
+	processSource := make(envSource)
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok {
 			continue
 		}
-		source[key] = value
+		processSource[key] = value
 	}
-	envFile := strings.TrimSpace(source["EDGE_RUNTIME_ENV_FILE"])
+	envFile := strings.TrimSpace(processSource["EDGE_RUNTIME_ENV_FILE"])
 	if envFile == "" {
 		envFile = defaultRuntimeEnvFile
 	}
-	for key, value := range loadEnvFile(envFile) {
+	fileSource := loadEnvFile(envFile)
+	return mergeEnvSource(processSource, fileSource, envFile)
+}
+
+func mergeEnvSource(processSource envSource, fileSource map[string]string, envFile string) envSource {
+	source := make(envSource, len(processSource)+len(fileSource)+1)
+	for key, value := range processSource {
 		source[key] = value
+	}
+	if len(fileSource) == 0 {
+		if strings.TrimSpace(envFile) != "" {
+			source["EDGE_RUNTIME_ENV_FILE"] = strings.TrimSpace(envFile)
+		}
+		return source
+	}
+	for key := range source {
+		if strings.HasPrefix(key, "EDGE_") && key != "EDGE_RUNTIME_ENV_FILE" {
+			delete(source, key)
+		}
+	}
+	for key, value := range fileSource {
+		source[key] = value
+	}
+	if strings.TrimSpace(envFile) != "" {
+		source["EDGE_RUNTIME_ENV_FILE"] = strings.TrimSpace(envFile)
 	}
 	return source
 }
@@ -316,6 +457,16 @@ func envCSV(source envSource, key, fallback string) []string {
 		}
 	}
 	return out
+}
+
+func envSNIRoutes(source envSource, key string) (map[string]string, error) {
+	raw := strings.TrimSpace(source[key])
+	return parseSNIRoutes(raw)
+}
+
+func envSNIBackendMap(source envSource, key string) (map[string]string, error) {
+	raw := strings.TrimSpace(source[key])
+	return parseSNIBackendMap(raw)
 }
 
 func envBool(source envSource, key string, fallback bool) (bool, error) {
@@ -399,6 +550,125 @@ func normalizeAddr(raw, defaultHost string) string {
 		return raw
 	}
 	return defaultHost + ":" + raw
+}
+
+func parseSNIRoutes(raw string) (map[string]string, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return nil, nil
+	}
+	parts := strings.FieldsFunc(text, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	out := make(map[string]string, len(parts))
+	for _, part := range parts {
+		entry := strings.TrimSpace(part)
+		if entry == "" {
+			continue
+		}
+		hostRaw, aliasRaw, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid SNI route entry %q (expected host=route)", entry)
+		}
+		host, err := normalizeSNIHost(hostRaw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SNI host %q: %w", hostRaw, err)
+		}
+		alias, err := normalizeSNIRouteAlias(aliasRaw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SNI route alias %q: %w", aliasRaw, err)
+		}
+		if _, exists := out[host]; exists {
+			return nil, fmt.Errorf("duplicate SNI host %q", host)
+		}
+		out[host] = alias
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func parseSNIBackendMap(raw string) (map[string]string, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return nil, nil
+	}
+	parts := strings.FieldsFunc(text, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	out := make(map[string]string, len(parts))
+	for _, part := range parts {
+		entry := strings.TrimSpace(part)
+		if entry == "" {
+			continue
+		}
+		hostRaw, targetRaw, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid SNI passthrough entry %q (expected host=backend)", entry)
+		}
+		host, err := normalizeSNIHost(hostRaw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SNI passthrough host %q: %w", hostRaw, err)
+		}
+		target := normalizeAddr(strings.TrimSpace(targetRaw), "127.0.0.1")
+		if target == "" {
+			return nil, fmt.Errorf("invalid SNI passthrough target %q", targetRaw)
+		}
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			return nil, fmt.Errorf("invalid SNI passthrough target %q: %w", targetRaw, err)
+		}
+		if _, exists := out[host]; exists {
+			return nil, fmt.Errorf("duplicate SNI passthrough host %q", host)
+		}
+		out[host] = target
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func normalizeSNIRouteAlias(raw string) (string, error) {
+	alias := strings.ToLower(strings.TrimSpace(raw))
+	alias = strings.ReplaceAll(alias, "-", "_")
+	if alias == "" {
+		return "", errors.New("empty route alias")
+	}
+	if _, ok := validSNIRouteAliases[alias]; !ok {
+		return "", fmt.Errorf("unsupported route alias %q", raw)
+	}
+	return alias, nil
+}
+
+func normalizeSNIHost(raw string) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return "", errors.New("empty host")
+	}
+	if strings.ContainsAny(host, "/:@") {
+		return "", fmt.Errorf("host must not contain path, port, or userinfo")
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if label == "" {
+			return "", fmt.Errorf("host has empty label")
+		}
+		if len(label) > 63 {
+			return "", fmt.Errorf("label %q too long", label)
+		}
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", fmt.Errorf("label %q must not start or end with '-'", label)
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return "", fmt.Errorf("label %q contains invalid character %q", label, r)
+		}
+	}
+	return host, nil
 }
 
 func isLoopbackListenAddr(addr string) bool {

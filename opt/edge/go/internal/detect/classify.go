@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -63,6 +64,99 @@ func IsTLSClientHello(b []byte) bool {
 		return false
 	}
 	return b[0] == 0x16 && b[1] == 0x03 && b[2] <= 0x04
+}
+
+func tlsClientHelloRecordLength(b []byte) (int, bool) {
+	if !IsTLSClientHello(b) || len(b) < 5 {
+		return 0, false
+	}
+	recordLen := int(b[3])<<8 | int(b[4])
+	if recordLen <= 0 {
+		return 0, false
+	}
+	return 5 + recordLen, true
+}
+
+func ExtractTLSServerName(b []byte) (string, bool) {
+	if !IsTLSClientHello(b) || len(b) < 5 {
+		return "", false
+	}
+	recordLen := int(b[3])<<8 | int(b[4])
+	if recordLen <= 0 || len(b) < 5+recordLen {
+		return "", false
+	}
+	record := b[5 : 5+recordLen]
+	if len(record) < 4 || record[0] != 0x01 {
+		return "", false
+	}
+	handshakeLen := int(record[1])<<16 | int(record[2])<<8 | int(record[3])
+	if handshakeLen <= 0 || len(record) < 4+handshakeLen {
+		return "", false
+	}
+	body := record[4 : 4+handshakeLen]
+	if len(body) < 2+32+1 {
+		return "", false
+	}
+	pos := 2 + 32
+	sessionIDLen := int(body[pos])
+	pos++
+	if len(body) < pos+sessionIDLen+2 {
+		return "", false
+	}
+	pos += sessionIDLen
+	cipherSuitesLen := int(body[pos])<<8 | int(body[pos+1])
+	pos += 2
+	if cipherSuitesLen == 0 || cipherSuitesLen%2 != 0 || len(body) < pos+cipherSuitesLen+1 {
+		return "", false
+	}
+	pos += cipherSuitesLen
+	compressionMethodsLen := int(body[pos])
+	pos++
+	if compressionMethodsLen == 0 || len(body) < pos+compressionMethodsLen+2 {
+		return "", false
+	}
+	pos += compressionMethodsLen
+	extensionsLen := int(body[pos])<<8 | int(body[pos+1])
+	pos += 2
+	if extensionsLen == 0 || len(body) < pos+extensionsLen {
+		return "", false
+	}
+	extensions := body[pos : pos+extensionsLen]
+	for len(extensions) >= 4 {
+		extType := int(extensions[0])<<8 | int(extensions[1])
+		extLen := int(extensions[2])<<8 | int(extensions[3])
+		extensions = extensions[4:]
+		if len(extensions) < extLen {
+			return "", false
+		}
+		extData := extensions[:extLen]
+		extensions = extensions[extLen:]
+		if extType != 0x0000 || len(extData) < 2 {
+			continue
+		}
+		serverNameListLen := int(extData[0])<<8 | int(extData[1])
+		if serverNameListLen == 0 || len(extData) < 2+serverNameListLen {
+			return "", false
+		}
+		names := extData[2 : 2+serverNameListLen]
+		for len(names) >= 3 {
+			nameType := names[0]
+			nameLen := int(names[1])<<8 | int(names[2])
+			names = names[3:]
+			if len(names) < nameLen {
+				return "", false
+			}
+			if nameType == 0 {
+				serverName := strings.ToLower(strings.TrimSuffix(string(names[:nameLen]), "."))
+				if serverName != "" {
+					return serverName, true
+				}
+				return "", false
+			}
+			names = names[nameLen:]
+		}
+	}
+	return "", false
 }
 
 func IsSSHBanner(b []byte) bool {
@@ -277,6 +371,9 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 			case IsHTTP(current):
 				return current, ClassHTTP, nil
 			case IsTLSClientHello(current):
+				if totalLen, ok := tlsClientHelloRecordLength(current); !ok || len(current) < totalLen {
+					continue
+				}
 				return current, ClassTLSClientHello, nil
 			case IsSSHBanner(current):
 				return current, ClassSSH, nil
