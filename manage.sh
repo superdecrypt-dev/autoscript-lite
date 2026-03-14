@@ -5773,46 +5773,12 @@ PY
 
 
 user_del_menu() {
-  local page=0
-  while true; do
-    title
-    echo "Xray Users > Delete User"
-    hr
-    echo "Daftar akun (10 per halaman):"
-    hr
-    account_collect_files
-    ACCOUNT_PAGE="${page}"
-    account_print_table_page "${ACCOUNT_PAGE}"
-    hr
-    echo "Ketik: lanjut / next / previous / kembali"
-    if ! read -r -p "Pilihan: " nav; then
-      echo
-      return 0
-    fi
-    if is_back_choice "${nav}"; then
-      return 0
-    fi
-    case "${nav}" in
-      lanjut|lanjutkan|l) break ;;
-      next|n)
-        local pages
-        pages="$(account_total_pages)"
-        if (( pages > 0 && page < pages - 1 )); then page=$((page + 1)); fi
-        ;;
-      previous|p|prev)
-        if (( page > 0 )); then page=$((page - 1)); fi
-        ;;
-      *) invalid_choice ;;
-    esac
-  done
+  ensure_account_quota_dirs
+  need_python3
 
   title
   echo "Xray Users > Delete User"
   hr
-
-  ensure_account_quota_dirs
-  need_python3
-
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
@@ -5831,24 +5797,100 @@ user_del_menu() {
     return 0
   fi
 
-  if ! read -r -p "Username (atau kembali): " username; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${username}"; then
-    return 0
-  fi
-  if [[ -z "${username}" ]]; then
-    warn "Username kosong"
-    pause
-    return 0
-  fi
+  local page=0
+  local username="" selected_file="" selected_quota_file=""
+  while true; do
+    title
+    echo "Xray Users > Delete User"
+    hr
+    echo "Protocol terpilih: ${proto}"
+    echo "Daftar akun ${proto} (10 per halaman):"
+    hr
+    account_collect_files "${proto}"
+    ACCOUNT_PAGE="${page}"
+    if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+      account_print_table_page "${ACCOUNT_PAGE}" "${proto}"
+    else
+      echo "  (Belum ada akun ${proto} terkelola)"
+      echo
+      echo "Halaman: 0/0  | Total akun: 0"
+      hr
+      echo "Ketik: kembali"
+      if ! read -r -p "Pilihan: " nav; then
+        echo
+        return 0
+      fi
+      return 0
+    fi
+    hr
+    echo "Ketik NO akun, atau: next / previous / kembali"
+    local nav=""
+    if ! read -r -p "Pilihan: " nav; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${nav}"; then
+      return 0
+    fi
+    case "${nav}" in
+      next|n)
+        local pages
+        pages="$(account_total_pages)"
+        if (( pages > 0 && page < pages - 1 )); then page=$((page + 1)); fi
+        continue
+        ;;
+      previous|p|prev)
+        if (( page > 0 )); then page=$((page - 1)); fi
+        continue
+        ;;
+    esac
 
-  if ! validate_username "${username}"; then
-    warn "Username tidak valid. Gunakan: A-Z a-z 0-9 . _ - (tanpa spasi, tanpa '/', tanpa '..', tanpa '@')."
-    pause
-    return 0
-  fi
+    if [[ ! "${nav}" =~ ^[0-9]+$ ]]; then
+      invalid_choice
+      continue
+    fi
+
+    local total pages start end rows idx
+    total="${#ACCOUNT_FILES[@]}"
+    pages=$(( (total + ACCOUNT_PAGE_SIZE - 1) / ACCOUNT_PAGE_SIZE ))
+    if (( page < 0 )); then page=0; fi
+    if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+    start=$((page * ACCOUNT_PAGE_SIZE))
+    end=$((start + ACCOUNT_PAGE_SIZE))
+    if (( end > total )); then end="${total}"; fi
+    rows=$((end - start))
+
+    if (( nav < 1 || nav > rows )); then
+      warn "NO di luar range"
+      pause
+      continue
+    fi
+
+    idx=$((start + nav - 1))
+    selected_file="${ACCOUNT_FILES[$idx]}"
+    username="$(account_parse_username_from_file "${selected_file}" "${proto}")"
+    selected_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+
+    title
+    echo "Xray Users > Delete User"
+    hr
+    echo "Protocol : ${proto}"
+    echo "Username : ${username}"
+    echo "Account  : ${selected_file}"
+    echo "Quota    : ${selected_quota_file}"
+    hr
+
+    local confirm_rc=0
+    if confirm_yn_or_back "Hapus user ini?"; then
+      break
+    else
+      confirm_rc=$?
+      if (( confirm_rc == 2 )); then
+        return 0
+      fi
+      continue
+    fi
+  done
 
   hr
   local speed_sync_ok="true"

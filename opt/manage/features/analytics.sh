@@ -5925,10 +5925,11 @@ ssh_qac_edit_flow() {
   qf="${SSH_QAC_FILES[$real_idx]}"
 
   while true; do
+    local label_w=18
     title
     echo "4) SSH QAC > Detail"
     hr
-    echo "File  : ${qf}"
+    printf "%-${label_w}s : %s\n" "File" "${qf}"
     hr
 
     local fields username ql_disp qu_disp exp_date ip_state ip_lim block_reason speed_state speed_down speed_up lock_state
@@ -5960,10 +5961,9 @@ ssh_qac_edit_flow() {
     [[ "${active_sessions_dropbear}" =~ ^[0-9]+$ ]] || active_sessions_dropbear="0"
     [[ -n "${distinct_ips}" ]] || distinct_ips="-"
 
-    local label_w=18
     printf "%-${label_w}s : %s\n" "Username" "${username}"
     printf "%-${label_w}s : %s\n" "Quota Limit" "${ql_disp}"
-    printf "%-${label_w}s : %s\n" "Quota Used (SSH)" "${qu_disp}"
+    printf "%-${label_w}s : %s\n" "Quota Used" "${qu_disp}"
     printf "%-${label_w}s : %s\n" "Expired At" "${exp_date}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit" "${ip_state}"
     printf "%-${label_w}s : %s\n" "IP/Login Limit Max" "${ip_lim}"
@@ -5973,9 +5973,9 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s\n" "Block Reason" "${block_reason}"
     printf "%-${label_w}s : %s\n" "Account Locked" "${lock_state}"
     printf "%-${label_w}s : %s\n" "Sesi Aktif" "${active_sessions_total}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Download (SSH)" "${speed_down}"
-    printf "%-${label_w}s : %s Mbps\n" "Speed Upload (SSH)" "${speed_up}"
-    printf "%-${label_w}s : %s\n" "Speed Limit (SSH)" "${speed_state}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
+    printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
+    printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
     hr
 
     echo "  1) View JSON"
@@ -5987,7 +5987,7 @@ ssh_qac_edit_flow() {
     echo "  7) Unlock IP/Login"
     echo "  8) Set Speed Download"
     echo "  9) Set Speed Upload"
-    echo " 10) Speed Limit SSH Enable/Disable (toggle)"
+    echo " 10) Speed Limit Enable/Disable (toggle)"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
