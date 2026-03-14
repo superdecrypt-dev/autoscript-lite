@@ -30,5 +30,5 @@ def health() -> dict:
     return {
         "status": "ok",
         "service": "backend-py",
-        "dangerous_actions_enabled": settings.enable_dangerous_actions,
+        "mutations_enabled": settings.mutations_enabled,
     }

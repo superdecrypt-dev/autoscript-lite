@@ -11,7 +11,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("backup_list_failed", title, msg)
 
     if action == "create_backup":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Backup/Restore", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg, data = backup_restore.op_backup_create()
         if ok:
@@ -19,7 +19,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("backup_create_failed", title, msg)
 
     if action == "restore_latest":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Backup/Restore", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = backup_restore.op_restore_latest_local()
         if ok:
@@ -27,7 +27,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("backup_restore_latest_failed", title, msg)
 
     if action == "restore_from_upload":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Backup/Restore", "Dangerous actions dinonaktifkan via env.")
         ok_param, upload_or_err = require_param(params, "upload_path", "Backup/Restore - Restore Upload")
         if not ok_param:

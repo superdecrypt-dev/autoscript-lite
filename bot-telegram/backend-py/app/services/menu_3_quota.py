@@ -55,7 +55,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, msg)
 
     if action == "set_quota_limit":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set Quota Limit")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -73,7 +73,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_set_limit_failed", title, m)
 
     if action == "reset_quota_used":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Reset Quota Used")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -88,7 +88,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_reset_used_failed", title, m)
 
     if action == "manual_block":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Manual Block")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -106,7 +106,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_manual_block_failed", title, m)
 
     if action == "ip_limit_enable":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "IP/Login Limit")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -124,7 +124,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_ip_limit_toggle_failed", title, m)
 
     if action == "set_ip_limit":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set IP/Login Limit")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -142,7 +142,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_set_ip_limit_failed", title, m)
 
     if action == "unlock_ip_lock":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Unlock IP Lock")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -157,7 +157,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_unlock_ip_failed", title, m)
 
     if action == "set_speed_download":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set Speed Download")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -175,7 +175,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_speed_down_failed", title, m)
 
     if action == "set_speed_upload":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set Speed Upload")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -193,7 +193,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("quota_speed_up_failed", title, m)
 
     if action == "speed_limit":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Speed Limit")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)

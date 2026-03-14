@@ -13,14 +13,14 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_tls_expiry()
         return ok_response(title, msg)
     if action == "reload_nginx":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system.op_reload_service("nginx")
         if ok:
             return ok_response(title, msg)
         return error_response("reload_nginx_failed", title, msg)
     if action == "renew_cert":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system_mutations.op_security_renew_cert()
         if ok:
@@ -36,7 +36,7 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_fail2ban_banned_ips()
         return ok_response(title, msg)
     if action == "unban_ip":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
         title = "Security - Fail2ban Unban IP"
         ok_ip, ip_or_err = require_param(params, "ip", title)
@@ -47,7 +47,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(result_title, msg)
         return error_response("fail2ban_unban_failed", result_title, msg)
     if action == "restart_fail2ban":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system.op_restart_service("fail2ban")
         if ok:

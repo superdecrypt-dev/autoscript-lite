@@ -48,7 +48,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action in {"restart_xray", "restart_nginx", "restart_wireproxy", "restart_edge_gateway", "restart_badvpn"}:
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
         if action == "restart_edge_gateway":
             ok, title, msg = system.op_restart_edge_gateway()
@@ -65,7 +65,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("restart_service_failed", title, msg)
 
     if action == "restart_all":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system.op_restart_all_core()
         if ok:
@@ -73,7 +73,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("restart_service_failed", title, msg)
 
     if action == "restart_xray_daemons":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system.op_restart_xray_daemons()
         if ok:
@@ -81,7 +81,7 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("restart_service_failed", title, msg)
 
     if action == "restart_sshws_stack":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
         ok, title, msg = system.op_restart_sshws_stack()
         if ok:

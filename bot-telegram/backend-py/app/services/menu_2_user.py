@@ -61,7 +61,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, msg)
 
     if action == "add_user":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Add User")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -171,7 +171,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, "\n".join(lines), data=data)
 
     if action == "delete_user":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Delete User")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -186,7 +186,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("user_delete_failed", title, msg_del)
 
     if action == "extend_expiry":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set User Expiry")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
@@ -212,7 +212,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("user_extend_failed", title, msg_ext)
 
     if action == "reset_password":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Reset Password")
         ok_u, user_or_err = require_username(params, title)
@@ -239,7 +239,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, msg)
 
     if scope == "ssh" and action == "restart_sshws_stack":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         ok_restart, title, msg = system.op_restart_sshws_stack()
         if ok_restart:

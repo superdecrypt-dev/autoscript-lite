@@ -46,8 +46,7 @@ Menu tambahan khusus bot:
 - `12) Backup/Restore`
 
 Catatan perilaku:
-- Action berstatus dangerous disembunyikan otomatis saat `ENABLE_DANGEROUS_ACTIONS=false`.
-- Callback stale untuk action dangerous tetap ditolak aman oleh gateway.
+- Callback stale untuk action sensitif tetap ditolak aman oleh gateway.
 - Menu `2) SSH Users` sudah mencakup `SSH WS Service Status`, `Restart SSH WS Stack`, dan `Active SSHWS Sessions`.
 - Menu `5) Network` sudah mencakup `WARP`, `DNS`, dan `Adblock` termasuk status, source list, update, enable/disable, serta auto update.
 - Menu `6) Domain Control` kini mencakup set domain manual/auto, set domain ringan tanpa wizard cert, guard, dan refresh account info.
@@ -76,7 +75,7 @@ Catatan penting:
 - Akun yang dibuat setelah titik backup bisa hilang, dan akun lama yang terhapus setelah backup bisa muncul lagi.
 - Restore menulis file dari arsip ke path yang diizinkan dan tidak melakukan purge massal direktori.
 - Setiap restore membuat safety snapshot lebih dulu. Jika validasi/restart service gagal, sistem mencoba rollback otomatis.
-- Action restore/create backup termasuk dangerous action dan mengikuti `ENABLE_DANGEROUS_ACTIONS`.
+- Action restore/create backup tetap termasuk aksi sensitif dan hanya bisa dipakai oleh admin yang lolos ACL.
 
 ## Operasional cepat
 - Installer menu: `sudo /usr/local/bin/install-telegram-bot menu`

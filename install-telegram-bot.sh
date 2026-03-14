@@ -243,6 +243,22 @@ set_env_value() {
   rm -f "$tmp" >/dev/null 2>&1 || true
 }
 
+unset_env_value() {
+  local key="$1"
+  local file="$2"
+  local tmp
+
+  [[ -f "$file" ]] || return 0
+  tmp="$(mktemp)"
+  awk -v key="$key" '
+    $0 ~ ("^" key "=") { next }
+    { print }
+  ' "$file" > "$tmp"
+
+  install -m 600 "$tmp" "$file"
+  rm -f "$tmp" >/dev/null 2>&1 || true
+}
+
 resolve_persisted_env_file() {
   local candidate unit
 
@@ -428,7 +444,6 @@ BACKEND_BASE_URL=${BACKEND_BASE_URL}
 BACKEND_HOST=${BACKEND_HOST}
 BACKEND_PORT=${BACKEND_PORT}
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
-ENABLE_DANGEROUS_ACTIONS=false
 ENVEOF
     chmod 600 "${BOT_ENV_FILE}"
     ok "File env dibuat: ${BOT_ENV_FILE}"
@@ -533,8 +548,8 @@ configure_env_interactive() {
   ensure_env_file
   CONFIGURE_ENV_CANCELLED=0
 
-  local current_token current_secret current_bot_username current_default_chat_id current_admin_chat_ids current_admin_user_ids current_dangerous current_allow_unrestricted
-  local token bot_username default_chat_id admin_chat_ids admin_user_ids dangerous allow_unrestricted secret_input
+  local current_token current_secret current_bot_username current_default_chat_id current_admin_chat_ids current_admin_user_ids current_allow_unrestricted
+  local token bot_username default_chat_id admin_chat_ids admin_user_ids allow_unrestricted secret_input
   local final_token final_secret staged_env
 
   current_token="$(get_env_value TELEGRAM_BOT_TOKEN "${BOT_ENV_FILE}")"
@@ -543,7 +558,6 @@ configure_env_interactive() {
   current_default_chat_id="$(get_env_value TELEGRAM_DEFAULT_CHAT_ID "${BOT_ENV_FILE}")"
   current_admin_chat_ids="$(get_env_value TELEGRAM_ADMIN_CHAT_IDS "${BOT_ENV_FILE}")"
   current_admin_user_ids="$(get_env_value TELEGRAM_ADMIN_USER_IDS "${BOT_ENV_FILE}")"
-  current_dangerous="$(get_env_value ENABLE_DANGEROUS_ACTIONS "${BOT_ENV_FILE}")"
   current_allow_unrestricted="$(get_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${BOT_ENV_FILE}")"
 
   echo "Konfigurasi env: ${BOT_ENV_FILE}"
@@ -581,11 +595,6 @@ configure_env_interactive() {
     cancel_env_config
     return 0
   fi
-  dangerous="$(prompt_with_default_or_back "ENABLE_DANGEROUS_ACTIONS (true/false)" "${current_dangerous}")"
-  if [[ "${dangerous}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
-  fi
   allow_unrestricted="$(prompt_with_default_or_back "TELEGRAM_ALLOW_UNRESTRICTED_ACCESS (true/false)" "${current_allow_unrestricted}")"
   if [[ "${allow_unrestricted}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
@@ -611,7 +620,6 @@ configure_env_interactive() {
   set_env_value TELEGRAM_DEFAULT_CHAT_ID "${default_chat_id}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_CHAT_IDS "${admin_chat_ids}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_USER_IDS "${admin_user_ids}" "${staged_env}"
-  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-false}" "${staged_env}"
   set_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${allow_unrestricted:-false}" "${staged_env}"
 
   set_env_value BOT_HOME "${BOT_HOME}" "${staged_env}"

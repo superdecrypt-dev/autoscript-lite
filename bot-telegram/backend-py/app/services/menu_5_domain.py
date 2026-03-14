@@ -11,7 +11,7 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_domain_nginx_server_name()
         return ok_response(title, msg)
     if action == "setup_domain_custom":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
         ok_d, domain_or_err = require_param(params, "domain", "Domain Control - Set Domain (Custom)")
         if not ok_d:
@@ -21,7 +21,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("setup_domain_custom_failed", title, msg)
     if action == "setup_domain_cloudflare":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
         title = "Domain Control - Set Domain (Cloudflare)"
         warnings: list[str] = []
@@ -68,7 +68,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg, data=warning_data)
         return error_response("setup_domain_cloudflare_failed", title, msg, data=warning_data)
     if action == "set_domain":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
         ok_d, domain_or_err = require_param(params, "domain", "Domain Control - Set Domain")
         if not ok_d:
@@ -79,7 +79,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("set_domain_failed", title, msg)
     if action == "refresh_account_info":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
         ok_ref, title, msg = system_mutations.op_domain_refresh_accounts()
         if ok_ref:
@@ -96,7 +96,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("domain_guard_status_failed", title, msg)
     if action == "domain_guard_renew":
-        if not settings.enable_dangerous_actions:
+        if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
         force = bool(parse_bool_value(params.get("force"), default=False))
         ok_run, title, msg = system.op_domain_guard_renew_if_needed(force=force)

@@ -397,7 +397,7 @@ def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
 
 
 def _action_visible(runtime: Runtime, action: ActionSpec) -> bool:
-    if action.dangerous and not runtime.config.enable_dangerous_actions:
+    if action.dangerous and not runtime.config.mutations_enabled:
         return False
     return True
 
@@ -1878,9 +1878,9 @@ def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
 
     catalog = CommandCatalog.from_payload({"menus": menus})
     LOGGER.info(
-        "Backend menu sync complete: menus=%s dangerous_actions_enabled=%s",
+        "Backend menu sync complete: menus=%s mutations_enabled=%s",
         len(catalog.menus),
-        bool(main_menu.get("dangerous_actions_enabled")) if isinstance(main_menu, dict) else False,
+        bool(main_menu.get("mutations_enabled")) if isinstance(main_menu, dict) else False,
     )
     return catalog
 
