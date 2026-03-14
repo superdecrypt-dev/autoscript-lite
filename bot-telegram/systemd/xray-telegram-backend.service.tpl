@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/bot-telegram/backend-py
 EnvironmentFile=/etc/xray-telegram-bot/bot.env
-ExecStart=/opt/bot-telegram/.venv/bin/uvicorn app.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}
+ExecStart=/opt/bot-telegram/.venv/bin/python -m uvicorn app.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}
 Restart=always
 RestartSec=3
 

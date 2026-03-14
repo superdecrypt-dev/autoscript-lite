@@ -1931,6 +1931,9 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_input))
 
     LOGGER.info("Starting xray-telegram-gateway")
+    # Python 3.12 no longer guarantees a default loop for the main thread.
+    # PTB still expects one when entering run_polling().
+    asyncio.set_event_loop(asyncio.new_event_loop())
     application.run_polling(allowed_updates=["message", "callback_query"])
 
 
