@@ -265,6 +265,22 @@ func (c Config) Validate() error {
 		if _, _, err := net.SplitHostPort(target); err != nil {
 			return fmt.Errorf("invalid EDGE_SNI_PASSTHROUGH target %q for host %q: %w", target, host, err)
 		}
+		if targetLoopsToPublicListener(target, c.PublicHTTPAddr) {
+			return fmt.Errorf(
+				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public HTTP listener %q",
+				target,
+				host,
+				c.PublicHTTPAddr,
+			)
+		}
+		if targetLoopsToPublicListener(target, c.PublicTLSAddr) {
+			return fmt.Errorf(
+				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public TLS listener %q",
+				target,
+				host,
+				c.PublicTLSAddr,
+			)
+		}
 		if _, exists := c.SNIRoutes[host]; exists {
 			return fmt.Errorf("host %q cannot exist in both EDGE_SNI_ROUTES and EDGE_SNI_PASSTHROUGH", host)
 		}
@@ -685,4 +701,56 @@ func isLoopbackListenAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func targetLoopsToPublicListener(target, listen string) bool {
+	targetHost, targetPort, err := net.SplitHostPort(strings.TrimSpace(target))
+	if err != nil {
+		return false
+	}
+	listenHost, listenPort, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil || targetPort != listenPort {
+		return false
+	}
+
+	targetHost = trimAddrHost(targetHost)
+	listenHost = trimAddrHost(listenHost)
+	if targetHost == "" || listenHost == "" {
+		return false
+	}
+	if strings.EqualFold(targetHost, listenHost) {
+		return true
+	}
+	if isUnspecifiedHost(listenHost) && isLocalHost(targetHost) {
+		return true
+	}
+	if isLoopbackHost(listenHost) && isLoopbackHost(targetHost) {
+		return true
+	}
+	return false
+}
+
+func trimAddrHost(host string) string {
+	return strings.Trim(strings.TrimSpace(host), "[]")
+}
+
+func isLocalHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
 }

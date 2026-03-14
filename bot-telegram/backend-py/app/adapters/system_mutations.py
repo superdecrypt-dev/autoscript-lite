@@ -2771,6 +2771,22 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
     return updated, failed
 
 
+def _account_refresh_outcome(
+    title: str,
+    lines: list[str],
+    *,
+    updated: int,
+    failed: int,
+    partial_failure_hint: str,
+) -> tuple[bool, str, str]:
+    message_lines = list(lines)
+    message_lines.append(f"- Refresh account info: updated={updated}, failed={failed}")
+    if failed > 0:
+        message_lines.append(partial_failure_hint)
+        return False, title, "\n".join(message_lines)
+    return True, title, "\n".join(message_lines)
+
+
 def _account_info_needs_compat_refresh() -> bool:
     _ensure_runtime_dirs()
     for proto in PROTOCOLS:
@@ -4633,12 +4649,19 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed = _refresh_all_account_info(domain=domain_n, ip=ip_override)
-    msg = (
-        f"Domain aktif sekarang: {domain_n}\n"
-        f"- Certificate mode : standalone\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
+    return _account_refresh_outcome(
+        title,
+        [
+            f"Domain aktif sekarang: {domain_n}",
+            "- Certificate mode : standalone",
+        ],
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain dan certificate sudah diperbarui, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
     )
-    return True, title, msg
 
 
 def op_domain_setup_cloudflare(
@@ -4731,17 +4754,25 @@ def op_domain_setup_cloudflare(
             _restore_services(stopped_services)
 
     updated, failed = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
-    msg = (
-        f"Domain aktif sekarang: {domain_final}\n"
-        f"- Root domain      : {root_domain}\n"
-        f"- Cloudflare proxy : {'ON' if proxied_b else 'OFF'}\n"
-        f"- DNS              : {dns_msg}\n"
-        f"- Certificate mode : dns_cf wildcard\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
-    )
+    lines = [
+        f"Domain aktif sekarang: {domain_final}",
+        f"- Root domain      : {root_domain}",
+        f"- Cloudflare proxy : {'ON' if proxied_b else 'OFF'}",
+        f"- DNS              : {dns_msg}",
+        "- Certificate mode : dns_cf wildcard",
+    ]
     if not ok_acc:
-        msg += f"\n- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})"
-    return True, title, msg
+        lines.append(f"- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})")
+    return _account_refresh_outcome(
+        title,
+        lines,
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain, DNS, dan certificate sudah diperbarui, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
+    )
 
 
 def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str]:
@@ -4761,16 +4792,26 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
         return False, title, ng_msg
 
     updated, failed = _refresh_all_account_info(domain=domain_n)
-    msg = (
-        f"Domain berhasil diubah ke: {domain_n}\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
+    return _account_refresh_outcome(
+        title,
+        [f"Domain berhasil diubah ke: {domain_n}"],
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain sudah berubah, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
     )
-    return True, title, msg
 
 
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     updated, failed = _refresh_all_account_info()
-    return True, "Domain Control - Refresh Account Info", f"Selesai: updated={updated}, failed={failed}"
+    title = "Domain Control - Refresh Account Info"
+    msg = f"Selesai: updated={updated}, failed={failed}"
+    if failed > 0:
+        msg += "\nSebagian ACCOUNT INFO gagal direfresh."
+        return False, title, msg
+    return True, title, msg
 
 
 def op_security_renew_cert() -> tuple[bool, str, str]:
@@ -5339,29 +5380,30 @@ def op_network_adblock_update() -> tuple[bool, str, str]:
 
 def op_network_adblock_toggle_auto_update() -> tuple[bool, str, str]:
     title = "Network - Toggle Auto Update"
-    timer_name = _adblock_auto_update_timer_name()
-    timer_path = _adblock_timer_path()
-    if not timer_path.exists():
-        return False, title, f"Timer auto update belum tersedia: {timer_path}"
+    with file_lock(ADBLOCK_LOCK_FILE):
+        timer_name = _adblock_auto_update_timer_name()
+        timer_path = _adblock_timer_path()
+        if not timer_path.exists():
+            return False, title, f"Timer auto update belum tersedia: {timer_path}"
 
-    enabled = _adblock_status_map().get("auto_update_enabled", "0") == "1"
-    target_value = "0" if enabled else "1"
-    ok_env, msg_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": target_value})
-    if not ok_env:
-        return False, title, msg_env
+        enabled = _adblock_status_map().get("auto_update_enabled", "0") == "1"
+        target_value = "0" if enabled else "1"
+        ok_env, msg_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": target_value})
+        if not ok_env:
+            return False, title, msg_env
 
-    if target_value == "1":
-        ok_cmd, out_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
+        if target_value == "1":
+            ok_cmd, out_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
+            if not ok_cmd:
+                _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+                return False, title, out_cmd
+            return True, title, "Auto Update Adblock diaktifkan."
+
+        ok_cmd, out_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
         if not ok_cmd:
-            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
             return False, title, out_cmd
-        return True, title, "Auto Update Adblock diaktifkan."
-
-    ok_cmd, out_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
-    if not ok_cmd:
-        _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
-        return False, title, out_cmd
-    return True, title, "Auto Update Adblock dinonaktifkan."
+        return True, title, "Auto Update Adblock dinonaktifkan."
 
 
 def op_network_adblock_set_auto_update_days(days: int) -> tuple[bool, str, str]:

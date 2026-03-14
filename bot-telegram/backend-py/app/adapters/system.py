@@ -306,12 +306,17 @@ def _edge_runtime_env_value(key: str, default: str = "") -> str:
     return _read_env_map(EDGE_RUNTIME_ENV_FILE).get(key, default)
 
 
+def _edge_runtime_provider_name(default: str = "go") -> str:
+    provider = _edge_runtime_env_value("EDGE_PROVIDER", default).strip().lower()
+    return provider or default
+
+
 def _badvpn_runtime_env_value(key: str, default: str = "") -> str:
     return _read_env_map(BADVPN_RUNTIME_ENV_FILE).get(key, default)
 
 
 def _edge_runtime_service_name() -> str:
-    provider = _edge_runtime_env_value("EDGE_PROVIDER", "go").strip().lower()
+    provider = _edge_runtime_provider_name("go")
     if provider == "nginx-stream":
         return "nginx"
     return "edge-mux"
@@ -2478,7 +2483,7 @@ def op_wireproxy_status() -> tuple[str, str]:
 def op_edge_gateway_status() -> tuple[str, str]:
     title = "Maintenance - Edge Gateway Status"
     service = _edge_runtime_service_name()
-    provider = _edge_runtime_env_value("EDGE_PROVIDER", "none") or "none"
+    provider = _edge_runtime_provider_name("go")
     active_flag = _edge_runtime_env_value("EDGE_ACTIVATE_RUNTIME", "false") or "false"
     http_port = _edge_runtime_env_value("EDGE_PUBLIC_HTTP_PORT", "80") or "80"
     tls_port = _edge_runtime_env_value("EDGE_PUBLIC_TLS_PORT", "443") or "443"

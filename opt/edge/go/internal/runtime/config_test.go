@@ -125,6 +125,64 @@ func TestValidateRejectsOverlappingSNIHost(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsPassthroughLoopToPublicTLSListener(t *testing.T) {
+	cfg := Config{
+		Provider:            "go",
+		PublicHTTPAddr:      "0.0.0.0:80",
+		PublicTLSAddr:       "0.0.0.0:443",
+		MetricsEnabled:      false,
+		HTTPBackend:         "127.0.0.1:18080",
+		SSHBackend:          "127.0.0.1:22022",
+		SSHTLSBackend:       "127.0.0.1:22443",
+		SSHWSBackend:        "127.0.0.1:10015",
+		VLESSRawBackend:     "127.0.0.1:33175",
+		TrojanRawBackend:    "127.0.0.1:48778",
+		TLSCertFile:         "/opt/cert/fullchain.pem",
+		TLSKeyFile:          "/opt/cert/privkey.pem",
+		DetectTimeout:       defaultDetectTimeout,
+		TLSHandshakeTimeout: defaultTLSHandshakeTimeout,
+		SSHSessionHeartbeat: defaultSSHSessionHeartbeat,
+		AcceptRateWindow:    defaultAcceptRateWindow,
+		CooldownWindow:      defaultCooldownWindow,
+		CooldownDuration:    defaultCooldownDuration,
+		SNIPassthrough: map[string]string{
+			"vision.example.com": "127.0.0.1:443",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate error = nil, want passthrough self-loop error")
+	}
+}
+
+func TestValidateRejectsPassthroughLoopToPublicHTTPListener(t *testing.T) {
+	cfg := Config{
+		Provider:            "go",
+		PublicHTTPAddr:      "0.0.0.0:80",
+		PublicTLSAddr:       "0.0.0.0:443",
+		MetricsEnabled:      false,
+		HTTPBackend:         "127.0.0.1:18080",
+		SSHBackend:          "127.0.0.1:22022",
+		SSHTLSBackend:       "127.0.0.1:22443",
+		SSHWSBackend:        "127.0.0.1:10015",
+		VLESSRawBackend:     "127.0.0.1:33175",
+		TrojanRawBackend:    "127.0.0.1:48778",
+		TLSCertFile:         "/opt/cert/fullchain.pem",
+		TLSKeyFile:          "/opt/cert/privkey.pem",
+		DetectTimeout:       defaultDetectTimeout,
+		TLSHandshakeTimeout: defaultTLSHandshakeTimeout,
+		SSHSessionHeartbeat: defaultSSHSessionHeartbeat,
+		AcceptRateWindow:    defaultAcceptRateWindow,
+		CooldownWindow:      defaultCooldownWindow,
+		CooldownDuration:    defaultCooldownDuration,
+		SNIPassthrough: map[string]string{
+			"legacy.example.com": "localhost:80",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate error = nil, want passthrough http self-loop error")
+	}
+}
+
 func TestConfigCloneDeepCopiesRoutingMaps(t *testing.T) {
 	cfg := Config{
 		TrustedProxyCIDRs: []string{"127.0.0.1/32"},
