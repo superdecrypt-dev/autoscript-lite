@@ -3192,7 +3192,7 @@ ssh_account_info_write() {
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
-  ip="$(detect_public_ip_ipapi)"
+  ip="$(main_info_ip_quiet_get)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
   geo="$(main_info_geo_lookup "${ip}")"
   IFS='|' read -r geo_ip isp country <<<"${geo}"
