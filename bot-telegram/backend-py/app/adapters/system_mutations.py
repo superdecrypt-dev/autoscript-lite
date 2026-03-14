@@ -52,6 +52,20 @@ NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 WGCF_DIR = Path("/etc/wgcf")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
+ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
+ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
+ADBLOCK_TIMER_DIR = Path("/etc/systemd/system")
+ADBLOCK_LOCK_FILE = "/run/autoscript/locks/adblock.lock"
+ADBLOCK_XRAY_RULE = "ext:custom.dat:adblock"
+ADBLOCK_DEFAULT_BLOCKLIST = "/etc/autoscript/ssh-adblock/blocked.domains"
+ADBLOCK_DEFAULT_URLS = "/etc/autoscript/ssh-adblock/source.urls"
+ADBLOCK_DEFAULT_MERGED = "/etc/autoscript/ssh-adblock/merged.domains"
+ADBLOCK_DEFAULT_RENDERED = "/etc/autoscript/ssh-adblock/blocklist.generated.conf"
+ADBLOCK_DEFAULT_CUSTOM_DAT = "/usr/local/share/xray/custom.dat"
+ADBLOCK_DEFAULT_DNS_SERVICE = "ssh-adblock-dns.service"
+ADBLOCK_DEFAULT_SYNC_SERVICE = "adblock-sync.service"
+ADBLOCK_DEFAULT_AUTO_UPDATE_SERVICE = "adblock-update.service"
+ADBLOCK_DEFAULT_AUTO_UPDATE_TIMER = "adblock-update.timer"
 XRAY_DOMAIN_FILE = Path("/etc/xray/domain")
 CERT_DIR = Path("/opt/cert")
 CERT_FULLCHAIN = CERT_DIR / "fullchain.pem"
@@ -533,6 +547,334 @@ def _network_state_set_many(values: dict[str, str]) -> None:
         payload[str(key)] = str(value)
     _write_json_atomic(NETWORK_STATE_FILE, payload)
     _chmod_600(NETWORK_STATE_FILE)
+
+
+def _adblock_env_map() -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        if not ADBLOCK_ENV_FILE.exists():
+            return data
+        for raw in ADBLOCK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            data[key.strip()] = value.strip()
+    except Exception:
+        return {}
+    return data
+
+
+def _adblock_env_value(key: str, default: str = "") -> str:
+    value = _adblock_env_map().get(key)
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def _adblock_path_from_env(key: str, default: str) -> Path:
+    return Path(_adblock_env_value(key, default))
+
+
+def _adblock_sync_service_name() -> str:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_SYNC_SERVICE", ADBLOCK_DEFAULT_SYNC_SERVICE)
+
+
+def _adblock_dns_service_name() -> str:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_SERVICE", ADBLOCK_DEFAULT_DNS_SERVICE)
+
+
+def _adblock_auto_update_service_name() -> str:
+    return _adblock_env_value("AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_SERVICE", ADBLOCK_DEFAULT_AUTO_UPDATE_SERVICE)
+
+
+def _adblock_auto_update_timer_name() -> str:
+    return _adblock_env_value("AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_TIMER", ADBLOCK_DEFAULT_AUTO_UPDATE_TIMER)
+
+
+def _adblock_timer_path() -> Path:
+    return ADBLOCK_TIMER_DIR / _adblock_auto_update_timer_name()
+
+
+def _adblock_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
+    lines: list[str] = []
+    if ADBLOCK_ENV_FILE.exists():
+        try:
+            lines = ADBLOCK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            return False, f"Gagal membaca config env adblock: {exc}"
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        line = str(raw or "")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key, _ = line.split("=", 1)
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+        out.append(line)
+
+    for key, value in updates.items():
+        if key in seen:
+            continue
+        out.append(f"{key}={value}")
+
+    try:
+        _write_text_atomic(ADBLOCK_ENV_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(ADBLOCK_ENV_FILE, 0o644)
+    except Exception as exc:
+        return False, f"Gagal menulis config env adblock: {exc}"
+    return True, "ok"
+
+
+def _adblock_enabled_flag() -> bool:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _adblock_status_map() -> dict[str, str]:
+    if not ADBLOCK_SYNC_BIN.exists():
+        return {}
+    ok, out = _run_cmd([str(ADBLOCK_SYNC_BIN), "--status"], timeout=30)
+    if not ok:
+        return {"error": out}
+    status: dict[str, str] = {}
+    for raw in out.splitlines():
+        line = str(raw or "").strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        status[key.strip()] = value.strip()
+    return status
+
+
+def _adblock_manual_domain_normalize(raw: str) -> str:
+    value = str(raw or "").strip().lower()
+    if value.startswith("*."):
+        value = value[2:]
+    value = value.lstrip(".").rstrip(".")
+    if not value or " " in value or "/" in value or ".." in value or "." not in value:
+        return ""
+    if not re.match(r"^[a-z0-9][a-z0-9._-]*\.[a-z0-9._-]+$", value):
+        return ""
+    return value
+
+
+def _adblock_url_normalize(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value.startswith(("http://", "https://")):
+        return ""
+    return value
+
+
+def _adblock_read_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+
+
+def _adblock_write_unique_lines(path: Path, lines: list[str]) -> tuple[bool, str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in lines:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    payload = ("\n".join(unique).rstrip("\n") + "\n") if unique else ""
+    try:
+        _write_text_atomic(path, payload)
+        os.chmod(path, 0o644)
+    except Exception as exc:
+        return False, f"Gagal menulis file {path}: {exc}"
+    return True, "ok"
+
+
+def _adblock_xray_rule_state() -> dict[str, str | int]:
+    if not XRAY_ROUTING_CONF.exists():
+        return {"enabled": "0", "outbound": "-", "duplicates": 0, "domains": 0}
+    ok, payload = _read_json(XRAY_ROUTING_CONF)
+    if not ok or not isinstance(payload, dict):
+        return {"enabled": "0", "outbound": "-", "duplicates": 0, "domains": 0}
+    rules = ((payload.get("routing") or {}).get("rules") or [])
+    targets: list[dict[str, Any]] = []
+    if isinstance(rules, list):
+        for item in rules:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "field":
+                continue
+            domains = item.get("domain")
+            if not isinstance(domains, list):
+                continue
+            if any(isinstance(val, str) and val.strip() == ADBLOCK_XRAY_RULE for val in domains):
+                targets.append(item)
+    if not targets:
+        return {"enabled": "0", "outbound": "-", "duplicates": 0, "domains": 0}
+    first = targets[0]
+    domains = first.get("domain") if isinstance(first.get("domain"), list) else []
+    outbound = str(first.get("outboundTag") or "-").strip() or "-"
+    return {
+        "enabled": "1",
+        "outbound": outbound,
+        "duplicates": max(0, len(targets) - 1),
+        "domains": sum(1 for item in domains if isinstance(item, str) and item.strip()),
+    }
+
+
+def _is_default_egress_rule(rule: dict[str, Any]) -> bool:
+    if not isinstance(rule, dict):
+        return False
+    if rule.get("type") != "field":
+        return False
+    port = str(rule.get("port") or "").strip()
+    if port not in {"1-65535", "0-65535"}:
+        return False
+    if rule.get("user") or rule.get("domain") or rule.get("ip") or rule.get("protocol"):
+        return False
+    return True
+
+
+def _adblock_set_xray_rule(mode: str) -> tuple[bool, str]:
+    mode_n = str(mode or "").strip().lower()
+    if mode_n not in {"blocked", "off"}:
+        return False, "Mode adblock Xray harus blocked/off."
+    ok, payload = _read_json(XRAY_ROUTING_CONF)
+    if not ok or not isinstance(payload, dict):
+        return False, str(payload)
+    routing = payload.get("routing")
+    if not isinstance(routing, dict):
+        return False, "Format routing tidak valid."
+    rules = routing.get("rules")
+    if not isinstance(rules, list):
+        return False, "Format routing.rules tidak valid."
+
+    before = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    backup = json.loads(json.dumps(payload, ensure_ascii=False))
+
+    filtered: list[Any] = []
+    primary_rule: dict[str, Any] | None = None
+    for item in rules:
+        if not isinstance(item, dict):
+            filtered.append(item)
+            continue
+        domains = item.get("domain")
+        if item.get("type") != "field" or not isinstance(domains, list):
+            filtered.append(item)
+            continue
+        contains = any(isinstance(val, str) and val.strip() == ADBLOCK_XRAY_RULE for val in domains)
+        if not contains:
+            filtered.append(item)
+            continue
+        if primary_rule is None:
+            primary_rule = dict(item)
+
+    if mode_n == "blocked":
+        if primary_rule is None:
+            primary_rule = {"type": "field", "domain": [ADBLOCK_XRAY_RULE], "outboundTag": "blocked"}
+        domains = primary_rule.get("domain")
+        if not isinstance(domains, list):
+            domains = []
+        cleaned = [ADBLOCK_XRAY_RULE]
+        seen = {ADBLOCK_XRAY_RULE}
+        for item in domains:
+            if not isinstance(item, str):
+                continue
+            value = item.strip()
+            if not value or value in seen:
+                continue
+            cleaned.append(value)
+            seen.add(value)
+        primary_rule["type"] = "field"
+        primary_rule["domain"] = cleaned
+        primary_rule["outboundTag"] = "blocked"
+
+        insert_at = len(filtered)
+        for idx, item in enumerate(filtered):
+            if isinstance(item, dict) and _is_default_egress_rule(item):
+                insert_at = idx
+                break
+        filtered.insert(insert_at, primary_rule)
+
+    routing["rules"] = filtered
+    payload["routing"] = routing
+    after = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if after == before:
+        return True, "Rule adblock Xray tidak berubah."
+
+    try:
+        _write_json_atomic(XRAY_ROUTING_CONF, payload)
+    except Exception as exc:
+        return False, f"Gagal menulis routing adblock Xray: {exc}"
+
+    if not _restart_and_wait("xray", timeout_sec=240):
+        try:
+            _write_json_atomic(XRAY_ROUTING_CONF, backup)
+        except Exception:
+            pass
+        _restart_and_wait("xray", timeout_sec=30)
+        return False, "xray tidak aktif setelah update routing adblock. Config di-rollback."
+    return True, "ok"
+
+
+def _adblock_apply_now() -> tuple[bool, str]:
+    if not ADBLOCK_SYNC_BIN.exists():
+        return False, "adblock-sync tidak ditemukan."
+    ok, out = _run_cmd([str(ADBLOCK_SYNC_BIN), "--apply"], timeout=120)
+    if not ok:
+        return False, out
+    return True, out
+
+
+def _adblock_update_now(reload_xray: bool = False) -> tuple[bool, str]:
+    if not ADBLOCK_SYNC_BIN.exists():
+        return False, "adblock-sync tidak ditemukan."
+    argv = [str(ADBLOCK_SYNC_BIN), "--update"]
+    if reload_xray:
+        argv.append("--reload-xray")
+    ok, out = _run_cmd(argv, timeout=300)
+    if not ok:
+        return False, out
+    return True, out
+
+
+def _adblock_mark_dirty() -> tuple[bool, str]:
+    return _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_DIRTY": "1"})
+
+
+def _adblock_auto_update_timer_write(days: int) -> tuple[bool, str]:
+    if days < 1:
+        return False, "Interval harus minimal 1 hari."
+    timer_path = _adblock_timer_path()
+    service_name = _adblock_auto_update_service_name()
+    content = (
+        "[Unit]\n"
+        f"Description=Run Adblock update every {days} day(s)\n\n"
+        "[Timer]\n"
+        "OnBootSec=10min\n"
+        f"OnUnitActiveSec={days}d\n"
+        "AccuracySec=5min\n"
+        f"Unit={service_name}\n"
+        "Persistent=true\n\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    try:
+        _write_text_atomic(timer_path, content)
+        os.chmod(timer_path, 0o644)
+    except Exception as exc:
+        return False, f"Gagal menulis timer adblock: {exc}"
+    ok_reload, out_reload = _run_cmd(["systemctl", "daemon-reload"], timeout=20)
+    if not ok_reload:
+        return False, out_reload
+    return True, "ok"
 
 
 def _warp_mask_license(value: str) -> str:
@@ -4431,6 +4773,64 @@ def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     return True, "Domain Control - Refresh Account Info", f"Selesai: updated={updated}, failed={failed}"
 
 
+def op_security_renew_cert() -> tuple[bool, str, str]:
+    title = "Security - Renew Certificate"
+    domain = _normalize_domain(_detect_domain())
+    if not DOMAIN_RE.match(domain):
+        return False, title, "Domain aktif tidak terdeteksi atau tidak valid."
+
+    ok_acme, acme_msg = _ensure_acme_installed()
+    if not ok_acme:
+        return False, title, acme_msg
+
+    acme = _acme_path()
+    renew_cmd = [str(acme), "--renew", "-d", domain, "--force"]
+    notes: list[str] = [f"Domain aktif : {domain}"]
+
+    ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
+    port80_conflict = (not ok_renew) and bool(
+        re.search(r"port 80 is already used|Please stop it first", renew_out, flags=re.IGNORECASE)
+    )
+
+    if not ok_renew and port80_conflict:
+        stopped_services = _stop_conflicting_services()
+        try:
+            ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
+        finally:
+            _restore_services(stopped_services)
+        if stopped_services:
+            notes.append("Retry renew dijalankan setelah menghentikan service yang memakai port 80.")
+
+    if not ok_renew and not port80_conflict:
+        ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
+        if ok_renew:
+            notes.append("Renew berhasil pada percobaan ulang.")
+
+    if not ok_renew:
+        msg = "\n".join(notes + ["", "Renew certificate gagal:", renew_out])
+        return False, title, msg
+
+    if _service_exists("nginx") and _service_is_active("nginx"):
+        ok_nginx_reload, nginx_reload_out = _run_cmd(["systemctl", "reload", "nginx"], timeout=30)
+        if not ok_nginx_reload:
+            ok_nginx_reload, nginx_reload_out = _run_cmd(["systemctl", "restart", "nginx"], timeout=30)
+        if ok_nginx_reload and _service_is_active("nginx"):
+            notes.append("nginx berhasil di-reload/restart untuk memuat cert terbaru.")
+        else:
+            notes.append("Cert berhasil diperbarui, tetapi nginx gagal di-reload/restart.")
+            notes.append(nginx_reload_out)
+
+    ok_tls, tls_msg = _restart_tls_runtime_consumers(set())
+    if ok_tls:
+        notes.append("TLS consumer aktif berhasil di-reload/restart.")
+    else:
+        notes.append("Cert berhasil diperbarui, tetapi restart consumer TLS tambahan gagal.")
+        notes.append(tls_msg)
+
+    msg = "\n".join(notes + ["", "Renew certificate selesai. Cek expiry untuk memastikan hasil terbaru."])
+    return True, title, msg
+
+
 def op_network_apply_warp_global_mode(mode: str) -> tuple[bool, str, str]:
     title = "Network Controls - WARP Global"
     mode_n = str(mode or "").strip().lower()
@@ -4754,3 +5154,235 @@ def op_network_toggle_dns_cache() -> tuple[bool, str, str]:
     if not ok_apply:
         return False, title, msg_apply
     return True, title, msg_apply
+
+
+def op_network_adblock_enable() -> tuple[bool, str, str]:
+    title = "Network - Enable Adblock"
+    with file_lock(ADBLOCK_LOCK_FILE):
+        status = _adblock_status_map()
+        dirty = status.get("dirty", "0") == "1"
+        rendered_ready = status.get("rendered_file", "missing") == "ready"
+        custom_ready = status.get("custom_dat", "missing") == "ready"
+        xray_enabled = str(_adblock_xray_rule_state().get("enabled") or "0") == "1"
+
+        if dirty or not rendered_ready or not custom_ready:
+            ok_update, msg_update = _adblock_update_now(reload_xray=xray_enabled)
+            if not ok_update:
+                return False, title, f"Update Adblock gagal. Enable dibatalkan.\n{msg_update}"
+            status = _adblock_status_map()
+            if status.get("custom_dat", "missing") != "ready":
+                return False, title, "custom.dat belum siap. Enable dibatalkan."
+
+        ok_xray, msg_xray = _adblock_set_xray_rule("blocked")
+        if not ok_xray:
+            return False, title, msg_xray
+
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "1"})
+        if not ok_env:
+            if not xray_enabled:
+                _adblock_set_xray_rule("off")
+            return False, title, msg_env
+
+        ok_apply, msg_apply = _adblock_apply_now()
+        if not ok_apply:
+            _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "0"})
+            _adblock_apply_now()
+            if not xray_enabled:
+                _adblock_set_xray_rule("off")
+            return False, title, f"DNS Adblock SSH gagal diterapkan.\n{msg_apply}"
+    return True, title, "Adblock diaktifkan (shared source -> Xray + SSH)."
+
+
+def op_network_adblock_disable() -> tuple[bool, str, str]:
+    title = "Network - Disable Adblock"
+    with file_lock(ADBLOCK_LOCK_FILE):
+        ok_xray, msg_xray = _adblock_set_xray_rule("off")
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "0"})
+        ok_apply, msg_apply = _adblock_apply_now()
+
+    if ok_xray and ok_env and ok_apply:
+        return True, title, "Adblock dinonaktifkan (Xray + SSH)."
+
+    parts = []
+    if not ok_xray:
+        parts.append(f"Xray: {msg_xray}")
+    if not ok_env:
+        parts.append(f"Config: {msg_env}")
+    if not ok_apply:
+        parts.append(f"SSH: {msg_apply}")
+    return False, title, "Adblock nonaktif sebagian.\n" + "\n".join(parts)
+
+
+def op_network_adblock_add_domain(domain: str) -> tuple[bool, str, str]:
+    title = "Network - Adblock Add Domain"
+    normalized = _adblock_manual_domain_normalize(domain)
+    if not normalized:
+        return False, title, "Domain tidak valid."
+    blocklist_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", ADBLOCK_DEFAULT_BLOCKLIST)
+    with file_lock(ADBLOCK_LOCK_FILE):
+        current = []
+        seen: set[str] = set()
+        for raw in _adblock_read_lines(blocklist_path):
+            item = _adblock_manual_domain_normalize(raw)
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            current.append(item)
+        if normalized in seen:
+            return False, title, "Domain sudah ada."
+        current.append(normalized)
+        ok_write, msg_write = _adblock_write_unique_lines(blocklist_path, current)
+        if not ok_write:
+            return False, title, msg_write
+        ok_dirty, msg_dirty = _adblock_mark_dirty()
+        if not ok_dirty:
+            return False, title, msg_dirty
+    return True, title, f"Domain ditambahkan: {normalized}\nJalankan Update Adblock untuk build artifact baru."
+
+
+def op_network_adblock_delete_domain(domain: str) -> tuple[bool, str, str]:
+    title = "Network - Adblock Delete Domain"
+    normalized = _adblock_manual_domain_normalize(domain)
+    if not normalized:
+        return False, title, "Domain tidak valid."
+    blocklist_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", ADBLOCK_DEFAULT_BLOCKLIST)
+    with file_lock(ADBLOCK_LOCK_FILE):
+        current = []
+        found = False
+        seen: set[str] = set()
+        for raw in _adblock_read_lines(blocklist_path):
+            item = _adblock_manual_domain_normalize(raw)
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            if item == normalized:
+                found = True
+                continue
+            current.append(item)
+        if not found:
+            return False, title, f"Domain tidak ditemukan: {normalized}"
+        ok_write, msg_write = _adblock_write_unique_lines(blocklist_path, current)
+        if not ok_write:
+            return False, title, msg_write
+        ok_dirty, msg_dirty = _adblock_mark_dirty()
+        if not ok_dirty:
+            return False, title, msg_dirty
+    return True, title, f"Domain dihapus: {normalized}\nJalankan Update Adblock untuk build artifact baru."
+
+
+def op_network_adblock_add_url_source(url: str) -> tuple[bool, str, str]:
+    title = "Network - Adblock Add URL Source"
+    normalized = _adblock_url_normalize(url)
+    if not normalized:
+        return False, title, "URL tidak valid."
+    urls_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_URLS_FILE", ADBLOCK_DEFAULT_URLS)
+    with file_lock(ADBLOCK_LOCK_FILE):
+        current = []
+        seen: set[str] = set()
+        for raw in _adblock_read_lines(urls_path):
+            item = _adblock_url_normalize(raw)
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            current.append(item)
+        if normalized in seen:
+            return False, title, "URL source sudah ada."
+        current.append(normalized)
+        ok_write, msg_write = _adblock_write_unique_lines(urls_path, current)
+        if not ok_write:
+            return False, title, msg_write
+        ok_dirty, msg_dirty = _adblock_mark_dirty()
+        if not ok_dirty:
+            return False, title, msg_dirty
+    return True, title, f"URL source ditambahkan: {normalized}\nJalankan Update Adblock untuk build artifact baru."
+
+
+def op_network_adblock_delete_url_source(url: str) -> tuple[bool, str, str]:
+    title = "Network - Adblock Delete URL Source"
+    normalized = _adblock_url_normalize(url)
+    if not normalized:
+        return False, title, "URL tidak valid."
+    urls_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_URLS_FILE", ADBLOCK_DEFAULT_URLS)
+    with file_lock(ADBLOCK_LOCK_FILE):
+        current = []
+        found = False
+        seen: set[str] = set()
+        for raw in _adblock_read_lines(urls_path):
+            item = _adblock_url_normalize(raw)
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            if item == normalized:
+                found = True
+                continue
+            current.append(item)
+        if not found:
+            return False, title, f"URL source tidak ditemukan: {normalized}"
+        ok_write, msg_write = _adblock_write_unique_lines(urls_path, current)
+        if not ok_write:
+            return False, title, msg_write
+        ok_dirty, msg_dirty = _adblock_mark_dirty()
+        if not ok_dirty:
+            return False, title, msg_dirty
+    return True, title, f"URL source dihapus: {normalized}\nJalankan Update Adblock untuk build artifact baru."
+
+
+def op_network_adblock_update() -> tuple[bool, str, str]:
+    title = "Network - Update Adblock"
+    with file_lock(ADBLOCK_LOCK_FILE):
+        xray_enabled = str(_adblock_xray_rule_state().get("enabled") or "0") == "1"
+        ok_update, msg_update = _adblock_update_now(reload_xray=xray_enabled)
+        if not ok_update:
+            return False, title, msg_update
+    return True, title, "Adblock sources diperbarui dan artifact runtime dibangun ulang."
+
+
+def op_network_adblock_toggle_auto_update() -> tuple[bool, str, str]:
+    title = "Network - Toggle Auto Update"
+    timer_name = _adblock_auto_update_timer_name()
+    timer_path = _adblock_timer_path()
+    if not timer_path.exists():
+        return False, title, f"Timer auto update belum tersedia: {timer_path}"
+
+    enabled = _adblock_status_map().get("auto_update_enabled", "0") == "1"
+    target_value = "0" if enabled else "1"
+    ok_env, msg_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": target_value})
+    if not ok_env:
+        return False, title, msg_env
+
+    if target_value == "1":
+        ok_cmd, out_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
+        if not ok_cmd:
+            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+            return False, title, out_cmd
+        return True, title, "Auto Update Adblock diaktifkan."
+
+    ok_cmd, out_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
+    if not ok_cmd:
+        _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
+        return False, title, out_cmd
+    return True, title, "Auto Update Adblock dinonaktifkan."
+
+
+def op_network_adblock_set_auto_update_days(days: int) -> tuple[bool, str, str]:
+    title = "Network - Set Auto Update Interval"
+    if int(days) < 1:
+        return False, title, "Interval harus berupa angka hari, minimal 1."
+    with file_lock(ADBLOCK_LOCK_FILE):
+        previous_days = _adblock_env_value("AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS", "1")
+        ok_env, msg_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": str(int(days))})
+        if not ok_env:
+            return False, title, msg_env
+        ok_timer, msg_timer = _adblock_auto_update_timer_write(int(days))
+        if not ok_timer:
+            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+            return False, title, msg_timer
+        timer_name = _adblock_auto_update_timer_name()
+        if _adblock_status_map().get("auto_update_enabled", "0") == "1":
+            ok_restart, out_restart = _run_cmd(["systemctl", "restart", timer_name], timeout=30)
+            if not ok_restart:
+                _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+                _adblock_auto_update_timer_write(int(previous_days) if str(previous_days).isdigit() else 1)
+                _run_cmd(["systemctl", "restart", timer_name], timeout=30)
+                return False, title, out_restart
+    return True, title, f"Interval Auto Update di-set setiap {int(days)} hari."

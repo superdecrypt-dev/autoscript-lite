@@ -59,10 +59,10 @@ DELETE_PICK_PAGE_SIZE = 12
 FORM_CHOICE_PAGE_SIZE = 12
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 USER_PROTOCOLS = XRAY_PROTOCOLS + ("ssh",)
-XRAY_USER_MENU_ID = "2"
-SSH_USER_MENU_ID = "3"
-XRAY_QAC_MENU_ID = "4"
-SSH_QAC_MENU_ID = "5"
+XRAY_USER_MENU_ID = "1"
+SSH_USER_MENU_ID = "2"
+XRAY_QAC_MENU_ID = "3"
+SSH_QAC_MENU_ID = "4"
 BACKUP_MENU_ID = "12"
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
@@ -492,9 +492,9 @@ def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
 
 def _delete_picker_title(menu_id: str) -> str:
     if menu_id == XRAY_USER_MENU_ID:
-        return "Xray Management"
+        return "Xray Users"
     if menu_id == SSH_USER_MENU_ID:
-        return "SSH Management"
+        return "SSH Users"
     return "User Management"
 
 
@@ -825,6 +825,22 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
         mode_q = mode if mode in {"direct", "warp"} else None
         try:
             options: list[BackendDomainOption] = await runtime.backend.list_warp_domain_options(mode=mode_q)
+        except BackendError:
+            return []
+        entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
+        return [(ent, ent) for ent in entries]
+
+    if field_id == "domain" and action_id == "delete_adblock_domain":
+        try:
+            options = await runtime.backend.list_adblock_manual_options()
+        except BackendError:
+            return []
+        entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
+        return [(ent, ent) for ent in entries]
+
+    if field_id == "url" and action_id == "delete_adblock_url_source":
+        try:
+            options = await runtime.backend.list_adblock_url_options()
         except BackendError:
             return []
         entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
@@ -1531,7 +1547,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith(f"dup_proto_menu{CALLBACK_SEP}"):
         parts = data.split(CALLBACK_SEP)
-        menu_id = parts[1] if len(parts) > 1 else "2"
+        menu_id = parts[1] if len(parts) > 1 else XRAY_USER_MENU_ID
         await _show_delete_user_proto_picker(
             context=context,
             chat_id=chat_id,
@@ -1570,7 +1586,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.answer("Sesi pemilihan user tidak aktif.", show_alert=True)
             return
         proto = str(state.get("proto") or "").strip().lower()
-        menu_id = str(state.get("menu_id") or "2")
+        menu_id = str(state.get("menu_id") or XRAY_USER_MENU_ID)
         users = state.get("users") if isinstance(state.get("users"), list) else []
         if proto not in _menu_protocol_scope(menu_id) or not users:
             await query.answer("Sesi pemilihan user tidak valid.", show_alert=True)
@@ -1599,7 +1615,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.answer("Sesi pemilihan user tidak aktif.", show_alert=True)
             return
         proto = str(state.get("proto") or "").strip().lower()
-        menu_id = str(state.get("menu_id") or "2")
+        menu_id = str(state.get("menu_id") or XRAY_USER_MENU_ID)
         users = state.get("users") if isinstance(state.get("users"), list) else []
         if proto not in _menu_protocol_scope(menu_id) or not users:
             await query.answer("Sesi pemilihan user tidak valid.", show_alert=True)

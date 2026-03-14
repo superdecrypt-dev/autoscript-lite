@@ -1,7 +1,7 @@
 {
   "menus": [
     {
-      "id": "1",
+      "id": "11",
       "label": "Status & Diagnostics",
       "description": "Status server, validasi konfigurasi Xray, dan informasi TLS.",
       "actions": [
@@ -26,8 +26,8 @@
       ]
     },
     {
-      "id": "2",
-      "label": "Xray Management",
+      "id": "1",
+      "label": "Xray Users",
       "description": "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
       "actions": [
         {
@@ -217,8 +217,8 @@
       ]
     },
     {
-      "id": "3",
-      "label": "SSH Management",
+      "id": "2",
+      "label": "SSH Users",
       "description": "Kelola akun SSH, masa aktif, password, sesi SSHWS, dan informasi akun.",
       "actions": [
         {
@@ -433,7 +433,7 @@
       ]
     },
     {
-      "id": "4",
+      "id": "3",
       "label": "Xray QAC",
       "description": "Ringkasan kuota dan kontrol akses per pengguna Xray.",
       "actions": [
@@ -755,7 +755,7 @@
       ]
     },
     {
-      "id": "5",
+      "id": "4",
       "label": "SSH QAC",
       "description": "Ringkasan quota dan kontrol akses per akun SSH.",
       "actions": [
@@ -1007,8 +1007,8 @@
       ]
     },
     {
-      "id": "6",
-      "label": "Network Controls",
+      "id": "5",
+      "label": "Network",
       "description": "Ringkasan routing WARP, DNS, dan status network.",
       "actions": [
         {
@@ -1246,11 +1246,152 @@
           "label": "State File",
           "mode": "direct",
           "style": "secondary"
+        },
+        {
+          "id": "adblock_status",
+          "label": "View Adblock Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "adblock_show_bound_users",
+          "label": "Show Bound Users",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "adblock_enable",
+          "label": "Enable Adblock",
+          "mode": "direct",
+          "style": "success",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_disable",
+          "label": "Disable Adblock",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_domain",
+          "label": "Add Adblock Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: ads.example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_domain",
+          "label": "Delete Adblock Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Delete Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_url_source",
+          "label": "Add URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL Source",
+                "style": "short",
+                "required": true,
+                "placeholder": "https://example.com/list.txt"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_url_source",
+          "label": "Delete URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Delete Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL Source",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "adblock_update",
+          "label": "Update Adblock",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_toggle_auto_update",
+          "label": "Toggle Auto Update",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_set_auto_update_days",
+          "label": "Set Auto Update Days",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Adblock Auto Update Interval",
+            "fields": [
+              {
+                "id": "days",
+                "label": "Interval Hari",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          },
+          "dangerous": true
         }
       ]
     },
     {
-      "id": "7",
+      "id": "6",
       "label": "Domain Control",
       "description": "Atur domain aktif + sertifikat.\nManual: pakai domain sendiri yang sudah pointing ke IP VPS.\nAuto: pakai root domain bawaan sistem (subdomain dibuat otomatis via API Cloudflare).",
       "actions": [
@@ -1323,6 +1464,26 @@
           "dangerous": true
         },
         {
+          "id": "set_domain",
+          "label": "Set Domain Only",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Set Domain (No Cert Wizard)",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain (FQDN)",
+                "style": "short",
+                "required": true,
+                "placeholder": "vpn.example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
           "id": "domain_info",
           "label": "View Domain Info",
           "mode": "direct",
@@ -1364,7 +1525,7 @@
       ]
     },
     {
-      "id": "8",
+      "id": "7",
       "label": "Speedtest",
       "description": "Pengujian kecepatan jaringan dan versi binary.",
       "actions": [
@@ -1383,7 +1544,7 @@
       ]
     },
     {
-      "id": "9",
+      "id": "8",
       "label": "Security",
       "description": "TLS, fail2ban, hardening system, dan security overview.",
       "actions": [
@@ -1398,6 +1559,22 @@
           "label": "TLS Expiry",
           "mode": "direct",
           "style": "secondary"
+        },
+        {
+          "id": "renew_cert",
+          "label": "Renew Cert",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "reload_nginx",
+          "label": "Reload Nginx",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
         },
         {
           "id": "fail2ban_status",
@@ -1491,7 +1668,7 @@
       ]
     },
     {
-      "id": "10",
+      "id": "9",
       "label": "Maintenance",
       "description": "Status layanan, restart, logs, WARP, daemon Xray, dan diagnostics SSHWS.",
       "actions": [
@@ -1544,8 +1721,36 @@
           "style": "secondary"
         },
         {
+          "id": "edge_gateway_status",
+          "label": "Edge Gateway Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "badvpn_status",
+          "label": "BadVPN Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
           "id": "restart_wireproxy",
           "label": "Restart Wireproxy",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_edge_gateway",
+          "label": "Restart Edge Gateway",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_badvpn",
+          "label": "Restart BadVPN",
           "mode": "direct",
           "style": "danger",
           "confirm": true,
@@ -1600,8 +1805,8 @@
       ]
     },
     {
-      "id": "11",
-      "label": "Traffic Analytics",
+      "id": "10",
+      "label": "Traffic",
       "description": "Analitik traffic user berdasarkan metadata quota (overview, top users, search, dan export).",
       "actions": [
         {

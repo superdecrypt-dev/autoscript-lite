@@ -39,7 +39,12 @@ class MenuSpec:
 
 class CommandCatalog:
     def __init__(self, menus: list[MenuSpec]) -> None:
-        self.menus: tuple[MenuSpec, ...] = tuple(menus)
+        self.menus: tuple[MenuSpec, ...] = tuple(
+            sorted(
+                menus,
+                key=lambda menu: (0, int(menu.id)) if menu.id.isdigit() else (1, menu.id),
+            )
+        )
         self._menu_map = {m.id: m for m in self.menus}
 
     @classmethod

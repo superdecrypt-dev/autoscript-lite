@@ -48,7 +48,12 @@ def _filter_commands_payload(payload: dict, enable_dangerous_actions: bool) -> d
         filtered_menus.append(menu_copy)
 
     payload_copy = dict(payload)
-    payload_copy["menus"] = filtered_menus
+    payload_copy["menus"] = sorted(
+        filtered_menus,
+        key=lambda item: (0, int(str(item.get("id", "")).strip()))
+        if str(item.get("id", "")).strip().isdigit()
+        else (1, str(item.get("id", "")).strip()),
+    )
     return payload_copy
 
 
@@ -102,6 +107,22 @@ def get_inbound_options() -> dict:
 @router.get("/api/network/domain-options", dependencies=[Depends(verify_shared_secret)])
 def get_network_domain_options(mode: str | None = None) -> dict:
     entries = system.list_warp_domain_options(mode=mode)
+    return {
+        "entries": [{"entry": item} for item in entries],
+    }
+
+
+@router.get("/api/network/adblock/manual-options", dependencies=[Depends(verify_shared_secret)])
+def get_network_adblock_manual_options() -> dict:
+    entries = system.list_adblock_manual_domains()
+    return {
+        "entries": [{"entry": item} for item in entries],
+    }
+
+
+@router.get("/api/network/adblock/url-options", dependencies=[Depends(verify_shared_secret)])
+def get_network_adblock_url_options() -> dict:
+    entries = system.list_adblock_url_sources()
     return {
         "entries": [{"entry": item} for item in entries],
     }

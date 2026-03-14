@@ -24,8 +24,8 @@ def _fmt_number(value: float) -> str:
 
 def _scope_title(scope: str, label: str) -> str:
     prefix = {
-        "xray": "Xray Management",
-        "ssh": "SSH Management",
+        "xray": "Xray Users",
+        "ssh": "SSH Users",
     }.get(scope, "User Management")
     return f"{prefix} - {label}" if label else prefix
 

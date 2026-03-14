@@ -8,6 +8,27 @@ import httpx
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
+    "5:adblock_enable": 420.0,
+    "5:adblock_disable": 120.0,
+    "5:adblock_update": 420.0,
+    "6:set_domain": 120.0,
+    "6:setup_domain_custom": 420.0,
+    "6:setup_domain_cloudflare": 420.0,
+    "6:domain_guard_check": 190.0,
+    "6:domain_guard_renew": 320.0,
+    "6:refresh_account_info": 240.0,
+    "7:run": 190.0,
+    "8:reload_nginx": 60.0,
+    "8:renew_cert": 420.0,
+    "9:restart_edge_gateway": 90.0,
+    "9:restart_badvpn": 90.0,
+    "12:create_backup": 240.0,
+    "12:restore_latest": 420.0,
+    "12:restore_from_upload": 420.0,
+    "5:warp_restart": 90.0,
+    "5:warp_tier_switch_free": 420.0,
+    "5:warp_tier_switch_plus": 420.0,
+    "5:warp_tier_reconnect": 420.0,
     "7:setup_domain_custom": 420.0,
     "7:setup_domain_cloudflare": 420.0,
     "7:domain_guard_check": 190.0,
@@ -210,6 +231,56 @@ class BackendClient:
         if not isinstance(raw_entries, list):
             return []
 
+        out: list[BackendDomainOption] = []
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                continue
+            entry = str(item.get("entry") or "").strip()
+            if not entry:
+                continue
+            out.append(BackendDomainOption(entry=entry))
+        return out
+
+    async def list_adblock_manual_options(self) -> list[BackendDomainOption]:
+        try:
+            async with self._new_client(timeout=15.0) as client:
+                response = await client.get("/api/network/adblock/manual-options")
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text.strip()
+            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
+        except Exception as exc:
+            raise BackendError(_sanitize_text(str(exc))) from exc
+
+        raw_entries = data.get("entries") if isinstance(data, dict) else None
+        if not isinstance(raw_entries, list):
+            return []
+        out: list[BackendDomainOption] = []
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                continue
+            entry = str(item.get("entry") or "").strip()
+            if not entry:
+                continue
+            out.append(BackendDomainOption(entry=entry))
+        return out
+
+    async def list_adblock_url_options(self) -> list[BackendDomainOption]:
+        try:
+            async with self._new_client(timeout=15.0) as client:
+                response = await client.get("/api/network/adblock/url-options")
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text.strip()
+            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
+        except Exception as exc:
+            raise BackendError(_sanitize_text(str(exc))) from exc
+
+        raw_entries = data.get("entries") if isinstance(data, dict) else None
+        if not isinstance(raw_entries, list):
+            return []
         out: list[BackendDomainOption] = []
         for item in raw_entries:
             if not isinstance(item, dict):

@@ -1,6 +1,6 @@
 from ..adapters import system, system_mutations
 from ..utils.response import error_response, ok_response
-from ..utils.validators import require_param, require_protocol, require_username
+from ..utils.validators import require_param, require_positive_int_param, require_protocol, require_username
 
 
 def handle(action: str, params: dict, settings) -> dict:
@@ -150,4 +150,100 @@ def handle(action: str, params: dict, settings) -> dict:
     if action == "state_file":
         title, msg = system.op_network_state_raw()
         return ok_response(title, msg)
+
+    if action == "adblock_status":
+        title, msg = system.op_network_adblock_status()
+        return ok_response(title, msg)
+
+    if action == "adblock_show_bound_users":
+        title, msg = system.op_network_adblock_bound_users()
+        return ok_response(title, msg)
+
+    if action == "adblock_enable":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_op, title, msg = system_mutations.op_network_adblock_enable()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_enable_failed", title, msg)
+
+    if action == "adblock_disable":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_op, title, msg = system_mutations.op_network_adblock_disable()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_disable_failed", title, msg)
+
+    if action == "add_adblock_domain":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_d, domain_or_err = require_param(params, "domain", "Network - Adblock Add Domain")
+        if not ok_d:
+            return domain_or_err
+        ok_op, title, msg = system_mutations.op_network_adblock_add_domain(str(domain_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_add_domain_failed", title, msg)
+
+    if action == "delete_adblock_domain":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_d, domain_or_err = require_param(params, "domain", "Network - Adblock Delete Domain")
+        if not ok_d:
+            return domain_or_err
+        ok_op, title, msg = system_mutations.op_network_adblock_delete_domain(str(domain_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_delete_domain_failed", title, msg)
+
+    if action == "add_adblock_url_source":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_u, url_or_err = require_param(params, "url", "Network - Adblock Add URL Source")
+        if not ok_u:
+            return url_or_err
+        ok_op, title, msg = system_mutations.op_network_adblock_add_url_source(str(url_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_add_url_failed", title, msg)
+
+    if action == "delete_adblock_url_source":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_u, url_or_err = require_param(params, "url", "Network - Adblock Delete URL Source")
+        if not ok_u:
+            return url_or_err
+        ok_op, title, msg = system_mutations.op_network_adblock_delete_url_source(str(url_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_delete_url_failed", title, msg)
+
+    if action == "adblock_update":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_op, title, msg = system_mutations.op_network_adblock_update()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_update_failed", title, msg)
+
+    if action == "adblock_toggle_auto_update":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_op, title, msg = system_mutations.op_network_adblock_toggle_auto_update()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_toggle_auto_update_failed", title, msg)
+
+    if action == "adblock_set_auto_update_days":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
+        ok_d, days_or_err = require_positive_int_param(params, "days", "Network - Adblock Set Auto Update Interval", minimum=1)
+        if not ok_d:
+            return days_or_err
+        ok_op, title, msg = system_mutations.op_network_adblock_set_auto_update_days(int(days_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_adblock_set_auto_update_days_failed", title, msg)
+
     return error_response("unknown_action", "Network Controls", f"Action tidak dikenal: {action}")

@@ -17,7 +17,13 @@ XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 CERT_FULLCHAIN = Path("/opt/cert/fullchain.pem")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
+ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
+ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
+ADBLOCK_DEFAULT_BLOCKLIST = Path("/etc/autoscript/ssh-adblock/blocked.domains")
+ADBLOCK_DEFAULT_URLS = Path("/etc/autoscript/ssh-adblock/source.urls")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
+EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
+BADVPN_RUNTIME_ENV_FILE = Path("/etc/default/badvpn-udpgw")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
@@ -43,6 +49,8 @@ EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 ALLOWED_SERVICES = (
     "xray",
     "nginx",
+    "edge-mux",
+    "badvpn-udpgw",
     "wireproxy",
     "xray-expired",
     "xray-quota",
@@ -266,6 +274,72 @@ def _listener_present(port: int) -> bool:
     if not ok:
         return False
     return bool(re.search(rf":{int(port)}(?:\s|$)", out))
+
+
+def _udp_listener_present(port: int) -> bool:
+    if not shutil.which("ss"):
+        return False
+    ok, out = run_cmd(["ss", "-lnup"], timeout=8)
+    if not ok:
+        return False
+    return bool(re.search(rf":{int(port)}(?:\s|$)", out))
+
+
+def _read_env_map(path: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    if not path.exists():
+        return data
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return data
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        data[key.strip()] = value.strip()
+    return data
+
+
+def _edge_runtime_env_value(key: str, default: str = "") -> str:
+    return _read_env_map(EDGE_RUNTIME_ENV_FILE).get(key, default)
+
+
+def _badvpn_runtime_env_value(key: str, default: str = "") -> str:
+    return _read_env_map(BADVPN_RUNTIME_ENV_FILE).get(key, default)
+
+
+def _edge_runtime_service_name() -> str:
+    provider = _edge_runtime_env_value("EDGE_PROVIDER", "go").strip().lower()
+    if provider == "nginx-stream":
+        return "nginx"
+    return "edge-mux"
+
+
+def _badvpn_runtime_ports() -> list[int]:
+    raw = _badvpn_runtime_env_value("BADVPN_UDPGW_PORTS", "7300 7400 7500 7600 7700 7800 7900")
+    values: list[int] = []
+    seen: set[int] = set()
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token:
+            continue
+        try:
+            port = int(token)
+        except Exception:
+            continue
+        if not (1 <= port <= 65535) or port in seen:
+            continue
+        seen.add(port)
+        values.append(port)
+    return values
+
+
+def _badvpn_runtime_ports_label() -> str:
+    ports = _badvpn_runtime_ports()
+    if not ports:
+        return "-"
+    return ", ".join(str(port) for port in ports)
 
 
 def _probe_tcp_endpoint(host: str, port: int, *, tls_mode: bool = False) -> str:
@@ -1166,6 +1240,215 @@ def op_network_state_raw() -> tuple[str, str]:
     if not ok:
         return "Network Controls - State File", str(payload)
     return "Network Controls - State File", json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _adblock_env_value(key: str, default: str = "") -> str:
+    try:
+        if not ADBLOCK_ENV_FILE.exists():
+            return default
+        for raw in ADBLOCK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            env_key, env_value = line.split("=", 1)
+            if env_key.strip() == key:
+                value = env_value.strip()
+                return value if value else default
+    except Exception:
+        return default
+    return default
+
+
+def _adblock_blocklist_file() -> Path:
+    return Path(_adblock_env_value("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", str(ADBLOCK_DEFAULT_BLOCKLIST)))
+
+
+def _adblock_urls_file() -> Path:
+    return Path(_adblock_env_value("SSH_DNS_ADBLOCK_URLS_FILE", str(ADBLOCK_DEFAULT_URLS)))
+
+
+def list_adblock_manual_domains() -> list[str]:
+    path = _adblock_blocklist_file()
+    if not path.exists():
+        return []
+    seen: set[str] = set()
+    domains: list[str] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = str(raw or "").strip().lower().rstrip(".")
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("*."):
+                line = line[2:]
+            if " " in line or "/" in line or ".." in line or "." not in line:
+                continue
+            if line in seen:
+                continue
+            seen.add(line)
+            domains.append(line)
+    except Exception:
+        return []
+    return domains
+
+
+def list_adblock_url_sources() -> list[str]:
+    path = _adblock_urls_file()
+    if not path.exists():
+        return []
+    seen: set[str] = set()
+    urls: list[str] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = str(raw or "").strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith(("http://", "https://")):
+                continue
+            if line in seen:
+                continue
+            seen.add(line)
+            urls.append(line)
+    except Exception:
+        return []
+    return urls
+
+
+def _adblock_status_map() -> dict[str, str]:
+    if not ADBLOCK_SYNC_BIN.exists():
+        return {
+            "enabled": "0",
+            "dirty": "0",
+            "dns_service": "missing",
+            "sync_service": "missing",
+            "nft_table": "absent",
+            "bound_users": "0",
+            "users_count": "0",
+            "manual_domains": str(len(list_adblock_manual_domains())),
+            "merged_domains": "0",
+            "blocklist_entries": "0",
+            "source_urls": str(len(list_adblock_url_sources())),
+            "dns_port": "5353",
+            "rendered_file": "missing",
+            "custom_dat": "missing",
+            "auto_update_enabled": "0",
+            "auto_update_service": "missing",
+            "auto_update_timer": "missing",
+            "auto_update_days": "1",
+            "auto_update_schedule": "every 1 day(s)",
+            "last_update": "-",
+            "blocklist_file": str(_adblock_blocklist_file()),
+            "urls_file": str(_adblock_urls_file()),
+        }
+    ok, out = run_cmd([str(ADBLOCK_SYNC_BIN), "--status"], timeout=25)
+    if not ok:
+        return {
+            "enabled": "0",
+            "dirty": "0",
+            "dns_service": "error",
+            "sync_service": "error",
+            "nft_table": "absent",
+            "bound_users": "0",
+            "users_count": "0",
+            "manual_domains": str(len(list_adblock_manual_domains())),
+            "merged_domains": "0",
+            "blocklist_entries": "0",
+            "source_urls": str(len(list_adblock_url_sources())),
+            "dns_port": "5353",
+            "rendered_file": "missing",
+            "custom_dat": "missing",
+            "auto_update_enabled": "0",
+            "auto_update_service": "error",
+            "auto_update_timer": "error",
+            "auto_update_days": "1",
+            "auto_update_schedule": "every 1 day(s)",
+            "last_update": f"error: {out.splitlines()[0] if out else 'status failed'}",
+            "blocklist_file": str(_adblock_blocklist_file()),
+            "urls_file": str(_adblock_urls_file()),
+        }
+
+    status: dict[str, str] = {}
+    for raw in out.splitlines():
+        line = str(raw or "").strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        status[key.strip()] = value.strip()
+    return status
+
+
+def _adblock_xray_rule_enabled() -> bool:
+    src = XRAY_CONFDIR / "30-routing.json"
+    ok, payload = read_json(src)
+    if not ok or not isinstance(payload, dict):
+        return False
+    rules = ((payload.get("routing") or {}).get("rules") or [])
+    if not isinstance(rules, list):
+        return False
+    for item in rules:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "field":
+            continue
+        domains = item.get("domain")
+        if not isinstance(domains, list):
+            continue
+        if any(isinstance(val, str) and val.strip() == "ext:custom.dat:adblock" for val in domains):
+            return True
+    return False
+
+
+def op_network_adblock_status() -> tuple[str, str]:
+    title = "Network - Adblock Status"
+    st = _adblock_status_map()
+    xray_rule = "ON" if _adblock_xray_rule_enabled() else "OFF"
+    auto_update = "ON" if st.get("auto_update_enabled", "0") == "1" else "OFF"
+    lines = [
+        f"Status       : {'ON' if xray_rule == 'ON' and st.get('enabled', '0') == '1' else ('PARTIAL' if xray_rule == 'ON' or st.get('enabled', '0') == '1' else 'OFF')}",
+        f"Dirty        : {'YES' if st.get('dirty', '0') == '1' else 'NO'}",
+        f"Manual List  : {st.get('manual_domains', '0')} domain",
+        f"URL Sources  : {st.get('source_urls', '0')}",
+        f"Merged List  : {st.get('merged_domains', '0')} domain",
+        f"Auto Update  : {auto_update}",
+        f"Update Timer : {st.get('auto_update_timer', '-')}",
+        f"Interval     : {st.get('auto_update_days', '1')} day(s)",
+        f"Schedule     : {st.get('auto_update_schedule', '-')}",
+        f"Last Update  : {st.get('last_update', '-')}",
+        "",
+        f"Xray Rule    : {xray_rule}",
+        f"Xray Asset   : {st.get('custom_dat', '-')}",
+        "Rule Entry   : ext:custom.dat:adblock",
+        "",
+        f"DNS Service  : {st.get('dns_service', '-')}",
+        f"Sync Service : {st.get('sync_service', '-')}",
+        f"NFT Table    : {st.get('nft_table', '-')}",
+        f"Managed Users: {st.get('users_count', '0')}",
+        f"Blocklist    : {st.get('blocklist_entries', '0')} entries",
+        f"DNS Asset    : {st.get('rendered_file', '-')}",
+        f"DNS Port     : {st.get('dns_port', '-')}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_network_adblock_bound_users() -> tuple[str, str]:
+    title = "Network - Adblock Bound Users"
+    if not ADBLOCK_SYNC_BIN.exists():
+        return title, "adblock-sync tidak ditemukan."
+    ok, out = run_cmd([str(ADBLOCK_SYNC_BIN), "--show-users"], timeout=20)
+    if not ok:
+        return title, out
+    rows = []
+    for raw in out.splitlines():
+        line = str(raw or "").strip()
+        if not line or "|" not in line:
+            continue
+        username, uid = line.split("|", 1)
+        rows.append((username.strip(), uid.strip()))
+    if not rows:
+        return title, "Belum ada user SSH terkelola yang terikat ke SSH Adblock."
+    lines = ["Username             UID", "-------------------- --------"]
+    for username, uid in rows:
+        lines.append(f"{username:<20} {uid}")
+    return title, "\n".join(lines)
 
 
 def list_inbound_tags() -> list[str]:
@@ -2098,6 +2381,31 @@ def op_restart_service(service: str) -> tuple[bool, str, str]:
     return False, "Maintenance - Restart", f"Restart {service} gagal.\n{out}\nState: {state}"
 
 
+def op_reload_service(service: str) -> tuple[bool, str, str]:
+    if service not in {"nginx"}:
+        return False, "Security - Reload", f"Service reload tidak diizinkan: {service}"
+    if not service_exists(service):
+        return False, "Security - Reload", f"Service tidak ditemukan: {service}"
+    ok, out = run_cmd(["systemctl", "reload", service], timeout=25)
+    state = service_state(service)
+    if ok:
+        return True, "Security - Reload", f"Reload {service} berhasil.\nState: {state}"
+    return False, "Security - Reload", f"Reload {service} gagal.\n{out}\nState: {state}"
+
+
+def op_restart_edge_gateway() -> tuple[bool, str, str]:
+    service = _edge_runtime_service_name()
+    if not service:
+        return False, "Maintenance - Restart Edge Gateway", "Edge runtime service tidak terdeteksi."
+    if not service_exists(service):
+        return False, "Maintenance - Restart Edge Gateway", f"Service edge tidak ditemukan: {service}"
+    ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
+    state = service_state(service)
+    if ok:
+        return True, "Maintenance - Restart Edge Gateway", f"Restart {service} berhasil.\nState: {state}"
+    return False, "Maintenance - Restart Edge Gateway", f"Restart {service} gagal.\n{out}\nState: {state}"
+
+
 def op_restart_sshws_stack() -> tuple[bool, str, str]:
     return _service_group_restart(SSHWS_SERVICES, "Maintenance - Restart SSHWS Stack")
 
@@ -2164,6 +2472,53 @@ def op_wireproxy_status() -> tuple[str, str]:
         lines.append("WARP IP       : curl tidak tersedia")
 
     lines.append(f"Config        : {WIREPROXY_CONF}")
+    return title, "\n".join(lines)
+
+
+def op_edge_gateway_status() -> tuple[str, str]:
+    title = "Maintenance - Edge Gateway Status"
+    service = _edge_runtime_service_name()
+    provider = _edge_runtime_env_value("EDGE_PROVIDER", "none") or "none"
+    active_flag = _edge_runtime_env_value("EDGE_ACTIVATE_RUNTIME", "false") or "false"
+    http_port = _edge_runtime_env_value("EDGE_PUBLIC_HTTP_PORT", "80") or "80"
+    tls_port = _edge_runtime_env_value("EDGE_PUBLIC_TLS_PORT", "443") or "443"
+    http_backend = _edge_runtime_env_value("EDGE_NGINX_HTTP_BACKEND", "127.0.0.1:18080") or "127.0.0.1:18080"
+    tls_backend = _edge_runtime_env_value("EDGE_NGINX_TLS_BACKEND", "127.0.0.1:18443") or "127.0.0.1:18443"
+    ssh_backend = _edge_runtime_env_value("EDGE_SSH_CLASSIC_BACKEND", "127.0.0.1:22022") or "127.0.0.1:22022"
+    ssh_tls_backend = _edge_runtime_env_value("EDGE_SSH_TLS_BACKEND", "127.0.0.1:22443") or "127.0.0.1:22443"
+    metrics_addr = _edge_runtime_env_value("EDGE_METRICS_LISTEN", "127.0.0.1:9910") or "127.0.0.1:9910"
+    lines = [
+        _unit_status_line(service),
+        f"Provider      : {provider}",
+        f"Activate      : {active_flag}",
+        f"HTTP Port     : {http_port} ({'LISTENING' if http_port.isdigit() and _listener_present(int(http_port)) else 'unknown'})",
+        f"TLS Port      : {tls_port} ({'LISTENING' if tls_port.isdigit() and _listener_present(int(tls_port)) else 'unknown'})",
+        f"HTTP Backend  : {http_backend}",
+        f"TLS Backend   : {tls_backend}",
+        f"SSH Backend   : {ssh_backend}",
+        f"SSH TLS Back  : {ssh_tls_backend}",
+        f"Metrics       : {metrics_addr}",
+        f"Env File      : {EDGE_RUNTIME_ENV_FILE}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_badvpn_status() -> tuple[str, str]:
+    title = "Maintenance - BadVPN UDPGW Status"
+    ports = _badvpn_runtime_ports()
+    listener_summary = "-"
+    if ports:
+        missing = [str(port) for port in ports if not _udp_listener_present(port)]
+        listener_summary = "LISTENING" if not missing else f"MISSING {', '.join(missing)}"
+    lines = [
+        _unit_status_line("badvpn-udpgw"),
+        f"Ports         : {_badvpn_runtime_ports_label()}",
+        f"UDP Listen    : {listener_summary}",
+        f"Max Clients   : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CLIENTS', '512') or '512'}",
+        f"Max Conn/User : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT', '8') or '8'}",
+        f"Buffer Size   : {_badvpn_runtime_env_value('BADVPN_UDPGW_BUFFER_SIZE', '1048576') or '1048576'}",
+        f"Env File      : {BADVPN_RUNTIME_ENV_FILE}",
+    ]
     return title, "\n".join(lines)
 
 

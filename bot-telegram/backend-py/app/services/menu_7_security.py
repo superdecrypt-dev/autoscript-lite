@@ -1,4 +1,4 @@
-from ..adapters import system
+from ..adapters import system, system_mutations
 from ..utils.validators import require_param
 from ..utils.response import error_response, ok_response
 
@@ -12,6 +12,20 @@ def handle(action: str, params: dict, settings) -> dict:
     if action == "tls_expiry":
         title, msg = system.op_tls_expiry()
         return ok_response(title, msg)
+    if action == "reload_nginx":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
+        ok, title, msg = system.op_reload_service("nginx")
+        if ok:
+            return ok_response(title, msg)
+        return error_response("reload_nginx_failed", title, msg)
+    if action == "renew_cert":
+        if not settings.enable_dangerous_actions:
+            return error_response("forbidden", "Security", "Dangerous actions dinonaktifkan via env.")
+        ok, title, msg = system_mutations.op_security_renew_cert()
+        if ok:
+            return ok_response(title, msg)
+        return error_response("renew_cert_failed", title, msg)
     if action == "fail2ban_status":
         title, msg = system.op_fail2ban_status()
         return ok_response(title, msg)

@@ -100,8 +100,10 @@ rec('health', s == 200 and b.get('status') == 'ok')
 s, b = get('/api/main-menu', headers={'X-Internal-Shared-Secret': SECRET})
 menu_ids = [str(m.get('id')) for m in (b.get('menus') or []) if isinstance(m, dict)]
 rec('main_menu', s == 200 and len(menu_ids) >= 8)
-s, b = post('/api/menu/1/action', {'action': 'overview', 'params': {}}, headers={'X-Internal-Shared-Secret': SECRET})
-rec('menu1_overview', s == 200 and b.get('code') == 'ok')
+s, b = post('/api/menu/1/action', {'action': 'list_users', 'params': {}}, headers={'X-Internal-Shared-Secret': SECRET})
+rec('menu1_list_users', s == 200 and b.get('code') == 'ok')
+s, b = post('/api/menu/11/action', {'action': 'overview', 'params': {}}, headers={'X-Internal-Shared-Secret': SECRET})
+rec('menu11_overview', s == 200 and b.get('code') == 'ok')
 
 if not all(checks):
     raise SystemExit('gate_failed')

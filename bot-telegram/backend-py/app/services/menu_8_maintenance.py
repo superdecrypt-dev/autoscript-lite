@@ -11,6 +11,14 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_wireproxy_status()
         return ok_response(title, msg)
 
+    if action == "edge_gateway_status":
+        title, msg = system.op_edge_gateway_status()
+        return ok_response(title, msg)
+
+    if action == "badvpn_status":
+        title, msg = system.op_badvpn_status()
+        return ok_response(title, msg)
+
     if action == "daemon_status":
         title, msg = system.op_daemon_status()
         return ok_response(title, msg)
@@ -39,15 +47,19 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_sshws_combined_logs()
         return ok_response(title, msg)
 
-    if action in {"restart_xray", "restart_nginx", "restart_wireproxy"}:
+    if action in {"restart_xray", "restart_nginx", "restart_wireproxy", "restart_edge_gateway", "restart_badvpn"}:
         if not settings.enable_dangerous_actions:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
-        svc = {
-            "restart_xray": "xray",
-            "restart_nginx": "nginx",
-            "restart_wireproxy": "wireproxy",
-        }[action]
-        ok, title, msg = system.op_restart_service(svc)
+        if action == "restart_edge_gateway":
+            ok, title, msg = system.op_restart_edge_gateway()
+        else:
+            svc = {
+                "restart_xray": "xray",
+                "restart_nginx": "nginx",
+                "restart_wireproxy": "wireproxy",
+                "restart_badvpn": "badvpn-udpgw",
+            }[action]
+            ok, title, msg = system.op_restart_service(svc)
         if ok:
             return ok_response(title, msg)
         return error_response("restart_service_failed", title, msg)
