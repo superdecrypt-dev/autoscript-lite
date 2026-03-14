@@ -6412,7 +6412,7 @@ quota_build_view_indexes() {
 
 quota_read_summary_fields() {
   # args: json_file
-  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|flags_disp
+  # prints: username|quota_limit_disp|quota_used_disp|expired_at_date|ip_limit_disp|block_reason|lock_state
   local qf="$1"
   need_python3
   python3 - <<'PY' "${qf}"
@@ -6500,8 +6500,8 @@ elif st.get("quota_exhausted") or lr == "quota":
 elif st.get("ip_limit_locked") or lr == "ip_limit":
   reason="IP_LIMIT"
 
-flags=f"IP_LIMIT={ip_str} | BLOCK={reason}"
-print(f"{u}|{ql_disp}|{qu_disp}|{exp_date}|{flags}")
+lock_disp="ON" if bool(st.get("account_locked")) else "OFF"
+print(f"{u}|{ql_disp}|{qu_disp}|{exp_date}|{ip_str}|{reason}|{lock_disp}")
 PY
 }
 
@@ -6788,27 +6788,35 @@ quota_print_table_page() {
   pages="$(quota_total_pages_for_indexes)"
 
   if (( total == 0 )); then
-    warn "Tidak ada quota metadata di ${QUOTA_ROOT}/{vless,vmess,trojan}"
+    echo "Xray accounts: 0 | page 1/1"
+    if [[ -n "${QUOTA_QUERY}" ]]; then
+      echo "Filter: '${QUOTA_QUERY}'"
+    fi
+    echo
+    echo "Belum ada data Xray QAC."
     return 0
   fi
 
   if (( page < 0 )); then page=0; fi
   if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
 
-  local start end i real_idx f proto fields username ql_disp qu_disp exp_date
+  local display_pages=1
+  if (( pages > 0 )); then
+    display_pages="${pages}"
+  fi
+  echo "Xray accounts: ${total} | page $((page + 1))/${display_pages}"
+  if [[ -n "${QUOTA_QUERY}" ]]; then
+    echo "Filter: '${QUOTA_QUERY}'"
+  fi
+  echo
+
+  local start end i real_idx f proto fields username ql_disp qu_disp exp_date ip_disp block_reason lock_state
   start=$((page * QUOTA_PAGE_SIZE))
   end=$((start + QUOTA_PAGE_SIZE))
   if (( end > total )); then end="${total}"; fi
 
-  if [[ -n "${QUOTA_QUERY}" ]]; then
-    echo "Filter: ${QUOTA_QUERY}"
-    hr
-  fi
-
-  printf "%-4s %-8s %-18s %-10s %-12s %-10s\n" "NO" "PROTO" "USERNAME" "LIMIT" "USED" "EXPIRED AT"
-
-  printf "%-4s %-8s %-18s %-10s %-12s %-10s\n" "----" "--------" "------------------" "----------" "------------" "----------"
-
+  printf "%-4s %-8s %-18s %-11s %-11s %-12s %-10s %-6s\n" "NO" "Proto" "Username" "Quota" "Used" "Expired" "IPLimit" "Lock"
+  hr
 
   for (( i=start; i<end; i++ )); do
     real_idx="${QUOTA_VIEW_INDEXES[$i]}"
@@ -6816,15 +6824,16 @@ quota_print_table_page() {
     proto="${QUOTA_FILE_PROTOS[$real_idx]}"
 
     fields="$(quota_read_summary_fields "${f}")"
-    username="${fields%%|*}"
-    fields="${fields#*|}"
-    ql_disp="${fields%%|*}"
-    fields="${fields#*|}"
-    qu_disp="${fields%%|*}"
-    fields="${fields#*|}"
-    exp_date="${fields%%|*}"
-    # BUG-17 fix: display page-relative row number (i - start + 1)
-    printf "%-4s %-8s %-18s %-10s %-12s %-10s\n" "$((i - start + 1))" "${proto}" "${username}" "${ql_disp}" "${qu_disp}" "${exp_date}"
+    IFS='|' read -r username ql_disp qu_disp exp_date ip_disp block_reason lock_state <<<"${fields}"
+    printf "%-4s %-8s %-18s %-11s %-11s %-12s %-10s %-6s\n" \
+      "$((i - start + 1))" \
+      "${proto}" \
+      "${username}" \
+      "${ql_disp}" \
+      "${qu_disp}" \
+      "${exp_date}" \
+      "${ip_disp}" \
+      "${lock_state}"
 
   done
 
