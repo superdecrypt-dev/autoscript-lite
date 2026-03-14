@@ -77,6 +77,9 @@ install_badvpn_udpgw_stack() {
     "BADVPN_RUNTIME_ENV_FILE=${BADVPN_RUNTIME_ENV_FILE}"
 
   systemctl daemon-reload >/dev/null 2>&1 || true
-  service_enable_restart_checked "${BADVPN_SERVICE_NAME}" || die "Gagal mengaktifkan ${BADVPN_SERVICE_NAME}"
+  # Avoid a second restart here: badvpn-udpgw-launcher exits only when one worker exits,
+  # so an immediate follow-up restart can hang systemctl even though the service is healthy.
+  systemctl enable "${BADVPN_SERVICE_NAME}" --now >/dev/null 2>&1 || die "Gagal mengaktifkan ${BADVPN_SERVICE_NAME}"
+  systemctl is-active --quiet "${BADVPN_SERVICE_NAME}" || die "${BADVPN_SERVICE_NAME} tidak active."
   ok "BadVPN UDPGW aktif (${src_name})"
 }
