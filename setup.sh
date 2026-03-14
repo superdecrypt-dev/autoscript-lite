@@ -189,6 +189,32 @@ sanity_check() {
   edge_provider="${EDGE_PROVIDER:-none}"
   edge_active="${EDGE_ACTIVATE_RUNTIME:-false}"
 
+  listener_present_tcp() {
+    local pattern="$1"
+    ss -lntp 2>/dev/null | grep -Eq "${pattern}"
+  }
+
+  listener_present_badvpn() {
+    local port="$1"
+    local pattern="(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"
+    ss -lntp 2>/dev/null | grep -Eq "${pattern}" || ss -lunp 2>/dev/null | grep -Eq "${pattern}"
+  }
+
+  wait_for_listener() {
+    local checker="$1"
+    local target="$2"
+    local tries="${3:-5}"
+    local delay="${4:-1}"
+    local i
+    for ((i = 0; i < tries; i++)); do
+      if "${checker}" "${target}"; then
+        return 0
+      fi
+      sleep "${delay}"
+    done
+    return 1
+  }
+
   # Core services (must be active)
   if systemctl is-active --quiet xray; then
     ok "check: xray active"
@@ -306,13 +332,13 @@ sanity_check() {
 
   # Listener hints (informational only)
   # Match exact port agar tidak false-positive ke :4430 dst.
-  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
+  if wait_for_listener listener_present_tcp '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)' 5 1; then
     ok "check: port 80 listening"
   else
     warn "check: port 80 not listening"
   fi
 
-  if ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+  if wait_for_listener listener_present_tcp '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)' 5 1; then
     ok "check: port 443 listening"
   else
     warn "check: port 443 not listening"
@@ -332,7 +358,7 @@ sanity_check() {
     [[ -n "${badvpn_ports}" ]] || badvpn_ports="7300 7400 7500 7600 7700 7800 7900"
     badvpn_ports_label="$(printf '%s\n' "${badvpn_ports}" | sed 's/ /, /g')"
     for port in ${badvpn_ports}; do
-      if ! ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
+      if ! wait_for_listener listener_present_badvpn "${port}" 5 1; then
         badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
       fi
     done
