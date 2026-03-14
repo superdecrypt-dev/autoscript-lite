@@ -175,6 +175,8 @@ source_setup_module "opt/setup/install/xray.sh"
 source_setup_module "opt/setup/install/management.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
+# shellcheck source=opt/setup/install/zivpn.sh
+source_setup_module "opt/setup/install/zivpn.sh"
 # shellcheck source=opt/setup/install/adblock.sh
 source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
@@ -400,6 +402,7 @@ setup_post_domain_main() {
   fi
   setup_run_step "Install SSH WS" install_sshws_stack
   setup_run_step "Install SSH QAC enforcer" install_sshws_qac_enforcer
+  setup_run_step "Install ZIVPN UDP" install_zivpn_stack
   setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
   setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
   setup_run_step "Install management scripts" install_management_scripts

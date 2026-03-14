@@ -1794,9 +1794,11 @@ sync_setup_runtime_layout() {
   local adblock_src="${SCRIPT_DIR}/opt/adblock"
   local edge_src="${SCRIPT_DIR}/opt/edge"
   local badvpn_src="${SCRIPT_DIR}/opt/badvpn"
+  local zivpn_src="${SCRIPT_DIR}/opt/zivpn"
   local fallback_adblock_root="${fallback_root}/opt/adblock"
   local fallback_edge_root="${fallback_root}/opt/edge"
   local fallback_badvpn_root="${fallback_root}/opt/badvpn"
+  local fallback_zivpn_root="${fallback_root}/opt/zivpn"
 
   [[ -d "${setup_src}" ]] || die "Source modular setup tidak ditemukan: ${setup_src}"
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
@@ -1825,6 +1827,13 @@ sync_setup_runtime_layout() {
     find "${fallback_badvpn_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
     find "${fallback_badvpn_root}" -type f -name 'badvpn-udpgw-linux-*' -exec chmod 755 {} + 2>/dev/null || true
     chown -R root:root "${fallback_badvpn_root}" 2>/dev/null || true
+  fi
+  if [[ -d "${zivpn_src}" ]]; then
+    sync_tree_atomic "${zivpn_src}" "${fallback_zivpn_root}" "asset zivpn ${fallback_zivpn_root}"
+    find "${fallback_zivpn_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${fallback_zivpn_root}" -type f -name '*.md' -exec chmod 644 {} + 2>/dev/null || true
+    find "${fallback_zivpn_root}" -type f -name 'zivpn-linux-*' -exec chmod 755 {} + 2>/dev/null || true
+    chown -R root:root "${fallback_zivpn_root}" 2>/dev/null || true
   fi
   find "${fallback_modules_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${fallback_modules_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true

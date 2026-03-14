@@ -2325,6 +2325,84 @@ ssh_state_dirs_prepare() {
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null)
 }
 
+zivpn_runtime_available() {
+  [[ -x "${ZIVPN_SYNC_BIN}" ]] || return 1
+  [[ -f "/etc/systemd/system/${ZIVPN_SERVICE}" || -f "/lib/systemd/system/${ZIVPN_SERVICE}" || -f "${ZIVPN_CONFIG_FILE}" ]] || return 1
+  return 0
+}
+
+zivpn_password_file() {
+  local username="${1:-}"
+  printf '%s/%s.pass\n' "${ZIVPN_PASSWORDS_DIR}" "${username}"
+}
+
+zivpn_sync_runtime_now() {
+  zivpn_runtime_available || return 1
+  "${ZIVPN_SYNC_BIN}" \
+    --config "${ZIVPN_CONFIG_FILE}" \
+    --passwords-dir "${ZIVPN_PASSWORDS_DIR}" \
+    --listen ":${ZIVPN_LISTEN_PORT}" \
+    --cert "${ZIVPN_CERT_FILE}" \
+    --key "${ZIVPN_KEY_FILE}" \
+    --obfs "${ZIVPN_OBFS}" \
+    --account-dir "${SSH_ACCOUNT_DIR}" \
+    --service "${ZIVPN_SERVICE}" \
+    --sync-service-state >/dev/null 2>&1
+}
+
+zivpn_store_user_password() {
+  local username="${1:-}"
+  local password="${2:-}"
+  local dst tmp
+  [[ -n "${username}" && -n "${password}" ]] || return 1
+  install -d -m 700 "${ZIVPN_PASSWORDS_DIR}"
+  dst="$(zivpn_password_file "${username}")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/zivpn-pass.XXXXXX")" || return 1
+  if ! printf '%s\n' "${password}" > "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! install -m 600 "${tmp}" "${dst}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  chown root:root "${dst}" 2>/dev/null || true
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
+}
+
+zivpn_sync_user_password_warn() {
+  local username="${1:-}"
+  local password="${2:-}"
+  zivpn_runtime_available || return 0
+  if ! zivpn_store_user_password "${username}" "${password}"; then
+    warn "ZIVPN password store gagal diperbarui untuk '${username}'."
+    return 1
+  fi
+  if ! zivpn_sync_runtime_now; then
+    warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'."
+    return 1
+  fi
+  return 0
+}
+
+zivpn_remove_user_password_warn() {
+  local username="${1:-}"
+  zivpn_runtime_available || return 0
+  rm -f "$(zivpn_password_file "${username}")" >/dev/null 2>&1 || true
+  if ! zivpn_sync_runtime_now; then
+    warn "Runtime ZIVPN gagal disinkronkan setelah hapus akun '${username}'."
+    return 1
+  fi
+  return 0
+}
+
+zivpn_account_info_enabled() {
+  zivpn_runtime_available || return 1
+  [[ -n "${ZIVPN_LISTEN_PORT:-}" ]] || return 1
+  return 0
+}
+
 ssh_user_state_file() {
   local username="${1:-}"
   printf '%s/%s@ssh.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
@@ -3111,6 +3189,7 @@ ssh_account_info_write() {
   fi
 
   local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
+  local zivpn_block="" zivpn_host_disp=""
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
   domain="$(detect_domain)"
@@ -3222,6 +3301,11 @@ PY
   printf -v running_ssh_direct '%-*s : %s' "${running_label_width}" "SSH Direct Port" "${ssh_direct_ports_disp}"
   printf -v running_ssh_ssl_tls '%-*s : %s' "${running_label_width}" "SSH SSL/TLS Port" "${ssh_ssl_tls_ports_disp}"
   printf -v running_badvpn '%-*s : %s' "${running_label_width}" "BadVPN UDPGW" "${badvpn_port_disp}"
+  if zivpn_account_info_enabled; then
+    local zivpn_password_line
+    printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "same as SSH password"
+    zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"
+  fi
 
   if ! cat > "${acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
@@ -3245,6 +3329,7 @@ ${running_ssh_ws_port}
 ${running_ssh_direct}
 ${running_ssh_ssl_tls}
 ${running_badvpn}
+${zivpn_block}
 
 === STANDARD PAYLOAD ===
 Payload WS:
@@ -3827,6 +3912,7 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
+  zivpn_sync_user_password_warn "${username}" "${password}" || true
 
   log "Akun SSH berhasil dibuat: ${username}"
   title
@@ -3888,6 +3974,7 @@ ssh_delete_user_menu() {
         "$(ssh_account_info_file "${username}")" \
         "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
   ssh_dns_adblock_runtime_refresh_if_available || true
+  zivpn_remove_user_password_warn "${username}" || true
   log "Akun SSH '${username}' dihapus."
   pause
 }
@@ -4025,6 +4112,7 @@ ssh_reset_password_menu() {
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
     warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
   fi
+  zivpn_sync_user_password_warn "${username}" "${password}" || true
   if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
     hr
     echo "One-time Password : ${password}"
