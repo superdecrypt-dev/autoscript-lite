@@ -93,6 +93,14 @@ function navRow(refreshId: string, backId: string, backLabel = "Back") {
   );
 }
 
+function footerRow(backId: string, backLabel = "Back") {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(backId).setLabel(backLabel).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${MENU_PREFIX}home`).setLabel("Main Menu").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${MENU_PREFIX}close`).setLabel("Close").setStyle(ButtonStyle.Danger),
+  );
+}
+
 function homeButtons() {
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -312,7 +320,7 @@ function buildDomainSetAutoRootSelectView(roots: BackendRootDomainOption[]) {
             })),
           ),
       ),
-      navRow(`${SECTION_PREFIX}domain`, `${SECTION_PREFIX}domain`, "Domain"),
+      footerRow(`${SECTION_PREFIX}domain`, "Domain"),
     ],
   };
 }
@@ -341,7 +349,7 @@ function buildDnsStrategySelectView() {
             { label: "PreferIPv6", value: "PreferIPv6" },
           ]),
       ),
-      navRow(`${SECTION_PREFIX}network`, `${SECTION_PREFIX}network`, "Network"),
+      footerRow(`${SECTION_PREFIX}network`, "Network"),
     ],
   };
 }
@@ -459,7 +467,7 @@ function buildUserSelectScreen(
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(safePage >= totalPages - 1),
       ),
-      navRow(`${USER_PICKER_PAGE_PREFIX}${token}:${safePage}`, backId, backLabel),
+      footerRow(backId, backLabel),
     ],
   };
 }
