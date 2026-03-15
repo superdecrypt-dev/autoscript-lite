@@ -91,14 +91,32 @@ if [[ -z "${SECRET}" ]]; then
   exit 1
 fi
 
+wait_backend_endpoint() {
+  local label="$1"
+  local endpoint="$2"
+  local attempts="${3:-30}"
+
+  for _ in $(seq 1 "${attempts}"); do
+    if curl -fsS --max-time 8 -H "X-Internal-Shared-Secret: ${SECRET}" "${BACKEND_BASE_URL%/}${endpoint}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "[smoke] timeout menunggu ${label}: ${BACKEND_BASE_URL%/}${endpoint}" >&2
+  return 1
+}
+
 echo "[smoke] service state"
 systemctl is-active "${BACKEND_SERVICE}" || true
 systemctl is-active "${GATEWAY_SERVICE}" || true
 
 echo "[smoke] backend health"
+wait_backend_endpoint "backend health" "/health"
 curl -fsS --max-time 8 -H "X-Internal-Shared-Secret: ${SECRET}" "${BACKEND_BASE_URL%/}/health"
 
 echo "[smoke] auth guard + menu endpoint"
+wait_backend_endpoint "backend main-menu" "/api/main-menu"
 curl -fsS --max-time 8 -H "X-Internal-Shared-Secret: ${SECRET}" "${BACKEND_BASE_URL%/}/api/main-menu" >/dev/null
 
 echo "[smoke] PASS"

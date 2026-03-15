@@ -43,6 +43,8 @@ from .render import (
 
 
 LOGGER = logging.getLogger("xray-telegram-gateway")
+BACKEND_MENU_SYNC_TIMEOUT_SECONDS = 30.0
+BACKEND_MENU_SYNC_RETRY_INTERVAL_SECONDS = 1.0
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
 DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
@@ -65,6 +67,7 @@ XRAY_QAC_MENU_ID = "3"
 SSH_QAC_MENU_ID = "4"
 BACKUP_MENU_ID = "12"
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
+QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -95,13 +98,16 @@ SSH_ONLY_PROTOCOL_ACTIONS = {
 KEY_PENDING_FORM = "pending_form"
 KEY_PENDING_CONFIRM = "pending_confirm"
 KEY_PENDING_DELETE_PICK = "pending_delete_pick"
+KEY_PENDING_QAC_PICK = "pending_qac_pick"
 KEY_PENDING_UPLOAD_RESTORE = "pending_upload_restore"
 KEY_LAST_ACTION_TS = "last_action_ts"
 KEY_LAST_CLEANUP_TS = "last_cleanup_ts"
+KEY_QAC_SELECTIONS = "qac_selections"
 PENDING_STATE_KEYS = (
     KEY_PENDING_FORM,
     KEY_PENDING_CONFIRM,
     KEY_PENDING_DELETE_PICK,
+    KEY_PENDING_QAC_PICK,
     KEY_PENDING_UPLOAD_RESTORE,
 )
 PENDING_OTHER_CHAT_TEXT = "Sesi aktif ada di chat lain. Lanjutkan dari chat asal atau mulai ulang dengan /panel."
@@ -490,6 +496,248 @@ def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
     return USER_PROTOCOLS
 
 
+def _qac_picker_title(menu_id: str) -> str:
+    if menu_id == XRAY_QAC_MENU_ID:
+        return "Xray QAC"
+    if menu_id == SSH_QAC_MENU_ID:
+        return "SSH QAC"
+    return "Quota & Access Control"
+
+
+def _qac_selection_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
+    raw = context.user_data.get(KEY_QAC_SELECTIONS)
+    if isinstance(raw, dict):
+        return raw
+    store: dict[str, dict] = {}
+    context.user_data[KEY_QAC_SELECTIONS] = store
+    return store
+
+
+def _set_qac_selection(
+    context: ContextTypes.DEFAULT_TYPE,
+    menu_id: str,
+    *,
+    chat_id: int | str | None,
+    proto: str,
+    username: str,
+) -> None:
+    store = _qac_selection_store(context)
+    store[menu_id] = {
+        "origin_chat_id": _chat_scope_id(chat_id),
+        "proto": str(proto or "").strip().lower(),
+        "username": str(username or "").strip(),
+    }
+
+
+def _clear_qac_selection(context: ContextTypes.DEFAULT_TYPE, menu_id: str) -> None:
+    store = _qac_selection_store(context)
+    store.pop(menu_id, None)
+
+
+def _get_qac_selection(
+    context: ContextTypes.DEFAULT_TYPE,
+    menu_id: str,
+    *,
+    chat_id: int | str | None,
+) -> dict | None:
+    raw = _qac_selection_store(context).get(menu_id)
+    if not isinstance(raw, dict):
+        return None
+    current_chat_id = _chat_scope_id(chat_id)
+    origin_chat_id = _chat_scope_id(raw.get("origin_chat_id"))
+    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
+        return None
+    proto = str(raw.get("proto") or "").strip().lower()
+    username = str(raw.get("username") or "").strip()
+    if not proto or not username:
+        return None
+    if proto not in _menu_protocol_scope(menu_id):
+        return None
+    return {"proto": proto, "username": username}
+
+
+def _qac_selection_params(menu_id: str, selection: dict | None) -> dict[str, str]:
+    if not isinstance(selection, dict):
+        return {}
+    proto = str(selection.get("proto") or "").strip().lower()
+    username = str(selection.get("username") or "").strip()
+    if not username:
+        return {}
+    params = {"username": username}
+    if menu_id == XRAY_QAC_MENU_ID and proto:
+        params["proto"] = proto
+    return params
+
+
+def _qac_selection_label(menu_id: str, selection: dict | None) -> str:
+    if not isinstance(selection, dict):
+        return "-"
+    proto = str(selection.get("proto") or "").strip().lower()
+    username = str(selection.get("username") or "").strip()
+    if not username:
+        return "-"
+    if menu_id == XRAY_QAC_MENU_ID and proto:
+        return f"{username}@{proto}"
+    return username
+
+
+def _qac_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
+    if menu_id == XRAY_QAC_MENU_ID:
+        return f"{username}@{proto}"
+    return username
+
+
+def _qac_menu_text(menu: MenuSpec, selection: dict, summary: dict[str, str] | None, page: int, total_pages: int) -> str:
+    lines = [
+        f"<b>{html.escape(menu.label)}</b>",
+    ]
+    if menu.description:
+        lines.append(html.escape(menu.description))
+    if summary:
+        if menu.id == SSH_QAC_MENU_ID:
+            lines.extend(
+                [
+                    "",
+                    "<pre>"
+                    + html.escape(
+                        "\n".join(
+                            [
+                                f"Username           : {str(summary.get('username') or _qac_selection_label(menu.id, selection))}",
+                                f"Quota Limit        : {str(summary.get('quota_limit') or '-')}",
+                                f"Quota Used (SSH)   : {str(summary.get('quota_used') or '-')}",
+                                f"Expired At         : {str(summary.get('expired_at') or '-')}",
+                                f"IP/Login Limit     : {str(summary.get('ip_limit') or '-')}",
+                                f"IP/Login Limit Max : {str(summary.get('ip_limit_max') or '-')}",
+                                f"IP Unik Aktif      : {str(summary.get('distinct_ip_count') or '0')}",
+                                f"Daftar IP Aktif    : {str(summary.get('distinct_ips') or '-')}",
+                                f"IP/Login Metric    : {str(summary.get('ip_limit_metric') or '0')}",
+                                f"Block Reason       : {str(summary.get('block_reason') or '-')}",
+                                f"Account Locked     : {str(summary.get('account_locked') or 'OFF')}",
+                                f"Sesi Aktif         : {str(summary.get('active_sessions_total') or '0')}",
+                                f"Speed Download     : {str(summary.get('speed_download') or '-')}",
+                                f"Speed Upload       : {str(summary.get('speed_upload') or '-')}",
+                                f"Speed Limit        : {str(summary.get('speed_limit') or '-')}",
+                            ]
+                        )
+                    )
+                    + "</pre>",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "<pre>"
+                    + html.escape(
+                        "\n".join(
+                            [
+                                f"Username       : {str(summary.get('username') or _qac_selection_label(menu.id, selection))}",
+                                f"Quota Limit    : {str(summary.get('quota_limit') or '-')}",
+                                f"Quota Used     : {str(summary.get('quota_used') or '-')}",
+                                f"Expired At     : {str(summary.get('expired_at') or '-')}",
+                                f"IP Limit       : {str(summary.get('ip_limit') or '-')}",
+                                f"Block Reason   : {str(summary.get('block_reason') or '-')}",
+                                f"IP Limit Max   : {str(summary.get('ip_limit_max') or '-')}",
+                                f"Speed Download : {str(summary.get('speed_download') or '-')}",
+                                f"Speed Upload   : {str(summary.get('speed_upload') or '-')}",
+                                f"Speed Limit    : {str(summary.get('speed_limit') or '-')}",
+                            ]
+                        )
+                    )
+                    + "</pre>",
+                ]
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                f"User aktif: <code>{html.escape(_qac_selection_label(menu.id, selection))}</code>",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            f"Halaman aksi <code>{page + 1}/{max(total_pages, 1)}</code>",
+            "Pilih action:",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _qac_menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboardMarkup:
+    rows = list(_menu_keyboard(runtime, menu, page).inline_keyboard)
+    if rows and len(rows[-1]) == 1 and rows[-1][0].callback_data == "h":
+        rows.insert(-1, [InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}")])
+    else:
+        rows.append([InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}")])
+        rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="h")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    start = page * DELETE_PICK_PAGE_SIZE
+    chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
+
+    user_buttons: list[InlineKeyboardButton] = []
+    for idx, item in enumerate(chunk, start=start):
+        label = _qac_picker_entry_label(menu_id, str(item.get("proto") or ""), str(item.get("username") or ""))
+        user_buttons.append(
+            InlineKeyboardButton(
+                _short_button_label(label, max_len=22),
+                callback_data=f"qac_pick{CALLBACK_SEP}{idx}",
+            )
+        )
+    rows.extend(_rows_from_buttons(user_buttons))
+
+    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"qac_page{CALLBACK_SEP}{page - 1}"))
+        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page + 1 < total_pages:
+            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"qac_page{CALLBACK_SEP}{page + 1}"))
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data="h")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _qac_pick_text(menu_id: str, page: int, users: list[dict[str, str]]) -> str:
+    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
+    return (
+        f"<b>{html.escape(_qac_picker_title(menu_id))}</b>\n"
+        "Pilih user dulu untuk membuka menu QAC.\n\n"
+        f"Total user: <code>{len(users)}</code>\n"
+        f"Halaman: <code>{page + 1}/{total_pages}</code>"
+    )
+
+
+async def _load_qac_user_entries(runtime: Runtime, menu_id: str) -> list[dict[str, str]]:
+    proto_filter = None
+    protocols = _menu_protocol_scope(menu_id)
+    if len(protocols) == 1:
+        proto_filter = protocols[0]
+
+    options = await runtime.backend.list_user_options(proto=proto_filter)
+    users: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for option in options:
+        proto = str(option.proto or "").strip().lower()
+        username = str(option.username or "").strip()
+        if proto not in protocols or not username:
+            continue
+        key = (proto, username)
+        if key in seen:
+            continue
+        seen.add(key)
+        users.append({"proto": proto, "username": username})
+
+    users.sort(key=lambda item: (str(item.get("username") or "").lower(), str(item.get("proto") or "").lower()))
+    return users
+
+
 def _delete_picker_title(menu_id: str) -> str:
     if menu_id == XRAY_USER_MENU_ID:
         return "Xray Users"
@@ -505,6 +753,15 @@ def _delete_pick_proto_keyboard(menu_id: str) -> InlineKeyboardMarkup:
         for proto in _menu_protocol_scope(menu_id)
     ]
     rows.extend(_rows_from_buttons(proto_buttons))
+    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _delete_pick_return_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+    protocols = _menu_protocol_scope(menu_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    if len(protocols) > 1:
+        rows.append([InlineKeyboardButton("↩️ Ganti Protocol", callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}")])
     rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
     return InlineKeyboardMarkup(rows)
 
@@ -543,8 +800,8 @@ def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str]) -> In
             nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"dup_page{CALLBACK_SEP}{page + 1}"))
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton("↩️ Ganti Protocol", callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
+    return_markup = _delete_pick_return_keyboard(menu_id)
+    rows.extend(return_markup.inline_keyboard)
     return InlineKeyboardMarkup(rows)
 
 
@@ -616,9 +873,7 @@ async def _show_delete_user_list_picker(
                 "<b>❌ Gagal Ambil Daftar User</b>\n"
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("↩️ Kembali", callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}")]]
-            ),
+            reply_markup=_delete_pick_return_keyboard(menu_id),
         )
         return
 
@@ -632,9 +887,7 @@ async def _show_delete_user_list_picker(
                 f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
                 f"Protocol <code>{html.escape(proto.upper())}</code> belum punya user."
             ),
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("↩️ Ganti Protocol", callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}")]]
-            ),
+            reply_markup=_delete_pick_return_keyboard(menu_id),
         )
         return
 
@@ -657,6 +910,141 @@ async def _show_delete_user_list_picker(
         context=context,
         text=_delete_pick_text_users(menu_id, proto, page, usernames),
         reply_markup=_delete_pick_users_keyboard(menu_id, page, usernames),
+    )
+
+
+async def _render_qac_menu(
+    *,
+    runtime: Runtime,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    query,
+    menu: MenuSpec,
+    page: int = 0,
+) -> None:
+    selection = _get_qac_selection(context, menu.id, chat_id=chat_id)
+    if selection is None:
+        await _show_qac_user_picker(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu_id=menu.id,
+        )
+        return
+    try:
+        users = await _load_qac_user_entries(runtime, menu.id)
+    except BackendError as exc:
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                f"<b>{html.escape(_qac_picker_title(menu.id))}</b>\n"
+                "Gagal memvalidasi user aktif.\n\n"
+                f"<pre>{html.escape(str(exc)[:1200])}</pre>"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+            ),
+        )
+        return
+
+    if not any(
+        str(item.get("proto") or "").strip().lower() == str(selection.get("proto") or "").strip().lower()
+        and str(item.get("username") or "").strip() == str(selection.get("username") or "").strip()
+        for item in users
+    ):
+        _clear_qac_selection(context, menu.id)
+        await _show_qac_user_picker(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu_id=menu.id,
+        )
+        return
+    summary: dict[str, str] | None = None
+    try:
+        summary = await runtime.backend.get_qac_user_summary(
+            str(selection.get("proto") or ""),
+            str(selection.get("username") or ""),
+        )
+    except BackendError:
+        summary = None
+    total_pages = _menu_pages(runtime, menu)
+    page = max(0, min(page, total_pages - 1))
+    await _send_or_edit(
+        query=query,
+        chat_id=chat_id,
+        context=context,
+        text=_qac_menu_text(menu, selection, summary, page, total_pages),
+        reply_markup=_qac_menu_keyboard(runtime, menu, page),
+    )
+
+
+async def _show_qac_user_picker(
+    *,
+    runtime: Runtime,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    query,
+    menu_id: str,
+    page: int = 0,
+) -> None:
+    try:
+        users = await _load_qac_user_entries(runtime, menu_id)
+    except BackendError as exc:
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                f"<b>{html.escape(_qac_picker_title(menu_id))}</b>\n"
+                "Gagal mengambil daftar user.\n\n"
+                f"<pre>{html.escape(str(exc)[:1200])}</pre>"
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+            ),
+        )
+        return
+
+    context.user_data.pop(KEY_PENDING_QAC_PICK, None)
+    if not users:
+        _clear_qac_selection(context, menu_id)
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                f"<b>{html.escape(_qac_picker_title(menu_id))}</b>\n"
+                "Belum ada user yang bisa dipilih."
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+            ),
+        )
+        return
+
+    page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
+    page = max(0, min(page, page_max))
+    _store_pending_state(
+        context,
+        KEY_PENDING_QAC_PICK,
+        {
+            "menu_id": menu_id,
+            "users": users,
+            "page": page,
+        },
+        chat_id,
+    )
+    await _send_or_edit(
+        query=query,
+        chat_id=chat_id,
+        context=context,
+        text=_qac_pick_text(menu_id, page, users),
+        reply_markup=_qac_pick_keyboard(menu_id, page, users),
     )
 
 
@@ -988,6 +1376,18 @@ async def _run_action(
         )
     except Exception as exc:
         LOGGER.warning("Gagal kirim lampiran %s: %s", filename, exc)
+
+
+def _prefilled_action_params(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    menu_id: str,
+    action_id: str,
+    chat_id: int,
+) -> dict[str, str]:
+    if menu_id not in QAC_MENU_IDS or action_id == "summary":
+        return {}
+    return _qac_selection_params(menu_id, _get_qac_selection(context, menu_id, chat_id=chat_id))
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1480,6 +1880,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=_main_menu_keyboard(runtime),
             )
             return
+        if menu_id in QAC_MENU_IDS:
+            await _render_qac_menu(
+                runtime=runtime,
+                context=context,
+                chat_id=chat_id,
+                query=query,
+                menu=menu,
+                page=0,
+            )
+            return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1657,6 +2067,93 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    if data.startswith(f"qac_pick_menu{CALLBACK_SEP}"):
+        parts = data.split(CALLBACK_SEP)
+        menu_id = parts[1] if len(parts) > 1 else XRAY_QAC_MENU_ID
+        await _show_qac_user_picker(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu_id=menu_id,
+            page=0,
+        )
+        return
+
+    if data.startswith(f"qac_page{CALLBACK_SEP}"):
+        state, state_err = _get_pending_state(context, KEY_PENDING_QAC_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
+            await query.answer("Sesi pemilihan user QAC tidak aktif.", show_alert=True)
+            return
+        menu_id = str(state.get("menu_id") or XRAY_QAC_MENU_ID)
+        users = state.get("users") if isinstance(state.get("users"), list) else []
+        if menu_id not in QAC_MENU_IDS or not users:
+            await query.answer("Sesi pemilihan user QAC tidak valid.", show_alert=True)
+            return
+        parts = data.split(CALLBACK_SEP)
+        page = _safe_int(parts[1] if len(parts) > 1 else "0", default=0)
+        page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
+        page = max(0, min(page, page_max))
+        state["page"] = page
+        _store_pending_state(context, KEY_PENDING_QAC_PICK, state, chat_id)
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=_qac_pick_text(menu_id, page, users),
+            reply_markup=_qac_pick_keyboard(menu_id, page, users),
+        )
+        return
+
+    if data.startswith(f"qac_pick{CALLBACK_SEP}"):
+        state, state_err = _get_pending_state(context, KEY_PENDING_QAC_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
+            await query.answer("Sesi pemilihan user QAC tidak aktif.", show_alert=True)
+            return
+        menu_id = str(state.get("menu_id") or XRAY_QAC_MENU_ID)
+        users = state.get("users") if isinstance(state.get("users"), list) else []
+        if menu_id not in QAC_MENU_IDS or not users:
+            await query.answer("Sesi pemilihan user QAC tidak valid.", show_alert=True)
+            return
+        parts = data.split(CALLBACK_SEP)
+        idx = _safe_int(parts[1] if len(parts) > 1 else "-1", default=-1)
+        if idx < 0 or idx >= len(users):
+            await query.answer("User tidak valid.", show_alert=True)
+            return
+        selected = users[idx] if isinstance(users[idx], dict) else {}
+        proto = str(selected.get("proto") or "").strip().lower()
+        username = str(selected.get("username") or "").strip()
+        if proto not in _menu_protocol_scope(menu_id) or not username:
+            await query.answer("User tidak valid.", show_alert=True)
+            return
+        context.user_data.pop(KEY_PENDING_QAC_PICK, None)
+        _set_qac_selection(
+            context,
+            menu_id,
+            chat_id=chat_id,
+            proto=proto,
+            username=username,
+        )
+        menu = runtime.catalog.get_menu(menu_id)
+        if menu is None:
+            await query.answer("Menu QAC tidak ditemukan.", show_alert=True)
+            return
+        await _render_qac_menu(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu=menu,
+            page=0,
+        )
+        return
+
     if data == "rc":
         pending, pending_err = _get_pending_state(context, KEY_PENDING_CONFIRM, chat_id)
         if pending is None:
@@ -1713,6 +2210,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not _visible_actions(runtime, menu):
             await query.answer("Tidak ada action yang aktif di menu ini.", show_alert=True)
             return
+        if menu.id in QAC_MENU_IDS:
+            await _render_qac_menu(
+                runtime=runtime,
+                context=context,
+                chat_id=chat_id,
+                query=query,
+                menu=menu,
+                page=0,
+            )
+            return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1735,6 +2242,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except ValueError:
             page = 0
         page = max(0, min(page, _menu_pages(runtime, menu) - 1))
+        if menu.id in QAC_MENU_IDS:
+            await _render_qac_menu(
+                runtime=runtime,
+                context=context,
+                chat_id=chat_id,
+                query=query,
+                menu=menu,
+                page=page,
+            )
+            return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1793,15 +2310,85 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+        initial_params = _prefilled_action_params(
+            context,
+            menu_id=menu_id,
+            action_id=action_id,
+            chat_id=chat_id,
+        )
+        if menu_id in QAC_MENU_IDS and action_id != "summary" and not initial_params:
+            await _show_qac_user_picker(
+                runtime=runtime,
+                context=context,
+                chat_id=chat_id,
+                query=query,
+                menu_id=menu_id,
+                page=0,
+            )
+            return
+
         if action.mode == "modal" and action.modal and len(action.modal.fields) > 0:
+            initial_index = 0
+            while initial_index < len(action.modal.fields) and action.modal.fields[initial_index].id in initial_params:
+                initial_index += 1
+            if initial_index >= len(action.modal.fields):
+                params = dict(initial_params)
+                if action.confirm:
+                    _store_pending_state(
+                        context,
+                        KEY_PENDING_CONFIRM,
+                        {
+                            "menu_id": menu_id,
+                            "action_id": action_id,
+                            "params": params,
+                        },
+                        chat_id,
+                    )
+                    await _send_or_edit(
+                        query=query,
+                        chat_id=chat_id,
+                        context=context,
+                        text=confirm_text(menu, action, params),
+                        reply_markup=_confirm_keyboard(menu_id),
+                    )
+                    return
+
+                wait = _cooldown_remaining(
+                    context,
+                    user_id=user_id,
+                    key=KEY_LAST_ACTION_TS,
+                    min_interval_sec=runtime.config.action_cooldown_seconds,
+                )
+                if wait > 0:
+                    await query.answer(_throttle_message(wait), show_alert=True)
+                    return
+
+                await _send_or_edit(
+                    query=query,
+                    chat_id=chat_id,
+                    context=context,
+                    text="<b>⏳ Menjalankan action...</b>",
+                    reply_markup=_result_keyboard(menu_id),
+                )
+                await _run_action(
+                    runtime=runtime,
+                    context=context,
+                    chat_id=chat_id,
+                    menu_id=menu_id,
+                    action_id=action_id,
+                    params=params,
+                    query=query,
+                )
+                return
+
             pending_form = _store_pending_state(
                 context,
                 KEY_PENDING_FORM,
                 {
                     "menu_id": menu_id,
                     "action_id": action_id,
-                    "index": 0,
-                    "params": {},
+                    "index": initial_index,
+                    "params": dict(initial_params),
                 },
                 chat_id,
             )
@@ -1814,7 +2401,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
-        params: dict[str, str] = {}
+        params: dict[str, str] = dict(initial_params)
         if action.confirm:
             _store_pending_state(
                 context,
@@ -1867,22 +2454,40 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
-    try:
-        main_menu = asyncio.run(backend.get_main_menu())
-    except BackendError as exc:
-        raise RuntimeError(f"Sinkronisasi menu backend gagal: {exc}") from exc
+    deadline = time.monotonic() + BACKEND_MENU_SYNC_TIMEOUT_SECONDS
+    attempt = 0
+    last_error: Exception | None = None
 
-    menus = main_menu.get("menus") if isinstance(main_menu, dict) else None
-    if not isinstance(menus, list):
-        raise RuntimeError("Sinkronisasi menu backend gagal: payload menus tidak valid.")
+    while True:
+        attempt += 1
+        try:
+            main_menu = asyncio.run(backend.get_main_menu())
+            menus = main_menu.get("menus") if isinstance(main_menu, dict) else None
+            if not isinstance(menus, list):
+                raise RuntimeError("payload menus tidak valid")
+            catalog = CommandCatalog.from_payload({"menus": menus})
+            LOGGER.info(
+                "Backend menu sync complete: menus=%s mutations_enabled=%s attempts=%s",
+                len(catalog.menus),
+                bool(main_menu.get("mutations_enabled")) if isinstance(main_menu, dict) else False,
+                attempt,
+            )
+            return catalog
+        except (BackendError, RuntimeError) as exc:
+            last_error = exc
 
-    catalog = CommandCatalog.from_payload({"menus": menus})
-    LOGGER.info(
-        "Backend menu sync complete: menus=%s mutations_enabled=%s",
-        len(catalog.menus),
-        bool(main_menu.get("mutations_enabled")) if isinstance(main_menu, dict) else False,
-    )
-    return catalog
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"Sinkronisasi menu backend gagal: {last_error}") from last_error
+
+        sleep_for = min(BACKEND_MENU_SYNC_RETRY_INTERVAL_SECONDS, remaining)
+        LOGGER.warning(
+            "Backend menu sync belum siap (attempt=%s retry_in=%.1fs): %s",
+            attempt,
+            sleep_for,
+            last_error,
+        )
+        time.sleep(sleep_for)
 
 
 async def post_init(application: Application) -> None:

@@ -1161,22 +1161,12 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
         if not content:
             content = "(kosong)"
         if proto_n == SSH_PROTOCOL:
-            fields = _read_account_fields(candidate)
-            password_info = str(fields.get("Password") or "").strip()
             lines = [
                 f"Username : {user_n}",
                 f"File     : {candidate}",
                 "",
                 content,
             ]
-            if not password_info or password_info in {"(hidden)", "********"}:
-                lines.extend(
-                    [
-                        "",
-                        "Password plaintext tidak tersedia di account info (mode mask).",
-                        "Gunakan menu Reset Password untuk mendapatkan one-time password.",
-                    ]
-                )
             return "User Management - Account Info", "\n".join(lines)
         lines = [
             f"Username : {user_n}",
@@ -1235,6 +1225,63 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
             "speed_limit": _fmt_speed_limit_from_account_fields(fields),
         }
     return False, f"File quota/account tidak ditemukan untuk {user_n} [{proto_n}]"
+
+
+def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
+    proto_n = proto.lower().strip()
+    user_n = username.strip()
+    if proto_n not in USER_PROTOCOLS:
+        return False, f"Proto tidak valid: {proto}"
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
+        return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
+
+    for candidate in _quota_candidates(proto_n, user_n):
+        if not candidate.exists():
+            continue
+        ok, payload = read_json(candidate)
+        if not ok:
+            return False, str(payload)
+        if not isinstance(payload, dict):
+            return False, f"Format quota tidak valid: {candidate}"
+
+        status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        expired_at = str(_pick_field(payload, ["expired_at", "expired", "expiry", "expires"]))[:10] or "-"
+        ip_limit_enabled = bool(status.get("ip_limit_enabled"))
+        speed_limit_enabled = bool(status.get("speed_limit_enabled"))
+        speed_down = _fmt_number(_to_float(status.get("speed_down_mbit"), 0.0))
+        speed_up = _fmt_number(_to_float(status.get("speed_up_mbit"), 0.0))
+        username_display = f"{user_n}@{proto_n}" if proto_n != SSH_PROTOCOL else user_n
+        summary = {
+            "username": username_display,
+            "quota_limit": _fmt_quota_limit_gb(payload),
+            "quota_used": _fmt_quota_used(payload),
+            "expired_at": expired_at,
+            "ip_limit": "ON" if ip_limit_enabled else "OFF",
+            "block_reason": _status_block_reason(status),
+            "ip_limit_max": str(max(0, _to_int(status.get("ip_limit"), 0))),
+            "speed_download": f"{speed_down} Mbps",
+            "speed_upload": f"{speed_up} Mbps",
+            "speed_limit": "ON" if speed_limit_enabled else "OFF",
+        }
+        if proto_n == SSH_PROTOCOL:
+            distinct_ips_raw = status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else []
+            distinct_ips = [str(item).strip() for item in distinct_ips_raw if str(item).strip()]
+            summary.update(
+                {
+                    "distinct_ip_count": str(max(0, _to_int(status.get("distinct_ip_count"), 0))),
+                    "distinct_ips": ", ".join(distinct_ips) if distinct_ips else "-",
+                    "ip_limit_metric": str(max(0, _to_int(status.get("ip_limit_metric"), 0))),
+                    "account_locked": "ON" if bool(status.get("account_locked")) else "OFF",
+                    "active_sessions_total": str(max(0, _to_int(status.get("active_sessions_total"), 0))),
+                }
+            )
+
+        return True, summary
+
+    return False, f"File quota tidak ditemukan untuk {user_n} [{proto_n}]"
 
 
 def op_dns_summary() -> tuple[str, str]:

@@ -38,13 +38,6 @@ SSHWS_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
 ZIVPN_SERVICE = "zivpn"
 ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
 ZIVPN_SYNC_BIN = Path("/usr/local/bin/zivpn-password-sync")
-SSH_ACCOUNT_INFO_STORE_PASSWORD = os.getenv("SSH_ACCOUNT_INFO_STORE_PASSWORD", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-    "y",
-}
 SPEED_CONFIG_FILE = Path("/etc/xray-speed/config.json")
 XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 XRAY_INBOUNDS_CONF = XRAY_CONFDIR / "10-inbounds.json"
@@ -80,6 +73,7 @@ SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
 PROTOCOLS = XRAY_PROTOCOLS
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
+_GEO_LOOKUP_CACHE: dict[str, tuple[str, str]] = {}
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 SPEED_OUTBOUND_TAG_PREFIX = "speed-mark-"
 SPEED_RULE_MARKER_PREFIX = "dummy-speed-user-"
@@ -511,9 +505,59 @@ def _detect_public_ipv4() -> str:
 
 
 def _geo_lookup(ip: str) -> tuple[str, str]:
-    # Keep account rendering local-only; avoid third-party lookups from bot actions.
-    del ip
-    return "-", "-"
+    ip_text = str(ip or "").strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip_text):
+        return "-", "-"
+    cached = _GEO_LOOKUP_CACHE.get(ip_text)
+    if cached is not None:
+        return cached
+
+    def _fetch_json(url: str) -> dict[str, Any] | None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "autoscript-bot-telegram/1.0",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            payload = json.loads(raw)
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+
+    payload = _fetch_json(f"http://ip-api.com/json/{ip_text}?fields=status,country,isp")
+    if payload and str(payload.get("status") or "").strip().lower() == "success":
+        result = (
+            str(payload.get("isp") or "-").strip() or "-",
+            str(payload.get("country") or "-").strip() or "-",
+        )
+        _GEO_LOOKUP_CACHE[ip_text] = result
+        return result
+
+    payload = _fetch_json(f"https://ipwho.is/{ip_text}")
+    if payload and bool(payload.get("success")):
+        result = (
+            str(payload.get("connection", {}).get("isp") or payload.get("isp") or "-").strip() or "-",
+            str(payload.get("country") or "-").strip() or "-",
+        )
+        _GEO_LOOKUP_CACHE[ip_text] = result
+        return result
+
+    payload = _fetch_json(f"https://ipapi.co/{ip_text}/json/")
+    if payload and not payload.get("error"):
+        result = (
+            str(payload.get("org") or payload.get("asn_org") or "-").strip() or "-",
+            str(payload.get("country_name") or payload.get("country") or "-").strip() or "-",
+        )
+        _GEO_LOOKUP_CACHE[ip_text] = result
+        return result
+
+    result = ("-", "-")
+    _GEO_LOOKUP_CACHE[ip_text] = result
+    return result
 
 
 def _detect_domain() -> str:
@@ -1152,14 +1196,10 @@ def _linux_user_exists(username: str) -> bool:
 
 
 def _ssh_password_output(password_raw: str) -> str:
-    if SSH_ACCOUNT_INFO_STORE_PASSWORD:
-        return str(password_raw or "-")
-    return "(hidden)"
+    return str(password_raw or "-")
 
 
 def _ssh_password_from_account_info(username: str) -> str:
-    if not SSH_ACCOUNT_INFO_STORE_PASSWORD:
-        return "-"
     account_file = _resolve_existing(_account_candidates(SSH_PROTOCOL, username))
     if account_file is None:
         return "-"
@@ -1390,7 +1430,8 @@ def _ssh_write_account_info(
         sshws_alt_path = "-"
         sshws_main = "-"
     domain = _detect_domain() or "-"
-    ip = _detect_public_ipv4() or "-"
+    ok_ip, public_ip = _get_public_ipv4()
+    ip = (public_ip if ok_ip else (_detect_public_ipv4() or "-")).strip() or "-"
     isp, country = _geo_lookup(ip)
 
     running_label_width = 16
@@ -2507,6 +2548,8 @@ def _build_account_text(
     speed_up: float,
 ) -> str:
     links = _build_links(proto, username, credential, domain)
+    ok_ip, public_ip = _get_public_ipv4()
+    ip = (public_ip if ok_ip else str(ip or "").strip() or _detect_public_ipv4() or "-").strip() or "-"
     isp, country = _geo_lookup(ip)
     proto_disp = _proto_display_label(proto)
     public_paths = {

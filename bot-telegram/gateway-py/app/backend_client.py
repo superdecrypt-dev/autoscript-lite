@@ -22,6 +22,8 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "8:renew_cert": 420.0,
     "9:restart_edge_gateway": 90.0,
     "9:restart_badvpn": 90.0,
+    "11:restart_edge_gateway": 90.0,
+    "11:restart_badvpn": 90.0,
     "12:create_backup": 240.0,
     "12:restore_latest": 420.0,
     "12:restore_from_upload": 420.0,
@@ -187,6 +189,28 @@ class BackendClient:
                 continue
             out.append(BackendUserOption(proto=p, username=u))
         return out
+
+    async def get_qac_user_summary(self, proto: str, username: str) -> dict[str, str]:
+        params = {"proto": proto, "username": username}
+        try:
+            async with self._new_client(timeout=15.0) as client:
+                response = await client.get("/api/qac/user-summary", params=params)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text.strip()
+            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
+        except Exception as exc:
+            raise BackendError(_sanitize_text(str(exc))) from exc
+
+        if not isinstance(data, dict):
+            raise BackendError("Response backend qac summary tidak valid.")
+        if not bool(data.get("ok")):
+            raise BackendError(str(data.get("error") or "Gagal membaca QAC summary."))
+        summary = data.get("summary")
+        if not isinstance(summary, dict):
+            raise BackendError("Payload QAC summary tidak valid.")
+        return {str(k): str(v) for k, v in summary.items()}
 
     async def list_inbound_options(self) -> list[BackendInboundOption]:
         try:

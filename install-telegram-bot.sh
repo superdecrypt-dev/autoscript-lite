@@ -1021,6 +1021,7 @@ start_or_restart_services() {
   service_unit_exists "${GATEWAY_SERVICE}" || die "Service ${GATEWAY_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."
 
   systemctl restart "${BACKEND_SERVICE}"
+  wait_for_backend_ready
   systemctl restart "${GATEWAY_SERVICE}"
   if timer_unit_exists "${MONITOR_SERVICE}"; then
     systemctl restart "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
@@ -1052,6 +1053,28 @@ status_services() {
   echo "Env file : ${BOT_ENV_FILE}"
   echo "Token    : $(mask_secret "${token}")"
   echo "Bot home : ${BOT_HOME}"
+}
+
+wait_for_backend_ready() {
+  need_root
+  command_exists curl || die "curl tidak tersedia di host ini."
+
+  local secret_url secret_value url attempts
+  secret_value="$(get_env_value INTERNAL_SHARED_SECRET "${BOT_ENV_FILE}")"
+  [[ -n "${secret_value}" ]] || die "INTERNAL_SHARED_SECRET belum diisi di ${BOT_ENV_FILE}."
+
+  secret_url="${BACKEND_BASE_URL%/}/api/main-menu"
+  attempts=40
+
+  for _ in $(seq 1 "${attempts}"); do
+    if curl -fsS --max-time 5 -H "X-Internal-Shared-Secret: ${secret_value}" "${secret_url}" >/dev/null 2>&1; then
+      ok "Backend bot siap menerima koneksi."
+      return 0
+    fi
+    sleep 1
+  done
+
+  die "Backend bot belum siap di ${secret_url} setelah ${attempts} detik."
 }
 
 view_logs_menu() {

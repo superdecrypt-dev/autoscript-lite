@@ -10,6 +10,8 @@ from .commands_loader import ActionSpec, FieldSpec, MenuSpec
 
 
 SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|license|api[_-]?key|authorization)", re.IGNORECASE)
+NON_PASSWORD_SENSITIVE_KEY_RE = re.compile(r"(token|secret|license|api[_-]?key|authorization)", re.IGNORECASE)
+PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
 DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 KV_SECRET_RE = re.compile(
@@ -43,7 +45,7 @@ def _mask_secret(value: str) -> str:
     return f"{raw[:4]}****{raw[-4:]}"
 
 
-def _sanitize_output_text(value: str) -> str:
+def _sanitize_output_text(value: str, *, allow_password: bool = False) -> str:
     text = str(value or "")
     text = TELEGRAM_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
     text = DISCORD_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
@@ -53,15 +55,19 @@ def _sanitize_output_text(value: str) -> str:
         key = match.group(1)
         sep = match.group(2)
         val = match.group(3)
+        if allow_password and PASSWORD_KEY_RE.search(key) and not NON_PASSWORD_SENSITIVE_KEY_RE.search(key):
+            return f"{key}{sep}{val}"
         return f"{key}{sep}{_mask_secret(val)}"
 
     return KV_SECRET_RE.sub(_mask_kv, text)
 
 
-def _mask_param_if_sensitive(key: str, value: str) -> str:
+def _mask_param_if_sensitive(key: str, value: str, *, allow_password: bool = False) -> str:
+    if allow_password and PASSWORD_KEY_RE.search(key) and not NON_PASSWORD_SENSITIVE_KEY_RE.search(key):
+        return _sanitize_output_text(value, allow_password=allow_password)
     if SENSITIVE_KEY_RE.search(key):
         return _mask_secret(value)
-    return _sanitize_output_text(value)
+    return _sanitize_output_text(value, allow_password=allow_password)
 
 
 def main_menu_text(hostname: str, menu_count: int) -> str:
@@ -110,6 +116,7 @@ def action_form_prompt(menu: MenuSpec, action: ActionSpec, field: FieldSpec, idx
 
 
 def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> str:
+    allow_password = menu.id == "2"
     lines = [
         f"<b>Konfirmasi: {html.escape(menu.label)} · {html.escape(action.label)}</b>",
         "",
@@ -119,7 +126,7 @@ def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> 
     else:
         lines.append(
             as_pre(
-                "\n".join([f"{k}={_mask_param_if_sensitive(k, v)}" for k, v in params.items()]),
+                "\n".join([f"{k}={_mask_param_if_sensitive(k, v, allow_password=allow_password)}" for k, v in params.items()]),
                 max_len=1200,
             )
         )
@@ -131,7 +138,8 @@ def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> 
 def action_result_text(result: BackendActionResponse) -> str:
     icon = "✅" if result.ok else "❌"
     title = html.escape(result.title or "Result")
-    message = _sanitize_output_text(result.message or "(no output)")
+    allow_password = bool(result.data.get("allow_sensitive_output")) if isinstance(result.data, dict) else False
+    message = _sanitize_output_text(result.message or "(no output)", allow_password=allow_password)
 
     lines = [
         f"<b>{icon} {title}</b>",

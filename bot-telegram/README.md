@@ -38,11 +38,10 @@ Menu bot Telegram saat ini mengikuti struktur operasional CLI pada area inti:
 - `6) Domain Control`
 - `7) Speedtest`
 - `8) Security`
-- `9) Maintenance`
 - `10) Traffic`
 
 Menu tambahan khusus bot:
-- `11) Status & Diagnostics`
+- `11) Status, Diagnostics & Maintenance`
 - `12) Backup/Restore`
 
 Catatan perilaku:
@@ -50,7 +49,7 @@ Catatan perilaku:
 - Menu `2) SSH Users` sudah mencakup `SSH WS Service Status`, `Restart SSH WS Stack`, dan `Active SSHWS Sessions`.
 - Menu `5) Network` sudah mencakup `WARP`, `DNS`, dan `Adblock` termasuk status, source list, update, enable/disable, serta auto update.
 - Menu `6) Domain Control` kini mencakup set domain manual/auto, set domain ringan tanpa wizard cert, guard, dan refresh account info.
-- Menu `8) Security` dan `9) Maintenance` kini lebih dekat ke CLI untuk TLS info/renew/reload, fail2ban, hardening, daemon, `wireproxy`, `edge gateway`, `BadVPN`, log, dan `SSHWS diagnostics`.
+- Menu `8) Security` dan `11) Status, Diagnostics & Maintenance` kini lebih dekat ke CLI untuk TLS info/renew/reload, fail2ban, hardening, daemon, `wireproxy`, `edge gateway`, `BadVPN`, log, dan `SSHWS diagnostics`.
 
 ## Backup/Restore (Menu 12)
 Fitur `12) Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`.

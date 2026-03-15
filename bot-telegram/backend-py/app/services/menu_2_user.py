@@ -173,6 +173,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             data["download_error"] = str(download_or_err)
 
         if proto == system.SSH_PROTOCOL:
+            data["allow_sensitive_output"] = True
             account_path = _extract_add_user_path(msg_add, "Account")
             quota_path = _extract_add_user_path(msg_add, "Quota")
             account_text = _decode_download_text(download_or_err) if ok_download and isinstance(download_or_err, dict) else ""
@@ -190,14 +191,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 lines.append(account_text)
             else:
                 lines.append(f"(SSH ACCOUNT INFO tidak ditemukan: {account_path})")
-            if password_value and ("Password    : (hidden)" in account_text or "Password    : ********" in account_text):
-                lines.extend(
-                    [
-                        "",
-                        f"One-time Password : {password_value}",
-                        "Note             : password tidak disimpan plaintext di file account info.",
-                    ]
-                )
             return ok_response(title, "\n".join(lines), data=data)
 
         account_path = _extract_add_user_path(msg_add, "Account")
@@ -276,7 +269,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 msg_reset,
                 f"Password baru : {pw_or_err}",
             ]
-            return ok_response(title, "\n".join(lines))
+            return ok_response(title, "\n".join(lines), data={"allow_sensitive_output": True})
         return error_response("user_reset_password_failed", title, msg_reset)
 
     if action == "active_sshws_sessions":
@@ -311,6 +304,8 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         data: dict[str, object] = {
             "download_file": download_or_err,
         }
+        if str(proto_or_err) == system.SSH_PROTOCOL:
+            data["allow_sensitive_output"] = True
         return ok_response(title, msg_info, data=data)
 
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")

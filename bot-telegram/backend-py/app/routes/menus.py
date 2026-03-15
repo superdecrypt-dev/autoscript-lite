@@ -88,6 +88,14 @@ def get_user_options(proto: str | None = None) -> dict:
     }
 
 
+@router.get("/api/qac/user-summary", dependencies=[Depends(verify_shared_secret)])
+def get_qac_user_summary(proto: str, username: str) -> dict:
+    ok, payload = system.op_qac_user_summary(proto, username)
+    if not ok:
+        return {"ok": False, "summary": {}, "error": str(payload)}
+    return {"ok": True, "summary": payload if isinstance(payload, dict) else {}}
+
+
 @router.get("/api/inbounds/options", dependencies=[Depends(verify_shared_secret)])
 def get_inbound_options() -> dict:
     tags = system.list_inbound_tags()

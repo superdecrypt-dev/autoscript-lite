@@ -2,8 +2,8 @@
   "menus": [
     {
       "id": "11",
-      "label": "Status & Diagnostics",
-      "description": "Status server, validasi konfigurasi Xray, dan informasi TLS.",
+      "label": "Status, Diagnostics & Maintenance",
+      "description": "Status server, validasi konfigurasi, informasi TLS, layanan, logs, dan restart maintenance.",
       "actions": [
         {
           "id": "overview",
@@ -20,6 +20,130 @@
         {
           "id": "tls_info",
           "label": "View TLS Info",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_xray",
+          "label": "Restart Xray",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_nginx",
+          "label": "Restart Nginx",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_all",
+          "label": "Restart All",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "xray_logs",
+          "label": "View Xray Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "nginx_logs",
+          "label": "View Nginx Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "wireproxy_status",
+          "label": "Wireproxy Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "edge_gateway_status",
+          "label": "Edge Gateway Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "badvpn_status",
+          "label": "BadVPN Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_wireproxy",
+          "label": "Restart Wireproxy",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_edge_gateway",
+          "label": "Restart Edge Gateway",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_badvpn",
+          "label": "Restart BadVPN",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "daemon_status",
+          "label": "Daemon Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_xray_daemons",
+          "label": "Restart Xray Daemons",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "xray_daemon_logs",
+          "label": "Xray Daemon Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "sshws_status",
+          "label": "SSH WS Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_sshws_stack",
+          "label": "Restart SSHWS Stack",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "sshws_diagnostics",
+          "label": "SSHWS Diagnostics",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "sshws_combined_logs",
+          "label": "SSHWS Combined Logs",
           "mode": "direct",
           "style": "secondary"
         }
@@ -1664,143 +1788,6 @@
           "label": "Security Overview",
           "mode": "direct",
           "style": "primary"
-        }
-      ]
-    },
-    {
-      "id": "9",
-      "label": "Maintenance",
-      "description": "Status layanan, restart, logs, WARP, daemon Xray, dan diagnostics SSHWS.",
-      "actions": [
-        {
-          "id": "service_status",
-          "label": "View Services",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "restart_xray",
-          "label": "Restart Xray",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_nginx",
-          "label": "Restart Nginx",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_all",
-          "label": "Restart All",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "xray_logs",
-          "label": "View Xray Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "nginx_logs",
-          "label": "View Nginx Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "wireproxy_status",
-          "label": "Wireproxy Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "edge_gateway_status",
-          "label": "Edge Gateway Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "badvpn_status",
-          "label": "BadVPN Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_wireproxy",
-          "label": "Restart Wireproxy",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_edge_gateway",
-          "label": "Restart Edge Gateway",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_badvpn",
-          "label": "Restart BadVPN",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "daemon_status",
-          "label": "Daemon Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_xray_daemons",
-          "label": "Restart Xray Daemons",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "xray_daemon_logs",
-          "label": "Xray Daemon Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "sshws_status",
-          "label": "SSH WS Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_sshws_stack",
-          "label": "Restart SSHWS Stack",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "sshws_diagnostics",
-          "label": "SSHWS Diagnostics",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "sshws_combined_logs",
-          "label": "SSHWS Combined Logs",
-          "mode": "direct",
-          "style": "secondary"
         }
       ]
     },
