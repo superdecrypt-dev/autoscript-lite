@@ -3890,6 +3890,119 @@ PY
   return 0
 }
 
+xray_reset_client_credential() {
+  # args: protocol username uuid_or_pass
+  local proto="$1"
+  local username="$2"
+  local cred="$3"
+
+  local email="${username}@${proto}"
+  need_python3
+
+  [[ -f "${XRAY_INBOUNDS_CONF}" ]] || die "Xray inbounds conf tidak ditemukan: ${XRAY_INBOUNDS_CONF}"
+  ensure_path_writable "${XRAY_INBOUNDS_CONF}"
+
+  local backup tmp out changed rc
+  backup="$(xray_backup_path_prepare "${XRAY_INBOUNDS_CONF}")"
+  tmp="${WORK_DIR}/10-inbounds.reset-cred.tmp"
+
+  set +e
+  out="$(
+    (
+      flock -x 200
+      cp -a "${XRAY_INBOUNDS_CONF}" "${backup}" || exit 1
+
+      py_out="$(
+        python3 - <<'PY' "${XRAY_INBOUNDS_CONF}" "${tmp}" "${proto}" "${email}" "${cred}"
+import json
+import sys
+
+src, dst, proto, email, cred = sys.argv[1:6]
+
+with open(src, "r", encoding="utf-8") as f:
+  cfg = json.load(f)
+
+inbounds = cfg.get("inbounds", [])
+if not isinstance(inbounds, list):
+  raise SystemExit("Invalid config: inbounds is not a list")
+
+def inbound_matches_proto(ib, p):
+  if not isinstance(ib, dict):
+    return False
+  ib_proto = str(ib.get("protocol") or "").strip().lower()
+  if p in ("vless", "vmess", "trojan"):
+    return ib_proto == p
+  return False
+
+updated = 0
+for ib in inbounds:
+  if not inbound_matches_proto(ib, proto):
+    continue
+  st = ib.get("settings") or {}
+  clients = st.get("clients")
+  if not isinstance(clients, list):
+    continue
+  for c in clients:
+    if not isinstance(c, dict):
+      continue
+    if c.get("email") != email:
+      continue
+    if proto == "trojan":
+      c["password"] = cred
+      c.pop("id", None)
+    else:
+      c["id"] = cred
+      c.pop("password", None)
+      if proto == "vmess":
+        try:
+          c["alterId"] = int(c.get("alterId") or 0)
+        except Exception:
+          c["alterId"] = 0
+    updated += 1
+
+if updated == 0:
+  raise SystemExit(f"user tidak ditemukan di config untuk {proto}: {email}")
+
+with open(dst, "w", encoding="utf-8") as f:
+  json.dump(cfg, f, ensure_ascii=False, indent=2)
+  f.write("\n")
+
+print("changed=1")
+PY
+      )" || exit 1
+
+      printf '%s\n' "${py_out}"
+      changed_local="$(xray_txn_changed_flag "${py_out}")"
+
+      if [[ "${changed_local}" == "1" ]]; then
+        xray_write_file_atomic "${XRAY_INBOUNDS_CONF}" "${tmp}" || {
+          restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"
+          exit 1
+        }
+
+        svc_restart xray || true
+        if ! svc_wait_active xray 60; then
+          restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"
+          systemctl restart xray || true
+          exit 86
+        fi
+      fi
+    ) 200>"${ROUTING_LOCK_FILE}"
+  )"
+  rc=$?
+  set -e
+
+  xray_txn_rc_or_die "${rc}" \
+    "Gagal reset UUID/password user: ${email}" \
+    "xray tidak aktif setelah reset UUID/password. Config di-rollback ke backup: ${backup}"
+
+  changed="$(xray_txn_changed_flag "${out}")"
+  if [[ "${changed}" != "1" ]]; then
+    return 0
+  fi
+  return 0
+}
+
 xray_routing_set_user_in_marker() {
   # args: marker email on|off [outbound_tag]
   # outbound_tag defaults to 'blocked' for backward compatibility
@@ -6236,6 +6349,170 @@ PY
   pause
 }
 
+user_reset_credential_menu() {
+  ensure_account_quota_dirs
+  need_python3
+
+  title
+  echo "Xray Users > Reset UUID/Password"
+  hr
+  echo "Pilih protocol:"
+  proto_list_menu_print
+  hr
+  if ! read -r -p "Protocol (1-3/kembali): " p; then
+    echo
+    return 0
+  fi
+  if is_back_choice "${p}"; then
+    return 0
+  fi
+  local proto
+  proto="$(proto_menu_pick_to_value "${p}")"
+  if [[ -z "${proto}" ]]; then
+    warn "Protocol tidak valid"
+    pause
+    return 0
+  fi
+
+  local page=0
+  local username="" selected_file="" selected_quota_file=""
+  while true; do
+    title
+    echo "Xray Users > Reset UUID/Password"
+    hr
+    echo "Protocol terpilih: ${proto}"
+    echo "Daftar akun ${proto} (10 per halaman):"
+    hr
+    account_collect_files "${proto}"
+    ACCOUNT_PAGE="${page}"
+    if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+      account_print_table_page "${ACCOUNT_PAGE}" "${proto}"
+    else
+      echo "  (Belum ada akun ${proto} terkelola)"
+      echo
+      echo "Halaman: 0/0  | Total akun: 0"
+      hr
+      echo "Ketik: kembali"
+      if ! read -r -p "Pilihan: " nav; then
+        echo
+        return 0
+      fi
+      return 0
+    fi
+    hr
+    echo "Ketik NO akun, atau: next / previous / kembali"
+    local nav=""
+    if ! read -r -p "Pilihan: " nav; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${nav}"; then
+      return 0
+    fi
+    case "${nav}" in
+      next|n)
+        local pages
+        pages="$(account_total_pages)"
+        if (( pages > 0 && page < pages - 1 )); then page=$((page + 1)); fi
+        continue
+        ;;
+      previous|p|prev)
+        if (( page > 0 )); then page=$((page - 1)); fi
+        continue
+        ;;
+    esac
+
+    if [[ ! "${nav}" =~ ^[0-9]+$ ]]; then
+      invalid_choice
+      continue
+    fi
+
+    local total pages start end rows idx
+    total="${#ACCOUNT_FILES[@]}"
+    pages=$(( (total + ACCOUNT_PAGE_SIZE - 1) / ACCOUNT_PAGE_SIZE ))
+    if (( page < 0 )); then page=0; fi
+    if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+    start=$((page * ACCOUNT_PAGE_SIZE))
+    end=$((start + ACCOUNT_PAGE_SIZE))
+    if (( end > total )); then end="${total}"; fi
+    rows=$((end - start))
+
+    if (( nav < 1 || nav > rows )); then
+      warn "NO di luar range"
+      pause
+      continue
+    fi
+
+    idx=$((start + nav - 1))
+    selected_file="${ACCOUNT_FILES[$idx]}"
+    username="$(account_parse_username_from_file "${selected_file}" "${proto}")"
+    selected_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+
+    title
+    echo "Xray Users > Reset UUID/Password"
+    hr
+    echo "Protocol : ${proto}"
+    echo "Username : ${username}"
+    echo "Account  : ${selected_file}"
+    echo "Quota    : ${selected_quota_file}"
+    hr
+
+    local confirm_rc=0
+    if confirm_yn_or_back "Reset UUID/password user ini?"; then
+      break
+    else
+      confirm_rc=$?
+      if (( confirm_rc == 2 )); then
+        return 0
+      fi
+      continue
+    fi
+  done
+
+  local new_cred label
+  if proto_uses_password "${proto}"; then
+    new_cred="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+    label="Password baru"
+  else
+    new_cred="$(gen_uuid)"
+    label="UUID baru"
+  fi
+
+  xray_reset_client_credential "${proto}" "${username}" "${new_cred}"
+
+  local refresh_ok="true"
+  if ! account_info_refresh_warn "${proto}" "${username}"; then
+    refresh_ok="false"
+  fi
+
+  title
+  echo "Reset UUID/Password selesai ✅"
+  hr
+  echo "User         : ${username}@${proto}"
+  echo "${label} : ${new_cred}"
+  if [[ "${refresh_ok}" != "true" ]]; then
+    echo "Warning      : XRAY ACCOUNT INFO belum sinkron"
+  fi
+  local account_file
+  account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  hr
+  echo "Account file:"
+  echo "  ${account_file}"
+  hr
+  echo "XRAY ACCOUNT INFO:"
+  if [[ -f "${account_file}" ]]; then
+    cat "${account_file}"
+  else
+    echo "(XRAY ACCOUNT INFO tidak ditemukan: ${account_file})"
+  fi
+  hr
+  pause
+}
+
 user_list_menu() {
   ACCOUNT_PAGE=0
   while true; do
@@ -6288,7 +6565,8 @@ user_menu() {
     "1|Add User"
     "2|Delete User"
     "3|Set Expiry"
-    "4|List Users"
+    "4|Reset UUID/Password"
+    "5|List Users"
     "0|Back"
   )
   while true; do
@@ -6303,7 +6581,8 @@ user_menu() {
       1) user_add_menu ;;
       2) user_del_menu ;;
       3) user_extend_expiry_menu ;;
-      4) user_list_menu ;;
+      4) user_reset_credential_menu ;;
+      5) user_list_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
