@@ -404,7 +404,7 @@ def _probe_ws_endpoint(
             f"Host: {host_header or host}\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
-            "User-Agent: xray-telegram-bot/sshws-diagnostics\r\n"
+            "User-Agent: bot-telegram/sshws-diagnostics\r\n"
             "\r\n"
         ).encode("ascii", "ignore")
         sock.sendall(request)

@@ -9,11 +9,11 @@ Bot Telegram ini standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 - Shared contract: `shared/commands.json`
 
 ## Service Units
-- `xray-telegram-backend.service`
-- `xray-telegram-gateway.service`
-- `xray-telegram-monitor.service` + timer
+- `bot-telegram-backend.service`
+- `bot-telegram-gateway.service`
+- `bot-telegram-monitor.service` + timer
 
 ## Security Baseline
 - Semua endpoint backend menggunakan `X-Internal-Shared-Secret`.
 - Auth bot di gateway berbasis `TELEGRAM_ADMIN_CHAT_IDS` dan/atau `TELEGRAM_ADMIN_USER_IDS`.
-- Secret/env disimpan di `/etc/xray-telegram-bot/bot.env` (mode 600).
+- Secret/env disimpan di `/etc/bot-telegram/bot.env` (mode 600).

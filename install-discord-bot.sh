@@ -61,11 +61,11 @@ BACKEND_BASE_URL_EXPLICIT=0
 [[ -v BACKEND_BASE_URL ]] && BACKEND_BASE_URL_EXPLICIT=1
 
 BOT_HOME="${BOT_HOME:-/opt/bot-discord}"
-BOT_ENV_DIR="${BOT_ENV_DIR:-/etc/xray-discord-bot}"
+BOT_ENV_DIR="${BOT_ENV_DIR:-/etc/bot-discord}"
 BOT_ENV_FILE="${BOT_ENV_FILE:-${BOT_ENV_DIR}/bot.env}"
-BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/xray-discord-bot}"
-BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/xray-discord-bot}"
-GATEWAY_RUN_USER="${GATEWAY_RUN_USER:-xray-discord-gateway}"
+BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/bot-discord}"
+BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/bot-discord}"
+GATEWAY_RUN_USER="${GATEWAY_RUN_USER:-bot-discord-gateway}"
 DISCORD_CHANNEL_POLICY_FILE="${DISCORD_CHANNEL_POLICY_FILE:-${BOT_STATE_DIR}/channel-policy.json}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8080}"
@@ -74,9 +74,9 @@ if [[ -z "${BACKEND_BASE_URL}" ]]; then
   BACKEND_BASE_URL="http://$(format_host_for_url "${BACKEND_HOST}"):${BACKEND_PORT}"
 fi
 
-BACKEND_SERVICE="xray-discord-backend"
-GATEWAY_SERVICE="xray-discord-gateway"
-MONITOR_SERVICE="xray-discord-monitor"
+BACKEND_SERVICE="bot-discord-backend"
+GATEWAY_SERVICE="bot-discord-gateway"
+MONITOR_SERVICE="bot-discord-monitor"
 
 SRC_OWNER="${BOT_SOURCE_OWNER:-superdecrypt-dev}"
 SRC_REPO="${BOT_SOURCE_REPO:-autoscript}"
@@ -700,8 +700,8 @@ validate_source_tree() {
   [[ -f "${src}/backend-py/requirements.txt" ]] || die "Source invalid: backend-py/requirements.txt tidak ditemukan"
   [[ -f "${src}/backend-py/requirements.lock.txt" ]] || die "Source invalid: backend-py/requirements.lock.txt tidak ditemukan"
   [[ -f "${src}/shared/commands.json" ]] || die "Source invalid: shared/commands.json tidak ditemukan"
-  [[ -f "${src}/systemd/xray-discord-backend.service.tpl" ]] || die "Source invalid: template backend service tidak ditemukan"
-  [[ -f "${src}/systemd/xray-discord-gateway.service.tpl" ]] || die "Source invalid: template gateway service tidak ditemukan"
+  [[ -f "${src}/systemd/bot-discord-backend.service.tpl" ]] || die "Source invalid: template backend service tidak ditemukan"
+  [[ -f "${src}/systemd/bot-discord-gateway.service.tpl" ]] || die "Source invalid: template gateway service tidak ditemukan"
 }
 
 migrate_channel_policy_state() {
@@ -982,8 +982,8 @@ install_or_update_systemd() {
 
   local backend_tpl gateway_tpl monitor_tpl monitor_timer_tpl
   local backend_dst gateway_dst monitor_dst monitor_timer_dst
-  backend_tpl="${BOT_HOME}/systemd/xray-discord-backend.service.tpl"
-  gateway_tpl="${BOT_HOME}/systemd/xray-discord-gateway.service.tpl"
+  backend_tpl="${BOT_HOME}/systemd/bot-discord-backend.service.tpl"
+  gateway_tpl="${BOT_HOME}/systemd/bot-discord-gateway.service.tpl"
   monitor_tpl="${BOT_HOME}/systemd/${MONITOR_SERVICE}.service.tpl"
   monitor_timer_tpl="${BOT_HOME}/systemd/${MONITOR_SERVICE}.timer.tpl"
   backend_dst="/etc/systemd/system/${BACKEND_SERVICE}.service"
@@ -999,27 +999,27 @@ install_or_update_systemd() {
 
   sed \
     -e "s#/opt/bot-discord#${BOT_HOME}#g" \
-    -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
+    -e "s#/etc/bot-discord/bot.env#${BOT_ENV_FILE}#g" \
     "${backend_tpl}" > "${backend_dst}"
 
   sed \
     -e "s#/opt/bot-discord#${BOT_HOME}#g" \
-    -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
-    -e "s#User=xray-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
+    -e "s#/etc/bot-discord/bot.env#${BOT_ENV_FILE}#g" \
+    -e "s#User=bot-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
     "${gateway_tpl}" > "${gateway_dst}"
 
   if [[ -f "${monitor_tpl}" ]]; then
     sed \
       -e "s#/opt/bot-discord#${BOT_HOME}#g" \
-      -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
-      -e "s#User=xray-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
+      -e "s#/etc/bot-discord/bot.env#${BOT_ENV_FILE}#g" \
+      -e "s#User=bot-discord-gateway#User=${GATEWAY_RUN_USER}#g" \
       "${monitor_tpl}" > "${monitor_dst}"
   fi
 
   if [[ -f "${monitor_timer_tpl}" ]]; then
     sed \
       -e "s#/opt/bot-discord#${BOT_HOME}#g" \
-      -e "s#/etc/xray-discord-bot/bot.env#${BOT_ENV_FILE}#g" \
+      -e "s#/etc/bot-discord/bot.env#${BOT_ENV_FILE}#g" \
       "${monitor_timer_tpl}" > "${monitor_timer_dst}"
   fi
 
@@ -1143,7 +1143,6 @@ uninstall_bot() {
   systemctl stop "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
   systemctl stop "${MONITOR_SERVICE}.timer" "${MONITOR_SERVICE}" >/dev/null 2>&1 || true
   systemctl disable "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
-
   rm -f \
     "/etc/systemd/system/${BACKEND_SERVICE}.service" \
     "/etc/systemd/system/${GATEWAY_SERVICE}.service" \

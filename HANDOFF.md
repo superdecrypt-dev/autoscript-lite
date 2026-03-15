@@ -189,8 +189,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 - Build gateway Discord:
   - `cd bot-discord/gateway-ts && npm run build`
 - Cek service bot (sesuaikan environment):
-  - Discord: `systemctl is-active xray-discord-backend xray-discord-gateway`
-  - Telegram: `systemctl is-active xray-telegram-backend xray-telegram-gateway`
+  - Discord: `systemctl is-active bot-discord-backend bot-discord-gateway`
+  - Telegram: `systemctl is-active bot-telegram-backend bot-telegram-gateway`
 
 ## SOP Testing Wajib
 - Semua pengujian shell script (`run.sh`, `setup.sh`, `manage.sh`, installer bot) dan bot mengacu ke `TESTING_PLAYBOOK.md`.

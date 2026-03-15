@@ -16,7 +16,7 @@ list_env_files() {
   done
 
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl cat xray-discord-gateway 2>/dev/null | awk '
+    systemctl cat bot-discord-gateway 2>/dev/null | awk '
       /^[[:space:]]*EnvironmentFile=/ {
         value = substr($0, index($0, "=") + 1)
         sub(/^-/, "", value)
@@ -25,7 +25,7 @@ list_env_files() {
     '
   fi
 
-  printf '%s\n' "/etc/xray-discord-bot/bot.env"
+  printf '%s\n' "/etc/bot-discord/bot.env"
 }
 
 is_probably_discord_token() {
@@ -86,9 +86,9 @@ main() {
     exit 1
   }
 
-  systemctl restart xray-discord-gateway
+  systemctl restart bot-discord-gateway
   sleep 2
-  systemctl show xray-discord-gateway -p ActiveState -p SubState -p NRestarts --no-pager
+  systemctl show bot-discord-gateway -p ActiveState -p SubState -p NRestarts --no-pager
   echo "[rotate-token] selesai."
 }
 

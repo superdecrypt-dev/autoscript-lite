@@ -203,7 +203,7 @@ run_gate_3_1() {
 set -euo pipefail
 env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+env_file="$(systemctl cat bot-discord-gateway 2>/dev/null | awk '"'"'
     /^[[:space:]]*EnvironmentFile=/ {
       value = substr($0, index($0, "=") + 1)
       sub(/^-/, "", value)
@@ -212,7 +212,7 @@ if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
   '"'"' | tail -n1)"
 fi
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="/etc/xray-discord-bot/bot.env"
+  env_file="/etc/bot-discord/bot.env"
 fi
 source "${env_file}"
 export INTERNAL_SHARED_SECRET
@@ -302,7 +302,7 @@ run_gate_4() {
 set -euo pipefail
 env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+env_file="$(systemctl cat bot-discord-gateway 2>/dev/null | awk '"'"'
     /^[[:space:]]*EnvironmentFile=/ {
       value = substr($0, index($0, "=") + 1)
       sub(/^-/, "", value)
@@ -311,7 +311,7 @@ if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
   '"'"' | tail -n1)"
 fi
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="/etc/xray-discord-bot/bot.env"
+  env_file="/etc/bot-discord/bot.env"
 fi
 source "${env_file}"
 export INTERNAL_SHARED_SECRET
@@ -385,10 +385,10 @@ run_gate_5() {
 
   lxc exec "${PROD_INSTANCE}" -- bash -lc '
 set -euo pipefail
-systemctl show xray-discord-gateway -p ActiveState -p SubState -p NRestarts --no-pager
+systemctl show bot-discord-gateway -p ActiveState -p SubState -p NRestarts --no-pager
 env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+  env_file="$(systemctl cat bot-discord-gateway 2>/dev/null | awk '"'"'
     /^[[:space:]]*EnvironmentFile=/ {
       value = substr($0, index($0, "=") + 1)
       sub(/^-/, "", value)
@@ -397,10 +397,10 @@ if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
   '"'"' | tail -n1)"
 fi
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="/etc/xray-discord-bot/bot.env"
+  env_file="/etc/bot-discord/bot.env"
 fi
 source "${env_file}"
-export RESP_JSON="$(curl -fsS --max-time 20 -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" -H "User-Agent: xray-discord-gateway/1.0" "https://discord.com/api/v10/applications/${DISCORD_APPLICATION_ID}/guilds/${DISCORD_GUILD_ID}/commands")"
+export RESP_JSON="$(curl -fsS --max-time 20 -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" -H "User-Agent: bot-discord-gateway/1.0" "https://discord.com/api/v10/applications/${DISCORD_APPLICATION_ID}/guilds/${DISCORD_GUILD_ID}/commands")"
 python3 - <<'"'"'PY'"'"'
 import json, os
 data = json.loads(os.environ["RESP_JSON"])
@@ -422,7 +422,7 @@ run_gate_6() {
 set -euo pipefail
 env_file="${BOT_ENV_FILE:-${DISCORD_ENV_FILE:-}}"
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '"'"'
+env_file="$(systemctl cat bot-discord-gateway 2>/dev/null | awk '"'"'
     /^[[:space:]]*EnvironmentFile=/ {
       value = substr($0, index($0, "=") + 1)
       sub(/^-/, "", value)
@@ -431,7 +431,7 @@ if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
   '"'"' | tail -n1)"
 fi
 if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
-  env_file="/etc/xray-discord-bot/bot.env"
+  env_file="/etc/bot-discord/bot.env"
 fi
 source "${env_file}"
 export INTERNAL_SHARED_SECRET

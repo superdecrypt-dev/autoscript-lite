@@ -42,7 +42,7 @@ from .render import (
 )
 
 
-LOGGER = logging.getLogger("xray-telegram-gateway")
+LOGGER = logging.getLogger("bot-telegram-gateway")
 BACKEND_MENU_SYNC_TIMEOUT_SECONDS = 30.0
 BACKEND_MENU_SYNC_RETRY_INTERVAL_SECONDS = 1.0
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
@@ -71,8 +71,6 @@ QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
-    "vyxara1.qzz.io",
-    "vyxara2.qzz.io",
 )
 FORM_CHOICE_MANUAL_VALUE = "__manual_input__"
 FORM_CHOICE_SKIP_VALUE = "__skip_optional__"
@@ -113,7 +111,7 @@ PENDING_STATE_KEYS = (
 PENDING_OTHER_CHAT_TEXT = "Sesi aktif ada di chat lain. Lanjutkan dari chat asal atau mulai ulang dengan /panel."
 BOT_ROOT = Path(__file__).resolve().parents[2]
 BOT_HOME = Path((os.getenv("BOT_HOME") or "").strip() or str(BOT_ROOT))
-BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot"))
+BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/bot-telegram"))
 UPLOAD_RESTORE_MAX_BYTES = 20 * 1024 * 1024
 UPLOAD_RESTORE_DIRS = (
     BOT_STATE_DIR / "tmp" / "uploads",
@@ -2535,7 +2533,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.Document.ALL, on_document_input))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_input))
 
-    LOGGER.info("Starting xray-telegram-gateway")
+    LOGGER.info("Starting bot-telegram-gateway")
     # Python 3.12 no longer guarantees a default loop for the main thread.
     # PTB still expects one when entering run_polling().
     asyncio.set_event_loop(asyncio.new_event_loop())

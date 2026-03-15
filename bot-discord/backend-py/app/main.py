@@ -7,9 +7,9 @@ from .auth import verify_shared_secret
 from .config import get_settings
 from .routes.menus import router as menu_router
 
-app = FastAPI(title="xray-discord-backend", version="1.0.0")
+app = FastAPI(title="bot-discord-backend", version="1.0.0")
 app.include_router(menu_router)
-logger = logging.getLogger("xray-discord-backend")
+logger = logging.getLogger("bot-discord-backend")
 
 
 @app.on_event("startup")

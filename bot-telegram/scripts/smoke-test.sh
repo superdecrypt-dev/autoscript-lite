@@ -2,8 +2,8 @@
 set -euo pipefail
 
 BASE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
-BACKEND_SERVICE="${BACKEND_SERVICE:-xray-telegram-backend}"
-GATEWAY_SERVICE="${GATEWAY_SERVICE:-xray-telegram-gateway}"
+BACKEND_SERVICE="${BACKEND_SERVICE:-bot-telegram-backend}"
+GATEWAY_SERVICE="${GATEWAY_SERVICE:-bot-telegram-gateway}"
 BACKEND_HOST="${BACKEND_HOST:-}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 SECRET="${INTERNAL_SHARED_SECRET:-}"
@@ -19,7 +19,7 @@ resolve_env_file() {
   done
 
   if command -v systemctl >/dev/null 2>&1; then
-    candidate="$(systemctl cat xray-telegram-gateway 2>/dev/null | awk '
+    candidate="$(systemctl cat bot-telegram-gateway 2>/dev/null | awk '
       /^[[:space:]]*EnvironmentFile=/ {
         value = substr($0, index($0, "=") + 1)
         sub(/^-/, "", value)
@@ -32,7 +32,7 @@ resolve_env_file() {
     fi
   fi
 
-  for candidate in "/etc/xray-telegram-bot/bot.env" "${BASE_DIR}/.env"; do
+  for candidate in "/etc/bot-telegram/bot.env" "${BASE_DIR}/.env"; do
     if [[ -f "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
       return

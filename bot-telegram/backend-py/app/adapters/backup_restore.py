@@ -26,8 +26,8 @@ MAX_RESTORE_MANIFEST_BYTES = 4 * 1024 * 1024
 STREAM_CHUNK_BYTES = 1024 * 1024
 
 BOT_HOME = Path(os.getenv("BOT_HOME") or Path(__file__).resolve().parents[3])
-BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot"))
-GATEWAY_RUN_USER = (os.getenv("GATEWAY_RUN_USER") or "xray-telegram-gateway").strip() or "xray-telegram-gateway"
+BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/bot-telegram"))
+GATEWAY_RUN_USER = (os.getenv("GATEWAY_RUN_USER") or "bot-telegram-gateway").strip() or "bot-telegram-gateway"
 BACKUP_ROOT_DIR = BOT_STATE_DIR / "backups"
 BACKUP_ARCHIVES_DIR = BACKUP_ROOT_DIR / "archives"
 BACKUP_SAFETY_DIR = BACKUP_ROOT_DIR / "safety"

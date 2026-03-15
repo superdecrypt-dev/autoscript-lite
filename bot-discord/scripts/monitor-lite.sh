@@ -5,13 +5,13 @@ SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="${SAFE_PATH}"
 export PATH
 
-BACKEND_SERVICE="${BACKEND_SERVICE:-xray-discord-backend}"
-GATEWAY_SERVICE="${GATEWAY_SERVICE:-xray-discord-gateway}"
+BACKEND_SERVICE="${BACKEND_SERVICE:-bot-discord-backend}"
+GATEWAY_SERVICE="${GATEWAY_SERVICE:-bot-discord-gateway}"
 BACKEND_HOST="${BACKEND_HOST:-}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 INTERNAL_SHARED_SECRET="${INTERNAL_SHARED_SECRET:-}"
-BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/xray-discord-bot}"
-BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/xray-discord-bot}"
+BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/bot-discord}"
+BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/bot-discord}"
 BOT_MONITOR_LOG_FILE="${BOT_MONITOR_LOG_FILE:-${BOT_LOG_DIR}/monitor-lite.log}"
 BOT_MONITOR_MAX_LINES="${BOT_MONITOR_MAX_LINES:-1000}"
 BOT_MONITOR_LOCK_FILE="${BOT_MONITOR_LOCK_FILE:-${BOT_LOG_DIR}/monitor-lite.lock}"
@@ -146,7 +146,7 @@ fi
 
 log_line "${message}"
 if command -v logger >/dev/null 2>&1; then
-  logger -t xray-discord-monitor "${message}"
+  logger -t bot-discord-monitor "${message}"
 fi
 
 if (( fail_count > 0 )); then

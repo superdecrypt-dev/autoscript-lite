@@ -48,10 +48,10 @@ bot-discord/
 │  ├─ locks/
 │  └─ tmp/
 ├─ systemd/
-│  ├─ xray-discord-backend.service.tpl
-│  ├─ xray-discord-gateway.service.tpl
-│  ├─ xray-discord-monitor.service.tpl
-│  └─ xray-discord-monitor.timer.tpl
+│  ├─ bot-discord-backend.service.tpl
+│  ├─ bot-discord-gateway.service.tpl
+│  ├─ bot-discord-monitor.service.tpl
+│  └─ bot-discord-monitor.timer.tpl
 └─ scripts/
    ├─ dev-up.sh
    ├─ dev-down.sh
@@ -83,7 +83,7 @@ Ringkasan fungsi:
 - `4` update token aman (`read -s`, konfirmasi ulang, permission file env 600).
 - `5` deploy dari archive GitHub lalu `rsync` ke target.
 - `6` memasang template systemd untuk backend dan gateway.
-- `6` juga memasang monitor ringan (`xray-discord-monitor.timer`).
+- `6` juga memasang monitor ringan (`bot-discord-monitor.timer`).
 - `7-9` operasional service (restart/status/log) termasuk status monitor timer.
 
 Script test otomatis:
@@ -96,7 +96,7 @@ Script keamanan:
 - `scripts/rotate-discord-token.sh` untuk rotasi `DISCORD_BOT_TOKEN` via prompt tersembunyi, update env file, lalu restart gateway.
 
 Script monitoring:
-- `scripts/monitor-lite.sh` mengecek backend/gateway/health dan mencatat ringkas ke `/var/log/xray-discord-bot/monitor-lite.log`.
+- `scripts/monitor-lite.sh` mengecek backend/gateway/health dan mencatat ringkas ke `/var/log/bot-discord/monitor-lite.log`.
 
 Ketentuan UX gateway (terkini):
 - Respons private interaction menggunakan `flags: MessageFlags.Ephemeral` (menghindari warning deprecate).
@@ -124,8 +124,8 @@ Ketentuan UX gateway (terkini):
 
 ## 5) Lokasi Deploy & Integrasi Root Script
 - Lokasi bot terpasang: `/opt/bot-discord`
-- Env produksi: `/etc/xray-discord-bot/bot.env`
-- Runtime data/log: `/var/lib/xray-discord-bot`, `/var/log/xray-discord-bot`
+- Env produksi: `/etc/bot-discord/bot.env`
+- Runtime data/log: `/var/lib/bot-discord`, `/var/log/bot-discord`
 - Launcher installer: `/usr/local/bin/install-discord-bot`
 
 Integrasi:

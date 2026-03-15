@@ -7,9 +7,9 @@ from .auth import verify_shared_secret
 from .config import get_settings
 from .routes.menus import router as menu_router
 
-app = FastAPI(title="xray-telegram-backend", version="1.0.0")
+app = FastAPI(title="bot-telegram-backend", version="1.0.0")
 app.include_router(menu_router)
-logger = logging.getLogger("xray-telegram-backend")
+logger = logging.getLogger("bot-telegram-backend")
 
 
 @app.on_event("startup")

@@ -461,11 +461,11 @@ Rilis ini memindahkan Hysteria2 menjadi fitur terintegrasi di jalur CLI (`setup.
 - Hasil patch memastikan setup memanggil `install_hysteria2_integrated()` dan `sanity_check` memverifikasi `hysteria-server` + `xray-hy2-sync`.
 
 - Deploy bot Discord:
-  - `xray-discord-backend` -> `active`
-  - `xray-discord-gateway` -> `active`
+  - `bot-discord-backend` -> `active`
+  - `bot-discord-gateway` -> `active`
 - Deploy bot Telegram:
-  - `xray-telegram-backend` -> `active`
-  - `xray-telegram-gateway` -> `active`
+  - `bot-telegram-backend` -> `active`
+  - `bot-telegram-gateway` -> `active`
 - Health backend:
   - `http://127.0.0.1:8080/health` -> `200` (Discord)
   - `http://127.0.0.1:8081/health` + `X-Internal-Shared-Secret` -> `200` (Telegram)
@@ -516,7 +516,7 @@ Rilis ini menambahkan full parity WARP untuk bot Telegram agar setara kontrol ne
 - `shellcheck install-telegram-bot.sh bot-telegram/scripts/smoke-test.sh bot-telegram/scripts/monitor-lite.sh bot-telegram/scripts/gate-all.sh` -> PASS
 - `bash bot-telegram/scripts/gate-all.sh` -> PASS
 - Runtime deploy:
-  - `systemctl is-active xray-telegram-backend xray-telegram-gateway` -> `active active`
+  - `systemctl is-active bot-telegram-backend bot-telegram-gateway` -> `active active`
   - smoke Telegram -> PASS
 
 ## Rilis 2026-02-25 (Update Malam)
@@ -618,7 +618,7 @@ Rilis ini memfinalkan integrasi fitur baru bot Discord untuk operasional staging
   - `(cd bot-discord/gateway-ts && npm run build)` -> PASS
   - `bash -n bot-discord/scripts/gate-all.sh` -> PASS
 - Validasi staging:
-  - service `xray-discord-backend` dan `xray-discord-gateway` -> active
+  - service `bot-discord-backend` dan `bot-discord-gateway` -> active
   - checklist action `/panel` untuk menu `1`, `5`, `12` -> PASS semua (18/18 action).
 
 ## Rilis 2026-02-24
@@ -693,7 +693,7 @@ Update ini mencatat perubahan identitas proyek ke `autoscript`, pembaruan source
 
 ### Catatan Operasional
 - Baseline handoff saat ini mengacu pada repo `autoscript`.
-- Deploy bot tetap di `/opt/bot-discord`; env di `/etc/xray-discord-bot/bot.env`.
+- Deploy bot tetap di `/opt/bot-discord`; env di `/etc/bot-discord/bot.env`.
 
 ## Rilis 2026-02-23
 
@@ -704,7 +704,7 @@ Rilis ini memfinalkan paket stabilisasi bot Discord standalone dan alur operasio
 1. Rotasi Token Discord (Security)
 - Token bot produksi telah diganti (regenerate) dan diverifikasi aktif.
 - Ditambahkan script rotasi aman: `bot-discord/scripts/rotate-discord-token.sh`.
-- Token tetap disimpan di env file deploy: `/etc/xray-discord-bot/bot.env`.
+- Token tetap disimpan di env file deploy: `/etc/bot-discord/bot.env`.
 
 2. Snapshot Rollback
 - Snapshot pra-perubahan dibuat untuk rollback cepat:
@@ -722,10 +722,10 @@ Rilis ini memfinalkan paket stabilisasi bot Discord standalone dan alur operasio
 - Ditambahkan health monitor:
   `bot-discord/scripts/monitor-lite.sh`.
 - Ditambahkan unit systemd:
-  - `xray-discord-monitor.service`
-  - `xray-discord-monitor.timer` (interval 5 menit)
+  - `bot-discord-monitor.service`
+  - `bot-discord-monitor.timer` (interval 5 menit)
 - Log monitor:
-  `/var/log/xray-discord-bot/monitor-lite.log`.
+  `/var/log/bot-discord/monitor-lite.log`.
 
 ### Hasil Validasi
 - `bash -n` dan `shellcheck` untuk script terkait: lulus.
@@ -734,9 +734,9 @@ Rilis ini memfinalkan paket stabilisasi bot Discord standalone dan alur operasio
   - Gate 5: PASS
   - Gate 6: PASS
 - Status runtime produksi:
-  - `xray-discord-backend`: active
-  - `xray-discord-gateway`: active
-  - `xray-discord-monitor.timer`: active
+  - `bot-discord-backend`: active
+  - `bot-discord-gateway`: active
+  - `bot-discord-monitor.timer`: active
 
 ### Risiko Diketahui (Accepted Risk)
 - Hardcoded Cloudflare token di lokasi historis diperlakukan sebagai by design/accepted risk sesuai kebijakan proyek saat ini.

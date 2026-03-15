@@ -79,26 +79,26 @@ cd /opt/bot-discord
 Script akan:
 - meminta token baru dengan input tersembunyi,
 - update `DISCORD_BOT_TOKEN` di env file deploy,
-- restart `xray-discord-gateway`,
+- restart `bot-discord-gateway`,
 - menampilkan status service setelah restart.
 
 ## Monitoring Ringan (Timer)
-Deploy terbaru memasang timer `xray-discord-monitor.timer` (interval 5 menit) yang menjalankan:
+Deploy terbaru memasang timer `bot-discord-monitor.timer` (interval 5 menit) yang menjalankan:
 
 ```bash
 /opt/bot-discord/scripts/monitor-lite.sh
 ```
 
 Cakupan cek:
-- status `xray-discord-backend`,
-- status `xray-discord-gateway`,
+- status `bot-discord-backend`,
+- status `bot-discord-gateway`,
 - endpoint `GET /health` backend.
 
 Lihat status timer:
 
 ```bash
-systemctl status xray-discord-monitor.timer --no-pager
-tail -n 50 /var/log/xray-discord-bot/monitor-lite.log
+systemctl status bot-discord-monitor.timer --no-pager
+tail -n 50 /var/log/bot-discord/monitor-lite.log
 ```
 
 ## Menu yang Didukung (Mirip manage.sh)
@@ -115,7 +115,7 @@ tail -n 50 /var/log/xray-discord-bot/monitor-lite.log
 - `11) SSH QAC`
 
 ## Catatan Keamanan
-- Simpan token hanya di env file (`/etc/xray-discord-bot/bot.env` saat deploy).
+- Simpan token hanya di env file (`/etc/bot-discord/bot.env` saat deploy).
 - Secret API internal wajib diset (`INTERNAL_SHARED_SECRET`).
 - Wajib isi minimal salah satu ACL admin: `DISCORD_ADMIN_ROLE_IDS` atau `DISCORD_ADMIN_USER_IDS` (gateway fail-closed jika keduanya kosong).
 - Secara default, action mutasi aktif untuk admin yang lolos ACL. Jika perlu mode lebih ketat, set `ENABLE_DANGEROUS_ACTIONS=false`.

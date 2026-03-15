@@ -1,5 +1,5 @@
 [Unit]
-Description=Xray Telegram Backend (FastAPI)
+Description=Bot Telegram Backend (FastAPI)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bot-telegram/backend-py
-EnvironmentFile=/etc/xray-telegram-bot/bot.env
+EnvironmentFile=/etc/bot-telegram/bot.env
 ExecStart=/opt/bot-telegram/.venv/bin/python -m uvicorn app.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}
 Restart=always
 RestartSec=3

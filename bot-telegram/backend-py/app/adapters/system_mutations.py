@@ -67,7 +67,7 @@ CERT_DIR = Path("/opt/cert")
 CERT_FULLCHAIN = CERT_DIR / "fullchain.pem"
 CERT_PRIVKEY = CERT_DIR / "privkey.pem"
 EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
-WORK_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-telegram-bot")) / "tmp"
+WORK_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/bot-telegram")) / "tmp"
 ROUTING_LOCK_FILE = "/run/autoscript/locks/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
 PROTOCOLS = XRAY_PROTOCOLS
@@ -105,8 +105,6 @@ CLOUDFLARE_API_TOKEN = os.getenv(
 PROVIDED_ROOT_DOMAINS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
-    "vyxara1.qzz.io",
-    "vyxara2.qzz.io",
 )
 ACME_SH_INSTALL_REF = os.getenv("ACME_SH_INSTALL_REF", "f39d066ced0271d87790dc426556c1e02a88c91b").strip()
 ACME_SH_TARBALL_URL = f"https://codeload.github.com/acmesh-official/acme.sh/tar.gz/{ACME_SH_INSTALL_REF}"

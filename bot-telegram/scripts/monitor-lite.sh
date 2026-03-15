@@ -5,13 +5,13 @@ SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="${SAFE_PATH}"
 export PATH
 
-BACKEND_SERVICE="${BACKEND_SERVICE:-xray-telegram-backend}"
-GATEWAY_SERVICE="${GATEWAY_SERVICE:-xray-telegram-gateway}"
+BACKEND_SERVICE="${BACKEND_SERVICE:-bot-telegram-backend}"
+GATEWAY_SERVICE="${GATEWAY_SERVICE:-bot-telegram-gateway}"
 BACKEND_HOST="${BACKEND_HOST:-}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 INTERNAL_SHARED_SECRET="${INTERNAL_SHARED_SECRET:-}"
-BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/xray-telegram-bot}"
-BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/xray-telegram-bot}"
+BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/bot-telegram}"
+BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/bot-telegram}"
 BOT_MONITOR_LOG_FILE="${BOT_MONITOR_LOG_FILE:-${BOT_LOG_DIR}/monitor-lite.log}"
 BOT_MONITOR_MAX_LINES="${BOT_MONITOR_MAX_LINES:-1000}"
 BOT_MONITOR_LOCK_FILE="${BOT_MONITOR_LOCK_FILE:-${BOT_LOG_DIR}/monitor-lite.lock}"
@@ -146,7 +146,7 @@ fi
 
 log_line "${message}"
 if command -v logger >/dev/null 2>&1; then
-  logger -t xray-telegram-monitor "${message}"
+  logger -t bot-telegram-monitor "${message}"
 fi
 
 if (( fail_count > 0 )); then

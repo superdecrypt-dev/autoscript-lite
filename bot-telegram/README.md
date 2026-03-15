@@ -16,7 +16,7 @@ Bot Telegram ini adalah pelengkap CLI `manage.sh`, berjalan standalone di `/opt/
 - `scripts/`: gate/smoke/monitor helper.
 
 ## Env penting
-Dikelola di `/etc/xray-telegram-bot/bot.env`:
+Dikelola di `/etc/bot-telegram/bot.env`:
 - `INTERNAL_SHARED_SECRET`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ADMIN_CHAT_IDS` (opsional, CSV)

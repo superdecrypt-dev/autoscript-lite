@@ -14,7 +14,7 @@ resolve_env_file() {
   done
 
   if command -v systemctl >/dev/null 2>&1; then
-    candidate="$(systemctl cat xray-discord-gateway 2>/dev/null | awk '
+    candidate="$(systemctl cat bot-discord-gateway 2>/dev/null | awk '
       /^[[:space:]]*EnvironmentFile=/ {
         value = substr($0, index($0, "=") + 1)
         sub(/^-/, "", value)
@@ -27,7 +27,7 @@ resolve_env_file() {
     fi
   fi
 
-  for candidate in "/etc/xray-discord-bot/bot.env" "${BASE_DIR}/.env"; do
+  for candidate in "/etc/bot-discord/bot.env" "${BASE_DIR}/.env"; do
     if [[ -f "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
       return

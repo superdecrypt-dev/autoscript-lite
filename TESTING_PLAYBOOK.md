@@ -193,8 +193,8 @@ Kriteria lulus:
 Khusus runtime bot Telegram (smoke cepat; detail lengkap lihat Bagian 6):
 
 ```bash
-set -a; . /etc/xray-telegram-bot/bot.env; set +a
-systemctl is-active xray-telegram-backend xray-telegram-gateway
+set -a; . /etc/bot-telegram/bot.env; set +a
+systemctl is-active bot-telegram-backend bot-telegram-gateway
 /opt/bot-telegram/scripts/smoke-test.sh
 curl -fsS --max-time 8 \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
@@ -309,8 +309,8 @@ bash bot-telegram/scripts/gate-all.sh
 Tambahkan smoke runtime:
 
 ```bash
-set -a; . /etc/xray-telegram-bot/bot.env; set +a
-systemctl is-active xray-telegram-backend xray-telegram-gateway xray-telegram-monitor.timer
+set -a; . /etc/bot-telegram/bot.env; set +a
+systemctl is-active bot-telegram-backend bot-telegram-gateway bot-telegram-monitor.timer
 /opt/bot-telegram/scripts/smoke-test.sh
 curl -fsS --max-time 8 \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
@@ -337,7 +337,7 @@ Catatan:
 5. Verifikasi log baru gateway tidak membocorkan token:
 
 ```bash
-journalctl -u xray-telegram-gateway --since "10 minutes ago" --no-pager | \
+journalctl -u bot-telegram-gateway --since "10 minutes ago" --no-pager | \
   rg -n 'api\\.telegram\\.org/bot[0-9]+:'
 ```
 
@@ -419,7 +419,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 ### 6.4 Kriteria Lulus Telegram
 - Semua action mengembalikan schema `ok/code/title/message`.
 - Tidak ada `unknown_action`.
-- Tidak ada crash service `xray-telegram-backend` dan `xray-telegram-gateway`.
+- Tidak ada crash service `bot-telegram-backend` dan `bot-telegram-gateway`.
 - ACL admin berjalan sesuai env (`TELEGRAM_ADMIN_*`).
 - Akun/chat non-whitelist ditolak konsisten.
 - Action dangerous benar-benar tersembunyi saat `ENABLE_DANGEROUS_ACTIONS=false`.

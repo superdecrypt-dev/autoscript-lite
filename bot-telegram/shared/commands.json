@@ -1588,26 +1588,6 @@
           "dangerous": true
         },
         {
-          "id": "set_domain",
-          "label": "Set Domain Only",
-          "mode": "modal",
-          "style": "secondary",
-          "confirm": true,
-          "modal": {
-            "title": "Set Domain (No Cert Wizard)",
-            "fields": [
-              {
-                "id": "domain",
-                "label": "Domain (FQDN)",
-                "style": "short",
-                "required": true,
-                "placeholder": "vpn.example.com"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
           "id": "domain_info",
           "label": "View Domain Info",
           "mode": "direct",
