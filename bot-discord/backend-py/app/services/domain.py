@@ -20,7 +20,6 @@ def handle(action: str, params: dict) -> dict:
         return error_response("setup_domain_custom_failed", title, msg)
     if action == "setup_domain_cloudflare":
         title = "Domain Control - Set Domain (Cloudflare)"
-        warnings: list[str] = []
         ok_r, root_or_err = require_param(params, "root_domain", title)
         if not ok_r:
             return root_or_err
@@ -30,25 +29,27 @@ def handle(action: str, params: dict) -> dict:
         elif subdomain_mode_raw in {"2", "manual", "input", "custom"}:
             subdomain_mode = "manual"
         else:
-            subdomain_mode = "auto"
+            return error_response("invalid_param", title, "Parameter 'subdomain_mode' harus auto atau manual.")
         subdomain = str(params.get("subdomain", "") or "")
         proxied = False
         proxied_raw = str(params.get("proxied", "") or "").strip()
         if proxied_raw:
             proxied_parsed = parse_bool_value(proxied_raw, default=None)
             if proxied_parsed is None:
-                warnings.append("Input 'proxied' tidak valid, default dipakai: OFF.")
-            else:
-                proxied = bool(proxied_parsed)
+                return error_response("invalid_param", title, "Parameter 'proxied' harus on/off atau true/false.")
+            proxied = bool(proxied_parsed)
 
         allow_existing = False
         allow_existing_raw = str(params.get("allow_existing_same_ip", "") or "").strip()
         if allow_existing_raw:
             allow_existing_parsed = parse_bool_value(allow_existing_raw, default=None)
             if allow_existing_parsed is None:
-                warnings.append("Input 'allow_existing_same_ip' tidak valid, default dipakai: OFF.")
-            else:
-                allow_existing = bool(allow_existing_parsed)
+                return error_response(
+                    "invalid_param",
+                    title,
+                    "Parameter 'allow_existing_same_ip' harus on/off atau true/false.",
+                )
+            allow_existing = bool(allow_existing_parsed)
 
         ok_set, title, msg = system_mutations.op_domain_setup_cloudflare(
             root_domain_input=str(root_or_err),
@@ -57,12 +58,9 @@ def handle(action: str, params: dict) -> dict:
             proxied=bool(proxied),
             allow_existing_same_ip=bool(allow_existing),
         )
-        warning_data = {"warnings": warnings} if warnings else None
-        if warnings:
-            msg = msg + "\n\nCatatan input:\n- " + "\n- ".join(warnings)
         if ok_set:
-            return ok_response(title, msg, data=warning_data)
-        return error_response("setup_domain_cloudflare_failed", title, msg, data=warning_data)
+            return ok_response(title, msg)
+        return error_response("setup_domain_cloudflare_failed", title, msg)
     if action == "set_domain":
         ok_d, domain_or_err = require_param(params, "domain", "Domain Control - Set Domain")
         if not ok_d:

@@ -11,6 +11,22 @@ function readField(interaction: ModalSubmitInteraction, fieldId: string): string
   return interaction.fields.getTextInputValue(fieldId).trim();
 }
 
+function normalizeDomainAutoMode(raw: string): "auto" | "manual" | null {
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (["1", "auto", "acak", "random", "generate", "generated"].includes(value)) return "auto";
+  if (["2", "manual", "input", "custom"].includes(value)) return "manual";
+  return null;
+}
+
+function normalizeOptionalBoolean(raw: string): "true" | "false" | "" | null {
+  const value = raw.trim().toLowerCase();
+  if (!value) return "";
+  if (["1", "true", "yes", "y", "on", "aktif", "enable", "enabled"].includes(value)) return "true";
+  if (["0", "false", "no", "n", "off", "nonaktif", "disable", "disabled"].includes(value)) return "false";
+  return null;
+}
+
 function isUserType(value: string): value is MenuUserContext["type"] {
   return value === "vless" || value === "vmess" || value === "trojan" || value === "ssh";
 }
@@ -38,15 +54,33 @@ export async function handleMenuModal(interaction: ModalSubmitInteraction, backe
       return true;
     }
 
-    const subdomainMode = readField(interaction, "subdomain_mode");
+    const subdomainModeRaw = readField(interaction, "subdomain_mode");
+    const subdomainMode = normalizeDomainAutoMode(subdomainModeRaw);
     if (!subdomainMode) {
-      await interaction.reply({ content: "Subdomain mode wajib diisi.", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "Subdomain mode harus `auto` atau `manual`.", flags: MessageFlags.Ephemeral });
       return true;
     }
 
     const subdomain = readField(interaction, "subdomain");
-    const proxied = readField(interaction, "proxied");
-    const allowExistingSameIp = readField(interaction, "allow_existing_same_ip");
+    if (subdomainMode === "manual" && !subdomain) {
+      await interaction.reply({ content: "Subdomain wajib diisi saat mode `manual`.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const proxiedRaw = readField(interaction, "proxied");
+    const allowExistingSameIpRaw = readField(interaction, "allow_existing_same_ip");
+    const proxied = normalizeOptionalBoolean(proxiedRaw);
+    if (proxied === null) {
+      await interaction.reply({ content: "Field `proxied` harus true/false atau on/off.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const allowExistingSameIp = normalizeOptionalBoolean(allowExistingSameIpRaw);
+    if (allowExistingSameIp === null) {
+      await interaction.reply({
+        content: "Field `allow_existing_same_ip` harus true/false atau on/off.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
     const params: Record<string, string> = {
       root_domain: ctx.rootDomain,
       subdomain_mode: subdomainMode,
@@ -60,8 +94,8 @@ export async function handleMenuModal(interaction: ModalSubmitInteraction, backe
         `Root domain: **${ctx.rootDomain}**`,
         `Subdomain mode: **${subdomainMode}**`,
         ...(subdomain ? [`Subdomain: **${subdomain}**`] : []),
-        ...(proxied ? [`Proxied: **${proxied}**`] : []),
-        ...(allowExistingSameIp ? [`Allow existing same IP: **${allowExistingSameIp}**`] : []),
+        ...(proxied ? [`Proxied: **${proxied.toUpperCase()}**`] : []),
+        ...(allowExistingSameIp ? [`Allow existing same IP: **${allowExistingSameIp.toUpperCase()}**`] : []),
       ]),
       flags: MessageFlags.Ephemeral,
     });

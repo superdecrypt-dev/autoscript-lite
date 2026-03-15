@@ -651,15 +651,15 @@ function showOpsPurgeModal(interaction: ButtonInteraction) {
         .setPlaceholder("100")
         .setStyle(TextInputStyle.Short),
     ),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("channel")
-        .setLabel("Target Channel (opsional)")
-        .setRequired(false)
-        .setPlaceholder("#general atau 1234567890")
-        .setStyle(TextInputStyle.Short),
-    ),
-  );
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("channel")
+          .setLabel("Target Channel (opsional)")
+          .setRequired(false)
+          .setPlaceholder("<#1234567890> atau 1234567890")
+          .setStyle(TextInputStyle.Short),
+      ),
+    );
   return interaction.showModal(modal);
 }
 

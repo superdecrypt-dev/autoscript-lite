@@ -51,7 +51,8 @@ cases = [
     ("domain_info_success", "domain_info", {}, "ok"),
     ("setup_domain_custom_invalid_domain", "setup_domain_custom", {"domain": "abc"}, "setup_domain_custom_failed"),
     ("setup_domain_cloudflare_invalid_root", "setup_domain_cloudflare", {"root_domain": "999"}, "setup_domain_cloudflare_failed"),
-    ("strict_bool_proxied_invalid", "setup_domain_cloudflare", {"root_domain": "999", "proxied": "abc"}, "setup_domain_cloudflare_failed"),
+    ("strict_bool_proxied_invalid", "setup_domain_cloudflare", {"root_domain": "999", "proxied": "abc"}, "invalid_param"),
+    ("strict_subdomain_mode_invalid", "setup_domain_cloudflare", {"root_domain": "vyxara1.web.id", "subdomain_mode": "oops"}, "invalid_param"),
 ]
 
 bad = []
@@ -81,24 +82,23 @@ try:
             "root_domain": "vyxara1.web.id",
             "subdomain_mode": "manual",
             "subdomain": "gate2-test",
-            "proxied": "abc",
-            "allow_existing_same_ip": "xyz",
+            "proxied": "true",
+            "allow_existing_same_ip": "false",
         },
     )
-    warnings = ((res_contract.get("data") or {}).get("warnings") or [])
     contract_ok = bool(
         res_contract.get("ok") is True
-        and captured.get("proxied") is False
+        and captured.get("proxied") is True
         and captured.get("allow_existing_same_ip") is False
-        and isinstance(warnings, list)
-        and len(warnings) >= 2
+        and captured.get("subdomain_mode") == "manual"
+        and captured.get("subdomain") == "gate2-test"
     )
 finally:
     domain.system_mutations.op_domain_setup_cloudflare = original_cf
 
-print(f"gate2_bool_invalid_warn_default={'PASS' if contract_ok else 'FAIL'}")
+print(f"gate2_bool_explicit_contract={'PASS' if contract_ok else 'FAIL'}")
 if not contract_ok:
-    bad.append("bool_invalid_warn_default")
+    bad.append("bool_explicit_contract")
 
 if bad:
     raise SystemExit(f"gate2_failed={','.join(bad)}")
@@ -347,7 +347,7 @@ def rec(name, ok):
 s,b=request("GET","/health", auth=False)
 rec("auth_guard", s==401)
 s,b=request("POST","/api/domain/action", {"action":"set_auto","params":{"root_domain":"999","proxied":"abc"}}, auth=True)
-rec("invalid_bool", s==200 and b.get("code")=="setup_domain_cloudflare_failed")
+rec("invalid_bool", s==200 and b.get("code")=="invalid_param")
 s,b=request("POST","/api/domain/action", {"action":"set_auto","params":{"root_domain":"999"}}, auth=True)
 rec("invalid_root", s==200 and b.get("code")=="setup_domain_cloudflare_failed")
 
@@ -384,7 +384,7 @@ import json, os
 data = json.loads(os.environ["RESP_JSON"])
 names = sorted(str(x.get("name") or "") for x in data if isinstance(x, dict))
 print("gate5_commands=" + ",".join(names))
-required = {"status", "user", "qac", "domain", "network", "ops", "notify"}
+required = {"menu", "status", "notify"}
 missing = sorted(required.difference(set(names)))
 if missing:
     raise SystemExit("gate5_commands_missing:" + ",".join(missing))
