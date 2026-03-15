@@ -42,6 +42,7 @@ const QAC_PANEL_SELECT_PREFIX = "menu-select:qac-panel:";
 const OPS_RESTART_SELECT_ID = "menu-select:ops:restart-service";
 const DOMAIN_SET_AUTO_ROOT_SELECT_ID = "menu-select:domain:set-auto-root";
 const NETWORK_SET_DNS_STRATEGY_SELECT_ID = "menu-select:network:set-dns-strategy";
+const USER_PICKER_PAGE_PREFIX = "menu:user-picker-page:";
 
 const DOMAIN_SET_MANUAL_MODAL_ID = "menu-modal:domain:set-manual";
 const DOMAIN_SET_AUTO_MODAL_PREFIX = "menu-modal:domain:set-auto:";
@@ -405,18 +406,24 @@ function sortUserOptions(users: BackendUserOption[]): BackendUserOption[] {
 }
 
 function buildUserSelectScreen(
+  token: string,
   title: string,
   description: string,
   customId: string,
   users: BackendUserOption[],
-  refreshId: string,
   backId: string,
   backLabel: string,
+  page: number,
 ) {
   const sorted = sortUserOptions(users);
-  const visible = sorted.slice(0, MAX_SELECT_OPTIONS);
-  const truncated = sorted.length > visible.length;
-  const lines = truncated ? [`Menampilkan ${visible.length} dari ${sorted.length} user pertama.`] : [`Total user: ${sorted.length}`];
+  const totalPages = Math.max(1, Math.ceil(sorted.length / MAX_SELECT_OPTIONS));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * MAX_SELECT_OPTIONS;
+  const visible = sorted.slice(start, start + MAX_SELECT_OPTIONS);
+  const lines = [
+    `Total user: ${sorted.length}`,
+    `Halaman: ${safePage + 1}/${totalPages}`,
+  ];
   return {
     embeds: [buildSectionEmbed(title, description, lines)],
     components: [
@@ -431,7 +438,28 @@ function buildUserSelectScreen(
             })),
           ),
       ),
-      navRow(refreshId, backId, backLabel),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${USER_PICKER_PAGE_PREFIX}${token}:${Math.max(safePage - 1, 0)}`)
+          .setLabel("Prev")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(safePage <= 0),
+        new ButtonBuilder()
+          .setCustomId(`${USER_PICKER_PAGE_PREFIX}${token}:${safePage}`)
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`${MENU_PREFIX}noop`)
+          .setLabel(`${safePage + 1}/${totalPages}`)
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId(`${USER_PICKER_PAGE_PREFIX}${token}:${Math.min(safePage + 1, totalPages - 1)}`)
+          .setLabel("Next")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(safePage >= totalPages - 1),
+      ),
+      navRow(`${USER_PICKER_PAGE_PREFIX}${token}:${safePage}`, backId, backLabel),
     ],
   };
 }
@@ -514,15 +542,17 @@ async function showUserPicker(
     });
     return;
   }
+  const token = createMenuState(opts);
   await interaction.update(
     buildUserSelectScreen(
+      token,
       title,
       description,
       customId,
       users,
       `${SECTION_PREFIX}${backSection}`,
-      `${SECTION_PREFIX}${backSection}`,
       backSection === "accounts" ? "Accounts" : "QAC",
+      0,
     ),
   );
 }
@@ -611,6 +641,14 @@ function showOpsPurgeModal(interaction: ButtonInteraction) {
         .setLabel("Jumlah pesan")
         .setRequired(true)
         .setPlaceholder("100")
+        .setStyle(TextInputStyle.Short),
+    ),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("channel")
+        .setLabel("Target Channel (opsional)")
+        .setRequired(false)
+        .setPlaceholder("#general atau 1234567890")
         .setStyle(TextInputStyle.Short),
     ),
   );
@@ -773,6 +811,11 @@ export async function handleMenuButton(interaction: ButtonInteraction, deps: Men
     return true;
   }
 
+  if (id === `${MENU_PREFIX}noop`) {
+    await interaction.deferUpdate();
+    return true;
+  }
+
   if (id.startsWith(SECTION_PREFIX)) {
     const section = id.slice(SECTION_PREFIX.length) as MenuSection;
     if (["accounts", "qac", "domain", "network", "ops"].includes(section)) {
@@ -789,15 +832,53 @@ export async function handleMenuButton(interaction: ButtonInteraction, deps: Men
     }
   }
 
+  if (id.startsWith(USER_PICKER_PAGE_PREFIX)) {
+    const body = id.slice(USER_PICKER_PAGE_PREFIX.length);
+    const [token, pageRaw] = body.split(":", 2);
+    const ctx = getMenuState<{
+      scope: Scope;
+      customId: string;
+      title: string;
+      description: string;
+      backSection: "accounts" | "qac";
+    }>(token || "");
+    if (!ctx) {
+      await interaction.reply({ content: "Context picker kadaluarsa. Buka /menu lagi.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const users = await loadScopeUsers(deps.backend, ctx.scope);
+    if (users.length === 0) {
+      await interaction.reply({
+        content: ctx.scope === "ssh" ? "Belum ada user SSH." : "Belum ada user Xray.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+    const page = Number.parseInt(pageRaw || "0", 10);
+    await interaction.update(
+      buildUserSelectScreen(
+        token,
+        ctx.title,
+        ctx.description,
+        ctx.customId,
+        users,
+        `${SECTION_PREFIX}${ctx.backSection}`,
+        ctx.backSection === "accounts" ? "Accounts" : "QAC",
+        Number.isFinite(page) ? page : 0,
+      ),
+    );
+    return true;
+  }
+
   if (id.startsWith(OPS_PURGE_CONFIRM_PREFIX)) {
     const token = id.slice(OPS_PURGE_CONFIRM_PREFIX.length);
-    const ctx = getMenuState<{ mode: "bot_only" | "all_messages"; amount: number }>(token);
+    const ctx = getMenuState<{ mode: "bot_only" | "all_messages"; amount: number; channelInput?: string }>(token);
     if (!ctx) {
       await interaction.reply({ content: "Context purge kadaluarsa. Buka /menu lagi.", flags: MessageFlags.Ephemeral });
       return true;
     }
     deleteMenuState(token);
-    await runPurgeAction(interaction, ctx.mode, ctx.amount);
+    await runPurgeAction(interaction, ctx.mode, ctx.amount, ctx.channelInput || "");
     return true;
   }
 

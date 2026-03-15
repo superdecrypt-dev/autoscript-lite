@@ -17,6 +17,14 @@ type PurgeCapableChannel = {
 
 type PurgeInteraction = ButtonInteraction | ModalSubmitInteraction;
 
+function normalizeChannelId(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const mentionMatch = /^<#(\d+)>$/.exec(trimmed);
+  if (mentionMatch) return mentionMatch[1];
+  return /^\d+$/.test(trimmed) ? trimmed : "";
+}
+
 function getDiscordErrorCode(err: unknown): number | null {
   if (!err || typeof err !== "object") return null;
   const maybe = (err as { code?: unknown }).code;
@@ -36,10 +44,10 @@ function isPurgeCapableChannel(channel: unknown): channel is PurgeCapableChannel
   return typeof maybe.id === "string" && typeof maybe.messages === "object" && typeof maybe.bulkDelete === "function";
 }
 
-export function buildPurgeConfirmView(token: string, mode: string, amount: number) {
+export function buildPurgeConfirmView(token: string, mode: string, amount: number, channelLabel: string) {
   const modeText = mode === "all_messages" ? "semua pesan (user+bot)" : "pesan bot saja";
   return {
-    content: `Konfirmasi purge?\n- Mode: ${modeText}\n- Jumlah target: ${amount}\n- Channel: channel saat ini`,
+    content: `Konfirmasi purge?\n- Mode: ${modeText}\n- Jumlah target: ${amount}\n- Channel: ${channelLabel}`,
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(`menu:ops:purge-confirm:${token}`).setLabel("Confirm").setStyle(ButtonStyle.Danger),
@@ -49,8 +57,32 @@ export function buildPurgeConfirmView(token: string, mode: string, amount: numbe
   };
 }
 
-export async function runPurgeAction(interaction: PurgeInteraction, mode: string, amount: number): Promise<void> {
-  const target = interaction.channel;
+export async function runPurgeAction(
+  interaction: PurgeInteraction,
+  mode: string,
+  amount: number,
+  channelInput = "",
+): Promise<void> {
+  let target: unknown = interaction.channel;
+  const channelId = normalizeChannelId(channelInput);
+  if (channelInput.trim() && !channelId) {
+    await interaction.reply({
+      content: "Channel target tidak valid. Gunakan mention channel atau ID channel.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (channelId) {
+    try {
+      target = await interaction.client.channels.fetch(channelId);
+    } catch (err) {
+      await interaction.reply({
+        content: `Gagal membuka channel target: ${formatError(err)}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  }
   if (!target || !isPurgeCapableChannel(target)) {
     await interaction.reply({
       content: "Channel target tidak mendukung bulk delete.",

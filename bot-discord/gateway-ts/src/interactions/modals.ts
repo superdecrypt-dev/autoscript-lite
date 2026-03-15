@@ -131,6 +131,7 @@ export async function handleMenuModal(interaction: ModalSubmitInteraction, backe
   if (interaction.customId === menuConstants.OPS_PURGE_MODAL_ID) {
     const mode = readField(interaction, "mode");
     const amount = readField(interaction, "amount");
+    const channelInput = readField(interaction, "channel");
     const normalizedMode = mode === "all_messages" ? "all_messages" : mode === "bot_only" ? "bot_only" : "";
     const amountValue = Number.parseInt(amount, 10);
     if (!normalizedMode) {
@@ -147,12 +148,18 @@ export async function handleMenuModal(interaction: ModalSubmitInteraction, backe
       });
       return true;
     }
-    const token = createMenuState<{ mode: "bot_only" | "all_messages"; amount: number }>({
+    const token = createMenuState<{ mode: "bot_only" | "all_messages"; amount: number; channelInput?: string }>({
       mode: normalizedMode,
       amount: Math.min(amountValue, 1000),
+      channelInput,
     });
     await interaction.reply({
-      ...buildPurgeConfirmView(token, normalizedMode, Math.min(amountValue, 1000)),
+      ...buildPurgeConfirmView(
+        token,
+        normalizedMode,
+        Math.min(amountValue, 1000),
+        channelInput.trim() || "channel saat ini",
+      ),
       flags: MessageFlags.Ephemeral,
     });
     return true;
