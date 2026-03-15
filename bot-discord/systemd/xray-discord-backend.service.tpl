@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/bot-discord/backend-py
 EnvironmentFile=/etc/xray-discord-bot/bot.env
-ExecStart=/opt/bot-discord/.venv/bin/uvicorn app.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}
+ExecStart=/opt/bot-discord/.venv/bin/python -m uvicorn app.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT}
 Restart=always
 RestartSec=3
 
