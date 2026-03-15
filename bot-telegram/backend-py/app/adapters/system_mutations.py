@@ -35,6 +35,9 @@ SSHWS_PROXY_BIN = Path("/usr/local/bin/sshws-proxy")
 SSHWS_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
 SSHWS_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
+ZIVPN_SERVICE = "zivpn"
+ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
+ZIVPN_SYNC_BIN = Path("/usr/local/bin/zivpn-password-sync")
 SSH_ACCOUNT_INFO_STORE_PASSWORD = os.getenv("SSH_ACCOUNT_INFO_STORE_PASSWORD", "1").strip().lower() in {
     "1",
     "true",
@@ -167,6 +170,12 @@ def _service_is_active(name: str) -> bool:
         return False
     state = out.splitlines()[-1].strip() if out else ""
     return state == "active"
+
+
+def _zivpn_account_info_enabled() -> bool:
+    if not ZIVPN_SYNC_BIN.exists():
+        return False
+    return _service_exists(ZIVPN_SERVICE) or ZIVPN_CONFIG_FILE.exists()
 
 
 def _edge_runtime_get_env(key: str) -> str:
@@ -1184,6 +1193,13 @@ def _path_alt_placeholder(path: str) -> str:
     return f"/<bebas>{raw}"
 
 
+def _service_alt_placeholder(service: str) -> str:
+    raw = str(service or "").strip()
+    if not raw or raw == "-":
+        return "-"
+    return f"<bebas>/{raw}"
+
+
 def _proto_display_label(proto: str) -> str:
     mapping = {
         "vless": "Vless",
@@ -1377,46 +1393,56 @@ def _ssh_write_account_info(
     ip = _detect_public_ipv4() or "-"
     isp, country = _geo_lookup(ip)
 
-    content = "\n".join(
+    running_label_width = 16
+    running_ssh_ws_path = f"{'SSH WS Path':<{running_label_width}} : {sshws_main}"
+    running_ssh_ws_alt = f"{'SSH WS Path Alt':<{running_label_width}} : {sshws_alt_path}"
+    running_ssh_ws_port = f"{'SSH WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}"
+    running_ssh_direct = f"{'SSH Direct Port':<{running_label_width}} : {_ssh_direct_public_ports_label()}"
+    running_ssh_ssl_tls = f"{'SSH SSL/TLS Port':<{running_label_width}} : {_ssh_ssl_tls_public_ports_label()}"
+    running_badvpn = f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}"
+    lines = [
+        "=== SSH ACCOUNT INFO ===",
+        f"Domain      : {domain}",
+        f"IP          : {ip}",
+        f"ISP         : {isp}",
+        f"Country     : {country}",
+        f"Username    : {username}",
+        f"Password    : {_ssh_password_output(password)}",
+        f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
+        f"Expired     : {_ssh_expired_display(expired_at)}",
+        f"Valid Until : {expired_at}",
+        f"Created     : {created_disp}",
+        f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
+        f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
+        "",
+        "=== RUNNING ON PORT ===",
+        running_ssh_ws_path,
+        running_ssh_ws_alt,
+        running_ssh_ws_port,
+        running_ssh_direct,
+        running_ssh_ssl_tls,
+        running_badvpn,
+    ]
+    if _zivpn_account_info_enabled():
+        lines.extend(
+            [
+                "",
+                "=== ZIVPN UDP ===",
+                f"{'ZIVPN Password':<{running_label_width}} : same as SSH password",
+            ]
+        )
+    lines.extend(
         [
-            "=== SSH ACCOUNT INFO ===",
-            f"Domain      : {domain}",
-            f"IP          : {ip}",
-            f"ISP         : {isp}",
-            f"Country     : {country}",
-            f"Username    : {username}",
-            f"Password    : {_ssh_password_output(password)}",
-            f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
-            f"Expired     : {_ssh_expired_display(expired_at)}",
-            f"Valid Until : {expired_at}",
-            f"Created     : {created_disp}",
-            f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
-            f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
-            f"SSH WS Path : {sshws_main}",
-            f"SSH WS Path Alt : {sshws_alt_path}",
-            f"SSH WS Port : {_ssh_ws_public_ports_label()}",
-            f"SSH Direct Port : {_ssh_direct_public_ports_label()}",
-            f"SSH SSL/TLS Port : {_ssh_ssl_tls_public_ports_label()}",
-            f"BadVPN UDPGW: {_badvpn_public_port_label()}",
             "",
-            "Standard Payload:",
-            "Payload WSS:",
-            f"    GET {sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]",
-            "",
+            "=== STANDARD PAYLOAD ===",
             "Payload WS:",
-            f"    GET {sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]",
-            "",
-            "Payload WS (Prefixed):",
             f"    GET {sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
             "",
-            "Payload SNI+WS+Proxy:",
-            f"    GET wss://[host]{sshws_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
-            "",
-            "Payload SNI+WS+Proxy (Prefixed):",
+            "Payload WSS:",
             f"    GET wss://[host]{sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
-            "",
         ]
     )
+    content = "\n".join(lines) + "\n"
     try:
         _write_text_atomic(account_file, content)
         _chmod_600(account_file)
@@ -2408,6 +2434,7 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
     }
+    tcp_tls_protocols = {"vless", "trojan"}
 
     def vless_link(net: str, val: str) -> str:
         q = {"encryption": "none", "security": "tls", "type": net, "sni": domain}
@@ -2449,7 +2476,10 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
 
     links: dict[str, str] = {}
     p = public_paths.get(proto, {})
-    for net in ("ws", "httpupgrade", "grpc"):
+    nets = ["ws", "httpupgrade", "grpc"]
+    if proto in tcp_tls_protocols:
+        nets = ["tcp"] + nets
+    for net in nets:
         v = p.get(net, "")
         if proto == "vless":
             links[net] = vless_link(net, v)
@@ -2479,53 +2509,103 @@ def _build_account_text(
     links = _build_links(proto, username, credential, domain)
     isp, country = _geo_lookup(ip)
     proto_disp = _proto_display_label(proto)
-    ws_path = (({
-        "vless": {"ws": "/vless-ws"},
-        "vmess": {"ws": "/vmess-ws"},
-        "trojan": {"ws": "/trojan-ws"},
-    }).get(proto, {}).get("ws") or "/")
+    public_paths = {
+        "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "grpc": "vless-grpc"},
+        "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "grpc": "vmess-grpc"},
+        "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "grpc": "trojan-grpc"},
+    }
+    tcp_tls_protocols = {"vless", "trojan"}
+    public_proto = public_paths.get(proto, {})
+    ws_path = public_proto.get("ws", "") or "/"
+    ws_path_alt = _path_alt_placeholder(ws_path)
+    hup_path = public_proto.get("httpupgrade", "") or "/"
+    hup_path_alt = _path_alt_placeholder(hup_path)
+    grpc_service = public_proto.get("grpc", "") or "-"
+    grpc_service_alt = _service_alt_placeholder(grpc_service)
+    created_disp = _normalize_created_display(created_at, date_only=True)
+    running_labels = [
+        f"{proto_disp} WS",
+        f"{proto_disp} HUP",
+        f"{proto_disp} gRPC",
+        f"{proto_disp} Path WS",
+        f"{proto_disp} Path WS Alt",
+        f"{proto_disp} Path HUP",
+        f"{proto_disp} Path HUP Alt",
+        f"{proto_disp} Path Service",
+        f"{proto_disp} Path Service Alt",
+    ]
+    if proto in tcp_tls_protocols:
+        running_labels.append(f"{proto_disp} TCP+TLS Port")
+    running_label_width = max(len(label) for label in running_labels)
+
+    def section_line(label: str, value: str) -> str:
+        return f"  {label:<{running_label_width}} : {value}"
+
+    def append_link_block(lines: list[str], label: str, value: str) -> None:
+        lines.append(f"    {label:<12}:")
+        lines.append(str(value or "-"))
+
     lines = [
         "=== XRAY ACCOUNT INFO ===",
-        f"Domain      : {domain}",
-        f"IP          : {ip}",
-        f"ISP         : {isp}",
-        f"Country     : {country}",
-        f"Username    : {username}",
-        f"Protocol    : {proto}",
+        f"  Domain      : {domain}",
+        f"  IP          : {ip}",
+        f"  ISP         : {isp}",
+        f"  Country     : {country}",
+        f"  Username    : {username}",
+        f"  Protocol    : {proto}",
     ]
     if proto in {"vless", "vmess"}:
-        lines.append(f"UUID        : {credential}")
+        lines.append(f"  UUID        : {credential}")
     else:
-        lines.append(f"Password    : {credential}")
+        lines.append(f"  Password    : {credential}")
 
     lines.extend(
         [
-            f"Quota Limit : {_fmt_quota_gb_from_bytes(max(0, quota_bytes))} GB",
-            f"Expired     : {max(0, days)} days",
-            f"Valid Until : {expired_at}",
-            f"Created     : {created_at}",
-            f"IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit})" if ip_enabled else ""),
+            f"  Quota Limit : {_fmt_quota_gb_from_bytes(max(0, quota_bytes))} GB",
+            f"  Expired     : {max(0, days)} days",
+            f"  Valid Until : {expired_at}",
+            f"  Created     : {created_disp}",
+            f"  IP Limit    : {'ON' if ip_enabled else 'OFF'}" + (f" ({ip_limit})" if ip_enabled and ip_limit > 0 else ""),
         ]
     )
 
     if speed_enabled and speed_down > 0 and speed_up > 0:
-        lines.append(f"Speed Limit : ON (DOWN {_fmt_number(speed_down)} Mbps | UP {_fmt_number(speed_up)} Mbps)")
+        lines.append(f"  Speed Limit : ON (DOWN {_fmt_number(speed_down)} Mbps | UP {_fmt_number(speed_up)} Mbps)")
     else:
-        lines.append("Speed Limit : OFF")
-    lines.append(f"{proto_disp} Path : {ws_path}")
-    lines.append(f"{proto_disp} Path Alt : {_path_alt_placeholder(ws_path)}")
-    lines.append(f"{proto_disp} Port : 443 & 80")
+        lines.append("  Speed Limit : OFF")
 
     lines.extend(
         [
             "",
-            "Links Import:",
-            f"  WebSocket   : {links.get('ws', '-')}",
-            f"  HTTPUpgrade : {links.get('httpupgrade', '-')}",
-            f"  gRPC        : {links.get('grpc', '-')}",
-            "",
+            "=== RUNNING ON PORT & PATH ===",
+            section_line(f"{proto_disp} WS", "443 & 80"),
+            section_line(f"{proto_disp} HUP", "443 & 80"),
+            section_line(f"{proto_disp} gRPC", "443"),
         ]
     )
+    if proto in tcp_tls_protocols:
+        lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443"))
+    lines.extend(
+        [
+            section_line(f"{proto_disp} Path WS", ws_path),
+            section_line(f"{proto_disp} Path WS Alt", ws_path_alt),
+            section_line(f"{proto_disp} Path HUP", hup_path),
+            section_line(f"{proto_disp} Path HUP Alt", hup_path_alt),
+            section_line(f"{proto_disp} Path Service", grpc_service),
+            section_line(f"{proto_disp} Path Service Alt", grpc_service_alt),
+            "",
+            "=== LINKS IMPORT ===",
+        ]
+    )
+    if "tcp" in links:
+        append_link_block(lines, "TCP+TLS", links.get("tcp", "-"))
+        lines.append("")
+    append_link_block(lines, "WebSocket", links.get("ws", "-"))
+    lines.append("")
+    append_link_block(lines, "HTTPUpgrade", links.get("httpupgrade", "-"))
+    lines.append("")
+    append_link_block(lines, "gRPC", links.get("grpc", "-"))
+    lines.append("")
     return "\n".join(lines)
 
 

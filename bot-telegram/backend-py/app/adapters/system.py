@@ -1160,7 +1160,32 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
             return "User Management - Account Info", f"Gagal membaca file {candidate}: {exc}"
         if not content:
             content = "(kosong)"
-        return "User Management - Account Info", f"File: {candidate}\n\n{content}"
+        if proto_n == SSH_PROTOCOL:
+            fields = _read_account_fields(candidate)
+            password_info = str(fields.get("Password") or "").strip()
+            lines = [
+                f"Username : {user_n}",
+                f"File     : {candidate}",
+                "",
+                content,
+            ]
+            if not password_info or password_info in {"(hidden)", "********"}:
+                lines.extend(
+                    [
+                        "",
+                        "Password plaintext tidak tersedia di account info (mode mask).",
+                        "Gunakan menu Reset Password untuk mendapatkan one-time password.",
+                    ]
+                )
+            return "User Management - Account Info", "\n".join(lines)
+        lines = [
+            f"Username : {user_n}",
+            f"Protocol : {proto_n}",
+            f"File     : {candidate}",
+            "",
+            content,
+        ]
+        return "User Management - Account Info", "\n".join(lines)
     return "User Management - Account Info", f"File account tidak ditemukan untuk {user_n} [{proto_n}]"
 
 

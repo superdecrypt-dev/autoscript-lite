@@ -1,3 +1,6 @@
+import base64
+import re
+
 from ..adapters import system, system_mutations
 from ..utils.response import error_response, ok_response
 from ..utils.validators import (
@@ -36,6 +39,22 @@ def _scope_protocols(scope: str) -> tuple[str, ...]:
     if scope == "ssh":
         return SSH_ONLY_PROTOCOLS
     return USER_PROTOCOLS
+
+
+def _extract_add_user_path(message: str, label: str) -> str:
+    pattern = rf"(?m)^-\s*{re.escape(label)}:\s*(.+?)\s*$"
+    match = re.search(pattern, str(message or ""))
+    return match.group(1).strip() if match else "-"
+
+
+def _decode_download_text(download_payload: dict[str, object]) -> str:
+    raw = str(download_payload.get("content_base64") or "").strip()
+    if not raw:
+        return ""
+    try:
+        return base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
 
 
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
@@ -137,18 +156,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if speed_enabled and speed_down > 0 and speed_up > 0:
             speed_limit_text = f"ON (DOWN {_fmt_number(speed_down)} Mbps | UP {_fmt_number(speed_up)} Mbps)"
 
-        lines = [
-            "Akun berhasil dibuat.",
-            f"Username    : {user_or_err}",
-            f"Protokol    : {proto}",
-            f"Masa Aktif  : {int(days_or_err)} hari",
-            f"Quota       : {_fmt_number(float(quota_or_err))} GB",
-            f"IP/Login Limit : {ip_limit_text}",
-            f"Speed Limit : {speed_limit_text}",
-        ]
-        if proto == system.SSH_PROTOCOL:
-            lines.append(f"Password    : {password_value}")
-
         data: dict[str, object] = {
             "add_user_summary": {
                 "username": str(user_or_err),
@@ -162,12 +169,54 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         ok_download, download_or_err = system_mutations.op_user_account_file_download(proto, str(user_or_err))
         if ok_download and isinstance(download_or_err, dict):
             data["download_file"] = download_or_err
-            filename = str(download_or_err.get("filename") or f"{user_or_err}@{proto}.txt")
-            lines.append(f"File TXT    : {filename} (download)")
         else:
-            lines.append("File TXT    : gagal menyiapkan file download")
             data["download_error"] = str(download_or_err)
 
+        if proto == system.SSH_PROTOCOL:
+            account_path = _extract_add_user_path(msg_add, "Account")
+            quota_path = _extract_add_user_path(msg_add, "Quota")
+            account_text = _decode_download_text(download_or_err) if ok_download and isinstance(download_or_err, dict) else ""
+            lines = [
+                "Add SSH user sukses ✅",
+                "",
+                "Account file:",
+                f"  {account_path}",
+                "Metadata file:",
+                f"  {quota_path}",
+                "",
+                "SSH ACCOUNT INFO:",
+            ]
+            if account_text:
+                lines.append(account_text)
+            else:
+                lines.append(f"(SSH ACCOUNT INFO tidak ditemukan: {account_path})")
+            if password_value and ("Password    : (hidden)" in account_text or "Password    : ********" in account_text):
+                lines.extend(
+                    [
+                        "",
+                        f"One-time Password : {password_value}",
+                        "Note             : password tidak disimpan plaintext di file account info.",
+                    ]
+                )
+            return ok_response(title, "\n".join(lines), data=data)
+
+        account_path = _extract_add_user_path(msg_add, "Account")
+        quota_path = _extract_add_user_path(msg_add, "Quota")
+        account_text = _decode_download_text(download_or_err) if ok_download and isinstance(download_or_err, dict) else ""
+        lines = [
+            "Add user sukses ✅",
+            "",
+            "Account file:",
+            f"  {account_path}",
+            "Quota metadata:",
+            f"  {quota_path}",
+            "",
+            "XRAY ACCOUNT INFO:",
+        ]
+        if account_text:
+            lines.append(account_text)
+        else:
+            lines.append(f"(XRAY ACCOUNT INFO tidak ditemukan: {account_path})")
         return ok_response(title, "\n".join(lines), data=data)
 
     if action == "delete_user":
@@ -255,26 +304,14 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if not ok_u:
             return user_or_err
         _title_info, msg_info = system.op_account_info(str(proto_or_err), str(user_or_err))
-        ok_summary, summary_or_err = system.op_account_info_summary(str(proto_or_err), str(user_or_err))
-        if not ok_summary:
-            return error_response("account_info_failed", title, str(summary_or_err))
-
         ok_download, download_or_err = system_mutations.op_user_account_file_download(str(proto_or_err), str(user_or_err))
         if not ok_download or not isinstance(download_or_err, dict):
             return error_response("account_info_failed", title, str(download_or_err))
 
         data: dict[str, object] = {
-            "account_info_summary": summary_or_err,
             "download_file": download_or_err,
         }
-        filename = str(download_or_err.get("filename") or f"{user_or_err}@{proto_or_err}.txt")
-        lines = [
-            "Ringkasan akun siap.",
-            f"File TXT    : {filename} (download)",
-            "",
-            msg_info,
-        ]
-        return ok_response(title, "\n".join(lines), data=data)
+        return ok_response(title, msg_info, data=data)
 
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")
 
