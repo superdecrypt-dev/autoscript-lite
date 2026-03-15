@@ -1,22 +1,19 @@
 import type { MenuDefinition } from "./types";
 
-export const menu3: MenuDefinition = {
-  id: "3",
-  label: "Xray QAC",
-  description: "Ringkasan quota dan kontrol akses untuk pengguna Xray.",
+export const menu11: MenuDefinition = {
+  id: "11",
+  label: "SSH QAC",
+  description: "Ringkasan quota dan kontrol akses untuk pengguna SSH.",
   actions: [
     { id: "summary", label: "View Quota Summary", mode: "direct", style: "primary" },
     {
       id: "detail",
-      label: "View Xray QAC Detail",
+      label: "View SSH QAC Detail",
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Xray QAC Detail",
-        fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
-          { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
-        ],
+        title: "SSH QAC Detail",
+        fields: [{ id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" }],
       },
     },
     {
@@ -25,9 +22,8 @@ export const menu3: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Set Quota Limit",
+        title: "Set SSH Quota Limit",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "quota_gb", label: "Quota GB", style: "short", required: true, placeholder: "100" },
         ],
@@ -40,11 +36,8 @@ export const menu3: MenuDefinition = {
       style: "danger",
       confirm: true,
       modal: {
-        title: "Reset Quota Used",
-        fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
-          { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
-        ],
+        title: "Reset SSH Quota Used",
+        fields: [{ id: "username", label: "Username", style: "short", required: true, placeholder: "alice" }],
       },
     },
     {
@@ -53,9 +46,8 @@ export const menu3: MenuDefinition = {
       mode: "modal",
       style: "danger",
       modal: {
-        title: "Manual Block",
+        title: "SSH Manual Block",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],
@@ -63,13 +55,12 @@ export const menu3: MenuDefinition = {
     },
     {
       id: "ip_limit_enable",
-      label: "Toggle IP Limit",
+      label: "Toggle IP/Login Limit",
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "IP Limit Enable/Disable",
+        title: "SSH IP/Login Limit Enable/Disable",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],
@@ -77,29 +68,25 @@ export const menu3: MenuDefinition = {
     },
     {
       id: "set_ip_limit",
-      label: "Set IP Limit",
+      label: "Set IP/Login Limit",
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Set IP Limit",
+        title: "Set SSH IP/Login Limit",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
-          { id: "ip_limit", label: "IP Limit", style: "short", required: true, placeholder: "2" },
+          { id: "ip_limit", label: "IP/Login Limit", style: "short", required: true, placeholder: "2" },
         ],
       },
     },
     {
       id: "unlock_ip_lock",
-      label: "Unlock IP Lock",
+      label: "Unlock IP/Login Lock",
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Unlock IP Lock",
-        fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
-          { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
-        ],
+        title: "Unlock SSH IP/Login Lock",
+        fields: [{ id: "username", label: "Username", style: "short", required: true, placeholder: "alice" }],
       },
     },
     {
@@ -108,9 +95,8 @@ export const menu3: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Set Speed Download",
+        title: "Set SSH Speed Download",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "speed_down_mbit", label: "Speed Down Mbps", style: "short", required: true, placeholder: "20" },
         ],
@@ -122,9 +108,8 @@ export const menu3: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Set Speed Upload",
+        title: "Set SSH Speed Upload",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "speed_up_mbit", label: "Speed Up Mbps", style: "short", required: true, placeholder: "10" },
         ],
@@ -136,9 +121,8 @@ export const menu3: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Speed Limit Enable/Disable",
+        title: "SSH Speed Limit Enable/Disable",
         fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
           { id: "username", label: "Username", style: "short", required: true, placeholder: "alice" },
           { id: "enabled", label: "Enabled", style: "short", required: true, placeholder: "on / off" },
         ],

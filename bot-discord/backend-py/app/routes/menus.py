@@ -88,10 +88,10 @@ def get_main_menu_overview() -> dict:
 @router.get("/api/users/options", dependencies=[Depends(verify_shared_secret)])
 def get_user_options(proto: str | None = None) -> dict:
     proto_norm = (proto or "").strip().lower()
-    if proto_norm and proto_norm not in {"vless", "vmess", "trojan"}:
+    if proto_norm and proto_norm not in set(system.USER_PROTOCOLS):
         return {"users": []}
 
-    records = system.list_accounts()
+    records = system.list_accounts((proto_norm,)) if proto_norm else system.list_accounts()
     if proto_norm:
         records = [(p, u) for p, u in records if p == proto_norm]
 

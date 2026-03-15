@@ -99,7 +99,7 @@ function buildConfirmView(menuId: string, actionId: string) {
 function buildProtocolSelectView(menuId: string, actionId: string) {
   const menu = findMenu(menuId);
   const action = findAction(menuId, actionId);
-  const title = menu ? `${menu.id}) ${menu.label}` : "User Management";
+  const title = menu ? `${menu.id}) ${menu.label}` : "Xray Users";
   const actionLabel = action?.label || actionId;
 
   const embed = new EmbedBuilder()
@@ -191,7 +191,7 @@ async function buildSingleFieldSelectView(menuId: string, actionId: string, back
 function buildUsernameSelectView(menuId: string, actionId: string, proto: string, usernames: string[], pageRaw = 0) {
   const menu = findMenu(menuId);
   const action = findAction(menuId, actionId);
-  const title = menu ? `${menu.id}) ${menu.label}` : "User Management";
+  const title = menu ? `${menu.id}) ${menu.label}` : "Xray Users";
   const actionLabel = action?.label || actionId;
 
   const total = usernames.length;

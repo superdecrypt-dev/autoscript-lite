@@ -71,9 +71,11 @@ function extractUserSummary(data?: Record<string, unknown>): UserSummaryPayload 
 
 function buildUserSummaryEmbed(summary: UserSummaryPayload): EmbedBuilder {
   const isAddUser = summary.source === "add_user";
+  const isSsh = summary.protocol.toLowerCase() === "ssh";
+  const accountLabel = isSsh ? "SSH" : "Xray";
   return new EmbedBuilder()
-    .setTitle(isAddUser ? "Add User Berhasil" : "Account Info")
-    .setDescription(isAddUser ? "Ringkasan akun baru" : "Ringkasan akun")
+    .setTitle(isAddUser ? `Add ${accountLabel} User Berhasil` : `${accountLabel} Account Info`)
+    .setDescription(isAddUser ? `Ringkasan akun ${accountLabel} baru` : `Ringkasan akun ${accountLabel}`)
     .setColor(isAddUser ? 0x2ea043 : 0x2f81f7)
     .addFields(
       { name: "Username", value: summary.username, inline: true },
@@ -113,6 +115,23 @@ function buildJsonAttachment(payload: JsonDownloadPayload): AttachmentBuilder | 
   }
 }
 
+async function sendTextChunks(interaction: Replyable, message: string): Promise<void> {
+  const chunks = splitText(message.replace(/```/g, "'''"));
+  const visibleChunks = chunks.slice(0, MAX_RESULT_CHUNKS);
+  const droppedChunks = Math.max(chunks.length - visibleChunks.length, 0);
+
+  for (const chunk of visibleChunks) {
+    await interaction.followUp({ content: `\`\`\`text\n${chunk}\n\`\`\``, flags: MessageFlags.Ephemeral });
+  }
+
+  if (droppedChunks > 0) {
+    await interaction.followUp({
+      content: `Output dipotong agar tidak spam. Bagian tersembunyi: ${droppedChunks} chunk.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
 export async function sendActionResult(
   interaction: Replyable,
   title: string,
@@ -127,6 +146,10 @@ export async function sendActionResult(
       await interaction.followUp({ embeds: [embed], flags: MessageFlags.Ephemeral });
     } else {
       await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
+    if ((message || "").trim()) {
+      await sendTextChunks(interaction, message);
     }
 
     const download = extractJsonDownload(data);
@@ -152,9 +175,6 @@ export async function sendActionResult(
     return;
   }
 
-  const chunks = splitText(message.replace(/```/g, "'''") );
-  const visibleChunks = chunks.slice(0, MAX_RESULT_CHUNKS);
-  const droppedChunks = Math.max(chunks.length - visibleChunks.length, 0);
   const prefix = ok ? "OK" : "ERROR";
 
   if (interaction.deferred || interaction.replied) {
@@ -163,16 +183,7 @@ export async function sendActionResult(
     await interaction.reply({ content: `**${prefix}** ${title}`, flags: MessageFlags.Ephemeral });
   }
 
-  for (const chunk of visibleChunks) {
-    await interaction.followUp({ content: `\`\`\`text\n${chunk}\n\`\`\``, flags: MessageFlags.Ephemeral });
-  }
-
-  if (droppedChunks > 0) {
-    await interaction.followUp({
-      content: `Output dipotong agar tidak spam. Bagian tersembunyi: ${droppedChunks} chunk.`,
-      flags: MessageFlags.Ephemeral,
-    });
-  }
+  await sendTextChunks(interaction, message);
 
   const download = extractJsonDownload(data);
   if (!download) return;

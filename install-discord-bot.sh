@@ -434,7 +434,7 @@ BACKEND_BASE_URL=${BACKEND_BASE_URL}
 BACKEND_HOST=${BACKEND_HOST}
 BACKEND_PORT=${BACKEND_PORT}
 COMMANDS_FILE=${BOT_HOME}/shared/commands.json
-ENABLE_DANGEROUS_ACTIONS=false
+ENABLE_DANGEROUS_ACTIONS=true
 ENVEOF
     chmod 600 "${BOT_ENV_FILE}"
     ok "File env dibuat: ${BOT_ENV_FILE}"
@@ -606,7 +606,7 @@ configure_env_interactive() {
     cancel_env_config
     return 0
   fi
-  dangerous="$(prompt_with_default_or_back "ENABLE_DANGEROUS_ACTIONS (true/false)" "${current_dangerous}")"
+  dangerous="$(prompt_with_default_or_back "ENABLE_DANGEROUS_ACTIONS (true/false)" "${current_dangerous:-true}")"
   if [[ "${dangerous}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
     return 0
@@ -631,7 +631,7 @@ configure_env_interactive() {
   [[ -n "${guild_id}" ]] && set_env_value DISCORD_GUILD_ID "${guild_id}" "${staged_env}"
   set_env_value DISCORD_ADMIN_ROLE_IDS "${role_ids}" "${staged_env}"
   set_env_value DISCORD_ADMIN_USER_IDS "${user_ids}" "${staged_env}"
-  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-false}" "${staged_env}"
+  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-true}" "${staged_env}"
 
   set_env_value BOT_HOME "${BOT_HOME}" "${staged_env}"
   set_env_value BOT_ENV_FILE "${BOT_ENV_FILE}" "${staged_env}"

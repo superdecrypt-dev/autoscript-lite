@@ -3,6 +3,7 @@ import grp
 import ipaddress
 import json
 import os
+import pwd
 import random
 import re
 import secrets
@@ -41,8 +42,12 @@ BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/xray-discord-bot"))
 WORK_DIR = BOT_STATE_DIR / "tmp"
 ROUTING_LOCK_FILE = "/run/autoscript/locks/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
-PROTOCOLS = ("vless", "vmess", "trojan")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
+SSH_PROTOCOL = "ssh"
+USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
+PROTOCOLS = XRAY_PROTOCOLS
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 SPEED_OUTBOUND_TAG_PREFIX = "speed-mark-"
 SPEED_RULE_MARKER_PREFIX = "dummy-speed-user-"
@@ -59,8 +64,6 @@ CLOUDFLARE_API_TOKEN = os.getenv(
 PROVIDED_ROOT_DOMAINS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
-    "vyxara1.qzz.io",
-    "vyxara2.qzz.io",
 )
 ACME_SH_INSTALL_REF = os.getenv("ACME_SH_INSTALL_REF", "f39d066ced0271d87790dc426556c1e02a88c91b").strip()
 ACME_SH_TARBALL_URL = f"https://codeload.github.com/acmesh-official/acme.sh/tar.gz/{ACME_SH_INSTALL_REF}"
@@ -68,6 +71,13 @@ ACME_SH_SCRIPT_URL = f"https://raw.githubusercontent.com/acmesh-official/acme.sh
 ACME_SH_DNS_CF_HOOK_URL = (
     f"https://raw.githubusercontent.com/acmesh-official/acme.sh/{ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
 )
+SSH_ACCOUNT_DIR = ACCOUNT_ROOT / SSH_PROTOCOL
+SSH_QUOTA_DIR = QUOTA_ROOT / SSH_PROTOCOL
+SSHWS_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
+SSHWS_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
+ZIVPN_SERVICE = "zivpn"
+ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
+ZIVPN_SYNC_BIN = Path("/usr/local/bin/zivpn-password-sync")
 
 
 def _run_cmd(
@@ -118,6 +128,12 @@ def _service_is_active(name: str) -> bool:
         return False
     state = out.splitlines()[-1].strip() if out else ""
     return state == "active"
+
+
+def _zivpn_account_info_enabled() -> bool:
+    if not ZIVPN_SYNC_BIN.exists():
+        return False
+    return _service_exists(ZIVPN_SERVICE) or ZIVPN_CONFIG_FILE.exists()
 
 
 def _edge_runtime_get_env(key: str) -> str:
@@ -325,9 +341,11 @@ def _ensure_runtime_dirs() -> None:
         ACCOUNT_ROOT / "vless",
         ACCOUNT_ROOT / "vmess",
         ACCOUNT_ROOT / "trojan",
+        SSH_ACCOUNT_DIR,
         QUOTA_ROOT / "vless",
         QUOTA_ROOT / "vmess",
         QUOTA_ROOT / "trojan",
+        SSH_QUOTA_DIR,
         SPEED_POLICY_ROOT / "vless",
         SPEED_POLICY_ROOT / "vmess",
         SPEED_POLICY_ROOT / "trojan",
@@ -545,6 +563,277 @@ def _resolve_existing(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _is_valid_ssh_username(username: str) -> bool:
+    return bool(SSH_USERNAME_RE.match(username or ""))
+
+
+def _linux_user_exists(username: str) -> bool:
+    try:
+        pwd.getpwnam(str(username or "").strip())
+        return True
+    except KeyError:
+        return False
+    except Exception:
+        return False
+
+
+def _ssh_password_output(password_raw: str) -> str:
+    return str(password_raw or "-")
+
+
+def _ssh_password_from_account_info(username: str) -> str:
+    account_file = _resolve_existing(_account_candidates(SSH_PROTOCOL, username))
+    if account_file is None:
+        return "-"
+    fields = _read_account_fields(account_file)
+    password = str(fields.get("Password") or "").strip()
+    return password or "-"
+
+
+def _ssh_ws_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _ssh_direct_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _ssh_ssl_tls_public_ports_label() -> str:
+    return "443 & 80"
+
+
+def _badvpn_public_port_label() -> str:
+    return "7300, 7400, 7500, 7600, 7700, 7800, 7900"
+
+
+def _ssh_normalize_state_payload(
+    username: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    created_at: str = "",
+    expired_at: str = "",
+) -> dict[str, Any]:
+    existing = payload if isinstance(payload, dict) else {}
+    status_raw = existing.get("status") if isinstance(existing.get("status"), dict) else {}
+    quota_limit = max(0, _to_int(existing.get("quota_limit"), 0))
+    quota_used = max(0, _to_int(existing.get("quota_used"), 0))
+    quota_unit = str(existing.get("quota_unit") or "binary").strip().lower()
+    if quota_unit not in {"binary", "decimal"}:
+        quota_unit = "binary"
+
+    return {
+        "managed_by": "autoscript-manage",
+        "username": str(username or "").strip(),
+        "protocol": SSH_PROTOCOL,
+        "created_at": str(created_at or existing.get("created_at") or "").strip()
+        or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "expired_at": (str(expired_at or existing.get("expired_at") or "-").strip() or "-")[:10],
+        "quota_limit": quota_limit,
+        "quota_unit": quota_unit,
+        "quota_used": quota_used,
+        "status": {
+            "manual_block": bool(status_raw.get("manual_block")),
+            "quota_exhausted": bool(status_raw.get("quota_exhausted")),
+            "ip_limit_enabled": bool(status_raw.get("ip_limit_enabled")),
+            "ip_limit": max(0, _to_int(status_raw.get("ip_limit"), 0)),
+            "ip_limit_locked": bool(status_raw.get("ip_limit_locked")),
+            "speed_limit_enabled": bool(status_raw.get("speed_limit_enabled")),
+            "speed_down_mbit": max(0.0, _to_float(status_raw.get("speed_down_mbit"), 0.0)),
+            "speed_up_mbit": max(0.0, _to_float(status_raw.get("speed_up_mbit"), 0.0)),
+            "lock_reason": str(status_raw.get("lock_reason") or "").strip().lower(),
+            "locked_at": str(status_raw.get("locked_at") or "").strip(),
+            "account_locked": bool(status_raw.get("account_locked")),
+            "lock_owner": str(status_raw.get("lock_owner") or "").strip(),
+            "lock_shell_restore": str(status_raw.get("lock_shell_restore") or "").strip(),
+        },
+    }
+
+
+def _ssh_load_state(
+    username: str,
+    *,
+    create_missing: bool = False,
+    created_at: str = "",
+    expired_at: str = "",
+) -> tuple[bool, Path | str, dict[str, Any] | str]:
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, username))
+    if target is None:
+        if not create_missing:
+            return False, f"File quota tidak ditemukan untuk {username} [{SSH_PROTOCOL}]", ""
+        target = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
+        payload: dict[str, Any] = {}
+    else:
+        ok, raw = _read_json(target)
+        if not ok:
+            return False, str(raw), ""
+        if not isinstance(raw, dict):
+            return False, f"Format quota tidak valid: {target}", ""
+        payload = raw
+
+    normalized = _ssh_normalize_state_payload(
+        username,
+        payload,
+        created_at=created_at,
+        expired_at=expired_at,
+    )
+    return True, target, normalized
+
+
+def _ssh_save_state(path: Path, payload: dict[str, Any]) -> None:
+    normalized = _ssh_normalize_state_payload(
+        str(payload.get("username") or ""),
+        payload,
+        created_at=str(payload.get("created_at") or ""),
+        expired_at=str(payload.get("expired_at") or ""),
+    )
+    _write_json_atomic(path, normalized)
+    _chmod_600(path)
+
+
+def _ssh_quota_limit_display(quota_bytes: int) -> str:
+    if quota_bytes <= 0:
+        return "0 GB"
+    return f"{_fmt_number(quota_bytes / (1024**3))} GB"
+
+
+def _ssh_expired_display(expired_at: str) -> str:
+    value = str(expired_at or "").strip()[:10]
+    if not value or value == "-":
+        return "unlimited"
+    try:
+        expiry = datetime.strptime(value, "%Y-%m-%d").date()
+        days = max(0, (expiry - datetime.now(timezone.utc).date()).days)
+        return f"{days} days"
+    except Exception:
+        return "unknown"
+
+
+def _ssh_ip_limit_display(enabled: bool, limit: int) -> str:
+    if not enabled:
+        return "OFF"
+    if limit > 0:
+        return f"ON ({limit})"
+    return "ON"
+
+
+def _ssh_speed_limit_display(enabled: bool, down: float, up: float) -> str:
+    if not enabled:
+        return "OFF"
+    return f"ON (DOWN {_fmt_number(down)} Mbps | UP {_fmt_number(up)} Mbps)"
+
+
+def _ssh_write_account_info(
+    username: str,
+    *,
+    password: str,
+    quota_payload: dict[str, Any],
+) -> tuple[bool, str]:
+    status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
+    account_file = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
+    created_at = str(quota_payload.get("created_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    created_disp = _normalize_created_display(created_at, date_only=True)
+    expired_at = str(quota_payload.get("expired_at") or "-").strip()[:10] or "-"
+    quota_limit = max(0, _to_int(quota_payload.get("quota_limit"), 0))
+    ip_enabled = bool(status.get("ip_limit_enabled"))
+    ip_limit = max(0, _to_int(status.get("ip_limit"), 0))
+    speed_enabled = bool(status.get("speed_limit_enabled"))
+    speed_down = max(0.0, _to_float(status.get("speed_down_mbit"), 0.0))
+    speed_up = max(0.0, _to_float(status.get("speed_up_mbit"), 0.0))
+    sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
+        sshws_path = f"/{sshws_token}"
+        sshws_alt_path = _path_alt_placeholder(sshws_path)
+        sshws_main = sshws_path
+    else:
+        sshws_alt_path = "-"
+        sshws_main = "-"
+    domain = _detect_domain() or "-"
+    ok_ip, public_ip = _get_public_ipv4()
+    ip = (public_ip if ok_ip else (_detect_public_ipv4() or "-")).strip() or "-"
+    isp, country = _geo_lookup(ip)
+
+    running_label_width = 16
+    lines = [
+        "=== SSH ACCOUNT INFO ===",
+        f"Domain      : {domain}",
+        f"IP          : {ip}",
+        f"ISP         : {isp}",
+        f"Country     : {country}",
+        f"Username    : {username}",
+        f"Password    : {_ssh_password_output(password)}",
+        f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
+        f"Expired     : {_ssh_expired_display(expired_at)}",
+        f"Valid Until : {expired_at}",
+        f"Created     : {created_disp}",
+        f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
+        f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
+        "",
+        "=== RUNNING ON PORT ===",
+        f"{'SSH WS Path':<{running_label_width}} : {sshws_main}",
+        f"{'SSH WS Path Alt':<{running_label_width}} : {sshws_alt_path}",
+        f"{'SSH WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
+        f"{'SSH Direct Port':<{running_label_width}} : {_ssh_direct_public_ports_label()}",
+        f"{'SSH SSL/TLS Port':<{running_label_width}} : {_ssh_ssl_tls_public_ports_label()}",
+        f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}",
+    ]
+    if _zivpn_account_info_enabled():
+        lines.extend(
+            [
+                "",
+                "=== ZIVPN UDP ===",
+                f"{'ZIVPN Password':<{running_label_width}} : same as SSH password",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "=== STANDARD PAYLOAD ===",
+            "Payload WS:",
+            f"    GET {sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
+            "",
+            "Payload WSS:",
+            f"    GET wss://[host]{sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
+        ]
+    )
+    content = "\n".join(lines) + "\n"
+    try:
+        _write_text_atomic(account_file, content)
+        _chmod_600(account_file)
+        return True, str(account_file)
+    except Exception as exc:
+        return False, f"Gagal menulis SSH account info: {exc}"
+
+
+def _ssh_refresh_account_info(username: str, password_override: str = "") -> tuple[bool, str]:
+    ok_state, state_path_or_err, payload_or_err = _ssh_load_state(username)
+    if not ok_state:
+        return False, str(state_path_or_err)
+    quota_payload = payload_or_err
+    assert isinstance(quota_payload, dict)
+    password = str(password_override or "").strip() or _ssh_password_from_account_info(username)
+    return _ssh_write_account_info(username, password=password, quota_payload=quota_payload)
+
+
+def _ssh_run_enforcer() -> tuple[bool, str]:
+    if not SSHWS_QAC_ENFORCER_BIN.exists():
+        return True, "skip: sshws-qac-enforcer tidak tersedia"
+    ok, out = _run_cmd([str(SSHWS_QAC_ENFORCER_BIN), "--once"], timeout=20)
+    if ok:
+        return True, "ok"
+    return False, out
+
+
+def _ssh_post_update_warnings(username: str, password_override: str = "") -> list[str]:
+    warnings: list[str] = []
+    ok_enforce, enforce_msg = _ssh_run_enforcer()
+    if not ok_enforce:
+        warnings.append(f"enforcer: {enforce_msg}")
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
+    if not ok_refresh:
+        warnings.append(f"account-info: {refresh_msg}")
+    return warnings
+
+
 def _load_quota(proto: str, username: str) -> tuple[bool, Path | str, dict[str, Any] | str]:
     target = _resolve_existing(_quota_candidates(proto, username))
     if target is None:
@@ -573,7 +862,7 @@ def _extract_username_from_file_name(path: Path, proto: str) -> str:
 def _username_exists_anywhere(username: str) -> tuple[bool, str]:
     needle = username.strip().lower()
 
-    for proto in PROTOCOLS:
+    for proto in USER_PROTOCOLS:
         acc_dir = ACCOUNT_ROOT / proto
         if acc_dir.exists():
             for p in acc_dir.glob("*.txt"):
@@ -604,6 +893,8 @@ def _username_exists_anywhere(username: str) -> tuple[bool, str]:
                     user_part, _, proto_part = email.partition("@")
                     if user_part == needle and proto_part in PROTOCOLS:
                         return True, f"xray:{proto_part}:{email}"
+    if _linux_user_exists(needle):
+        return True, f"linux:{needle}"
     return False, ""
 
 
@@ -1299,9 +1590,9 @@ def _find_credential_in_inbounds(proto: str, username: str) -> str:
                 continue
             if str(c.get("email") or "") != email:
                 continue
-        if proto == "trojan":
-            return str(c.get("password") or "").strip()
-        return str(c.get("id") or "").strip()
+            if proto == "trojan":
+                return str(c.get("password") or "").strip()
+            return str(c.get("id") or "").strip()
     return ""
 
 
@@ -1378,8 +1669,12 @@ def _write_account_artifacts(
 
 
 def _refresh_account_info_for_user(proto: str, username: str, domain: str | None = None, ip: str | None = None) -> tuple[bool, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Username SSH tidak valid"
+        return _ssh_refresh_account_info(username)
     if not _is_valid_username(username):
         return False, "Username tidak valid"
 
@@ -1473,7 +1768,7 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
     updated = 0
     failed = 0
 
-    for proto in PROTOCOLS:
+    for proto in USER_PROTOCOLS:
         d = ACCOUNT_ROOT / proto
         if not d.exists():
             continue
@@ -1503,6 +1798,22 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
     return updated, failed
 
 
+def _account_refresh_outcome(
+    title: str,
+    lines: list[str],
+    *,
+    updated: int,
+    failed: int,
+    partial_failure_hint: str,
+) -> tuple[bool, str, str]:
+    message_lines = list(lines)
+    message_lines.append(f"- Refresh account info: updated={updated}, failed={failed}")
+    if failed > 0:
+        message_lines.append(partial_failure_hint)
+        return False, title, "\n".join(message_lines)
+    return True, title, "\n".join(message_lines)
+
+
 def _account_info_needs_compat_refresh() -> bool:
     _ensure_runtime_dirs()
     for proto in PROTOCOLS:
@@ -1527,7 +1838,7 @@ def _account_info_needs_compat_refresh() -> bool:
 
 
 def op_account_info_compat_refresh_if_needed() -> tuple[bool, str, str]:
-    title = "User Management - Account Info Compat Refresh"
+    title = "Xray Users - Account Info Compat Refresh"
     if not _account_info_needs_compat_refresh():
         return True, title, "Skip: format account info sudah kompatibel."
 
@@ -1938,10 +2249,14 @@ def op_user_add(
     speed_enabled: bool,
     speed_down_mbit: float,
     speed_up_mbit: float,
+    password: str = "",
 ) -> tuple[bool, str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, "User Management - Add User", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Add User", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(username):
         return False, "User Management - Add User", "Username tidak valid."
     if days <= 0:
         return False, "User Management - Add User", "Masa aktif harus > 0 hari."
@@ -1959,6 +2274,100 @@ def op_user_add(
     exists, where = _username_exists_anywhere(username)
     if exists:
         return False, "User Management - Add User", f"Username sudah ada: {username} ({where})"
+
+    if proto == SSH_PROTOCOL:
+        raw_password = str(password or "")
+        if not raw_password.strip():
+            return False, "User Management - Add User", "Password SSH wajib diisi."
+        if username.strip().lower() == raw_password.strip().lower():
+            return False, "User Management - Add User", "Password SSH tidak boleh sama dengan username."
+
+        expiry = (date.today() + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
+        created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        quota_bytes = int(round(quota_gb * (1024**3)))
+        quota_path = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
+        account_path = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
+
+        ok_add_user, out_add_user = _run_cmd(["useradd", "-m", "-s", "/bin/bash", username], timeout=20)
+        if not ok_add_user:
+            return False, "User Management - Add User", f"Gagal membuat user Linux '{username}': {out_add_user}"
+
+        ok_passwd, out_passwd = _run_cmd(
+            ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, raw_password],
+            timeout=20,
+        )
+        if not ok_passwd:
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            return False, "User Management - Add User", f"Gagal set password user '{username}': {out_passwd}"
+
+        ok_expiry, out_expiry = _run_cmd(["chage", "-E", expiry, username], timeout=20)
+        if not ok_expiry:
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            return False, "User Management - Add User", f"Gagal set expiry user '{username}': {out_expiry}"
+
+        try:
+            with file_lock(str(SSHWS_LOCK_FILE)):
+                ok_state, quota_path_or_err, payload_or_err = _ssh_load_state(
+                    username,
+                    create_missing=True,
+                    created_at=created_at,
+                    expired_at=expiry,
+                )
+                if not ok_state:
+                    raise RuntimeError(str(quota_path_or_err))
+                quota_path = quota_path_or_err
+                quota_payload = payload_or_err
+                assert isinstance(quota_path, Path)
+                assert isinstance(quota_payload, dict)
+
+                quota_payload["quota_limit"] = quota_bytes
+                quota_payload["quota_used"] = 0
+                quota_payload["created_at"] = created_at
+                quota_payload["expired_at"] = expiry
+                status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
+                status["manual_block"] = False
+                status["quota_exhausted"] = False
+                status["ip_limit_enabled"] = bool(ip_enabled)
+                status["ip_limit"] = int(max(0, ip_limit)) if ip_enabled else 0
+                status["ip_limit_locked"] = False
+                status["speed_limit_enabled"] = bool(speed_on)
+                status["speed_down_mbit"] = float(down) if speed_on else 0.0
+                status["speed_up_mbit"] = float(up) if speed_on else 0.0
+                status["account_locked"] = False
+                status["lock_owner"] = ""
+                status["lock_shell_restore"] = ""
+                _status_apply_lock_fields(status)
+                quota_payload["status"] = status
+                _ssh_save_state(quota_path, quota_payload)
+        except Exception as exc:
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            for path in (quota_path, account_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False, "User Management - Add User", f"Gagal menulis metadata SSH: {exc}"
+
+        ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
+        if not ok_account:
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            for path in (quota_path, account_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False, "User Management - Add User", str(account_msg)
+
+        warnings = _ssh_post_update_warnings(username, password_override=raw_password)
+        msg = (
+            f"Add user SSH sukses.\n"
+            f"- User: {username}@{proto}\n"
+            f"- Account: {account_path}\n"
+            f"- Quota: {quota_path}"
+        )
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "User Management - Add User", msg
 
     cred = _generate_credential(proto)
     quota_bytes = int(round(quota_gb * (1024**3)))
@@ -2015,9 +2424,12 @@ def op_user_add(
 
 
 def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Username SSH tidak valid."
+    elif not _is_valid_username(username):
         return False, "Username tidak valid."
 
     account_file = _resolve_existing(_account_candidates(proto, username))
@@ -2037,10 +2449,23 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
 
 
 def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, "User Management - Delete User", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Delete User", "Username SSH tidak valid."
+    elif not _is_valid_username(username):
         return False, "User Management - Delete User", "Username tidak valid."
+
+    if proto == SSH_PROTOCOL:
+        if _linux_user_exists(username):
+            ok_del, out_del = _run_cmd(["userdel", "-r", username], timeout=20)
+            if not ok_del:
+                ok_del2, out_del2 = _run_cmd(["userdel", username], timeout=20)
+                if not ok_del2:
+                    return False, "User Management - Delete User", f"Gagal menghapus user Linux '{username}': {out_del2}"
+        _delete_account_artifacts(proto, username)
+        return True, "User Management - Delete User", f"Delete user selesai: {username}@{proto}"
 
     ok_del, del_msg = _xray_delete_client(proto, username)
     if not ok_del:
@@ -2085,10 +2510,60 @@ def _user_exists_in_inbounds(proto: str, username: str) -> bool:
 
 
 def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> tuple[bool, str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, "User Management - Extend Expiry", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Extend Expiry", "Username SSH tidak valid."
+    elif not _is_valid_username(username):
         return False, "User Management - Extend Expiry", "Username tidak valid."
+
+    if proto == SSH_PROTOCOL:
+        if not _linux_user_exists(username):
+            return False, "User Management - Extend Expiry", f"User Linux '{username}' tidak ditemukan."
+
+        ok_state, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_state:
+            return False, "User Management - Extend Expiry", str(q_path_or_msg)
+        quota_path = q_path_or_msg
+        quota_data = q_data_or_msg
+        assert isinstance(quota_path, Path)
+        assert isinstance(quota_data, dict)
+
+        current_expiry = str(quota_data.get("expired_at") or "").strip()[:10]
+        today = date.today()
+        mode_n = str(mode or "").strip().lower()
+        if mode_n in {"extend", "tambah", "days", "1"}:
+            add_days = _to_int(value, 0)
+            if add_days <= 0:
+                return False, "User Management - Extend Expiry", "Nilai extend harus angka hari > 0."
+            base = _parse_date_only(current_expiry) or today
+            if base < today:
+                base = today
+            new_expiry = (base + timedelta(days=add_days)).strftime("%Y-%m-%d")
+        elif mode_n in {"set", "date", "2"}:
+            d = _parse_date_only(value)
+            if d is None:
+                return False, "User Management - Extend Expiry", "Format tanggal harus YYYY-MM-DD."
+            new_expiry = d.strftime("%Y-%m-%d")
+        else:
+            return False, "User Management - Extend Expiry", "Mode harus extend atau set."
+
+        ok_expiry, out_expiry = _run_cmd(["chage", "-E", new_expiry, username], timeout=20)
+        if not ok_expiry:
+            return False, "User Management - Extend Expiry", f"Gagal update expiry untuk '{username}': {out_expiry}"
+
+        quota_data["expired_at"] = new_expiry
+        _ssh_save_state(quota_path, quota_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = (
+            f"Expiry diperbarui: {username}@{proto}\n"
+            f"- Lama: {current_expiry or '-'}\n"
+            f"- Baru: {new_expiry}"
+        )
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "User Management - Extend Expiry", msg
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
@@ -2153,13 +2628,62 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
     )
 
 
+def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]:
+    title = "User Management - Reset Password"
+    if not _is_valid_ssh_username(username):
+        return False, title, "Username SSH tidak valid."
+    raw_password = str(password or "")
+    if not raw_password.strip():
+        return False, title, "Password SSH wajib diisi."
+    if username.strip().lower() == raw_password.strip().lower():
+        return False, title, "Password SSH tidak boleh sama dengan username."
+    if not _linux_user_exists(username):
+        return False, title, f"User Linux '{username}' tidak ditemukan."
+
+    ok_passwd, out_passwd = _run_cmd(
+        ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, raw_password],
+        timeout=20,
+    )
+    if not ok_passwd:
+        return False, title, f"Gagal reset password user '{username}': {out_passwd}"
+
+    warnings = _ssh_post_update_warnings(username, password_override=raw_password)
+    msg = f"Password berhasil direset untuk {username}@{SSH_PROTOCOL}"
+    if warnings:
+        msg += "\n- Warning: " + " | ".join(warnings)
+    return True, title, msg
+
+
 def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool, str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return False, "Quota - Set Limit", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Quota - Set Limit", "Username SSH tidak valid"
+    elif not _is_valid_username(username):
         return False, "Quota - Set Limit", "Username tidak valid"
     if quota_gb <= 0:
         return False, "Quota - Set Limit", "Quota harus > 0 GB"
+
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Set Limit", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        q_data["quota_limit"] = int(round(quota_gb * (1024**3)))
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        _status_apply_lock_fields(status)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Quota limit diubah ke {_fmt_number(quota_gb)} GB untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Set Limit", msg
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
@@ -2180,6 +2704,27 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
 
 
 def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Reset Used", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        q_data["quota_used"] = 0
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["quota_exhausted"] = False
+        _status_apply_lock_fields(status)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Quota used di-reset untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Reset Used", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Reset Used", str(q_path_or_msg)
@@ -2201,6 +2746,26 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
 
 
 def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Manual Block", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["manual_block"] = bool(enabled)
+        _status_apply_lock_fields(status)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Manual block {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Manual Block", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Manual Block", str(q_path_or_msg)
@@ -2228,6 +2793,28 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
 
 
 def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - IP Limit", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["ip_limit_enabled"] = bool(enabled)
+        if not enabled:
+            status["ip_limit_locked"] = False
+        _status_apply_lock_fields(status)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"IP/Login limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - IP Limit", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - IP Limit", str(q_path_or_msg)
@@ -2256,6 +2843,25 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
     if limit <= 0:
         return False, "Quota - Set IP Limit", "IP limit harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Set IP Limit", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["ip_limit"] = int(limit)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"IP/Login limit diubah ke {limit} untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Set IP Limit", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Set IP Limit", str(q_path_or_msg)
@@ -2275,6 +2881,26 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
 
 
 def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Unlock IP Lock", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["ip_limit_locked"] = False
+        _status_apply_lock_fields(status)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"IP/Login lock di-unlock untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Unlock IP Lock", msg
+
     email = _email(proto, username)
     if Path("/usr/local/bin/limit-ip").exists():
         _run_cmd(["/usr/local/bin/limit-ip", "unlock", email], timeout=15)
@@ -2302,6 +2928,25 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
     if speed_down <= 0:
         return False, "Quota - Speed Download", "Speed download harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Speed Download", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["speed_down_mbit"] = float(speed_down)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Speed download diubah ke {_fmt_number(speed_down)} Mbps untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Speed Download", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Speed Download", str(q_path_or_msg)
@@ -2328,6 +2973,25 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
     if speed_up <= 0:
         return False, "Quota - Speed Upload", "Speed upload harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Speed Upload", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["speed_up_mbit"] = float(speed_up)
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Speed upload diubah ke {_fmt_number(speed_up)} Mbps untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Speed Upload", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Speed Upload", str(q_path_or_msg)
@@ -2351,6 +3015,30 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
 
 
 def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
+        if not ok_q:
+            return False, "Quota - Speed Limit", str(q_path_or_msg)
+        q_path = q_path_or_msg
+        q_data = q_data_or_msg
+        assert isinstance(q_path, Path)
+        assert isinstance(q_data, dict)
+
+        status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
+        status["speed_limit_enabled"] = bool(enabled)
+        if enabled:
+            down = _to_float(status.get("speed_down_mbit"), 0.0)
+            up = _to_float(status.get("speed_up_mbit"), 0.0)
+            if down <= 0 or up <= 0:
+                return False, "Quota - Speed Limit", "Set speed download/upload > 0 dulu sebelum ON."
+        q_data["status"] = status
+        _ssh_save_state(q_path, q_data)
+        warnings = _ssh_post_update_warnings(username)
+        msg = f"Speed limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
+        if warnings:
+            msg += "\n- Warning: " + " | ".join(warnings)
+        return True, "Quota - Speed Limit", msg
+
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
         return False, "Quota - Speed Limit", str(q_path_or_msg)
@@ -2988,12 +3676,19 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed = _refresh_all_account_info(domain=domain_n, ip=ip_override)
-    msg = (
-        f"Domain aktif sekarang: {domain_n}\n"
-        f"- Certificate mode : standalone\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
+    return _account_refresh_outcome(
+        title,
+        [
+            f"Domain aktif sekarang: {domain_n}",
+            "- Certificate mode : standalone",
+        ],
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain dan certificate sudah diperbarui, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
     )
-    return True, title, msg
 
 
 def op_domain_setup_cloudflare(
@@ -3086,17 +3781,25 @@ def op_domain_setup_cloudflare(
             _restore_services(stopped_services)
 
     updated, failed = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
-    msg = (
-        f"Domain aktif sekarang: {domain_final}\n"
-        f"- Root domain      : {root_domain}\n"
-        f"- Cloudflare proxy : {'ON' if proxied_b else 'OFF'}\n"
-        f"- DNS              : {dns_msg}\n"
-        f"- Certificate mode : dns_cf wildcard\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
-    )
+    lines = [
+        f"Domain aktif sekarang: {domain_final}",
+        f"- Root domain      : {root_domain}",
+        f"- Cloudflare proxy : {'ON' if proxied_b else 'OFF'}",
+        f"- DNS              : {dns_msg}",
+        "- Certificate mode : dns_cf wildcard",
+    ]
     if not ok_acc:
-        msg += f"\n- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})"
-    return True, title, msg
+        lines.append(f"- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})")
+    return _account_refresh_outcome(
+        title,
+        lines,
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain, DNS, dan certificate sudah diperbarui, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
+    )
 
 
 def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str]:
@@ -3116,16 +3819,27 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
         return False, title, ng_msg
 
     updated, failed = _refresh_all_account_info(domain=domain_n)
-    msg = (
-        f"Domain berhasil diubah ke: {domain_n}\n"
-        f"- Refresh account info: updated={updated}, failed={failed}"
+    return _account_refresh_outcome(
+        title,
+        [f"Domain berhasil diubah ke: {domain_n}"],
+        updated=updated,
+        failed=failed,
+        partial_failure_hint=(
+            "Sebagian ACCOUNT INFO gagal direfresh. Domain aktif sudah berubah, "
+            "tetapi sebagian file akun mungkin masih stale."
+        ),
     )
-    return True, title, msg
 
 
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     updated, failed = _refresh_all_account_info()
-    return True, "Domain Control - Refresh Account Info", f"Selesai: updated={updated}, failed={failed}"
+    return _account_refresh_outcome(
+        "Domain Control - Refresh Account Info",
+        ["Selesai refresh ACCOUNT INFO."],
+        updated=updated,
+        failed=failed,
+        partial_failure_hint="Sebagian ACCOUNT INFO gagal direfresh dan mungkin masih stale.",
+    )
 
 
 def op_network_apply_warp_global_mode(mode: str) -> tuple[bool, str, str]:

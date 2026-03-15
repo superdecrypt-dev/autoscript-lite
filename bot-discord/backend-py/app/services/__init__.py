@@ -7,6 +7,8 @@ from . import (
     menu_6_speedtest,
     menu_7_security,
     menu_8_maintenance,
+    menu_10_ssh_user,
+    menu_11_ssh_quota,
     menu_12_traffic,
 )
 
@@ -20,6 +22,8 @@ MENU_HANDLERS = {
     "7": menu_7_security.handle,
     "8": menu_8_maintenance.handle,
     "9": menu_12_traffic.handle,
+    "10": menu_10_ssh_user.handle,
+    "11": menu_11_ssh_quota.handle,
     # Backward compatibility for older cached interaction payloads.
     "12": menu_12_traffic.handle,
 }

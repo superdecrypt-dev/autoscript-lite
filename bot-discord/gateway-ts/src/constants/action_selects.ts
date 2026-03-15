@@ -14,8 +14,6 @@ export interface ActionSingleSelectConfig {
 const ROOT_DOMAIN_FALLBACK_VALUES = [
   "vyxara1.web.id",
   "vyxara2.web.id",
-  "vyxara1.qzz.io",
-  "vyxara2.qzz.io",
 ] as const;
 
 const NETWORK_SINGLE_SELECTS: Record<string, ActionSingleSelectConfig> = {

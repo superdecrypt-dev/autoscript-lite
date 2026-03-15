@@ -16,9 +16,13 @@ NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
-PROTOCOLS = ("vless", "vmess", "trojan")
+XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
+SSH_PROTOCOL = "ssh"
+USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
+PROTOCOLS = XRAY_PROTOCOLS
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 ALLOWED_SERVICES = (
     "xray",
@@ -359,9 +363,21 @@ def op_domain_guard_renew_if_needed(force: bool = False) -> tuple[bool, str, str
     return False, title, msg
 
 
-def list_accounts() -> list[tuple[str, str]]:
+def _normalize_protocol_filter(protocols: tuple[str, ...] | list[str] | set[str] | None) -> tuple[str, ...]:
+    if protocols is None:
+        return USER_PROTOCOLS
+    selected: list[str] = []
+    for proto in protocols:
+        proto_n = str(proto).strip().lower()
+        if proto_n in USER_PROTOCOLS and proto_n not in selected:
+            selected.append(proto_n)
+    return tuple(selected)
+
+
+def list_accounts(protocols: tuple[str, ...] | list[str] | set[str] | None = None) -> list[tuple[str, str]]:
+    protocol_list = _normalize_protocol_filter(protocols)
     records: list[tuple[str, str]] = []
-    for proto in PROTOCOLS:
+    for proto in protocol_list:
         d = ACCOUNT_ROOT / proto
         if not d.exists():
             continue
@@ -387,34 +403,48 @@ def list_accounts() -> list[tuple[str, str]]:
     return records
 
 
-def op_user_list() -> tuple[str, str]:
-    records = list_accounts()
-    if not records:
-        return "User Management - List", f"Tidak ada data di {ACCOUNT_ROOT}/{{vless,vmess,trojan}}"
+def _protocols_text(protocols: tuple[str, ...]) -> str:
+    return ",".join(protocols)
 
-    counts = {p: 0 for p in PROTOCOLS}
+
+def op_user_list(
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "Xray Users - List",
+) -> tuple[str, str]:
+    protocol_list = _normalize_protocol_filter(protocols)
+    records = list_accounts(protocol_list)
+    if not records:
+        return title, f"Tidak ada data di {ACCOUNT_ROOT}/{{{_protocols_text(protocol_list)}}}"
+
+    counts = {p: 0 for p in protocol_list}
     for proto, _ in records:
         counts[proto] += 1
 
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(records[:250])]
-    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in PROTOCOLS])
+    protocol_lines = "\n".join([f"- {proto}: {counts[proto]}" for proto in protocol_list])
     body = (
         f"Total user: {len(records)}\n"
         f"{protocol_lines}\n\n"
         "Daftar (maks 250):\n"
         + "\n".join(lines)
     )
-    return "User Management - List", body
+    return title, body
 
 
-def op_user_search(query: str) -> tuple[str, str]:
+def op_user_search(
+    query: str,
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "Xray Users - Search",
+) -> tuple[str, str]:
     q = query.lower().strip()
-    records = list_accounts()
+    records = list_accounts(protocols)
     hits = [(proto, user) for proto, user in records if q in user.lower()]
     if not hits:
-        return "User Management - Search", f"Tidak ada user cocok dengan query: {query}"
+        return title, f"Tidak ada user cocok dengan query: {query}"
     lines = [f"{i+1:03d}. {user} [{proto}]" for i, (proto, user) in enumerate(hits[:250])]
-    return "User Management - Search", f"Hasil: {len(hits)}\n\n" + "\n".join(lines)
+    return title, f"Hasil: {len(hits)}\n\n" + "\n".join(lines)
 
 
 def _quota_candidates(proto: str, username: str) -> list[Path]:
@@ -433,6 +463,14 @@ def _account_candidates(proto: str, username: str) -> list[Path]:
 
 def _is_valid_username(username: str) -> bool:
     return bool(USERNAME_RE.match(username))
+
+
+def _is_valid_ssh_username(username: str) -> bool:
+    return bool(SSH_USERNAME_RE.match(username))
+
+
+def _account_info_label(proto: str) -> str:
+    return "SSH ACCOUNT INFO" if proto == SSH_PROTOCOL else "XRAY ACCOUNT INFO"
 
 
 def _to_int(v: object, default: int = 0) -> int:
@@ -654,10 +692,15 @@ def _pick_field(data: dict, keys: list[str], default: str = "-") -> str:
     return default
 
 
-def op_quota_summary() -> tuple[str, str]:
+def op_quota_summary(
+    protocols: tuple[str, ...] | list[str] | set[str] | None = None,
+    *,
+    title: str = "Xray QAC - Summary",
+) -> tuple[str, str]:
+    protocol_list = _normalize_protocol_filter(protocols)
     lines: list[str] = []
     count = 0
-    for proto in PROTOCOLS:
+    for proto in protocol_list:
         for username, path in _iter_proto_quota_files(proto):
             ok, payload = read_json(path)
             if not ok:
@@ -683,16 +726,17 @@ def op_quota_summary() -> tuple[str, str]:
             break
 
     if not lines:
-        return "Quota & Access Control - Summary", (
-            f"Tidak ada file quota di {QUOTA_ROOT}/{{vless,vmess,trojan}}"
-        )
-    return "Quota & Access Control - Summary", "Maks 200 entri:\n" + "\n".join(lines)
+        return title, f"Tidak ada file quota di {QUOTA_ROOT}/{{{_protocols_text(protocol_list)}}}"
+    return title, "Maks 200 entri:\n" + "\n".join(lines)
 
 
 def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
-    if proto not in PROTOCOLS:
+    if proto not in USER_PROTOCOLS:
         return "Quota & Access Control - Detail", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(username):
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return "Quota & Access Control - Detail", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(username):
         return "Quota & Access Control - Detail", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
     for candidate in _quota_candidates(proto, username):
         if not candidate.exists():
@@ -703,6 +747,7 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
         parts = [f"Quota File: {candidate}", "", json.dumps(payload, indent=2, ensure_ascii=False)]
 
         account_file = next((p for p in _account_candidates(proto, username) if p.exists()), None)
+        account_label = _account_info_label(proto)
         if account_file is not None:
             try:
                 account_text = account_file.read_text(encoding="utf-8", errors="ignore").strip()
@@ -711,13 +756,13 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
             parts.extend(
                 [
                     "",
-                    f"XRAY ACCOUNT INFO File: {account_file}",
+                    f"{account_label} File: {account_file}",
                     "",
                     account_text or "(kosong)",
                 ]
             )
         else:
-            parts.extend(["", "XRAY ACCOUNT INFO: file tidak ditemukan di /opt/account"])
+            parts.extend(["", f"{account_label}: file tidak ditemukan di /opt/account"])
 
         return "Quota & Access Control - Detail", "\n".join(parts)
     return "Quota & Access Control - Detail", f"File quota tidak ditemukan untuk {username} [{proto}]"
@@ -726,9 +771,12 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
 def op_account_info(proto: str, username: str) -> tuple[str, str]:
     proto_n = proto.lower().strip()
     user_n = username.strip()
-    if proto_n not in PROTOCOLS:
+    if proto_n not in USER_PROTOCOLS:
         return "User Management - Account Info", f"Proto tidak valid: {proto}"
-    if not _is_valid_username(user_n):
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return "User Management - Account Info", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
         return "User Management - Account Info", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _account_candidates(proto_n, user_n):
@@ -740,16 +788,34 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
             return "User Management - Account Info", f"Gagal membaca file {candidate}: {exc}"
         if not content:
             content = "(kosong)"
-        return "User Management - Account Info", f"File: {candidate}\n\n{content}"
+        if proto_n == SSH_PROTOCOL:
+            lines = [
+                f"Username : {user_n}",
+                f"File     : {candidate}",
+                "",
+                content,
+            ]
+            return "User Management - Account Info", "\n".join(lines)
+        lines = [
+            f"Username : {user_n}",
+            f"Protocol : {proto_n}",
+            f"File     : {candidate}",
+            "",
+            content,
+        ]
+        return "User Management - Account Info", "\n".join(lines)
     return "User Management - Account Info", f"File account tidak ditemukan untuk {user_n} [{proto_n}]"
 
 
 def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
     proto_n = proto.lower().strip()
     user_n = username.strip()
-    if proto_n not in PROTOCOLS:
+    if proto_n not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
-    if not _is_valid_username(user_n):
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
         return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _quota_candidates(proto_n, user_n):
@@ -776,7 +842,7 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
         if not fields:
             continue
         protocol = str(fields.get("Protocol") or proto_n).strip().lower()
-        if protocol not in PROTOCOLS:
+        if protocol not in USER_PROTOCOLS:
             protocol = proto_n
         return True, {
             "username": str(fields.get("Username") or user_n).strip() or user_n,
@@ -787,6 +853,63 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
             "speed_limit": _fmt_speed_limit_from_account_fields(fields),
         }
     return False, f"File quota/account tidak ditemukan untuk {user_n} [{proto_n}]"
+
+
+def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
+    proto_n = proto.lower().strip()
+    user_n = username.strip()
+    if proto_n not in USER_PROTOCOLS:
+        return False, f"Proto tidak valid: {proto}"
+    if proto_n == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(user_n):
+            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
+    elif not _is_valid_username(user_n):
+        return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
+
+    for candidate in _quota_candidates(proto_n, user_n):
+        if not candidate.exists():
+            continue
+        ok, payload = read_json(candidate)
+        if not ok:
+            return False, str(payload)
+        if not isinstance(payload, dict):
+            return False, f"Format quota tidak valid: {candidate}"
+
+        status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        expired_at = str(_pick_field(payload, ["expired_at", "expired", "expiry", "expires"]))[:10] or "-"
+        ip_limit_enabled = bool(status.get("ip_limit_enabled"))
+        speed_limit_enabled = bool(status.get("speed_limit_enabled"))
+        speed_down = _fmt_number(_to_float(status.get("speed_down_mbit"), 0.0))
+        speed_up = _fmt_number(_to_float(status.get("speed_up_mbit"), 0.0))
+        username_display = f"{user_n}@{proto_n}" if proto_n != SSH_PROTOCOL else user_n
+        summary = {
+            "username": username_display,
+            "quota_limit": _fmt_quota_limit_gb(payload),
+            "quota_used": _fmt_quota_used(payload),
+            "expired_at": expired_at,
+            "ip_limit": "ON" if ip_limit_enabled else "OFF",
+            "block_reason": _status_block_reason(status),
+            "ip_limit_max": str(max(0, _to_int(status.get("ip_limit"), 0))),
+            "speed_download": f"{speed_down} Mbps",
+            "speed_upload": f"{speed_up} Mbps",
+            "speed_limit": "ON" if speed_limit_enabled else "OFF",
+        }
+        if proto_n == SSH_PROTOCOL:
+            distinct_ips_raw = status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else []
+            distinct_ips = [str(item).strip() for item in distinct_ips_raw if str(item).strip()]
+            summary.update(
+                {
+                    "distinct_ip_count": str(max(0, _to_int(status.get("distinct_ip_count"), 0))),
+                    "distinct_ips": ", ".join(distinct_ips) if distinct_ips else "-",
+                    "ip_limit_metric": str(max(0, _to_int(status.get("ip_limit_metric"), 0))),
+                    "account_locked": "ON" if bool(status.get("account_locked")) else "OFF",
+                    "active_sessions_total": str(max(0, _to_int(status.get("active_sessions_total"), 0))),
+                }
+            )
+
+        return True, summary
+
+    return False, f"File quota tidak ditemukan untuk {user_n} [{proto_n}]"
 
 
 def op_dns_summary() -> tuple[str, str]:

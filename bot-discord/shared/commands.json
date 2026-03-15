@@ -27,8 +27,8 @@
     },
     {
       "id": "2",
-      "label": "User Management",
-      "description": "Kelola pengguna, masa aktif, pencarian, dan informasi akun.",
+      "label": "Xray Users",
+      "description": "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
       "actions": [
         {
           "id": "add_user",
@@ -195,7 +195,7 @@
           "mode": "modal",
           "style": "secondary",
           "modal": {
-            "title": "User Account Info",
+            "title": "Xray Account Info",
             "fields": [
               {
                 "id": "proto",
@@ -218,8 +218,8 @@
     },
     {
       "id": "3",
-      "label": "Quota & Access Control",
-      "description": "Ringkasan kuota dan kontrol akses per pengguna.",
+      "label": "Xray QAC",
+      "description": "Ringkasan quota dan kontrol akses untuk pengguna Xray.",
       "actions": [
         {
           "id": "summary",
@@ -229,11 +229,11 @@
         },
         {
           "id": "detail",
-          "label": "View Quota Detail",
+          "label": "View Xray QAC Detail",
           "mode": "modal",
           "style": "secondary",
           "modal": {
-            "title": "Quota Detail",
+            "title": "Xray QAC Detail",
             "fields": [
               {
                 "id": "proto",
@@ -660,7 +660,7 @@
                 "label": "Root Domain",
                 "style": "short",
                 "required": true,
-                "placeholder": "1 atau vyxara1.web.id"
+                "placeholder": "Pilih via select"
               },
               {
                 "id": "subdomain_mode",
@@ -854,6 +854,433 @@
           "label": "Export JSON",
           "mode": "direct",
           "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "10",
+      "label": "SSH Users",
+      "description": "Kelola akun SSH, masa aktif, password, pencarian, dan informasi akun.",
+      "actions": [
+        {
+          "id": "add_user",
+          "label": "Add User",
+          "mode": "modal",
+          "style": "success",
+          "modal": {
+            "title": "Add SSH User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "password",
+                "label": "Password SSH",
+                "style": "short",
+                "required": true,
+                "placeholder": "password SSH wajib diisi"
+              },
+              {
+                "id": "days",
+                "label": "Masa Aktif (hari)",
+                "style": "short",
+                "required": true,
+                "placeholder": "30"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota (GB)",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit (opsional)",
+                "style": "short",
+                "required": false,
+                "placeholder": "0 = OFF"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_user",
+          "label": "Delete User",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Delete SSH User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "extend_expiry",
+          "label": "Set User Expiry",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Extend/Set SSH Expiry",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "extend / set"
+              },
+              {
+                "id": "value",
+                "label": "Value",
+                "style": "short",
+                "required": true,
+                "placeholder": "7 atau 2026-12-31"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_password",
+          "label": "Reset SSH Password",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Reset SSH Password",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "password",
+                "label": "Password Baru",
+                "style": "short",
+                "required": true,
+                "placeholder": "password SSH baru"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "list_users",
+          "label": "View User List",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "search_user",
+          "label": "Search User",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Search SSH User",
+            "fields": [
+              {
+                "id": "query",
+                "label": "Username Query",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "account_info",
+          "label": "View Account Info",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH Account Info",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "11",
+      "label": "SSH QAC",
+      "description": "Ringkasan quota dan kontrol akses untuk pengguna SSH.",
+      "actions": [
+        {
+          "id": "summary",
+          "label": "View Quota Summary",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "detail",
+          "label": "View SSH QAC Detail",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH QAC Detail",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "set_quota_limit",
+          "label": "Set Quota Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Quota Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota GB",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_quota_used",
+          "label": "Reset Quota Used",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Reset SSH Quota Used",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "manual_block",
+          "label": "Toggle Manual Block",
+          "mode": "modal",
+          "style": "danger",
+          "modal": {
+            "title": "SSH Manual Block",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "ip_limit_enable",
+          "label": "Toggle IP/Login Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH IP/Login Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_ip_limit",
+          "label": "Set IP/Login Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH IP/Login Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit",
+                "style": "short",
+                "required": true,
+                "placeholder": "2"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "unlock_ip_lock",
+          "label": "Unlock IP/Login Lock",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Unlock SSH IP/Login Lock",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_download",
+          "label": "Set Speed Down",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Speed Download",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Down Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "20"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_upload",
+          "label": "Set Speed Up",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Speed Upload",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Up Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "speed_limit",
+          "label": "Toggle Speed Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH Speed Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
         }
       ]
     }

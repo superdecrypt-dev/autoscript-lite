@@ -30,7 +30,7 @@ export const menu5: MenuDefinition = {
       modal: {
         title: "Set Domain Auto (API Cloudflare)",
         fields: [
-          { id: "root_domain", label: "Root Domain", style: "short", required: true, placeholder: "1 atau vyxara1.web.id" },
+          { id: "root_domain", label: "Root Domain", style: "short", required: true, placeholder: "Pilih via select" },
           { id: "subdomain_mode", label: "Subdomain Mode", style: "short", required: false, placeholder: "auto / manual (default: auto)" },
           { id: "subdomain", label: "Subdomain", style: "short", required: false, placeholder: "Isi jika mode manual, contoh: vpn01" },
           { id: "proxied", label: "Cloudflare Proxy", style: "short", required: false, placeholder: "on / off (default: off)" },

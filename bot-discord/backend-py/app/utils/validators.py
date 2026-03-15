@@ -16,16 +16,23 @@ def require_param(params: dict, key: str, title: str) -> tuple[bool, str | dict]
     return True, value
 
 
-def require_protocol(params: dict, title: str, key: str = "proto") -> tuple[bool, str | dict]:
+def require_protocol(
+    params: dict,
+    title: str,
+    key: str = "proto",
+    allowed: set[str] | None = None,
+) -> tuple[bool, str | dict]:
     ok, proto_or_err = require_param(params, key, title)
     if not ok:
         return False, proto_or_err
     proto = str(proto_or_err).strip().lower()
-    if proto not in PROTOCOLS:
+    allowed_protocols = {str(item).strip().lower() for item in (allowed or PROTOCOLS) if str(item).strip()}
+    if proto not in allowed_protocols:
+        choices = "/".join(sorted(allowed_protocols)) if allowed_protocols else "/".join(sorted(PROTOCOLS))
         return False, error_response(
             "invalid_param",
             title,
-            "Protocol harus vless/vmess/trojan.",
+            f"Protocol harus {choices}.",
         )
     return True, proto
 

@@ -7,9 +7,11 @@ import { menu5 } from "./views/menu_5_domain";
 import { menu6 } from "./views/menu_6_speedtest";
 import { menu7 } from "./views/menu_7_security";
 import { menu8 } from "./views/menu_8_maintenance";
+import { menu10 } from "./views/menu_10_ssh_user";
+import { menu11 } from "./views/menu_11_ssh_quota";
 import { menu12 } from "./views/menu_12_traffic";
 
-const BASE_MENUS: MenuDefinition[] = [menu1, menu2, menu3, menu4, menu5, menu6, menu7, menu8, menu12];
+const BASE_MENUS: MenuDefinition[] = [menu1, menu2, menu3, menu4, menu5, menu6, menu7, menu8, menu10, menu11, menu12];
 const KNOWN_BUTTON_TONES = new Set<ButtonTone>(["primary", "secondary", "success", "danger"]);
 const KNOWN_ACTION_MODES = new Set<ActionMode>(["direct", "modal"]);
 

@@ -1,9 +1,9 @@
 import type { MenuDefinition } from "./types";
 
-export const menu2: MenuDefinition = {
-  id: "2",
-  label: "Xray Users",
-  description: "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
+export const menu10: MenuDefinition = {
+  id: "10",
+  label: "SSH Users",
+  description: "Kelola akun SSH, masa aktif, password, pencarian, dan informasi akun.",
   actions: [
     {
       id: "add_user",
@@ -11,19 +11,13 @@ export const menu2: MenuDefinition = {
       mode: "modal",
       style: "success",
       modal: {
-        title: "Add User",
+        title: "Add SSH User",
         fields: [
           { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
+          { id: "password", label: "Password SSH", style: "short", required: true, placeholder: "password SSH wajib diisi" },
           { id: "days", label: "Masa Aktif (hari)", style: "short", required: true, placeholder: "30" },
           { id: "quota_gb", label: "Quota (GB)", style: "short", required: true, placeholder: "100" },
-          { id: "ip_limit", label: "IP Limit (opsional)", style: "short", required: false, placeholder: "0 = OFF" },
-          {
-            id: "speed_limit",
-            label: "Speed Limit Mbps (opsional)",
-            style: "short",
-            required: false,
-            placeholder: "off | 20 | 20/10 (down/up)",
-          },
+          { id: "ip_limit", label: "IP/Login Limit (opsional)", style: "short", required: false, placeholder: "0 = OFF" },
         ],
       },
     },
@@ -34,11 +28,8 @@ export const menu2: MenuDefinition = {
       style: "danger",
       confirm: true,
       modal: {
-        title: "Delete User",
-        fields: [
-          { id: "proto", label: "Protocol", style: "short", required: true, placeholder: "vless/vmess/trojan" },
-          { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
-        ],
+        title: "Delete SSH User",
+        fields: [{ id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" }],
       },
     },
     {
@@ -47,11 +38,24 @@ export const menu2: MenuDefinition = {
       mode: "modal",
       style: "primary",
       modal: {
-        title: "Extend/Set Expiry",
+        title: "Extend/Set SSH Expiry",
         fields: [
           { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
           { id: "mode", label: "Mode", style: "short", required: true, placeholder: "extend / set" },
           { id: "value", label: "Value", style: "short", required: true, placeholder: "7 atau 2026-12-31" },
+        ],
+      },
+    },
+    {
+      id: "reset_password",
+      label: "Reset SSH Password",
+      mode: "modal",
+      style: "secondary",
+      modal: {
+        title: "Reset SSH Password",
+        fields: [
+          { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
+          { id: "password", label: "Password Baru", style: "short", required: true, placeholder: "password SSH baru" },
         ],
       },
     },
@@ -62,7 +66,7 @@ export const menu2: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Search User",
+        title: "Search SSH User",
         fields: [{ id: "query", label: "Username Query", style: "short", required: true, placeholder: "contoh: alice" }],
       },
     },
@@ -72,10 +76,8 @@ export const menu2: MenuDefinition = {
       mode: "modal",
       style: "secondary",
       modal: {
-        title: "Xray Account Info",
-        fields: [
-          { id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" },
-        ],
+        title: "SSH Account Info",
+        fields: [{ id: "username", label: "Username", style: "short", required: true, placeholder: "contoh: alice" }],
       },
     },
   ],
