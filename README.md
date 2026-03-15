@@ -67,13 +67,15 @@ Catatan penting:
 
 ## Bot
 ### Telegram
-- Entry point: `/panel`, `/cleanup`
-- Xray dan SSH sudah dipisah
-- Action dangerous disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`
+- Entry point: `/menu`, `/cleanup`, `/start`
+- UX sekarang menu-first dengan kategori `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops`
+- Action mutasi dikendalikan lewat ACL admin Telegram, bukan lagi flag dangerous terpisah
 - Detail: `bot-telegram/README.md`
 
 ### Discord
-- Entry point utama: `/panel`
+- Entry point utama: `/menu`
+- Slash publik ringkas: `/menu`, `/status`, `/notify`
+- Flow utama hybrid lewat button, select menu, modal, dan konfirmasi
 - Pelengkap CLI, bukan pengganti penuh
 
 ## Command Cepat

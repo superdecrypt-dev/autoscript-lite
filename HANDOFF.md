@@ -9,136 +9,50 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
 - Workspace aktif (Codex): `/root/project/autoscript`
 - Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas historis: `/root/xray-core_discord`)
-- Deploy bot Discord: `/opt/bot-discord`
-- Deploy bot Telegram: `/opt/bot-telegram`
+- Path deploy bot default jika diinstal:
+  - Discord: `/opt/bot-discord`
+  - Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-03-09)
+## Status Operasional Terkini (2026-03-16)
 - Commit terbaru di `main`:
-  - `110552f` — `feat(ssh): apply edge qac across all edge transports`
-  - `c3b87e5` — `feat(edge): add ssh direct on 80 and 443`
-  - `aac822a` — `refactor(edge): remove haproxy provider support`
-  - `27194cc` — `docs(edge): rename rollback guide to recovery`
-  - `9d55920` — `feat(edge): add haproxy standby failover flow`
-  - `0b795dc` — `feat(edge): add nginx-stream provider support`
-  - `f1bf684` — `fix(setup): avoid tty warning in non-interactive runs`
-  - `da09ee0` — `fix(edge): clean dynamic env export`
-  - `ca066dc` — `fix(edge): improve request classification and error handling`
-  - `f191110` — `fix: harden edge persistence and discord deploy`
-  - `609e173` — `fix(nginx): resolve cert path before template render`
-  - `562832c` — `feat(ssh): update ssh ws account info and docs`
-  - `8e1c990` — `chore(edge): rename user-facing labels to Edge Gateway`
-  - `3c0662d` — `feat(edge): add cli maintenance tools and rollback note`
-  - `e96dc37` — `feat(edge): cut over public ports to provider`
-  - `8617fe7` — `feat(edge): add guarded runtime activation flow`
-  - `a1fbdb6` — `feat(edge): add go provider build and staging flow`
-  - `fed9458` — `chore(edge): add provider scaffold`
-  - `5356202` — `docs: add edge provider architecture design`
-  - `812cf06` — `docs: refine audit and testing playbooks`
-  - `f4fa613` — `fix(run): harden local source preflight and add audit playbook`
-  - `b8e82a6` — `refactor(setup): modularize installer and tune sshws restart`
-  - `921a03e` — `chore: drop generated python cache files`
-  - Perubahan penting terbaru:
-  - Topologi edge live sekarang diposisikan sebagai:
-    - `edge-mux` aktif di publik `80/443`
-    - `nginx` backend internal di `127.0.0.1:18080`
-    - helper switch:
-      - `edge-provider-switch go`
-      - `edge-provider-switch nginx-stream`
-  - Edge Gateway kini aktif live:
-    - provider aktif: `go`
-    - `edge-mux` memegang publik `80/443`
-    - `nginx` berjalan di backend internal `127.0.0.1:18080`
-    - SSH Direct kini tersedia sebagai surface resmi `SSH Direct` di `80/443`
-    - SSH klasik TLS kini tersedia sebagai surface resmi `SSH SSL/TLS` di `80/443`
-    - BadVPN UDPGW kini tersedia sebagai fitur tambahan SSH di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
-  - Surface operasional baru:
-    - `Maintenance > Edge Gateway Status`
-    - `Maintenance > Restart Edge Gateway`
-    - `Maintenance > Edge Gateway Info`
-    - `Maintenance > BadVPN UDPGW Status`
-    - `Maintenance > Restart BadVPN UDPGW`
-  - Refactor modular installer sudah commit + push:
-    - `setup.sh` kini menjadi orchestrator tipis
-    - implementasi installer dipindah ke `opt/setup/core`, `opt/setup/install`, `opt/setup/bin`, dan `opt/setup/templates`
-    - full E2E modular installer sudah lolos live
-  - SSH WS mode runtime sekarang autoscript-stream compatible (tanpa `Sec-WebSocket-*` wajib), diselaraskan untuk payload klien kompatibilitas.
-  - Guardrail audit: konsep SSH WS ini harus dipertahankan; referensi perilaku: `https://github.com/nanotechid/supreme` (tanpa menyalin identitas/penamaan repo referensi).
-  - SSH WS kini memakai token path per-user 10 hex chars:
-    - `/<token>`
-    - `/<bebas>/<token>`
-    - path tanpa token tidak dipakai lagi
-  - SSH WS handshake kini fail-close:
-    - path tanpa token -> `401 Unauthorized`
-    - token tidak dikenal -> `403 Forbidden`
-    - backend internal down -> `502 Bad Gateway`
-    - token valid + backend ready -> `101 Switching Protocols`
-  - SSH QAC terbaru:
-    - quota dan speed limit menempel ke user dari awal lewat token path
-    - `IP/Login limit` sekarang dicek sebelum `101`, bukan hanya menunggu timer enforcer
-    - active session SSH WS dihitung dari runtime session files
-    - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
-  - `manage.sh` module loader di-hardening:
-    - source modul dipilih hanya jika `trusted + lengkap` (semua modul wajib tersedia)
-    - urutan source: `/opt/manage` -> `/opt/autoscript/opt/manage` -> local repo `opt/manage`
-  - `SSH Management > Add SSH User` kini:
-    - mewajibkan input masa aktif (hari)
-    - menerima `0` sebagai `back` pada prompt masa aktif
-  - Scope enforcement SSH perlu dianggap eksplisit:
-    - `SSH WS`, `SSH Direct`, dan `SSH SSL/TLS` sekarang berbagi satu sistem SSH QAC pada jalur edge aktif
-    - login SSH native via `sshd`/port `22` belum dihitung atau di-throttle oleh SSH QAC
-    - masa aktif dan manual block tetap berlaku pada akun SSH native
-  - Edge provider yang aktif kembali dipertegas:
-    - `go` adalah provider utama
-    - `nginx-stream` tetap experimental
-    - dukungan `haproxy` sudah dihapus dari baseline proyek
-  - Bot Telegram kini memiliki parity menu yang lebih dekat ke CLI pada area:
-    - `Xray Management`
-    - `SSH Management`
-    - `Xray QAC`
-    - `SSH QAC`
-    - `Security`
-    - `Maintenance`
-  - Action dangerous pada bot Telegram sekarang disembunyikan saat `ENABLE_DANGEROUS_ACTIONS=false`; callback stale tetap ditolak aman.
-  - Logging gateway Telegram sudah di-hardening agar URL Bot API yang memuat token tidak lagi tercatat di journal baru.
-  - `Wireproxy Status` bot Telegram sudah lebih defensif terhadap `BindAddress` yang diberi komentar atau format manual yang tidak rapi.
-  - Full E2E `run.sh` live sudah pernah lolos dengan domain random pada `vyxara2.web.id`, dan `/etc/xray/domain` kini disinkronkan konsisten oleh `setup.sh` + `manage.sh`.
-  - Full E2E terbaru untuk refactor modular installer juga lolos live:
-    - domain final: `dlj8u.vyxara2.web.id`
-    - `run.sh` dijalankan dengan `RUN_USE_LOCAL_SOURCE=1 KEEP_REPO_AFTER_INSTALL=1`
-    - `xray`, `nginx`, `sshws-dropbear`, `sshws-stunnel`, `sshws-proxy`, `xray-speed`, dan `xray-domain-guard.timer` aktif
-    - `/<token>` dan `/<bebas>/<token>` sama-sama lolos `101`
-  - Cutover Edge Gateway sudah lolos live:
-    - HTTP/HTTPS publik diteruskan ke backend HTTP internal
-    - `SSH WS` valid token -> `101`
-    - `SSH SSL/TLS` di `443` dan `80` -> banner `dropbear`
-  - Provider `nginx-stream` sekarang sudah diimplementasikan dan tervalidasi:
-    - high-port validation -> PASS
-    - cutover live -> PASS
-    - restore kembali ke `go` -> PASS
+  - `e1d827e` — `fix(bot-discord): tighten domain modal validation`
+  - `7737dd9` — `fix(bot-discord): avoid duplicate menu custom ids`
+  - `faab408` — `fix(bot-discord): improve hybrid picker and purge flows`
+  - `87de35f` — `refactor(bot-discord): adopt hybrid menu workflow`
+  - `3c85652` — `refactor(bot-telegram): streamline menu-first flows`
+  - `478a081` — `refactor(bot-discord): migrate to slash-native actions`
+  - `dcc93ce` — `refactor(bot): remove xray legacy naming`
+  - `5865052` — `fix(bot-discord): stabilize backend startup`
+  - `203ae87` — `feat(bot-discord): expand parity and fix account refresh`
+  - `56e7768` — `refine(bot-telegram): improve parity and startup flow`
+  - `0b9f6ea` — `refine(bot-telegram): align account info with cli`
+  - `c9149d6` — `refactor(bot-telegram): remove dangerous actions flag`
+- Baseline runtime live:
+  - provider edge aktif: `go`
+  - `edge-mux` memegang publik `:80/:443`
+  - `nginx` backend internal di `127.0.0.1:18080`
+  - `SSH WS`, `SSH Direct`, dan `SSH SSL/TLS` berbagi satu surface SSH edge
+  - `badvpn-udpgw` aktif di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
+- Full E2E live terbaru:
+  - `run.sh` dijalankan dengan `RUN_USE_LOCAL_SOURCE=1`
+  - log: `/var/log/autoscript/setup-20260316-062536.log`
+  - domain aktif: `k8i2j.vyxara1.web.id`
+  - sertifikat live yang disajikan: `CN = k8i2j.vyxara1.web.id`, valid sampai `Jun 13 2026`
 - Validasi runtime terakhir:
-  - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-  - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py` -> PASS
-  - `printf "0\n" | timeout 20 bash manage.sh` -> PASS
-  - runtime SSH WS:
-    - path tanpa token -> `HTTP/1.1 401 Unauthorized`
-    - token tidak valid -> `HTTP/1.1 403 Forbidden`
-    - backend down -> `HTTP/1.1 502 Bad Gateway`
-    - token valid + backend up -> `HTTP/1.1 101 Switching Protocols`
-  - runtime Edge Gateway:
-    - `edge-mux.service` -> `active`
-    - listener publik di `:80/:443`
-    - `nginx` backend di `127.0.0.1:18080`
-    - `nginx-stream` sudah lolos smoke high-port dan cutover live, tetapi tetap diposisikan experimental/non-default
-  - runtime BadVPN:
-    - `badvpn-udpgw.service` -> `active`
-    - listener lokal di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
-  - Validasi modular installer terbaru:
-    - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
-    - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-domain-guard` -> PASS
-    - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
-  - Validasi playbook terbaru:
-    - `TESTING_PLAYBOOK.md` sudah sinkron dengan SSH WS token path dan pengujian bot Telegram
-    - `AUDIT_PLAYBOOK.md` sudah sinkron dengan repo modular, bot, dan format audit terbaru
+  - `systemctl is-active nginx xray edge-mux sshws-dropbear sshws-stunnel sshws-proxy sshws-qac-enforcer.timer badvpn-udpgw xray-speed xray-domain-guard.timer zivpn` -> `active`
+  - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
+  - `nginx -t` -> `successful`
+  - SSH WS live:
+    - path tanpa token + websocket -> `401 Unauthorized`
+    - token invalid -> `403 Forbidden`
+    - token valid -> `101 Switching Protocols`
+- Baseline bot di source repo:
+  - Telegram kini menu-first dengan `/menu`; `/panel` sudah dihapus total
+  - Discord kini hybrid dengan slash publik `/menu`, `/status`, `/notify`
+  - flag dangerous actions sudah tidak dipakai lagi sebagai mekanisme utama pada bot
+- State bot di host live saat handoff ini:
+  - unit file `bot-discord*` dan `bot-telegram*` saat ini tidak terpasang
+  - `systemctl list-unit-files 'bot-discord*' 'bot-telegram*'` -> `0 unit files listed`
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
@@ -150,10 +64,11 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 7. Full parity WARP + hardening baseline bot Telegram.
 8. Split menu bot Telegram antara Xray vs SSH untuk user management dan quota/access control.
 9. Ekspansi parity bot Telegram untuk `SSH`, `Security`, dan `Maintenance`.
-10. UI bot Telegram sekarang menyembunyikan action dangerous saat runtime policy mematikannya.
-11. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
-12. Edge Gateway (`go`) sekarang aktif live dan menjadi frontend publik `80/443`.
-13. BadVPN UDPGW sekarang terpasang sebagai fitur tambahan SSH dengan surface status/restart di `Maintenance`.
+10. Bot Telegram kini memakai flow menu-first `/menu` dengan `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops`.
+11. Bot Discord kini memakai model hybrid `/menu`, `/status`, `/notify`.
+12. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
+13. Edge Gateway (`go`) sekarang aktif live dan menjadi frontend publik `80/443`.
+14. BadVPN UDPGW sekarang terpasang sebagai fitur tambahan SSH dengan surface status/restart di `Maintenance`.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.

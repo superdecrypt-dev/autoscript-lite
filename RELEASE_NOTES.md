@@ -1,5 +1,60 @@
 # Release Notes
 
+## Rilis 2026-03-16 (Bot UX Refresh + Live E2E Revalidation)
+
+### Ringkasan
+Rilis ini merapikan peran dua bot agar lebih masuk akal untuk operasional harian: Telegram menjadi menu-first, sedangkan Discord menjadi hybrid menu interaktif dengan slash tipis. Setelah itu, `run.sh` divalidasi ulang penuh di host live memakai source lokal repo.
+
+### Perubahan Utama
+1. Telegram kini menu-first
+- entry point utama sekarang `/menu`
+- `/panel` sudah dihapus total
+- kategori utama Telegram kini:
+  - `Status`
+  - `Accounts`
+  - `QAC`
+  - `Domain`
+  - `Network`
+  - `Ops`
+- flow `Accounts` kini picker-first
+- flow `QAC` kini user-first dengan summary per-user
+- `Domain` dan `Ops` diringkas agar lebih enak dipakai dari HP
+
+2. Discord kini hybrid
+- slash publik Discord kini ringkas:
+  - `/menu`
+  - `/status`
+  - `/notify`
+- flow utama dipindah ke button, select menu, modal, dan konfirmasi
+- `/panel` dan slash publik lama untuk `/user`, `/qac`, `/domain`, `/network`, `/ops` sudah dipensiunkan
+- hybrid picker user kini mendukung paging
+- flow `Purge Messages` kembali mendukung target channel opsional dengan konfirmasi
+
+3. Naming dan hardening bot
+- naming legacy `xray-telegram-*` dan `xray-discord-*` sudah dibersihkan ke:
+  - `bot-telegram-*`
+  - `bot-discord-*`
+- flag dangerous actions sudah dihapus dari desain Telegram
+- validasi `Domain -> Set Auto` di Discord kini menolak input invalid secara tegas
+
+### Commit
+- `3c85652` — `refactor(bot-telegram): streamline menu-first flows`
+- `87de35f` — `refactor(bot-discord): adopt hybrid menu workflow`
+- `faab408` — `fix(bot-discord): improve hybrid picker and purge flows`
+- `7737dd9` — `fix(bot-discord): avoid duplicate menu custom ids`
+- `e1d827e` — `fix(bot-discord): tighten domain modal validation`
+
+### Hasil Validasi
+- Full E2E live `run.sh` pada `2026-03-16` -> PASS
+- domain aktif hasil rerun: `k8i2j.vyxara1.web.id`
+- `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
+- `nginx -t` -> PASS
+- sertifikat live yang disajikan untuk `k8i2j.vyxara1.web.id` valid sampai `Jun 13 2026`
+- smoke SSH WS:
+  - tokenless websocket -> `401 Unauthorized`
+  - token invalid -> `403 Forbidden`
+  - token valid -> `101 Switching Protocols`
+
 ## Rilis 2026-03-09 (BadVPN UDPGW Sebagai Fitur Tambahan SSH)
 
 ### Ringkasan

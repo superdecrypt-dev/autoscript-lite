@@ -226,40 +226,55 @@ Catatan:
 2. Gate 2: API Smoke (domain/service actions).
 3. Gate 3/3.1: Integration endpoint + auth guard.
 4. Gate 4: Negative/Failure (invalid param, unauthorized).
-5. Gate 5: Discord E2E server-side check (`/panel` terdaftar).
-6. Gate 6: Regression read-only menu 1-9.
+5. Gate 5: Discord E2E server-side check (`/menu`, `/status`, `/notify` terdaftar).
+6. Gate 6: Regression hybrid `/menu` untuk `Accounts`, `QAC`, `Domain`, `Network`, dan `Ops`.
 
 ### 4.2 E2E Manual di Discord (staging)
-1. Jalankan `/panel`.
-2. Klik beberapa button menu utama.
-3. Jalankan modal input (misal domain/user action aman).
-4. Pastikan response private dan tidak spam output panjang.
-5. Pastikan tidak ada warning deprecate untuk opsi ephemeral lama.
+1. Jalankan `/menu`.
+2. Pastikan dashboard utama menampilkan kategori `Accounts`, `QAC`, `Domain`, `Network`, dan `Ops`.
+3. Uji minimal satu flow button/select/modal pada `Accounts` atau `QAC`.
+4. Uji minimal satu flow aman pada `Domain`, `Network`, atau `Ops`.
+5. Pastikan response private dan tidak spam output panjang.
+6. Jalankan `/status` dan `/notify status` untuk memastikan slash tipis tetap sehat.
 
-### 4.3 Checklist Manual /panel (Rekomendasi Terbaru)
+### 4.3 Checklist Manual /menu (Rekomendasi Terbaru)
 Gunakan checklist ini saat regresi fitur bot terbaru:
 
-1. Menu status
-- `View Status`
-- `Run Xray Test`
-- `View TLS Info`
-- `Run Observe Snap`
-- `View Observe Stat`
-- `View Alert Log`
+1. Accounts
+- `Add User`
+- `Account Info`
+- `Delete User`
+- `Extend Expiry`
+- `Reset Password` (SSH)
 
-2. Menu domain
+2. QAC
+- pilih user lalu buka panel aksi
+- `Detail`
+- `Set Quota`
+- `Reset Used`
+
+3. Domain
 - `View Domain Info`
-- `Run Guard Check`
-- `View Guard Stat`
-- `Run Guard Renew`
 - `View Nginx Name`
+- `Set Domain Manual`
+- `Set Domain Auto`
 - `Refresh Accounts`
 
-3. Menu traffic
-- `View Overview`
-- `View Top Users` (isi limit)
-- `Search User` (isi query)
-- `Export JSON` (pastikan file attachment terkirim)
+4. Network
+- `DNS Summary`
+- `Set DNS Strategy`
+- `Domain Guard Status`
+- `Domain Guard Check`
+
+5. Ops
+- `Speedtest`
+- `Service Status`
+- `Traffic Overview`
+- `Traffic Top`
+- `Traffic Search`
+- `Export JSON`
+- `Restart Service`
+- `Purge Messages`
 
 Kriteria lulus:
 - Semua action mengembalikan respons dengan schema `ok/code/title/message`.
@@ -272,12 +287,12 @@ Contoh format ringkas:
 ```text
 Tanggal:
 Environment: staging
-Checklist: /panel manual (menu 1, 5, 9)
+Checklist: /menu manual (accounts, qac, domain, network, ops)
 
-1.overview: PASS
-1.xray_test: PASS
+accounts.add_user: PASS
+qac.detail: PASS
 ...
-9.export_json: PASS
+ops.export_json: PASS
 
 Total PASS:
 Total FAIL:
@@ -292,11 +307,10 @@ Sebelum promote ke production:
 3. Gate bot Discord sesuai target PASS.
 4. Gate bot Telegram (`bash bot-telegram/scripts/gate-all.sh`) PASS.
 5. Smoke runtime Telegram (`/opt/bot-telegram/scripts/smoke-test.sh`) PASS.
-6. Manual `/panel` Telegram minimal untuk menu `2`, `3`, `4`, `5`, `9`, `10` PASS.
-7. Action dangerous tersembunyi saat `ENABLE_DANGEROUS_ACTIONS=false`.
-8. Journal baru tidak membocorkan token bot.
-9. Bukti uji tersimpan (log/screenshot ringkas).
-10. Snapshot rollback tersedia.
+6. Manual `/menu` Telegram minimal untuk `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops` PASS.
+7. Journal baru tidak membocorkan token bot.
+8. Bukti uji tersimpan (log/screenshot ringkas).
+9. Snapshot rollback tersedia.
 
 ## 6. Pengujian Bot Telegram
 
@@ -319,7 +333,8 @@ curl -fsS --max-time 8 \
 
 Catatan:
 - Endpoint `/health` backend Telegram wajib header secret internal.
-- Default aman proyek ini adalah `ENABLE_DANGEROUS_ACTIONS=false`.
+- Entry point utama Telegram sekarang `/menu`; `/panel` tidak dipakai lagi.
+- Action mutasi dikendalikan lewat ACL admin Telegram, bukan lagi flag dangerous terpisah.
 - Action menu network tetap perlu diuji untuk regresi WARP parity.
 
 ### 6.1 Gate Wajib
@@ -330,10 +345,10 @@ Catatan:
    - `curl` ke `/api/main-menu` dengan header secret internal
 3. Verifikasi env aman:
    - `TELEGRAM_ADMIN_USER_IDS` atau `TELEGRAM_ADMIN_CHAT_IDS` terisi sesuai target
-   - `ENABLE_DANGEROUS_ACTIONS` sesuai mode uji
+   - `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=false` kecuali memang sedang uji bypass ACL
 4. Verifikasi ACL perilaku:
-   - kirim `/panel` dari akun admin -> harus diterima
-   - kirim `/panel` dari akun/chat yang tidak di-whitelist -> harus ditolak
+   - kirim `/menu` dari akun admin -> harus diterima
+   - kirim `/menu` dari akun/chat yang tidak di-whitelist -> harus ditolak
 5. Verifikasi log baru gateway tidak membocorkan token:
 
 ```bash
@@ -346,75 +361,60 @@ Ekspektasi:
 - akun/chat non-whitelist tidak bisa masuk panel.
 
 ### 6.2 E2E Manual Telegram (staging)
-1. Jalankan `/panel`.
+1. Jalankan `/menu`.
 2. Pastikan keyboard menu utama tampil penuh dan tidak ada button yang mati/error.
-3. Uji menu read-only aman berikut:
-   - status
-   - xray management
-   - ssh management
-   - xray qac
-   - ssh qac
-   - network
-   - domain control
-   - security
-   - maintenance
-4. Jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan button dangerous memang tidak muncul.
-5. Jika mode staging mengizinkan dangerous actions, uji satu action aman-berubah per area yang relevan, lalu rollback hasilnya.
-6. Jalankan `/cleanup`.
-7. Pastikan output tidak membocorkan token, shared secret, atau license/plain secret lain.
+3. Uji kategori inti berikut:
+   - `Status`
+   - `Accounts`
+   - `QAC`
+   - `Domain`
+   - `Network`
+   - `Ops`
+4. Uji minimal satu action aman-berubah dari `Accounts`, `QAC`, `Domain`, atau `Ops`, lalu rollback hasilnya.
+5. Jalankan `/cleanup`.
+6. Pastikan output tidak membocorkan token, shared secret, atau secret sensitif lain.
 
-### 6.3 Checklist Manual /panel (Rekomendasi Terbaru)
+### 6.3 Checklist Manual /menu (Rekomendasi Terbaru)
 Gunakan checklist ini saat regresi menu Telegram:
 
-1. Menu status
+1. Status
 - `Overview`
 - `Run Xray Test`
 - `View TLS Info`
 
-2. Menu xray management
-- `List Managed Users`
-- `Search User`
-- `View Account Info`
+2. Accounts
+- `Xray Users -> View Account Info`
+- `Xray Users -> Delete User`
+- `SSH Users -> View Account Info`
+- `SSH Users -> Extend Expiry`
+- `SSH Users -> Reset Password`
 
-3. Menu ssh management
-- `List Managed SSH Users`
-- `View Account Info`
-- `Active SSH Sessions`
-- `SSH WS Service Status`
-- `Edge Gateway Status`
+3. QAC
+- `Xray QAC -> pilih user -> Detail`
+- `Xray QAC -> pilih user -> Set Quota`
+- `SSH QAC -> pilih user -> Detail`
+- `SSH QAC -> pilih user -> Set Quota`
 
-4. Menu xray qac
-- `Summary`
-- `Detail` untuk satu user
-
-5. Menu ssh qac
-- `Summary`
-- `Detail` untuk satu user
-
-6. Menu network
-- `View WARP Status`
-- `View WARP Tier`
-- jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan action setter/toggle tidak muncul
-
-7. Menu domain control
+4. Domain
 - `View Domain Info`
-- `View Nginx Name`
-
-8. Menu security
-- `Security Overview`
 - `TLS Certificate Info`
-- `Fail2ban Overview`
+- `Set Domain Manual`
+- `Set Domain Auto`
+- `Refresh Accounts`
+- `Renew Cert`
 
-9. Menu maintenance
-- `SSH WS Diagnostics`
-- `SSH WS Status`
-- `Edge Gateway Status`
-- `Edge Gateway Info`
-- `Daemon Status`
+5. Network
+- `Adblock Status`
+- `DNS Summary`
+- `Domain Guard Status`
+- `Domain Guard Check`
 
-10. Menu backup/restore
+6. Ops
+- `View Ops Status`
+- `Run Speedtest`
+- `Traffic Overview`
+- `Restart Service`
 - `List Backups`
-- jika `ENABLE_DANGEROUS_ACTIONS=false`, pastikan create/restore tidak muncul
 
 ### 6.4 Kriteria Lulus Telegram
 - Semua action mengembalikan schema `ok/code/title/message`.
@@ -422,7 +422,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 - Tidak ada crash service `bot-telegram-backend` dan `bot-telegram-gateway`.
 - ACL admin berjalan sesuai env (`TELEGRAM_ADMIN_*`).
 - Akun/chat non-whitelist ditolak konsisten.
-- Action dangerous benar-benar tersembunyi saat `ENABLE_DANGEROUS_ACTIONS=false`.
+- Navigasi `Back`/`Cancel` menjaga konteks picker dan halaman saat kembali.
 - Journal baru gateway tidak lagi menulis URL Telegram yang mengandung token.
 
 ## 7. Format Laporan Singkat
@@ -451,8 +451,7 @@ Bot Telegram:
 - Gate all: PASS/FAIL
 - Smoke runtime: PASS/FAIL
 - ACL whitelist/non-whitelist: PASS/FAIL
-- Manual `/panel` menu 2/3/4/5/9/10: PASS/FAIL
-- Hidden dangerous actions: PASS/FAIL
+- Manual `/menu` core categories: PASS/FAIL
 - Log hygiene: PASS/FAIL
 
 Catatan risiko:
