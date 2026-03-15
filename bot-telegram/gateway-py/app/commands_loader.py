@@ -26,6 +26,7 @@ class ActionSpec:
     mode: str
     confirm: bool
     dangerous: bool
+    target_menu: str | None
     modal: ModalSpec | None
 
 
@@ -34,6 +35,8 @@ class MenuSpec:
     id: str
     label: str
     description: str
+    hidden: bool
+    parent_menu: str | None
     actions: tuple[ActionSpec, ...]
 
 
@@ -108,6 +111,9 @@ class CommandCatalog:
                         mode=str(raw_action.get("mode") or "direct").strip().lower(),
                         confirm=bool(raw_action.get("confirm", False)),
                         dangerous=bool(raw_action.get("dangerous", False)),
+                        target_menu=(
+                            str(raw_action.get("target_menu") or "").strip() or None
+                        ),
                         modal=modal,
                     )
                 )
@@ -117,6 +123,10 @@ class CommandCatalog:
                     id=menu_id,
                     label=str(raw_menu.get("label") or f"Menu {menu_id}"),
                     description=str(raw_menu.get("description") or "").strip(),
+                    hidden=bool(raw_menu.get("hidden", False)),
+                    parent_menu=(
+                        str(raw_menu.get("parent_menu") or "").strip() or None
+                    ),
                     actions=tuple(actions),
                 )
             )

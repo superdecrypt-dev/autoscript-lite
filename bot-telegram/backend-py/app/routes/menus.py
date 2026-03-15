@@ -55,6 +55,22 @@ def _filter_commands_payload(payload: dict) -> dict:
     return payload_copy
 
 
+def _visible_menu_count(payload: dict) -> int:
+    menus = payload.get("menus")
+    if not isinstance(menus, list):
+        return 0
+    count = 0
+    for raw_menu in menus:
+        if not isinstance(raw_menu, dict):
+            continue
+        if bool(raw_menu.get("hidden", False)):
+            continue
+        if not isinstance(raw_menu.get("actions"), list) or not raw_menu.get("actions"):
+            continue
+        count += 1
+    return count
+
+
 @router.get("/api/menus", dependencies=[Depends(verify_shared_secret)])
 def get_menus() -> dict:
     settings = get_settings()
@@ -68,7 +84,7 @@ def get_main_menu_overview() -> dict:
     return {
         "mode": "standalone",
         "mutations_enabled": settings.mutations_enabled,
-        "menu_count": len(data.get("menus", [])),
+        "menu_count": _visible_menu_count(data),
         "menus": data.get("menus", []),
     }
 

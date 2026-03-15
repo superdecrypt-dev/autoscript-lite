@@ -72,14 +72,14 @@ def _mask_param_if_sensitive(key: str, value: str, *, allow_password: bool = Fal
 
 def main_menu_text(hostname: str, menu_count: int) -> str:
     lines = [
-        "<b>XRAY TELEGRAM CONTROL</b>",
-        "Panel standalone untuk kontrol VPS.",
+        "<b>AUTOSCRIPT TELEGRAM CONTROL</b>",
+        "Panel mobile untuk kontrol VPS.",
         "",
         f"• Host: <code>{html.escape(hostname)}</code>",
-        f"• Menu aktif: <code>{menu_count}</code>",
+        f"• Kategori aktif: <code>{menu_count}</code>",
         f"• Updated: <code>{now_utc_text()}</code>",
         "",
-        "Pilih menu di bawah:",
+        "Pilih kategori di bawah:",
     ]
     return "\n".join(lines)
 
@@ -96,14 +96,46 @@ def menu_text(menu: MenuSpec, page: int, total_pages: int) -> str:
     return "\n".join(lines)
 
 
-def action_form_prompt(menu: MenuSpec, action: ActionSpec, field: FieldSpec, idx: int, total: int) -> str:
+def _target_identity(menu: MenuSpec, params: dict[str, str] | None = None) -> str:
+    payload = params if isinstance(params, dict) else {}
+    username = str(payload.get("username") or "").strip()
+    proto = str(payload.get("proto") or "").strip().lower()
+
+    if menu.id == "24" and username and proto:
+        return f"{username}@{proto}"
+    if menu.id == "25" and username:
+        return username
+    return ""
+
+
+def action_form_prompt(
+    menu: MenuSpec,
+    action: ActionSpec,
+    field: FieldSpec,
+    idx: int,
+    total: int,
+    *,
+    params: dict[str, str] | None = None,
+) -> str:
     lines = [
         f"<b>{html.escape(menu.label)} · {html.escape(action.label)}</b>",
         f"Input <code>{idx}/{total}</code>",
         "",
-        f"Field: <code>{html.escape(field.id)}</code>",
-        f"Label: {html.escape(field.label)}",
     ]
+    target = _target_identity(menu, params)
+    if target:
+        lines.extend(
+            [
+                f"User: <code>{html.escape(target)}</code>",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"Field: <code>{html.escape(field.id)}</code>",
+        f"Label: {html.escape(field.label)}",
+        ]
+    )
     if field.placeholder:
         lines.append(f"Contoh: <code>{html.escape(field.placeholder)}</code>")
     if field.required:
@@ -116,17 +148,35 @@ def action_form_prompt(menu: MenuSpec, action: ActionSpec, field: FieldSpec, idx
 
 
 def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> str:
-    allow_password = menu.id == "2"
+    allow_password = menu.label.strip().lower().startswith("ssh users")
     lines = [
         f"<b>Konfirmasi: {html.escape(menu.label)} · {html.escape(action.label)}</b>",
         "",
     ]
-    if not params:
+    target = _target_identity(menu, params)
+    if target:
+        lines.append(f"User: <code>{html.escape(target)}</code>")
+        lines.append("")
+
+    display_params = params
+    if menu.id in {"24", "25"}:
+        display_params = {
+            key: value
+            for key, value in params.items()
+            if key not in {"proto", "username"}
+        }
+
+    if not display_params:
         lines.append("Tanpa parameter.")
     else:
         lines.append(
             as_pre(
-                "\n".join([f"{k}={_mask_param_if_sensitive(k, v, allow_password=allow_password)}" for k, v in params.items()]),
+                "\n".join(
+                    [
+                        f"{k}={_mask_param_if_sensitive(k, v, allow_password=allow_password)}"
+                        for k, v in display_params.items()
+                    ]
+                ),
                 max_len=1200,
             )
         )

@@ -6,10 +6,10 @@ Bot Telegram ini adalah pelengkap CLI `manage.sh`, berjalan standalone di `/opt/
 - Panel Telegram untuk action yang setara menu operasional `manage.sh`.
 - Tidak menjalankan `manage.sh` secara langsung dari bot.
 - Menggunakan backend API lokal (`backend-py`) + gateway Telegram (`gateway-py`).
-- Fokus parity saat ini mencakup area `Xray`, `SSH`, `Quota & Access Control`, `Network` termasuk `Adblock`, `Security`, dan `Maintenance`.
+- Fokus parity saat ini mencakup area `Accounts`, `QAC`, `Status`, `Domain`, `Network`, dan `Ops`.
 
 ## Struktur
-- `backend-py/`: FastAPI service action menu operasional Telegram (status, user, quota, network, domain, speedtest, security, maintenance, traffic analytics, backup/restore).
+- `backend-py/`: FastAPI service action menu operasional Telegram.
 - `gateway-py/`: Bot Telegram berbasis `python-telegram-bot`.
 - `shared/commands.json`: definisi menu/action.
 - `systemd/`: template unit backend/gateway/monitor.
@@ -29,30 +29,29 @@ Dikelola di `/etc/bot-telegram/bot.env`:
 - `COMMANDS_FILE`
 
 ## Ringkasan Menu
-Menu bot Telegram saat ini mengikuti struktur operasional CLI pada area inti:
-- `1) Xray Users`
-- `2) SSH Users`
-- `3) Xray QAC`
-- `4) SSH QAC`
+Menu bot Telegram tahap ini memakai kategori utama:
+- `1) Status`
+- `2) Accounts`
+- `3) QAC`
+- `4) Domain`
 - `5) Network`
-- `6) Domain Control`
-- `7) Speedtest`
-- `8) Security`
-- `10) Traffic`
+- `6) Ops`
 
-Menu tambahan khusus bot:
-- `11) Status, Diagnostics & Maintenance`
-- `12) Backup/Restore`
+Submenu internal yang dipakai di balik kategori:
+- `Accounts` -> `Xray Users`, `SSH Users`
+- `QAC` -> `Xray QAC`, `SSH QAC`
+- `Domain` -> action langsung untuk `Domain Info`, `TLS`, `Set Domain`, `Refresh Accounts`, `Renew Cert`, plus submenu `Security Tools`
+- `Ops` -> action langsung untuk status operasional, speedtest, traffic overview, restart inti, dan backup, plus submenu `Speedtest Tools`, `Traffic Tools`, `Service Tools`, dan `Backup Tools`
 
 Catatan perilaku:
 - Callback stale untuk action sensitif tetap ditolak aman oleh gateway.
-- Menu `2) SSH Users` sudah mencakup `SSH WS Service Status`, `Restart SSH WS Stack`, dan `Active SSHWS Sessions`.
-- Menu `5) Network` sudah mencakup `WARP`, `DNS`, dan `Adblock` termasuk status, source list, update, enable/disable, serta auto update.
-- Menu `6) Domain Control` kini mencakup set domain manual/auto, set domain ringan tanpa wizard cert, guard, dan refresh account info.
-- Menu `8) Security` dan `11) Status, Diagnostics & Maintenance` kini lebih dekat ke CLI untuk TLS info/renew/reload, fail2ban, hardening, daemon, `wireproxy`, `edge gateway`, `BadVPN`, log, dan `SSHWS diagnostics`.
+- `Status` fokus ke ringkasan host, TLS, validasi Xray, dan status runtime inti.
+- `Network` mencakup `WARP`, `DNS`, dan `Adblock` termasuk status, source list, update, enable/disable, serta auto update.
+- `Domain` memusatkan action domain yang paling sering dipakai langsung di satu layar, sementara tool yang lebih teknis dipindah ke `Security Tools`.
+- `Ops` memusatkan aksi operasional yang paling sering dipakai langsung di satu layar, sementara tool yang lebih detail dipisah ke submenu yang lebih spesifik.
 
-## Backup/Restore (Menu 12)
-Fitur `12) Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`.
+## Backup/Restore
+Fitur `Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`. Pada struktur baru, fitur ini diakses lewat kategori `Ops`.
 
 Scope file yang dibackup:
 - `/usr/local/etc/xray/conf.d` (seluruh file konfigurasi Xray)

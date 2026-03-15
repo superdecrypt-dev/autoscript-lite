@@ -1,9 +1,9 @@
 {
   "menus": [
     {
-      "id": "11",
-      "label": "Status, Diagnostics & Maintenance",
-      "description": "Status server, validasi konfigurasi, informasi TLS, layanan, logs, dan restart maintenance.",
+      "id": "1",
+      "label": "Status",
+      "description": "Ringkasan host, validasi Xray, TLS, dan status runtime inti.",
       "actions": [
         {
           "id": "overview",
@@ -24,44 +24,8 @@
           "style": "secondary"
         },
         {
-          "id": "restart_xray",
-          "label": "Restart Xray",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_nginx",
-          "label": "Restart Nginx",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_all",
-          "label": "Restart All",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "xray_logs",
-          "label": "View Xray Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "nginx_logs",
-          "label": "View Nginx Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "wireproxy_status",
-          "label": "Wireproxy Status",
+          "id": "daemon_status",
+          "label": "Daemon Status",
           "mode": "direct",
           "style": "secondary"
         },
@@ -72,1068 +36,201 @@
           "style": "secondary"
         },
         {
-          "id": "badvpn_status",
-          "label": "BadVPN Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_wireproxy",
-          "label": "Restart Wireproxy",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_edge_gateway",
-          "label": "Restart Edge Gateway",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_badvpn",
-          "label": "Restart BadVPN",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "daemon_status",
-          "label": "Daemon Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_xray_daemons",
-          "label": "Restart Xray Daemons",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "xray_daemon_logs",
-          "label": "Xray Daemon Logs",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
           "id": "sshws_status",
           "label": "SSH WS Status",
           "mode": "direct",
           "style": "secondary"
-        },
-        {
-          "id": "restart_sshws_stack",
-          "label": "Restart SSHWS Stack",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "sshws_diagnostics",
-          "label": "SSHWS Diagnostics",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "sshws_combined_logs",
-          "label": "SSHWS Combined Logs",
-          "mode": "direct",
-          "style": "secondary"
-        }
-      ]
-    },
-    {
-      "id": "1",
-      "label": "Xray Users",
-      "description": "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
-      "actions": [
-        {
-          "id": "add_user",
-          "label": "Add User",
-          "mode": "modal",
-          "style": "success",
-          "modal": {
-            "title": "Add Xray User",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              },
-              {
-                "id": "days",
-                "label": "Masa Aktif (hari)",
-                "style": "short",
-                "required": true,
-                "placeholder": "30"
-              },
-              {
-                "id": "quota_gb",
-                "label": "Quota (GB)",
-                "style": "short",
-                "required": true,
-                "placeholder": "100"
-              },
-              {
-                "id": "ip_limit",
-                "label": "IP/Login Limit",
-                "style": "short",
-                "required": false,
-                "placeholder": "0 = OFF"
-              },
-              {
-                "id": "speed_limit_enabled",
-                "label": "Speed Limit (opsional)",
-                "style": "short",
-                "required": false,
-                "placeholder": "on/off"
-              },
-              {
-                "id": "speed_down_mbit",
-                "label": "Speed Download Mbps",
-                "style": "short",
-                "required": false,
-                "placeholder": "contoh: 20"
-              },
-              {
-                "id": "speed_up_mbit",
-                "label": "Speed Upload Mbps",
-                "style": "short",
-                "required": false,
-                "placeholder": "contoh: 10"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "delete_user",
-          "label": "Delete User",
-          "mode": "modal",
-          "style": "danger",
-          "confirm": true,
-          "modal": {
-            "title": "Delete Xray User",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "extend_expiry",
-          "label": "Set User Expiry",
-          "mode": "modal",
-          "style": "primary",
-          "modal": {
-            "title": "Extend/Set Xray Expiry",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              },
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "extend / set"
-              },
-              {
-                "id": "value",
-                "label": "Value",
-                "style": "short",
-                "required": true,
-                "placeholder": "7 atau 2026-12-31"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "list_users",
-          "label": "View User List",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "search_user",
-          "label": "Search User",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Search User",
-            "fields": [
-              {
-                "id": "query",
-                "label": "Username Query",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
-        },
-        {
-          "id": "account_info",
-          "label": "View Account Info",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Xray Account Info",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
         }
       ]
     },
     {
       "id": "2",
-      "label": "SSH Users",
-      "description": "Kelola akun SSH, masa aktif, password, sesi SSHWS, dan informasi akun.",
+      "label": "Accounts",
+      "description": "Kelola akun Xray dan SSH melalui submenu yang lebih rapi.",
       "actions": [
         {
-          "id": "add_user",
-          "label": "Add User",
-          "mode": "modal",
-          "style": "success",
-          "modal": {
-            "title": "Add SSH User",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              },
-              {
-                "id": "password",
-                "label": "Password SSH",
-                "style": "short",
-                "required": true,
-                "placeholder": "password SSH wajib diisi"
-              },
-              {
-                "id": "days",
-                "label": "Masa Aktif (hari)",
-                "style": "short",
-                "required": true,
-                "placeholder": "30"
-              },
-              {
-                "id": "quota_gb",
-                "label": "Quota (GB)",
-                "style": "short",
-                "required": true,
-                "placeholder": "100"
-              },
-              {
-                "id": "ip_limit",
-                "label": "IP/Login Limit",
-                "style": "short",
-                "required": false,
-                "placeholder": "0 = OFF"
-              },
-              {
-                "id": "speed_limit_enabled",
-                "label": "Speed Limit (opsional)",
-                "style": "short",
-                "required": false,
-                "placeholder": "on/off"
-              },
-              {
-                "id": "speed_down_mbit",
-                "label": "Speed Download Mbps",
-                "style": "short",
-                "required": false,
-                "placeholder": "contoh: 20"
-              },
-              {
-                "id": "speed_up_mbit",
-                "label": "Speed Upload Mbps",
-                "style": "short",
-                "required": false,
-                "placeholder": "contoh: 10"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "delete_user",
-          "label": "Delete User",
-          "mode": "modal",
-          "style": "danger",
-          "confirm": true,
-          "modal": {
-            "title": "Delete SSH User",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "extend_expiry",
-          "label": "Set User Expiry",
-          "mode": "modal",
+          "id": "open_xray_users",
+          "label": "Xray Users",
+          "mode": "menu",
           "style": "primary",
-          "modal": {
-            "title": "Extend/Set SSH Expiry",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              },
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "extend / set"
-              },
-              {
-                "id": "value",
-                "label": "Value",
-                "style": "short",
-                "required": true,
-                "placeholder": "7 atau 2026-12-31"
-              }
-            ]
-          },
-          "dangerous": true
+          "target_menu": "22"
         },
         {
-          "id": "reset_password",
-          "label": "Reset SSH Password",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Reset SSH Password",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              },
-              {
-                "id": "password",
-                "label": "Password Baru",
-                "style": "short",
-                "required": true,
-                "placeholder": "password SSH baru"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "list_users",
-          "label": "View User List",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "sshws_status",
-          "label": "SSH WS Service Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_sshws_stack",
-          "label": "Restart SSH WS Stack",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "active_sshws_sessions",
-          "label": "Active SSHWS Sessions",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "search_user",
-          "label": "Search User",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Search User",
-            "fields": [
-              {
-                "id": "query",
-                "label": "Username Query",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
-        },
-        {
-          "id": "account_info",
-          "label": "View Account Info",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "SSH Account Info",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
+          "id": "open_ssh_users",
+          "label": "SSH Users",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "23"
         }
       ]
     },
     {
       "id": "3",
-      "label": "Xray QAC",
-      "description": "Ringkasan kuota dan kontrol akses per pengguna Xray.",
+      "label": "QAC",
+      "description": "Quota, IP/Login limit, dan speed limit untuk Xray maupun SSH.",
       "actions": [
         {
-          "id": "summary",
-          "label": "View Quota Summary",
-          "mode": "direct",
-          "style": "primary"
+          "id": "open_xray_qac",
+          "label": "Xray QAC",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "24"
         },
         {
-          "id": "detail",
-          "label": "View Quota Detail",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Xray Quota Detail",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
-        },
-        {
-          "id": "set_quota_limit",
-          "label": "Set Quota Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Xray Quota Limit",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "quota_gb",
-                "label": "Quota GB",
-                "style": "short",
-                "required": true,
-                "placeholder": "100"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "reset_quota_used",
-          "label": "Reset Quota Used",
-          "mode": "modal",
-          "style": "danger",
-          "confirm": true,
-          "modal": {
-            "title": "Reset Xray Quota Used",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "manual_block",
-          "label": "Toggle Manual Block",
-          "mode": "modal",
-          "style": "danger",
-          "modal": {
-            "title": "Xray Manual Block",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "ip_limit_enable",
-          "label": "Toggle IP/Login Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Xray IP/Login Limit Enable/Disable",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_ip_limit",
-          "label": "Set IP/Login Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Xray IP/Login Limit",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "ip_limit",
-                "label": "IP/Login Limit",
-                "style": "short",
-                "required": true,
-                "placeholder": "2"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "unlock_ip_lock",
-          "label": "Unlock IP Lock",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Unlock Xray IP Lock",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_speed_download",
-          "label": "Set Speed Download",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Xray Speed Download",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "speed_down_mbit",
-                "label": "Speed Down Mbps",
-                "style": "short",
-                "required": true,
-                "placeholder": "20"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_speed_upload",
-          "label": "Set Speed Upload",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Xray Speed Upload",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "speed_up_mbit",
-                "label": "Speed Up Mbps",
-                "style": "short",
-                "required": true,
-                "placeholder": "10"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "speed_limit",
-          "label": "Toggle Speed Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Xray Speed Limit Enable/Disable",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
-          "dangerous": true
+          "id": "open_ssh_qac",
+          "label": "SSH QAC",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "25"
         }
       ]
     },
     {
       "id": "4",
-      "label": "SSH QAC",
-      "description": "Ringkasan quota dan kontrol akses per akun SSH.",
+      "label": "Domain",
+      "description": "Kontrol domain aktif, sertifikat TLS, refresh account info, dan health domain.",
       "actions": [
         {
-          "id": "summary",
-          "label": "View Quota Summary",
+          "id": "domain_info",
+          "label": "View Domain Info",
           "mode": "direct",
           "style": "primary"
         },
         {
-          "id": "detail",
-          "label": "View Quota Detail",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "SSH Quota Detail",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: alice"
-              }
-            ]
-          }
+          "id": "tls_info",
+          "label": "TLS Certificate Info",
+          "mode": "direct",
+          "style": "secondary"
         },
         {
-          "id": "set_quota_limit",
-          "label": "Set Quota Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set SSH Quota Limit",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "quota_gb",
-                "label": "Quota GB",
-                "style": "short",
-                "required": true,
-                "placeholder": "100"
-              }
-            ]
-          },
-          "dangerous": true
+          "id": "tls_expiry",
+          "label": "TLS Expiry",
+          "mode": "direct",
+          "style": "secondary"
         },
         {
-          "id": "reset_quota_used",
-          "label": "Reset Quota Used",
+          "id": "setup_domain_custom",
+          "label": "Set Domain Manual",
           "mode": "modal",
           "style": "danger",
           "confirm": true,
           "modal": {
-            "title": "Reset SSH Quota Used",
+            "title": "Set Domain Manual",
             "fields": [
               {
-                "id": "username",
-                "label": "Username",
+                "id": "domain",
+                "label": "Domain (FQDN)",
                 "style": "short",
                 "required": true,
-                "placeholder": "alice"
+                "placeholder": "vpn.example.com"
               }
             ]
           },
           "dangerous": true
         },
         {
-          "id": "manual_block",
-          "label": "Toggle Manual Block",
+          "id": "setup_domain_cloudflare",
+          "label": "Set Domain Auto",
           "mode": "modal",
+          "style": "primary",
+          "confirm": true,
+          "modal": {
+            "title": "Set Domain Auto (API Cloudflare)",
+            "fields": [
+              {
+                "id": "root_domain",
+                "label": "Root Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              },
+              {
+                "id": "subdomain_mode",
+                "label": "Subdomain Mode",
+                "style": "short",
+                "required": false,
+                "placeholder": "auto / manual (default: auto)"
+              },
+              {
+                "id": "subdomain",
+                "label": "Subdomain",
+                "style": "short",
+                "required": false,
+                "placeholder": "Isi jika mode manual, contoh: vpn01"
+              },
+              {
+                "id": "proxied",
+                "label": "Cloudflare Proxy",
+                "style": "short",
+                "required": false,
+                "placeholder": "on / off (default: off)"
+              },
+              {
+                "id": "allow_existing_same_ip",
+                "label": "Lanjut jika ada A record dengan IP sama?",
+                "style": "short",
+                "required": false,
+                "placeholder": "on / off (default: off)"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "refresh_account_info",
+          "label": "Refresh Accounts",
+          "mode": "direct",
+          "style": "secondary",
+          "dangerous": true
+        },
+        {
+          "id": "renew_cert",
+          "label": "Renew Cert",
+          "mode": "direct",
           "style": "danger",
-          "modal": {
-            "title": "SSH Manual Block",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
+          "confirm": true,
           "dangerous": true
         },
         {
-          "id": "ip_limit_enable",
-          "label": "Toggle IP/Login Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "SSH IP/Login Limit Enable/Disable",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
+          "id": "domain_guard_status",
+          "label": "View Guard Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "domain_guard_check",
+          "label": "Run Guard Check",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "domain_guard_renew",
+          "label": "Run Guard Renew",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
           "dangerous": true
         },
         {
-          "id": "set_ip_limit",
-          "label": "Set IP/Login Limit",
-          "mode": "modal",
+          "id": "nginx_server_name",
+          "label": "View Nginx Name",
+          "mode": "direct",
           "style": "secondary",
-          "modal": {
-            "title": "Set SSH IP/Login Limit",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "ip_limit",
-                "label": "IP/Login Limit",
-                "style": "short",
-                "required": true,
-                "placeholder": "2"
-              }
-            ]
-          },
-          "dangerous": true
+          "dangerous": false
         },
         {
-          "id": "unlock_ip_lock",
-          "label": "Unlock IP Lock",
-          "mode": "modal",
+          "id": "open_domain_security_tools",
+          "label": "Security Tools",
+          "mode": "menu",
           "style": "secondary",
-          "modal": {
-            "title": "Unlock SSH IP Lock",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_speed_download",
-          "label": "Set Speed Download",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set SSH Speed Download",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "speed_down_mbit",
-                "label": "Speed Down Mbps",
-                "style": "short",
-                "required": true,
-                "placeholder": "20"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_speed_upload",
-          "label": "Set Speed Upload",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set SSH Speed Upload",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "speed_up_mbit",
-                "label": "Speed Up Mbps",
-                "style": "short",
-                "required": true,
-                "placeholder": "10"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "speed_limit",
-          "label": "Toggle Speed Limit",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "SSH Speed Limit Enable/Disable",
-            "fields": [
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "enabled",
-                "label": "Enabled",
-                "style": "short",
-                "required": true,
-                "placeholder": "on / off"
-              }
-            ]
-          },
-          "dangerous": true
+          "target_menu": "27"
         }
       ]
     },
     {
       "id": "5",
       "label": "Network",
-      "description": "Ringkasan routing WARP, DNS, dan status network.",
+      "description": "WARP, DNS, Adblock, dan kontrol jaringan lain yang aktif.",
       "actions": [
         {
           "id": "warp_status",
@@ -1516,9 +613,1099 @@
     },
     {
       "id": "6",
-      "label": "Domain Control",
-      "description": "Atur domain aktif + sertifikat.\nManual: pakai domain sendiri yang sudah pointing ke IP VPS.\nAuto: pakai root domain bawaan sistem (subdomain dibuat otomatis via API Cloudflare).",
+      "label": "Ops",
+      "description": "Operasi cepat untuk speedtest, traffic, restart service inti, dan backup.",
       "actions": [
+        {
+          "id": "service_status",
+          "label": "View Ops Status",
+          "mode": "direct",
+          "style": "primary",
+          "dangerous": false
+        },
+        {
+          "id": "run",
+          "label": "Run Speedtest",
+          "mode": "direct",
+          "style": "primary",
+          "dangerous": false
+        },
+        {
+          "id": "overview",
+          "label": "Traffic Overview",
+          "mode": "direct",
+          "style": "secondary",
+          "dangerous": false
+        },
+        {
+          "id": "restart_xray",
+          "label": "Restart Xray",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_nginx",
+          "label": "Restart Nginx",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_edge_gateway",
+          "label": "Restart Edge Gateway",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "create_backup",
+          "label": "Create Backup",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "list_backups",
+          "label": "List Backups",
+          "mode": "direct",
+          "style": "secondary",
+          "dangerous": false
+        },
+        {
+          "id": "open_speedtest_tools",
+          "label": "Speedtest Tools",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "29"
+        },
+        {
+          "id": "open_traffic_tools",
+          "label": "Traffic Tools",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "30"
+        },
+        {
+          "id": "open_service_tools",
+          "label": "Service Tools",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "31"
+        },
+        {
+          "id": "open_backup_tools",
+          "label": "Backup Tools",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "32"
+        }
+      ]
+    },
+    {
+      "id": "22",
+      "label": "Xray Users",
+      "description": "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
+      "actions": [
+        {
+          "id": "add_user",
+          "label": "Add User",
+          "mode": "modal",
+          "style": "success",
+          "modal": {
+            "title": "Add Xray User",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "days",
+                "label": "Masa Aktif (hari)",
+                "style": "short",
+                "required": true,
+                "placeholder": "30"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota (GB)",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit",
+                "style": "short",
+                "required": false,
+                "placeholder": "0 = OFF"
+              },
+              {
+                "id": "speed_limit_enabled",
+                "label": "Speed Limit (opsional)",
+                "style": "short",
+                "required": false,
+                "placeholder": "on/off"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Download Mbps",
+                "style": "short",
+                "required": false,
+                "placeholder": "contoh: 20"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Upload Mbps",
+                "style": "short",
+                "required": false,
+                "placeholder": "contoh: 10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_user",
+          "label": "Delete User",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Delete Xray User",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "extend_expiry",
+          "label": "Set User Expiry",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Extend/Set Xray Expiry",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "extend / set"
+              },
+              {
+                "id": "value",
+                "label": "Value",
+                "style": "short",
+                "required": true,
+                "placeholder": "7 atau 2026-12-31"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "list_users",
+          "label": "View User List",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "search_user",
+          "label": "Search User",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Search User",
+            "fields": [
+              {
+                "id": "query",
+                "label": "Username Query",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "account_info",
+          "label": "View Account Info",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Xray Account Info",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "2"
+    },
+    {
+      "id": "23",
+      "label": "SSH Users",
+      "description": "Kelola akun SSH, masa aktif, password, sesi SSHWS, dan informasi akun.",
+      "actions": [
+        {
+          "id": "add_user",
+          "label": "Add User",
+          "mode": "modal",
+          "style": "success",
+          "modal": {
+            "title": "Add SSH User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "password",
+                "label": "Password SSH",
+                "style": "short",
+                "required": true,
+                "placeholder": "password SSH wajib diisi"
+              },
+              {
+                "id": "days",
+                "label": "Masa Aktif (hari)",
+                "style": "short",
+                "required": true,
+                "placeholder": "30"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota (GB)",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit",
+                "style": "short",
+                "required": false,
+                "placeholder": "0 = OFF"
+              },
+              {
+                "id": "speed_limit_enabled",
+                "label": "Speed Limit (opsional)",
+                "style": "short",
+                "required": false,
+                "placeholder": "on/off"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Download Mbps",
+                "style": "short",
+                "required": false,
+                "placeholder": "contoh: 20"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Upload Mbps",
+                "style": "short",
+                "required": false,
+                "placeholder": "contoh: 10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_user",
+          "label": "Delete User",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Delete SSH User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "extend_expiry",
+          "label": "Set User Expiry",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Extend/Set SSH Expiry",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "extend / set"
+              },
+              {
+                "id": "value",
+                "label": "Value",
+                "style": "short",
+                "required": true,
+                "placeholder": "7 atau 2026-12-31"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_password",
+          "label": "Reset SSH Password",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Reset SSH Password",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              },
+              {
+                "id": "password",
+                "label": "Password Baru",
+                "style": "short",
+                "required": true,
+                "placeholder": "password SSH baru"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "list_users",
+          "label": "View User List",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "sshws_status",
+          "label": "SSH WS Service Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_sshws_stack",
+          "label": "Restart SSH WS Stack",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "active_sshws_sessions",
+          "label": "Active SSHWS Sessions",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "search_user",
+          "label": "Search User",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Search User",
+            "fields": [
+              {
+                "id": "query",
+                "label": "Username Query",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "account_info",
+          "label": "View Account Info",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH Account Info",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "2"
+    },
+    {
+      "id": "24",
+      "label": "Xray QAC",
+      "description": "Ringkasan kuota dan kontrol akses per pengguna Xray.",
+      "actions": [
+        {
+          "id": "detail",
+          "label": "Detail",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Xray Quota Detail",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "set_quota_limit",
+          "label": "Set Quota",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Xray Quota Limit",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota GB",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_quota_used",
+          "label": "Reset Used",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Reset Xray Quota Used",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "manual_block",
+          "label": "Block / Unblock",
+          "mode": "modal",
+          "style": "danger",
+          "modal": {
+            "title": "Xray Manual Block",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "ip_limit_enable",
+          "label": "Toggle IP/Login",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Xray IP/Login Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_ip_limit",
+          "label": "Set IP/Login",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Xray IP/Login Limit",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit",
+                "style": "short",
+                "required": true,
+                "placeholder": "2"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "unlock_ip_lock",
+          "label": "Unlock IP Lock",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Unlock Xray IP Lock",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_download",
+          "label": "Set Speed Down",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Xray Speed Download",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Down Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "20"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_upload",
+          "label": "Set Speed Up",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Xray Speed Upload",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Up Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "speed_limit",
+          "label": "Toggle Speed",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Xray Speed Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "3"
+    },
+    {
+      "id": "25",
+      "label": "SSH QAC",
+      "description": "Ringkasan quota dan kontrol akses per akun SSH.",
+      "actions": [
+        {
+          "id": "detail",
+          "label": "Detail",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH Quota Detail",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "set_quota_limit",
+          "label": "Set Quota",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Quota Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota GB",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_quota_used",
+          "label": "Reset Used",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Reset SSH Quota Used",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "manual_block",
+          "label": "Block / Unblock",
+          "mode": "modal",
+          "style": "danger",
+          "modal": {
+            "title": "SSH Manual Block",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "ip_limit_enable",
+          "label": "Toggle IP/Login",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH IP/Login Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_ip_limit",
+          "label": "Set IP/Login",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH IP/Login Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP/Login Limit",
+                "style": "short",
+                "required": true,
+                "placeholder": "2"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "unlock_ip_lock",
+          "label": "Unlock IP Lock",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Unlock SSH IP Lock",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_download",
+          "label": "Set Speed Down",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Speed Download",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Down Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "20"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_upload",
+          "label": "Set Speed Up",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set SSH Speed Upload",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Up Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "speed_limit",
+          "label": "Toggle Speed",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "SSH Speed Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "3"
+    },
+    {
+      "id": "26",
+      "label": "Domain",
+      "description": "Kontrol domain aktif, sertifikat TLS, refresh account info, dan health domain.",
+      "actions": [
+        {
+          "id": "domain_info",
+          "label": "View Domain Info",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "tls_info",
+          "label": "TLS Certificate Info",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "tls_expiry",
+          "label": "TLS Expiry",
+          "mode": "direct",
+          "style": "secondary"
+        },
         {
           "id": "setup_domain_custom",
           "label": "Set Domain Manual",
@@ -1588,20 +1775,29 @@
           "dangerous": true
         },
         {
-          "id": "domain_info",
-          "label": "View Domain Info",
+          "id": "refresh_account_info",
+          "label": "Refresh Accounts",
           "mode": "direct",
-          "style": "primary"
+          "style": "secondary",
+          "dangerous": true
         },
         {
-          "id": "domain_guard_check",
-          "label": "Run Guard Check",
+          "id": "renew_cert",
+          "label": "Renew Cert",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "domain_guard_status",
+          "label": "View Guard Status",
           "mode": "direct",
           "style": "secondary"
         },
         {
-          "id": "domain_guard_status",
-          "label": "View Guard Stat",
+          "id": "domain_guard_check",
+          "label": "Run Guard Check",
           "mode": "direct",
           "style": "secondary"
         },
@@ -1620,58 +1816,21 @@
           "style": "secondary"
         },
         {
-          "id": "refresh_account_info",
-          "label": "Refresh Accounts",
-          "mode": "direct",
+          "id": "open_domain_security_tools",
+          "label": "Security Tools",
+          "mode": "menu",
           "style": "secondary",
-          "dangerous": true
+          "target_menu": "27"
         }
-      ]
+      ],
+      "hidden": true,
+      "parent_menu": "4"
     },
     {
-      "id": "7",
-      "label": "Speedtest",
-      "description": "Pengujian kecepatan jaringan dan versi binary.",
+      "id": "27",
+      "label": "Security Tools",
+      "description": "Fail2ban, hardening system, dan maintenance keamanan yang lebih teknis.",
       "actions": [
-        {
-          "id": "run",
-          "label": "Run Speedtest",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "version",
-          "label": "View Version",
-          "mode": "direct",
-          "style": "secondary"
-        }
-      ]
-    },
-    {
-      "id": "8",
-      "label": "Security",
-      "description": "TLS, fail2ban, hardening system, dan security overview.",
-      "actions": [
-        {
-          "id": "tls_info",
-          "label": "TLS Certificate Info",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "tls_expiry",
-          "label": "TLS Expiry",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "renew_cert",
-          "label": "Renew Cert",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
         {
           "id": "reload_nginx",
           "label": "Reload Nginx",
@@ -1769,12 +1928,35 @@
           "mode": "direct",
           "style": "primary"
         }
-      ]
+      ],
+      "hidden": true,
+      "parent_menu": "4"
     },
     {
-      "id": "10",
-      "label": "Traffic",
-      "description": "Analitik traffic user berdasarkan metadata quota (overview, top users, search, dan export).",
+      "id": "29",
+      "label": "Speedtest Tools",
+      "description": "Pengujian kecepatan jaringan dan informasi binary speedtest.",
+      "actions": [
+        {
+          "id": "run",
+          "label": "Run Speedtest",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "version",
+          "label": "View Version",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "6"
+    },
+    {
+      "id": "30",
+      "label": "Traffic Tools",
+      "description": "Analitik traffic user: overview, top users, search, dan export JSON.",
       "actions": [
         {
           "id": "overview",
@@ -1824,12 +2006,129 @@
           "mode": "direct",
           "style": "secondary"
         }
-      ]
+      ],
+      "hidden": true,
+      "parent_menu": "6"
     },
     {
-      "id": "12",
-      "label": "Backup/Restore",
-      "description": "Backup full+cert (tanpa env bot), list backup lokal, restore latest local, dan restore via upload arsip bot.",
+      "id": "31",
+      "label": "Service Tools",
+      "description": "Restart service, log penting, dan diagnostik runtime yang lebih detail.",
+      "actions": [
+        {
+          "id": "restart_xray",
+          "label": "Restart Xray",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_nginx",
+          "label": "Restart Nginx",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_all",
+          "label": "Restart All",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "xray_logs",
+          "label": "View Xray Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "nginx_logs",
+          "label": "View Nginx Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "wireproxy_status",
+          "label": "Wireproxy Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "badvpn_status",
+          "label": "BadVPN Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_wireproxy",
+          "label": "Restart Wireproxy",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_edge_gateway",
+          "label": "Restart Edge Gateway",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_badvpn",
+          "label": "Restart BadVPN",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_xray_daemons",
+          "label": "Restart Xray Daemons",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "xray_daemon_logs",
+          "label": "Xray Daemon Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "restart_sshws_stack",
+          "label": "Restart SSHWS Stack",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "sshws_diagnostics",
+          "label": "SSHWS Diagnostics",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "sshws_combined_logs",
+          "label": "SSHWS Combined Logs",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "6"
+    },
+    {
+      "id": "32",
+      "label": "Backup Tools",
+      "description": "Backup lokal, list arsip, restore latest, dan restore via upload.",
       "actions": [
         {
           "id": "create_backup",
@@ -1860,7 +2159,9 @@
           "style": "danger",
           "dangerous": true
         }
-      ]
+      ],
+      "hidden": true,
+      "parent_menu": "6"
     }
   ]
 }

@@ -61,13 +61,14 @@ DELETE_PICK_PAGE_SIZE = 12
 FORM_CHOICE_PAGE_SIZE = 12
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 USER_PROTOCOLS = XRAY_PROTOCOLS + ("ssh",)
-XRAY_USER_MENU_ID = "1"
-SSH_USER_MENU_ID = "2"
-XRAY_QAC_MENU_ID = "3"
-SSH_QAC_MENU_ID = "4"
-BACKUP_MENU_ID = "12"
+XRAY_USER_MENU_ID = "22"
+SSH_USER_MENU_ID = "23"
+XRAY_QAC_MENU_ID = "24"
+SSH_QAC_MENU_ID = "25"
+BACKUP_MENU_ID = "32"
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
+ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password"}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -97,18 +98,21 @@ KEY_PENDING_FORM = "pending_form"
 KEY_PENDING_CONFIRM = "pending_confirm"
 KEY_PENDING_DELETE_PICK = "pending_delete_pick"
 KEY_PENDING_QAC_PICK = "pending_qac_pick"
+KEY_PENDING_ACCOUNT_PICK = "pending_account_pick"
 KEY_PENDING_UPLOAD_RESTORE = "pending_upload_restore"
 KEY_LAST_ACTION_TS = "last_action_ts"
 KEY_LAST_CLEANUP_TS = "last_cleanup_ts"
 KEY_QAC_SELECTIONS = "qac_selections"
+KEY_MENU_PARENT_PAGES = "menu_parent_pages"
 PENDING_STATE_KEYS = (
     KEY_PENDING_FORM,
     KEY_PENDING_CONFIRM,
     KEY_PENDING_DELETE_PICK,
     KEY_PENDING_QAC_PICK,
+    KEY_PENDING_ACCOUNT_PICK,
     KEY_PENDING_UPLOAD_RESTORE,
 )
-PENDING_OTHER_CHAT_TEXT = "Sesi aktif ada di chat lain. Lanjutkan dari chat asal atau mulai ulang dengan /panel."
+PENDING_OTHER_CHAT_TEXT = "Sesi aktif ada di chat lain. Lanjutkan dari chat asal atau mulai ulang dengan /menu."
 BOT_ROOT = Path(__file__).resolve().parents[2]
 BOT_HOME = Path((os.getenv("BOT_HOME") or "").strip() or str(BOT_ROOT))
 BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/bot-telegram"))
@@ -209,7 +213,7 @@ def _is_authorized(runtime: Runtime, update: Update) -> tuple[bool, str]:
         return False, "Akses ditolak: user Telegram belum terdaftar sebagai admin."
 
     if runtime.config.admin_chat_ids and chat_id not in runtime.config.admin_chat_ids:
-        return False, "Akses ditolak: chat ini belum diizinkan untuk panel."
+        return False, "Akses ditolak: chat ini belum diizinkan untuk menu bot."
 
     return True, ""
 
@@ -224,6 +228,7 @@ def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(KEY_PENDING_FORM, None)
     context.user_data.pop(KEY_PENDING_CONFIRM, None)
     context.user_data.pop(KEY_PENDING_DELETE_PICK, None)
+    context.user_data.pop(KEY_PENDING_ACCOUNT_PICK, None)
     context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
 
 
@@ -260,6 +265,45 @@ def _get_pending_state(
     if current_chat_id and not origin_chat_id:
         pending = _store_pending_state(context, key, pending, current_chat_id)
     return pending, ""
+
+
+def _menu_parent_page_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
+    raw = context.user_data.get(KEY_MENU_PARENT_PAGES)
+    if isinstance(raw, dict):
+        return raw
+    store: dict[str, dict] = {}
+    context.user_data[KEY_MENU_PARENT_PAGES] = store
+    return store
+
+
+def _set_menu_parent_page(
+    context: ContextTypes.DEFAULT_TYPE,
+    menu_id: str,
+    *,
+    chat_id: int | str | None,
+    parent_page: int,
+) -> None:
+    store = _menu_parent_page_store(context)
+    store[menu_id] = {
+        "origin_chat_id": _chat_scope_id(chat_id),
+        "page": max(0, int(parent_page)),
+    }
+
+
+def _get_menu_parent_page(
+    context: ContextTypes.DEFAULT_TYPE,
+    menu_id: str,
+    *,
+    chat_id: int | str | None,
+) -> int:
+    raw = _menu_parent_page_store(context).get(menu_id)
+    if not isinstance(raw, dict):
+        return 0
+    current_chat_id = _chat_scope_id(chat_id)
+    origin_chat_id = _chat_scope_id(raw.get("origin_chat_id"))
+    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
+        return 0
+    return max(0, _safe_int(str(raw.get("page") or "0"), default=0))
 
 
 def _has_pending_state_in_other_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int | str | None) -> bool:
@@ -389,11 +433,15 @@ def _rows_from_buttons(buttons: list[InlineKeyboardButton], per_row: int = BUTTO
 
 def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
-    for menu in runtime.catalog.menus:
+    for menu in _visible_main_menus(runtime):
         if not _visible_actions(runtime, menu):
             continue
-        label = f"{menu.id}) {menu.label}"
-        buttons.append(InlineKeyboardButton(_short_button_label(label), callback_data=f"m{CALLBACK_SEP}{menu.id}"))
+        buttons.append(
+            InlineKeyboardButton(
+                _short_button_label(menu.label),
+                callback_data=f"m{CALLBACK_SEP}{menu.id}",
+            )
+        )
 
     rows = _rows_from_buttons(buttons)
     rows.append([InlineKeyboardButton("🔄 Refresh", callback_data="h")])
@@ -410,6 +458,14 @@ def _visible_actions(runtime: Runtime, menu: MenuSpec) -> list[ActionSpec]:
     return [action for action in menu.actions if _action_visible(runtime, action)]
 
 
+def _visible_main_menus(runtime: Runtime) -> list[MenuSpec]:
+    return [
+        menu
+        for menu in runtime.catalog.menus
+        if not menu.hidden and _visible_actions(runtime, menu)
+    ]
+
+
 def _menu_pages(runtime: Runtime, menu: MenuSpec) -> int:
     total = len(_visible_actions(runtime, menu))
     if total <= 0:
@@ -417,7 +473,7 @@ def _menu_pages(runtime: Runtime, menu: MenuSpec) -> int:
     return ((total - 1) // ACTIONS_PER_PAGE) + 1
 
 
-def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboardMarkup:
+def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_page: int = 0) -> InlineKeyboardMarkup:
     visible_actions = _visible_actions(runtime, menu)
     total_pages = _menu_pages(runtime, menu)
     page = max(0, min(page, total_pages - 1))
@@ -430,7 +486,7 @@ def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboar
         buttons.append(
             InlineKeyboardButton(
                 _short_button_label(action.label),
-                callback_data=f"a{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{action.id}",
+                callback_data=f"a{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}{CALLBACK_SEP}{action.id}",
             )
         )
 
@@ -445,18 +501,24 @@ def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboar
             nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"p{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page + 1}"))
         rows.append(nav)
 
-    rows.append(
-        [
-            InlineKeyboardButton("🏠 Main Menu", callback_data="h"),
-        ]
-    )
+    footer: list[InlineKeyboardButton] = []
+    if menu.parent_menu:
+        footer.append(
+            InlineKeyboardButton(
+                "⬅️ Kembali",
+                callback_data=f"m{CALLBACK_SEP}{menu.parent_menu}{CALLBACK_SEP}{max(parent_page, 0)}",
+            )
+        )
+    footer.append(InlineKeyboardButton("🏠 Main Menu", callback_data="h"))
+    rows.append(footer)
     return InlineKeyboardMarkup(rows)
 
 
-def _result_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+def _result_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
+    back_label = "⬅️ Kembali ke Panel QAC" if menu_id in QAC_MENU_IDS else "⬅️ Kembali ke Action"
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("⬅️ Kembali ke Action", callback_data=f"m{CALLBACK_SEP}{menu_id}")],
+            [InlineKeyboardButton(back_label, callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(page, 0)}")],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="h")],
         ]
     )
@@ -471,10 +533,10 @@ def _callback_chat_id(update: Update) -> int:
     raise RuntimeError("Chat ID callback tidak tersedia.")
 
 
-def _confirm_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+def _confirm_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("✅ Jalankan", callback_data="rc"), InlineKeyboardButton("❌ Batal", callback_data=f"m{CALLBACK_SEP}{menu_id}")],
+            [InlineKeyboardButton("✅ Jalankan", callback_data="rc"), InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(page, 0)}")],
         ]
     )
 
@@ -662,17 +724,27 @@ def _qac_menu_text(menu: MenuSpec, selection: dict, summary: dict[str, str] | No
     return "\n".join(lines)
 
 
-def _qac_menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int) -> InlineKeyboardMarkup:
-    rows = list(_menu_keyboard(runtime, menu, page).inline_keyboard)
-    if rows and len(rows[-1]) == 1 and rows[-1][0].callback_data == "h":
-        rows.insert(-1, [InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}")])
+def _qac_menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_page: int = 0) -> InlineKeyboardMarkup:
+    rows = list(_menu_keyboard(runtime, menu, page, parent_page=parent_page).inline_keyboard)
+    utility_row = [
+        InlineKeyboardButton("🔄 Refresh Summary", callback_data=f"qac_refresh{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}"),
+        InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}"),
+    ]
+    if rows and rows[-1]:
+        footer_callbacks = {str(btn.callback_data or "") for btn in rows[-1]}
+        if "h" in footer_callbacks or any(
+            cb == f"m{CALLBACK_SEP}{menu.parent_menu}" or cb.startswith(f"m{CALLBACK_SEP}{menu.parent_menu}{CALLBACK_SEP}")
+            for cb in footer_callbacks
+        ):
+            rows.insert(-1, utility_row)
+        else:
+            rows.append(utility_row)
     else:
-        rows.append([InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}")])
-        rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="h")])
+        rows.append(utility_row)
     return InlineKeyboardMarkup(rows)
 
 
-def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]]) -> InlineKeyboardMarkup:
+def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]], menu_page: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     start = page * DELETE_PICK_PAGE_SIZE
     chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
@@ -698,7 +770,14 @@ def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]]) -> 
             nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"qac_page{CALLBACK_SEP}{page + 1}"))
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data="h")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ Kembali",
+                callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}",
+            )
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -744,23 +823,189 @@ def _delete_picker_title(menu_id: str) -> str:
     return "User Management"
 
 
-def _delete_pick_proto_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+def _account_picker_title(menu_id: str) -> str:
+    if menu_id == XRAY_USER_MENU_ID:
+        return "Xray Users"
+    if menu_id == SSH_USER_MENU_ID:
+        return "SSH Users"
+    return "Accounts"
+
+
+def _account_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
+    if menu_id == XRAY_USER_MENU_ID:
+        return f"{username}@{proto}"
+    return username
+
+
+def _account_picker_return_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    )
+
+
+def _account_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]], menu_page: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    proto_buttons = [
-        InlineKeyboardButton(proto.upper(), callback_data=f"dup_proto{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{proto}")
-        for proto in _menu_protocol_scope(menu_id)
-    ]
-    rows.extend(_rows_from_buttons(proto_buttons))
-    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
+    start = page * DELETE_PICK_PAGE_SIZE
+    chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
+
+    user_buttons: list[InlineKeyboardButton] = []
+    for idx, item in enumerate(chunk, start=start):
+        label = _account_picker_entry_label(menu_id, str(item.get("proto") or ""), str(item.get("username") or ""))
+        user_buttons.append(
+            InlineKeyboardButton(
+                _short_button_label(label, max_len=22),
+                callback_data=f"acc_pick{CALLBACK_SEP}{idx}",
+            )
+        )
+    rows.extend(_rows_from_buttons(user_buttons))
+
+    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"acc_page{CALLBACK_SEP}{page - 1}"))
+        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page + 1 < total_pages:
+            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"acc_page{CALLBACK_SEP}{page + 1}"))
+        rows.append(nav)
+
+    rows.extend(_account_picker_return_keyboard(menu_id, menu_page).inline_keyboard)
     return InlineKeyboardMarkup(rows)
 
 
-def _delete_pick_return_keyboard(menu_id: str) -> InlineKeyboardMarkup:
+def _account_pick_text(menu_id: str, action_label: str, page: int, users: list[dict[str, str]]) -> str:
+    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
+    return (
+        f"<b>{html.escape(_account_picker_title(menu_id))} · {html.escape(action_label)}</b>\n"
+        "Pilih user dulu dari daftar.\n\n"
+        f"Total user: <code>{len(users)}</code>\n"
+        f"Halaman: <code>{page + 1}/{total_pages}</code>"
+    )
+
+
+async def _load_account_user_entries(runtime: Runtime, menu_id: str) -> list[dict[str, str]]:
+    proto_filter = None
+    protocols = _menu_protocol_scope(menu_id)
+    if len(protocols) == 1:
+        proto_filter = protocols[0]
+
+    options = await runtime.backend.list_user_options(proto=proto_filter)
+    users: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for option in options:
+        proto = str(option.proto or "").strip().lower()
+        username = str(option.username or "").strip()
+        if proto not in protocols or not username:
+            continue
+        key = (proto, username)
+        if key in seen:
+            continue
+        seen.add(key)
+        users.append({"proto": proto, "username": username})
+
+    users.sort(key=lambda item: (str(item.get("username") or "").lower(), str(item.get("proto") or "").lower()))
+    return users
+
+
+async def _show_account_user_picker(
+    *,
+    runtime: Runtime,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    query,
+    menu_id: str,
+    action_id: str,
+    page: int = 0,
+    menu_page: int = 0,
+) -> None:
+    menu = runtime.catalog.get_menu(menu_id)
+    action = runtime.catalog.get_action(menu_id, action_id)
+    if menu is None or action is None:
+        await query.answer("Action tidak ditemukan.", show_alert=True)
+        return
+
+    try:
+        users = await _load_account_user_entries(runtime, menu_id)
+    except BackendError as exc:
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                "<b>❌ Gagal Ambil Daftar User</b>\n"
+                f"<pre>{html.escape(str(exc)[:1200])}</pre>"
+            ),
+            reply_markup=_account_picker_return_keyboard(menu_id, menu_page),
+        )
+        return
+
+    if not users:
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                f"<b>{html.escape(_account_picker_title(menu_id))} · {html.escape(action.label)}</b>\n"
+                "Belum ada user untuk dipilih."
+            ),
+            reply_markup=_account_picker_return_keyboard(menu_id, menu_page),
+        )
+        return
+
+    page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
+    page = max(0, min(page, page_max))
+    _store_pending_state(
+        context,
+        KEY_PENDING_ACCOUNT_PICK,
+        {
+            "menu_id": menu_id,
+            "action_id": action_id,
+            "users": users,
+            "page": page,
+            "menu_page": max(0, menu_page),
+        },
+        chat_id,
+    )
+    await _send_or_edit(
+        query=query,
+        chat_id=chat_id,
+        context=context,
+        text=_account_pick_text(menu_id, action.label, page, users),
+        reply_markup=_account_pick_keyboard(menu_id, page, users, menu_page),
+    )
+
+
+def _delete_pick_proto_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    proto_buttons = [
+        InlineKeyboardButton(
+            proto.upper(),
+            callback_data=f"dup_proto{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{proto}{CALLBACK_SEP}{max(menu_page, 0)}",
+        )
+        for proto in _menu_protocol_scope(menu_id)
+    ]
+    rows.extend(_rows_from_buttons(proto_buttons))
+    rows.append(
+        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _delete_pick_return_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
     protocols = _menu_protocol_scope(menu_id)
     rows: list[list[InlineKeyboardButton]] = []
     if len(protocols) > 1:
-        rows.append([InlineKeyboardButton("↩️ Ganti Protocol", callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "↩️ Ganti Protocol",
+                    callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}",
+                )
+            ]
+        )
+    rows.append(
+        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -773,7 +1018,7 @@ def _protocol_choices_for_action(menu_id: str, action_id: str) -> tuple[str, ...
     return XRAY_PROTOCOLS
 
 
-def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str]) -> InlineKeyboardMarkup:
+def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str], menu_page: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     start = page * DELETE_PICK_PAGE_SIZE
     chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
@@ -798,7 +1043,7 @@ def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str]) -> In
             nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"dup_page{CALLBACK_SEP}{page + 1}"))
         rows.append(nav)
 
-    return_markup = _delete_pick_return_keyboard(menu_id)
+    return_markup = _delete_pick_return_keyboard(menu_id, menu_page)
     rows.extend(return_markup.inline_keyboard)
     return InlineKeyboardMarkup(rows)
 
@@ -827,6 +1072,7 @@ async def _show_delete_user_proto_picker(
     chat_id: int,
     query,
     menu_id: str,
+    menu_page: int = 0,
 ) -> None:
     context.user_data.pop(KEY_PENDING_DELETE_PICK, None)
     protocols = _menu_protocol_scope(menu_id)
@@ -839,6 +1085,7 @@ async def _show_delete_user_proto_picker(
             menu_id=menu_id,
             proto=protocols[0],
             page=0,
+            menu_page=menu_page,
         )
         return
     await _send_or_edit(
@@ -846,7 +1093,7 @@ async def _show_delete_user_proto_picker(
         chat_id=chat_id,
         context=context,
         text=_delete_pick_text_proto(menu_id),
-        reply_markup=_delete_pick_proto_keyboard(menu_id),
+        reply_markup=_delete_pick_proto_keyboard(menu_id, menu_page),
     )
 
 
@@ -859,6 +1106,7 @@ async def _show_delete_user_list_picker(
     menu_id: str,
     proto: str,
     page: int = 0,
+    menu_page: int = 0,
 ) -> None:
     try:
         options: list[BackendUserOption] = await runtime.backend.list_user_options(proto=proto)
@@ -871,7 +1119,7 @@ async def _show_delete_user_list_picker(
                 "<b>❌ Gagal Ambil Daftar User</b>\n"
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
-            reply_markup=_delete_pick_return_keyboard(menu_id),
+            reply_markup=_delete_pick_return_keyboard(menu_id, menu_page),
         )
         return
 
@@ -885,7 +1133,7 @@ async def _show_delete_user_list_picker(
                 f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
                 f"Protocol <code>{html.escape(proto.upper())}</code> belum punya user."
             ),
-            reply_markup=_delete_pick_return_keyboard(menu_id),
+            reply_markup=_delete_pick_return_keyboard(menu_id, menu_page),
         )
         return
 
@@ -899,6 +1147,7 @@ async def _show_delete_user_list_picker(
             "proto": proto,
             "users": usernames,
             "page": page,
+            "menu_page": max(0, menu_page),
         },
         chat_id,
     )
@@ -907,7 +1156,7 @@ async def _show_delete_user_list_picker(
         chat_id=chat_id,
         context=context,
         text=_delete_pick_text_users(menu_id, proto, page, usernames),
-        reply_markup=_delete_pick_users_keyboard(menu_id, page, usernames),
+        reply_markup=_delete_pick_users_keyboard(menu_id, page, usernames, menu_page),
     )
 
 
@@ -928,6 +1177,7 @@ async def _render_qac_menu(
             chat_id=chat_id,
             query=query,
             menu_id=menu.id,
+            menu_page=page,
         )
         return
     try:
@@ -943,7 +1193,7 @@ async def _render_qac_menu(
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{max(page, 0)}")]]
             ),
         )
         return
@@ -960,6 +1210,7 @@ async def _render_qac_menu(
             chat_id=chat_id,
             query=query,
             menu_id=menu.id,
+            menu_page=page,
         )
         return
     summary: dict[str, str] | None = None
@@ -989,6 +1240,7 @@ async def _show_qac_user_picker(
     query,
     menu_id: str,
     page: int = 0,
+    menu_page: int = 0,
 ) -> None:
     try:
         users = await _load_qac_user_entries(runtime, menu_id)
@@ -1003,7 +1255,7 @@ async def _show_qac_user_picker(
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
             ),
         )
         return
@@ -1020,7 +1272,7 @@ async def _show_qac_user_picker(
                 "Belum ada user yang bisa dipilih."
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data="h")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
             ),
         )
         return
@@ -1034,6 +1286,7 @@ async def _show_qac_user_picker(
             "menu_id": menu_id,
             "users": users,
             "page": page,
+            "menu_page": max(0, menu_page),
         },
         chat_id,
     )
@@ -1042,7 +1295,7 @@ async def _show_qac_user_picker(
         chat_id=chat_id,
         context=context,
         text=_qac_pick_text(menu_id, page, users),
-        reply_markup=_qac_pick_keyboard(menu_id, page, users),
+        reply_markup=_qac_pick_keyboard(menu_id, page, users, menu_page),
     )
 
 
@@ -1083,6 +1336,40 @@ def _pending_choice_options(pending: dict) -> list[dict[str, str]]:
     return out
 
 
+def _pending_prefilled_fields(pending: dict) -> set[str]:
+    raw = pending.get("prefilled_fields")
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    return {str(item).strip() for item in raw if str(item).strip()}
+
+
+def _display_form_field_indices(action: ActionSpec, pending: dict) -> list[int]:
+    prefilled = _pending_prefilled_fields(pending)
+    params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+    speed_limit_value = str(params.get("speed_limit_enabled") or "").strip()
+    hide_speed_fields = bool(speed_limit_value) and not _is_truthy(speed_limit_value)
+
+    indices: list[int] = []
+    for idx, field in enumerate(action.modal.fields):
+        if field.id in prefilled:
+            continue
+        if hide_speed_fields and field.id in {"speed_down_mbit", "speed_up_mbit"}:
+            continue
+        indices.append(idx)
+    return indices
+
+
+def _display_form_progress(action: ActionSpec, pending: dict, current_idx: int) -> tuple[int, int]:
+    indices = _display_form_field_indices(action, pending)
+    if not indices:
+        return 1, 1
+    total = len(indices)
+    if current_idx in indices:
+        return indices.index(current_idx) + 1, total
+    completed = sum(1 for idx in indices if idx <= current_idx)
+    return max(1, min(completed, total)), total
+
+
 def _is_click_only_field(action_id: str, field_id: str) -> bool:
     return action_id == "setup_domain_cloudflare" and field_id == "root_domain"
 
@@ -1093,7 +1380,7 @@ def _choice_total_pages(choice_options: list[dict[str, str]]) -> int:
     return ((len(choice_options) - 1) // FORM_CHOICE_PAGE_SIZE) + 1
 
 
-def _choice_keyboard(menu_id: str, choice_options: list[dict[str, str]], page: int) -> InlineKeyboardMarkup:
+def _choice_keyboard(menu_id: str, choice_options: list[dict[str, str]], page: int, *, menu_page: int = 0) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if choice_options:
         start = page * FORM_CHOICE_PAGE_SIZE
@@ -1118,7 +1405,7 @@ def _choice_keyboard(menu_id: str, choice_options: list[dict[str, str]], page: i
             nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"pfp{CALLBACK_SEP}{page + 1}"))
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}")])
+    rows.append([InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1129,6 +1416,12 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
 
     if field_id == "proto":
         return [(proto.upper(), proto) for proto in _protocol_choices_for_action(menu_id, action_id)]
+
+    if field_id == "enabled":
+        if action_id == "manual_block":
+            return [("BLOCK", "on"), ("UNBLOCK", "off")]
+        if action_id in {"ip_limit_enable", "speed_limit"}:
+            return [("ENABLE", "on"), ("DISABLE", "off")]
 
     if field_id in {"enabled", "proxied", "allow_existing_same_ip", "speed_limit_enabled"}:
         return [("ON", "on"), ("OFF", "off")]
@@ -1252,6 +1545,7 @@ async def _render_pending_choice_prompt(
     if idx < 0 or idx >= len(action.modal.fields):
         raise RuntimeError("Index pilihan input tidak valid.")
     field = action.modal.fields[idx]
+    step_no, total_steps = _display_form_progress(action, pending, idx)
 
     choice_options = _pending_choice_options(pending)
     page_max = _choice_total_pages(choice_options) - 1
@@ -1264,16 +1558,16 @@ async def _render_pending_choice_prompt(
         chat_id=chat_id,
         context=context,
         text=(
-            f"{action_form_prompt(menu, action, field, idx + 1, len(action.modal.fields))}\n\n"
+            f"{action_form_prompt(menu, action, field, step_no, total_steps, params=pending.get('params'))}\n\n"
             "Pilih nilainya lewat tombol."
         ),
-        reply_markup=_choice_keyboard(menu.id, choice_options, page),
+        reply_markup=_choice_keyboard(menu.id, choice_options, page, menu_page=_safe_int(str(pending.get("page") or "0"), default=0)),
     )
 
 
-def _manual_input_prompt(menu: MenuSpec, action: ActionSpec, field, idx: int, total: int) -> str:
+def _manual_input_prompt(menu: MenuSpec, action: ActionSpec, field, idx: int, total: int, *, params: dict | None = None) -> str:
     return (
-        f"{action_form_prompt(menu, action, field, idx, total)}\n\n"
+        f"{action_form_prompt(menu, action, field, idx, total, params=params)}\n\n"
         "Mode input manual aktif. Ketik nilainya sekarang."
     )
 
@@ -1314,6 +1608,7 @@ async def _run_action(
     menu_id: str,
     action_id: str,
     params: dict[str, str],
+    page: int,
     query,
 ) -> None:
     try:
@@ -1328,7 +1623,7 @@ async def _run_action(
                 "Tidak bisa menjalankan action.\n\n"
                 f"<pre>{str(exc)[:1800]}</pre>"
             ),
-            reply_markup=_result_keyboard(menu_id),
+            reply_markup=_result_keyboard(menu_id, page),
         )
         return
 
@@ -1337,7 +1632,7 @@ async def _run_action(
         chat_id=chat_id,
         context=context,
         text=action_result_text(result),
-        reply_markup=_result_keyboard(menu_id),
+        reply_markup=_result_keyboard(menu_id, page),
     )
 
     local_attachment = _resolve_local_download(result.data)
@@ -1388,6 +1683,151 @@ def _prefilled_action_params(
     return _qac_selection_params(menu_id, _get_qac_selection(context, menu_id, chat_id=chat_id))
 
 
+async def _start_action_flow(
+    *,
+    runtime: Runtime,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: str,
+    query,
+    menu: MenuSpec,
+    action: ActionSpec,
+    initial_params: dict[str, str],
+    page: int = 0,
+) -> None:
+    if action.mode == "modal" and action.modal and len(action.modal.fields) > 0:
+        initial_index = 0
+        while initial_index < len(action.modal.fields) and action.modal.fields[initial_index].id in initial_params:
+            initial_index += 1
+        if initial_index >= len(action.modal.fields):
+            params = dict(initial_params)
+            if action.confirm:
+                _store_pending_state(
+                    context,
+                    KEY_PENDING_CONFIRM,
+                    {
+                        "menu_id": menu.id,
+                        "action_id": action.id,
+                        "params": params,
+                        "page": page,
+                    },
+                    chat_id,
+                )
+                await _send_or_edit(
+                    query=query,
+                    chat_id=chat_id,
+                    context=context,
+                    text=confirm_text(menu, action, params),
+                    reply_markup=_confirm_keyboard(menu.id, page),
+                )
+                return
+
+            wait = _cooldown_remaining(
+                context,
+                user_id=user_id,
+                key=KEY_LAST_ACTION_TS,
+                min_interval_sec=runtime.config.action_cooldown_seconds,
+            )
+            if wait > 0:
+                await query.answer(_throttle_message(wait), show_alert=True)
+                return
+
+            await _send_or_edit(
+                query=query,
+                chat_id=chat_id,
+                context=context,
+                text="<b>⏳ Menjalankan action...</b>",
+                reply_markup=_result_keyboard(menu.id, page),
+            )
+            await _run_action(
+                runtime=runtime,
+                context=context,
+                chat_id=chat_id,
+                menu_id=menu.id,
+                action_id=action.id,
+                params=params,
+                page=page,
+                query=query,
+            )
+            return
+
+        pending_form = _store_pending_state(
+            context,
+            KEY_PENDING_FORM,
+            {
+                "menu_id": menu.id,
+                "action_id": action.id,
+                "index": initial_index,
+                "params": dict(initial_params),
+                "page": page,
+                "prefilled_fields": [
+                    field.id
+                    for field in action.modal.fields
+                    if field.id in initial_params
+                ],
+            },
+            chat_id,
+        )
+        await _prompt_next_form_field(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            pending=pending_form,
+            query=query,
+        )
+        return
+
+    params = dict(initial_params)
+    if action.confirm:
+        _store_pending_state(
+            context,
+            KEY_PENDING_CONFIRM,
+            {
+                "menu_id": menu.id,
+                "action_id": action.id,
+                "params": params,
+                "page": page,
+            },
+            chat_id,
+        )
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=confirm_text(menu, action, params),
+            reply_markup=_confirm_keyboard(menu.id, page),
+        )
+        return
+
+    wait = _cooldown_remaining(
+        context,
+        user_id=user_id,
+        key=KEY_LAST_ACTION_TS,
+        min_interval_sec=runtime.config.action_cooldown_seconds,
+    )
+    if wait > 0:
+        await query.answer(_throttle_message(wait), show_alert=True)
+        return
+
+    await _send_or_edit(
+        query=query,
+        chat_id=chat_id,
+        context=context,
+        text="<b>⏳ Menjalankan action...</b>",
+        reply_markup=_result_keyboard(menu.id, page),
+    )
+    await _run_action(
+        runtime=runtime,
+        context=context,
+        chat_id=chat_id,
+        menu_id=menu.id,
+        action_id=action.id,
+        params=params,
+        page=page,
+        query=query,
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     runtime = _get_runtime(context)
     ok, reason = _is_authorized(runtime, update)
@@ -1396,7 +1836,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.effective_message.reply_text(
-        "Selamat datang. Gunakan /panel untuk membuka kontrol server.",
+        "Selamat datang. Gunakan /menu untuk membuka kontrol server.",
     )
 
 
@@ -1475,7 +1915,7 @@ async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     runtime = _get_runtime(context)
     ok, reason = _is_authorized(runtime, update)
     if not ok:
@@ -1485,7 +1925,7 @@ async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _clear_pending(context)
 
     await update.effective_message.reply_text(
-        main_menu_text(runtime.hostname, len(runtime.catalog.menus)),
+        main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
         parse_mode=ParseMode.HTML,
         reply_markup=_main_menu_keyboard(runtime),
     )
@@ -1550,18 +1990,18 @@ async def _submit_pending_form_value(
     if menu is None or action is None or action.modal is None:
         _clear_pending(context)
         if reply_message is not None:
-            await reply_message.reply_text("Sesi input rusak. Jalankan /panel lagi.")
+            await reply_message.reply_text("Sesi input rusak. Jalankan /menu lagi.")
         elif query is not None:
-            await query.answer("Sesi input rusak. Jalankan /panel lagi.", show_alert=True)
+            await query.answer("Sesi input rusak. Jalankan /menu lagi.", show_alert=True)
         return
 
     idx = int(pending.get("index", 0))
     if idx < 0 or idx >= len(action.modal.fields):
         _clear_pending(context)
         if reply_message is not None:
-            await reply_message.reply_text("Sesi input sudah selesai. Jalankan /panel lagi.")
+            await reply_message.reply_text("Sesi input sudah selesai. Jalankan /menu lagi.")
         elif query is not None:
-            await query.answer("Sesi input sudah selesai. Jalankan /panel lagi.", show_alert=True)
+            await query.answer("Sesi input sudah selesai. Jalankan /menu lagi.", show_alert=True)
         return
 
     field = action.modal.fields[idx]
@@ -1590,9 +2030,18 @@ async def _submit_pending_form_value(
             pending.pop("choice_page", None)
             pending["manual_entry"] = True
             _store_pending_state(context, KEY_PENDING_FORM, pending, chat_id)
-            text = _manual_input_prompt(menu, action, field, idx + 1, len(action.modal.fields))
+            step_no, total_steps = _display_form_progress(action, pending, idx)
+            text = _manual_input_prompt(
+                menu,
+                action,
+                field,
+                step_no,
+                total_steps,
+                params=pending.get("params"),
+            )
+            menu_page = _safe_int(str(pending.get("page") or "0"), default=0)
             markup = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}")]]
+                [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{menu_page}")]]
             )
             if query is not None:
                 await _send_or_edit(
@@ -1650,6 +2099,7 @@ async def _submit_pending_form_value(
         return
 
     context.user_data.pop(KEY_PENDING_FORM, None)
+    menu_page = _safe_int(str(pending.get("page") or "0"), default=0)
 
     if action.confirm:
         _store_pending_state(
@@ -1659,6 +2109,7 @@ async def _submit_pending_form_value(
                 "menu_id": menu_id,
                 "action_id": action_id,
                 "params": params,
+                "page": menu_page,
             },
             chat_id,
         )
@@ -1668,13 +2119,13 @@ async def _submit_pending_form_value(
                 chat_id=chat_id,
                 context=context,
                 text=confirm_text(menu, action, params),
-                reply_markup=_confirm_keyboard(menu_id),
+                reply_markup=_confirm_keyboard(menu_id, menu_page),
             )
         elif reply_message is not None:
             await reply_message.reply_text(
                 confirm_text(menu, action, params),
                 parse_mode=ParseMode.HTML,
-                reply_markup=_confirm_keyboard(menu_id),
+                reply_markup=_confirm_keyboard(menu_id, menu_page),
             )
         return
 
@@ -1684,7 +2135,7 @@ async def _submit_pending_form_value(
             chat_id=chat_id,
             context=context,
             text="<b>⏳ Menjalankan action...</b>",
-            reply_markup=_result_keyboard(menu_id),
+            reply_markup=_result_keyboard(menu_id, menu_page),
         )
     elif reply_message is not None:
         await reply_message.reply_text("⏳ Menjalankan action...")
@@ -1696,6 +2147,7 @@ async def _submit_pending_form_value(
         menu_id=menu_id,
         action_id=action_id,
         params=params,
+        page=menu_page,
         query=query,
     )
 
@@ -1751,12 +2203,13 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     menu_id = str(pending_upload.get("menu_id") or BACKUP_MENU_ID)
     action_id = str(pending_upload.get("action_id") or "restore_from_upload")
+    menu_page = _safe_int(str(pending_upload.get("page") or "0"), default=0)
     menu = runtime.catalog.get_menu(menu_id)
     action = runtime.catalog.get_action(menu_id, action_id)
     if menu is None or action is None:
         context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
         _cleanup_uploaded_archive(str(upload_path))
-        await msg.reply_text("Action restore upload tidak ditemukan. Jalankan /panel lagi.")
+        await msg.reply_text("Action restore upload tidak ditemukan. Jalankan /menu lagi.")
         return
 
     params = {"upload_path": str(upload_path)}
@@ -1768,6 +2221,7 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "menu_id": menu_id,
             "action_id": action_id,
             "params": params,
+            "page": menu_page,
         },
         chat.id,
     )
@@ -1781,7 +2235,7 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await msg.reply_text(
         confirm_msg,
         parse_mode=ParseMode.HTML,
-        reply_markup=_confirm_keyboard(menu_id),
+        reply_markup=_confirm_keyboard(menu_id, menu_page),
     )
 
 
@@ -1859,7 +2313,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
             chat_id=chat_id,
             context=context,
-            text=main_menu_text(runtime.hostname, len(runtime.catalog.menus)),
+            text=main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
             reply_markup=_main_menu_keyboard(runtime),
         )
         return
@@ -1868,13 +2322,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _clear_pending(context)
         parts = data.split(CALLBACK_SEP)
         menu_id = parts[1] if len(parts) > 1 else ""
+        page = _safe_int(parts[2] if len(parts) > 2 else "0", default=0)
         menu = runtime.catalog.get_menu(menu_id)
         if menu is None:
             await _send_or_edit(
                 query=query,
                 chat_id=chat_id,
                 context=context,
-                text=main_menu_text(runtime.hostname, len(runtime.catalog.menus)),
+                text=main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
                 reply_markup=_main_menu_keyboard(runtime),
             )
             return
@@ -1885,15 +2340,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 chat_id=chat_id,
                 query=query,
                 menu=menu,
-                page=0,
+                page=page,
             )
             return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
             context=context,
-            text=menu_text(menu, 0, _menu_pages(runtime, menu)),
-            reply_markup=_menu_keyboard(runtime, menu, 0),
+            text=menu_text(menu, page, _menu_pages(runtime, menu)),
+            reply_markup=_menu_keyboard(runtime, menu, page),
         )
         return
 
@@ -1953,24 +2408,112 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    if data.startswith(f"acc_page{CALLBACK_SEP}"):
+        state, state_err = _get_pending_state(context, KEY_PENDING_ACCOUNT_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
+            await query.answer("Sesi pemilihan akun tidak aktif.", show_alert=True)
+            return
+        menu_id = str(state.get("menu_id") or XRAY_USER_MENU_ID)
+        action_id = str(state.get("action_id") or "").strip()
+        users = state.get("users") if isinstance(state.get("users"), list) else []
+        menu_page = _safe_int(str(state.get("menu_page") or "0"), default=0)
+        if menu_id not in DELETE_PICK_MENU_IDS or action_id not in ACCOUNT_PICK_ACTION_IDS or not users:
+            await query.answer("Sesi pemilihan akun tidak valid.", show_alert=True)
+            return
+        parts = data.split(CALLBACK_SEP)
+        page = _safe_int(parts[1] if len(parts) > 1 else "0", default=0)
+        page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
+        page = max(0, min(page, page_max))
+        state["page"] = page
+        _store_pending_state(context, KEY_PENDING_ACCOUNT_PICK, state, chat_id)
+        menu = runtime.catalog.get_menu(menu_id)
+        action = runtime.catalog.get_action(menu_id, action_id)
+        if menu is None or action is None:
+            await query.answer("Action tidak ditemukan.", show_alert=True)
+            return
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=_account_pick_text(menu_id, action.label, page, users),
+            reply_markup=_account_pick_keyboard(menu_id, page, users, menu_page),
+        )
+        return
+
+    if data.startswith(f"acc_pick{CALLBACK_SEP}"):
+        state, state_err = _get_pending_state(context, KEY_PENDING_ACCOUNT_PICK, chat_id)
+        if state is None:
+            if state_err:
+                await query.answer(state_err, show_alert=True)
+                return
+            await query.answer("Sesi pemilihan akun tidak aktif.", show_alert=True)
+            return
+        menu_id = str(state.get("menu_id") or XRAY_USER_MENU_ID)
+        action_id = str(state.get("action_id") or "").strip()
+        users = state.get("users") if isinstance(state.get("users"), list) else []
+        menu_page = _safe_int(str(state.get("menu_page") or "0"), default=0)
+        if menu_id not in DELETE_PICK_MENU_IDS or action_id not in ACCOUNT_PICK_ACTION_IDS or not users:
+            await query.answer("Sesi pemilihan akun tidak valid.", show_alert=True)
+            return
+        parts = data.split(CALLBACK_SEP)
+        idx = _safe_int(parts[1] if len(parts) > 1 else "-1", default=-1)
+        if idx < 0 or idx >= len(users):
+            await query.answer("User tidak valid.", show_alert=True)
+            return
+        selected = users[idx] if isinstance(users[idx], dict) else {}
+        proto = str(selected.get("proto") or "").strip().lower()
+        username = str(selected.get("username") or "").strip()
+        if not username or proto not in _menu_protocol_scope(menu_id):
+            await query.answer("User tidak valid.", show_alert=True)
+            return
+        context.user_data.pop(KEY_PENDING_ACCOUNT_PICK, None)
+
+        menu = runtime.catalog.get_menu(menu_id)
+        action = runtime.catalog.get_action(menu_id, action_id)
+        if menu is None or action is None:
+            await query.answer("Action tidak ditemukan.", show_alert=True)
+            return
+
+        initial_params = {"username": username}
+        if menu_id == XRAY_USER_MENU_ID:
+            initial_params["proto"] = proto
+        await _start_action_flow(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            user_id=user_id,
+            query=query,
+            menu=menu,
+            action=action,
+            initial_params=initial_params,
+            page=menu_page,
+        )
+        return
+
     if data.startswith(f"dup_proto_menu{CALLBACK_SEP}"):
         parts = data.split(CALLBACK_SEP)
         menu_id = parts[1] if len(parts) > 1 else XRAY_USER_MENU_ID
+        menu_page = _safe_int(parts[2] if len(parts) > 2 else "0", default=0)
         await _show_delete_user_proto_picker(
             context=context,
             chat_id=chat_id,
             query=query,
             menu_id=menu_id,
+            menu_page=menu_page,
         )
         return
 
     if data.startswith(f"dup_proto{CALLBACK_SEP}"):
         parts = data.split(CALLBACK_SEP)
-        if len(parts) != 3:
+        if len(parts) not in {3, 4}:
             await query.answer("Protocol tidak valid.", show_alert=True)
             return
         menu_id = str(parts[1]).strip()
         proto = parts[2].strip().lower()
+        menu_page = _safe_int(parts[3] if len(parts) > 3 else "0", default=0)
         if menu_id not in DELETE_PICK_MENU_IDS or proto not in _menu_protocol_scope(menu_id):
             await query.answer("Protocol tidak valid.", show_alert=True)
             return
@@ -1982,6 +2525,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             menu_id=menu_id,
             proto=proto,
             page=0,
+            menu_page=menu_page,
         )
         return
 
@@ -1996,6 +2540,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         proto = str(state.get("proto") or "").strip().lower()
         menu_id = str(state.get("menu_id") or XRAY_USER_MENU_ID)
         users = state.get("users") if isinstance(state.get("users"), list) else []
+        menu_page = _safe_int(str(state.get("menu_page") or "0"), default=0)
         if proto not in _menu_protocol_scope(menu_id) or not users:
             await query.answer("Sesi pemilihan user tidak valid.", show_alert=True)
             return
@@ -2010,7 +2555,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text=_delete_pick_text_users(menu_id, proto, page, users),
-            reply_markup=_delete_pick_users_keyboard(menu_id, page, users),
+            reply_markup=_delete_pick_users_keyboard(menu_id, page, users, menu_page),
         )
         return
 
@@ -2053,6 +2598,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 "menu_id": menu_id,
                 "action_id": "delete_user",
                 "params": params,
+                "page": menu_page,
             },
             chat_id,
         )
@@ -2061,13 +2607,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text=confirm_text(menu, action, params),
-            reply_markup=_confirm_keyboard(menu_id),
+            reply_markup=_confirm_keyboard(menu_id, menu_page),
         )
         return
 
     if data.startswith(f"qac_pick_menu{CALLBACK_SEP}"):
         parts = data.split(CALLBACK_SEP)
         menu_id = parts[1] if len(parts) > 1 else XRAY_QAC_MENU_ID
+        menu_page = _safe_int(parts[2] if len(parts) > 2 else "0", default=0)
         await _show_qac_user_picker(
             runtime=runtime,
             context=context,
@@ -2075,6 +2622,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
             menu_id=menu_id,
             page=0,
+            menu_page=menu_page,
+        )
+        return
+
+    if data.startswith(f"qac_refresh{CALLBACK_SEP}"):
+        parts = data.split(CALLBACK_SEP)
+        menu_id = parts[1] if len(parts) > 1 else XRAY_QAC_MENU_ID
+        page = _safe_int(parts[2] if len(parts) > 2 else "0", default=0)
+        menu = runtime.catalog.get_menu(menu_id)
+        if menu is None or menu_id not in QAC_MENU_IDS:
+            await query.answer("Menu QAC tidak ditemukan.", show_alert=True)
+            return
+        await _render_qac_menu(
+            runtime=runtime,
+            context=context,
+            chat_id=chat_id,
+            query=query,
+            menu=menu,
+            page=page,
         )
         return
 
@@ -2088,6 +2654,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         menu_id = str(state.get("menu_id") or XRAY_QAC_MENU_ID)
         users = state.get("users") if isinstance(state.get("users"), list) else []
+        menu_page = _safe_int(str(state.get("menu_page") or "0"), default=0)
         if menu_id not in QAC_MENU_IDS or not users:
             await query.answer("Sesi pemilihan user QAC tidak valid.", show_alert=True)
             return
@@ -2102,7 +2669,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text=_qac_pick_text(menu_id, page, users),
-            reply_markup=_qac_pick_keyboard(menu_id, page, users),
+            reply_markup=_qac_pick_keyboard(menu_id, page, users, menu_page),
         )
         return
 
@@ -2116,6 +2683,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         menu_id = str(state.get("menu_id") or XRAY_QAC_MENU_ID)
         users = state.get("users") if isinstance(state.get("users"), list) else []
+        menu_page = _safe_int(str(state.get("menu_page") or "0"), default=0)
         if menu_id not in QAC_MENU_IDS or not users:
             await query.answer("Sesi pemilihan user QAC tidak valid.", show_alert=True)
             return
@@ -2148,7 +2716,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             query=query,
             menu=menu,
-            page=0,
+            page=menu_page,
         )
         return
 
@@ -2174,6 +2742,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         menu_id = str(pending.get("menu_id", ""))
         action_id = str(pending.get("action_id", ""))
         params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+        page = _safe_int(str(pending.get("page") or "0"), default=0)
         context.user_data.pop(KEY_PENDING_CONFIRM, None)
 
         await _send_or_edit(
@@ -2181,7 +2750,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text="<b>⏳ Menjalankan action...</b>",
-            reply_markup=_result_keyboard(menu_id),
+            reply_markup=_result_keyboard(menu_id, page),
         )
         await _run_action(
             runtime=runtime,
@@ -2190,6 +2759,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             menu_id=menu_id,
             action_id=action_id,
             params=params,
+            page=page,
             query=query,
         )
         if action_id == "restore_from_upload":
@@ -2199,15 +2769,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     parts = data.split(CALLBACK_SEP)
     kind = parts[0]
 
-    if kind == "m" and len(parts) == 2:
+    if kind == "m" and len(parts) in {2, 3}:
         _clear_pending(context)
         menu = runtime.catalog.get_menu(parts[1])
         if menu is None:
             await query.answer("Menu tidak ditemukan.", show_alert=True)
             return
+        page = _safe_int(parts[2] if len(parts) > 2 else "0", default=0)
         if not _visible_actions(runtime, menu):
             await query.answer("Tidak ada action yang aktif di menu ini.", show_alert=True)
             return
+        parent_page = _get_menu_parent_page(context, menu.id, chat_id=chat_id)
         if menu.id in QAC_MENU_IDS:
             await _render_qac_menu(
                 runtime=runtime,
@@ -2215,15 +2787,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 chat_id=chat_id,
                 query=query,
                 menu=menu,
-                page=0,
+                page=page,
             )
             return
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
             context=context,
-            text=menu_text(menu, 0, _menu_pages(runtime, menu)),
-            reply_markup=_menu_keyboard(runtime, menu, 0),
+            text=menu_text(menu, page, _menu_pages(runtime, menu)),
+            reply_markup=_menu_keyboard(runtime, menu, page, parent_page=parent_page),
         )
         return
 
@@ -2240,6 +2812,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except ValueError:
             page = 0
         page = max(0, min(page, _menu_pages(runtime, menu) - 1))
+        parent_page = _get_menu_parent_page(context, menu.id, chat_id=chat_id)
         if menu.id in QAC_MENU_IDS:
             await _render_qac_menu(
                 runtime=runtime,
@@ -2255,13 +2828,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text=menu_text(menu, page, _menu_pages(runtime, menu)),
-            reply_markup=_menu_keyboard(runtime, menu, page),
+            reply_markup=_menu_keyboard(runtime, menu, page, parent_page=parent_page),
         )
         return
 
-    if kind == "a" and len(parts) == 3:
+    if kind == "a" and len(parts) in {3, 4}:
         menu_id = parts[1]
-        action_id = parts[2]
+        if len(parts) > 3:
+            page = _safe_int(parts[2], default=0)
+            action_id = parts[3]
+        else:
+            page = 0
+            action_id = parts[2]
         menu = runtime.catalog.get_menu(menu_id)
         action = runtime.catalog.get_action(menu_id, action_id)
         if menu is None or action is None:
@@ -2273,12 +2851,45 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         _clear_pending(context)
 
-        if menu_id in DELETE_PICK_MENU_IDS and action_id == "delete_user":
-            await _show_delete_user_proto_picker(
+        if menu_id in DELETE_PICK_MENU_IDS and action_id in ACCOUNT_PICK_ACTION_IDS:
+            await _show_account_user_picker(
+                runtime=runtime,
                 context=context,
                 chat_id=chat_id,
                 query=query,
                 menu_id=menu_id,
+                action_id=action_id,
+                page=0,
+                menu_page=page,
+            )
+            return
+
+        if action.mode == "menu":
+            target_menu_id = str(action.target_menu or "").strip()
+            target_menu = runtime.catalog.get_menu(target_menu_id)
+            if target_menu is None:
+                await query.answer("Submenu tidak ditemukan.", show_alert=True)
+                return
+            if not _visible_actions(runtime, target_menu):
+                await query.answer("Tidak ada action yang aktif di submenu ini.", show_alert=True)
+                return
+            _set_menu_parent_page(context, target_menu.id, chat_id=chat_id, parent_page=page)
+            if target_menu.id in QAC_MENU_IDS:
+                await _render_qac_menu(
+                    runtime=runtime,
+                    context=context,
+                    chat_id=chat_id,
+                    query=query,
+                    menu=target_menu,
+                    page=0,
+                )
+                return
+            await _send_or_edit(
+                query=query,
+                chat_id=chat_id,
+                context=context,
+                text=menu_text(target_menu, 0, _menu_pages(runtime, target_menu)),
+                reply_markup=_menu_keyboard(runtime, target_menu, 0, parent_page=page),
             )
             return
 
@@ -2289,6 +2900,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 {
                     "menu_id": menu_id,
                     "action_id": action_id,
+                    "page": page,
                 },
                 chat_id,
             )
@@ -2303,7 +2915,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     "Setelah file diterima, bot akan minta konfirmasi sebelum restore dijalankan."
                 ),
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}")]]
+                    [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{page}")]]
                 ),
             )
             return
@@ -2322,133 +2934,24 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 query=query,
                 menu_id=menu_id,
                 page=0,
+                menu_page=page,
             )
             return
 
-        if action.mode == "modal" and action.modal and len(action.modal.fields) > 0:
-            initial_index = 0
-            while initial_index < len(action.modal.fields) and action.modal.fields[initial_index].id in initial_params:
-                initial_index += 1
-            if initial_index >= len(action.modal.fields):
-                params = dict(initial_params)
-                if action.confirm:
-                    _store_pending_state(
-                        context,
-                        KEY_PENDING_CONFIRM,
-                        {
-                            "menu_id": menu_id,
-                            "action_id": action_id,
-                            "params": params,
-                        },
-                        chat_id,
-                    )
-                    await _send_or_edit(
-                        query=query,
-                        chat_id=chat_id,
-                        context=context,
-                        text=confirm_text(menu, action, params),
-                        reply_markup=_confirm_keyboard(menu_id),
-                    )
-                    return
-
-                wait = _cooldown_remaining(
-                    context,
-                    user_id=user_id,
-                    key=KEY_LAST_ACTION_TS,
-                    min_interval_sec=runtime.config.action_cooldown_seconds,
-                )
-                if wait > 0:
-                    await query.answer(_throttle_message(wait), show_alert=True)
-                    return
-
-                await _send_or_edit(
-                    query=query,
-                    chat_id=chat_id,
-                    context=context,
-                    text="<b>⏳ Menjalankan action...</b>",
-                    reply_markup=_result_keyboard(menu_id),
-                )
-                await _run_action(
-                    runtime=runtime,
-                    context=context,
-                    chat_id=chat_id,
-                    menu_id=menu_id,
-                    action_id=action_id,
-                    params=params,
-                    query=query,
-                )
-                return
-
-            pending_form = _store_pending_state(
-                context,
-                KEY_PENDING_FORM,
-                {
-                    "menu_id": menu_id,
-                    "action_id": action_id,
-                    "index": initial_index,
-                    "params": dict(initial_params),
-                },
-                chat_id,
-            )
-            await _prompt_next_form_field(
-                runtime=runtime,
-                context=context,
-                chat_id=chat_id,
-                pending=pending_form,
-                query=query,
-            )
-            return
-
-        params: dict[str, str] = dict(initial_params)
-        if action.confirm:
-            _store_pending_state(
-                context,
-                KEY_PENDING_CONFIRM,
-                {
-                    "menu_id": menu_id,
-                    "action_id": action_id,
-                    "params": params,
-                },
-                chat_id,
-            )
-            await _send_or_edit(
-                query=query,
-                chat_id=chat_id,
-                context=context,
-                text=confirm_text(menu, action, params),
-                reply_markup=_confirm_keyboard(menu_id),
-            )
-            return
-
-        wait = _cooldown_remaining(
-            context,
-            user_id=user_id,
-            key=KEY_LAST_ACTION_TS,
-            min_interval_sec=runtime.config.action_cooldown_seconds,
-        )
-        if wait > 0:
-            await query.answer(_throttle_message(wait), show_alert=True)
-            return
-
-        await _send_or_edit(
-            query=query,
-            chat_id=chat_id,
-            context=context,
-            text="<b>⏳ Menjalankan action...</b>",
-            reply_markup=_result_keyboard(menu_id),
-        )
-        await _run_action(
+        await _start_action_flow(
             runtime=runtime,
             context=context,
             chat_id=chat_id,
-            menu_id=menu_id,
-            action_id=action_id,
-            params=params,
+            user_id=user_id,
             query=query,
+            menu=menu,
+            action=action,
+            initial_params=initial_params,
+            page=page,
         )
         return
 
-    await query.answer("Interaksi tidak dikenali. Jalankan /panel lagi.", show_alert=True)
+    await query.answer("Interaksi tidak dikenali. Jalankan /menu lagi.", show_alert=True)
 
 
 def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
@@ -2500,7 +3003,7 @@ async def post_init(application: Application) -> None:
     try:
         await application.bot.set_my_commands(
             [
-                BotCommand("panel", "Open panel VPS"),
+                BotCommand("menu", "Open menu utama"),
                 BotCommand("cleanup", "Hapus pesan menumpuk"),
             ]
         )
@@ -2526,7 +3029,7 @@ def main() -> None:
     application.bot_data["runtime"] = runtime
 
     application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("panel", cmd_panel))
+    application.add_handler(CommandHandler("menu", cmd_menu))
     application.add_handler(CommandHandler("cleanup", cmd_cleanup))
 
     application.add_handler(CallbackQueryHandler(on_callback))

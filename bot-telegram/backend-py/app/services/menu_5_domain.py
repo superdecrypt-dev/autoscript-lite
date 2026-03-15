@@ -7,6 +7,14 @@ def handle(action: str, params: dict, settings) -> dict:
     if action == "domain_info":
         title, msg = system.op_domain_info()
         return ok_response(title, msg)
+    if action == "tls_info":
+        ok, title, msg = system.op_tls_info()
+        if ok:
+            return ok_response(title, msg)
+        return error_response("tls_info_failed", title, msg)
+    if action == "tls_expiry":
+        title, msg = system.op_tls_expiry()
+        return ok_response(title, msg)
     if action == "nginx_server_name":
         title, msg = system.op_domain_nginx_server_name()
         return ok_response(title, msg)
@@ -85,6 +93,13 @@ def handle(action: str, params: dict, settings) -> dict:
         if ok_ref:
             return ok_response(title, msg)
         return error_response("domain_refresh_failed", title, msg)
+    if action == "renew_cert":
+        if not settings.mutations_enabled:
+            return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
+        ok, title, msg = system_mutations.op_security_renew_cert()
+        if ok:
+            return ok_response(title, msg)
+        return error_response("renew_cert_failed", title, msg)
     if action == "domain_guard_check":
         ok_chk, title, msg = system.op_domain_guard_check()
         if ok_chk:
