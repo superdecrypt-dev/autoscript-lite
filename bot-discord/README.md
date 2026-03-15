@@ -1,48 +1,40 @@
-# Bot Discord Standalone (Slash Command + UI Follow-up)
+# Bot Discord Standalone (Hybrid Slash + Interactive Menu)
 
 Bot ini berdiri sendiri dan tidak menjalankan `manage.sh`. Perilaku menunya dibuat mirip struktur `manage.sh`, tetapi seluruh aksi dieksekusi lewat backend sendiri.
 
 ## Arsitektur
-- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash command dan tombol konfirmasi/notifikasi.
+- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash entrypoint, tombol, select menu, modal, dan konfirmasi.
 - `backend-py/`: API internal (`FastAPI`) untuk operasi sistem/Xray.
 - `systemd/`: template service untuk deployment.
 
 ## Alur Interaksi
-1. Admin jalankan slash command sesuai domain aksi, misalnya `/status`, `/ops`, atau `/notify`.
-2. Gateway memproses command dan, bila perlu, melanjutkan flow dengan tombol konfirmasi/notifikasi.
+1. Admin membuka `/menu` untuk dashboard utama, atau memakai `/status` dan `/notify` untuk aksi cepat.
+2. Gateway memproses command lalu melanjutkan flow lewat tombol, select menu, modal, dan konfirmasi.
 3. Gateway memanggil backend domain action (`/api/{domain}/action`) dengan secret internal.
 4. Backend menjalankan aksi dan mengembalikan hasil ke Discord.
 
 ## Slash Command Aktif
+- `/menu`
 - `/status`
-- `/user`
-- `/qac`
-- `/domain`
-- `/network`
-- `/ops`
 - `/notify`
 
-Bot ini memakai slash-native murni. Jalur `/panel` dan interaksi legacy lama tidak dipakai lagi.
+Bot ini tidak lagi memakai `/panel`. Jalur aktif sekarang memakai model hybrid:
+- `/menu` membuka dashboard `Accounts`, `QAC`, `Domain`, `Network`, dan `Ops`
+- `/status` dipakai untuk cek cepat
+- `/notify` dipakai untuk konfigurasi notifikasi
 
 ## UX Terkini
-- Option `username`, `root_domain`, dan `service` pada slash command utama memakai autocomplete.
-- `Add Xray User`:
-  - memilih protokol lewat option slash command,
-  - output sukses berupa embed ringkasan (`Username`, `Protokol`, `Masa Aktif`, `Quota`, `IP Limit`, `Speed Limit`),
-  - detail `ACCOUNT INFO` tetap ditampilkan,
-  - lampiran file `username@protokol.txt`.
-- `Xray Account Info`:
-  - pemilihan user lewat option slash command,
-  - output berupa embed ringkasan + detail `ACCOUNT INFO`,
-  - lampiran file `username@protokol.txt`.
-- `SSH Users` dan `SSH QAC` tersedia sebagai menu terpisah.
-- `Domain Control`:
-  - `Set Domain Manual` untuk domain sendiri (sudah pointing ke IP VPS),
-  - `Set Domain Auto (API Cloudflare)` untuk root domain bawaan sistem,
-  - root domain dipilih lewat option slash command (`vyxara1.web.id`, `vyxara2.web.id`).
-- `Network Controls`:
-  - `Set DNS Query Strategy` memakai option slash command.
-- `Run Speedtest` diringkas ke metrik inti: ISP, Latency, Packet Loss, Download, Upload.
+- `/menu` membuka 5 kategori utama: `Accounts`, `QAC`, `Domain`, `Network`, `Ops`
+- `Accounts` memakai button/select/modal untuk:
+  - `Add User`
+  - `Account Info`
+  - `Delete User`
+  - `Extend Expiry`
+  - `Reset Password` (SSH)
+- `QAC` memakai picker user lalu panel aksi per-user
+- `Domain`, `Network`, dan `Ops` juga sudah bisa dijalankan dari `/menu`
+- Output panjang seperti `ACCOUNT INFO` dan export tetap dikirim sebagai teks + attachment
+- Semua interaction operasional memakai `flags: MessageFlags.Ephemeral`
 
 ## Jalankan Lokal
 ```bash
@@ -111,9 +103,9 @@ tail -n 50 /var/log/bot-discord/monitor-lite.log
 ```
 
 ## Arah UX
-- Slash command dipakai sebagai entrypoint utama.
-- Button dipakai hanya untuk konfirmasi aksi berisiko dan kontrol notifikasi.
-- `/panel` tidak dipakai lagi.
+- Slash command publik dibuat tetap pendek: `/menu`, `/status`, `/notify`
+- Flow utama berjalan lewat button, select menu, modal, dan konfirmasi
+- `/panel` tidak dipakai lagi
 
 ## Catatan Keamanan
 - Simpan token hanya di env file (`/etc/bot-discord/bot.env` saat deploy).

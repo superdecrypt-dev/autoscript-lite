@@ -25,7 +25,7 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
-async function buildOverviewStatusEmbed(client: Client, backend: BackendClient): Promise<EmbedBuilder> {
+export async function buildOverviewStatusEmbed(client: Client, backend: BackendClient): Promise<EmbedBuilder> {
   const wsPingRaw = client.ws.ping;
   const wsPingText = Number.isFinite(wsPingRaw) && wsPingRaw >= 0 ? `${Math.round(wsPingRaw)} ms` : "n/a";
   const hostUptime = formatDuration(os.uptime());

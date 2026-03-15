@@ -11,7 +11,7 @@ Dokumen ini menjadi acuan tetap implementasi bot Discord standalone pada repo in
 ## 1) Prinsip Dasar
 - Bot Discord berdiri sendiri dan **tidak mengeksekusi `manage.sh`**.
 - Perilaku menu mengikuti struktur CLI `manage.sh` (menu 1-8 + 12), tetapi eksekusi action dilakukan oleh backend bot.
-- UI Discord bergerak ke model slash-native; button dipakai hanya untuk konfirmasi/notify, bukan entry point utama.
+- UI Discord memakai model hybrid: slash publik tetap sedikit, sedangkan flow utama berjalan lewat button/select/modal.
 
 ## 2) Struktur Direktori Bot
 ```text
@@ -96,7 +96,8 @@ Script monitoring:
 Ketentuan UX gateway (terkini):
 - Respons private interaction menggunakan `flags: MessageFlags.Ephemeral` (menghindari warning deprecate).
 - Output action panjang dipotong per chunk agar tidak spam di perangkat mobile.
-- Menu bot operasional: 1-8 dan 12; instalasi bot tetap melalui CLI installer terpisah.
+- Slash publik: `/menu`, `/status`, `/notify`.
+- Kategori operasional utama tersedia dari `/menu`: `Accounts`, `QAC`, `Domain`, `Network`, `Ops`.
 
 ## 4) Update Arsitektur Terkini (2026-02-25)
 1. Menu dan kapabilitas baru:
@@ -115,7 +116,8 @@ Ketentuan UX gateway (terkini):
    - Gateway (`discord.js`) -> backend FastAPI -> adapter system/mutations -> respon terstruktur (`ok/code/title/message/data`).
 5. Status validasi terbaru:
    - Build gateway + compile backend PASS.
-   - Entry point aktif hanya slash command; `/panel` dan flow legacy tidak dipakai.
+   - Entry point aktif: `/menu`, `/status`, `/notify`.
+   - `/panel` dan flow legacy tidak dipakai.
 
 ## 5) Lokasi Deploy & Integrasi Root Script
 - Lokasi bot terpasang: `/opt/bot-discord`

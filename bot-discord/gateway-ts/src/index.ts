@@ -6,7 +6,6 @@ import {
   MessageFlags,
   REST,
   Routes,
-  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
 
@@ -15,7 +14,9 @@ import { isAuthorized } from "./authz";
 import { ChannelPolicyStore } from "./channel_policy";
 import { loadConfig } from "./config";
 import { handleButton } from "./interactions/buttons";
-import { handleSlashAutocomplete } from "./slash/autocomplete";
+import { handleMenuButton } from "./interactions/menu";
+import { handleMenuModal } from "./interactions/modals";
+import { handleMenuSelect } from "./interactions/selects";
 import { handleSlashCommand } from "./slash/dispatch";
 import { handleNotifyControlButton, sendServiceNotification } from "./slash/handlers/notify";
 import { buildSlashCommands } from "./slash/registry";
@@ -103,11 +104,6 @@ async function assertAuthorized(interaction: ChatInputCommandInteraction): Promi
   return true;
 }
 
-function isAuthorizedAutocomplete(interaction: AutocompleteInteraction): boolean {
-  const member = interaction.inGuild() ? interaction.member : null;
-  return interaction.inGuild() && isAuthorized(member, interaction.user.id, cfg);
-}
-
 async function runNotifSchedulerTick(): Promise<void> {
   if (notifSchedulerBusy) return;
   notifSchedulerBusy = true;
@@ -149,7 +145,7 @@ client.once(Events.ClientReady, async (ready) => {
   console.log(`[gateway] logged in as ${ready.user.tag}`);
   const registered = await registerSlashCommandsWithRetry();
   if (registered) {
-    console.log("[gateway] slash commands registered: /status, /user, /qac, /domain, /network, /ops, /notify.");
+    console.log("[gateway] slash commands registered: /menu, /status, /notify.");
   } else {
     console.error("[gateway] slash command registration failed after retries; bot continues running.");
   }
@@ -159,15 +155,6 @@ client.once(Events.ClientReady, async (ready) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isAutocomplete()) {
-      if (!isAuthorizedAutocomplete(interaction)) {
-        await interaction.respond([]);
-        return;
-      }
-      await handleSlashAutocomplete(interaction, { backend });
-      return;
-    }
-
     if (interaction.isChatInputCommand()) {
       if (!(await assertAuthorized(interaction))) return;
       await handleSlashCommand(interaction, { client, backend, channelPolicyStore });
@@ -181,6 +168,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const notifHandled = await handleNotifyControlButton(interaction, { client, channelPolicyStore });
       if (notifHandled) return;
+      const menuHandled = await handleMenuButton(interaction, { client, backend });
+      if (menuHandled) return;
       const handled = await handleButton(interaction, backend);
       if (!handled && !interaction.replied) {
         await interaction.reply({ content: "Aksi tidak dikenali.", flags: MessageFlags.Ephemeral });
@@ -193,10 +182,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: "Akses ditolak.", flags: MessageFlags.Ephemeral });
         return;
       }
-      await interaction.reply({
-        content: "Form legacy tidak lagi didukung. Gunakan slash command aktif.",
-        flags: MessageFlags.Ephemeral,
-      });
+      const menuHandled = await handleMenuModal(interaction, backend);
+      if (!menuHandled) {
+        await interaction.reply({
+          content: "Form tidak dikenali. Jalankan /menu lagi.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
       return;
     }
 
@@ -205,10 +197,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: "Akses ditolak.", flags: MessageFlags.Ephemeral });
         return;
       }
-      await interaction.reply({
-        content: "Select menu legacy tidak lagi didukung. Gunakan slash command aktif.",
-        flags: MessageFlags.Ephemeral,
-      });
+      const menuHandled = await handleMenuSelect(interaction, backend);
+      if (!menuHandled) {
+        await interaction.reply({
+          content: "Select menu tidak dikenali. Jalankan /menu lagi.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
     }
   } catch (err) {
     if (isIgnorableInteractionError(err)) {
