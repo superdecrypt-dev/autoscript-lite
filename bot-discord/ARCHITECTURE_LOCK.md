@@ -11,15 +11,11 @@ Dokumen ini menjadi acuan tetap implementasi bot Discord standalone pada repo in
 ## 1) Prinsip Dasar
 - Bot Discord berdiri sendiri dan **tidak mengeksekusi `manage.sh`**.
 - Perilaku menu mengikuti struktur CLI `manage.sh` (menu 1-8 + 12), tetapi eksekusi action dilakukan oleh backend bot.
-- UI Discord meminimalkan slash command (entry point `/panel`) dan menggunakan button/modal untuk interaksi utama.
+- UI Discord bergerak ke model slash-native; button dipakai hanya untuk konfirmasi/notify, bukan entry point utama.
 
 ## 2) Struktur Direktori Bot
 ```text
 bot-discord/
-├─ shared/
-│  ├─ commands.json
-│  ├─ error_codes.json
-│  └─ schemas/
 ├─ gateway-ts/
 │  ├─ package.json
 │  ├─ tsconfig.json
@@ -28,10 +24,9 @@ bot-discord/
 │     ├─ index.ts
 │     ├─ config.ts
 │     ├─ authz.ts
-│     ├─ router.ts
 │     ├─ api_client.ts
 │     ├─ interactions/
-│     └─ views/
+│     └─ slash/
 ├─ backend-py/
 │  ├─ requirements.txt
 │  ├─ .env.example
@@ -114,13 +109,13 @@ Ketentuan UX gateway (terkini):
    - Label tombol diseragamkan dengan pola `View/Run/Set/Toggle`.
    - Action yang memiliki dampak tinggi tetap memakai konfirmasi (`confirm`).
 3. Kontrak data:
-   - `shared/commands.json` harus sinkron dengan view gateway dan service backend.
+   - Gateway Discord memakai schema slash internal TypeScript sebagai sumber navigasi aktif.
    - Export analytics memakai `data.download_file` dengan payload base64 untuk attachment Discord.
 4. Jalur eksekusi runtime:
    - Gateway (`discord.js`) -> backend FastAPI -> adapter system/mutations -> respon terstruktur (`ok/code/title/message/data`).
 5. Status validasi terbaru:
    - Build gateway + compile backend PASS.
-   - Checklist `/panel` menu 1/5/12 di staging PASS per action.
+   - Entry point aktif hanya slash command; `/panel` dan flow legacy tidak dipakai.
 
 ## 5) Lokasi Deploy & Integrasi Root Script
 - Lokasi bot terpasang: `/opt/bot-discord`

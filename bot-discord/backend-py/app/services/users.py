@@ -64,7 +64,7 @@ def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | di
     return require_protocol(params, title, allowed=set(protocols))
 
 
-def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") -> dict:
+def handle_scoped(action: str, params: dict, *, scope: str = "all") -> dict:
     protocol_scope = _scope_protocols(scope)
 
     if action == "list_users":
@@ -80,8 +80,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, msg)
 
     if action == "add_user":
-        if not settings.enable_dangerous_actions:
-            return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Add User")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
         if not ok_p:
@@ -209,8 +207,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return ok_response(title, "\n".join(lines), data=data)
 
     if action == "delete_user":
-        if not settings.enable_dangerous_actions:
-            return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Delete User")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
         if not ok_p:
@@ -224,8 +220,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("user_delete_failed", title, msg_del)
 
     if action == "extend_expiry":
-        if not settings.enable_dangerous_actions:
-            return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Set User Expiry")
         ok_p, proto_or_err = _resolve_proto(params, title, scope)
         if not ok_p:
@@ -250,8 +244,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         return error_response("user_extend_failed", title, msg_ext)
 
     if scope == "ssh" and action == "reset_password":
-        if not settings.enable_dangerous_actions:
-            return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
         title = _scope_title(scope, "Reset Password")
         ok_u, user_or_err = require_username(params, title)
         if not ok_u:
@@ -301,5 +293,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")
 
 
-def handle(action: str, params: dict, settings) -> dict:
-    return handle_scoped(action, params, settings, scope="xray")
+def handle(action: str, params: dict) -> dict:
+    scope = "ssh" if str(params.get("type") or params.get("proto") or "").strip().lower() == system.SSH_PROTOCOL else "xray"
+    return handle_scoped(action, params, scope=scope)

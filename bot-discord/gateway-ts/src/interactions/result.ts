@@ -1,4 +1,12 @@
-import { AttachmentBuilder, ButtonInteraction, EmbedBuilder, MessageFlags, ModalSubmitInteraction, StringSelectMenuInteraction } from "discord.js";
+import {
+  AttachmentBuilder,
+  ButtonInteraction,
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  MessageFlags,
+  ModalSubmitInteraction,
+  StringSelectMenuInteraction,
+} from "discord.js";
 
 const MAX_CHUNK = 1800;
 const MAX_RESULT_CHUNKS = 2;
@@ -14,7 +22,7 @@ function splitText(input: string): string[] {
   return parts;
 }
 
-type Replyable = ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction;
+type Replyable = ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction | StringSelectMenuInteraction;
 
 type JsonDownloadPayload = {
   filename: string;

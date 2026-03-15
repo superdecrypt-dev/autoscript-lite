@@ -30,15 +30,6 @@ run_gate_1() {
     python3 -m py_compile "${backend_py_files[@]}"
   fi
 
-  python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-p = Path(os.environ["BOT_DIR"]) / "shared" / "commands.json"
-obj = json.loads(p.read_text(encoding="utf-8"))
-print(f"gate1_commands_json_ok menus={len(obj.get('menus', []))}")
-PY
-
   (
     cd "${BOT_DIR}/gateway-ts"
     npm run build
@@ -54,28 +45,24 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str((Path(os.environ["BOT_DIR"]) / "backend-py").resolve()))
-from app.services import menu_5_domain
-
-settings_on = type("S", (), {"enable_dangerous_actions": True})()
-settings_off = type("S", (), {"enable_dangerous_actions": False})()
+from app.services import domain
 
 cases = [
-    ("domain_info_success", "domain_info", {}, settings_on, "ok"),
-    ("setup_domain_custom_invalid_domain", "setup_domain_custom", {"domain": "abc"}, settings_on, "setup_domain_custom_failed"),
-    ("setup_domain_cloudflare_invalid_root", "setup_domain_cloudflare", {"root_domain": "999"}, settings_on, "setup_domain_cloudflare_failed"),
-    ("strict_bool_proxied_invalid", "setup_domain_cloudflare", {"root_domain": "999", "proxied": "abc"}, settings_on, "setup_domain_cloudflare_failed"),
-    ("dangerous_action_blocked", "setup_domain_custom", {"domain": "vpn.example.com"}, settings_off, "forbidden"),
+    ("domain_info_success", "domain_info", {}, "ok"),
+    ("setup_domain_custom_invalid_domain", "setup_domain_custom", {"domain": "abc"}, "setup_domain_custom_failed"),
+    ("setup_domain_cloudflare_invalid_root", "setup_domain_cloudflare", {"root_domain": "999"}, "setup_domain_cloudflare_failed"),
+    ("strict_bool_proxied_invalid", "setup_domain_cloudflare", {"root_domain": "999", "proxied": "abc"}, "setup_domain_cloudflare_failed"),
 ]
 
 bad = []
-for name, action, params, settings, expect_code in cases:
-    res = menu_5_domain.handle(action, params, settings)
+for name, action, params, expect_code in cases:
+    res = domain.handle(action, params)
     ok = bool(res.get("code") == expect_code or (expect_code == "ok" and res.get("ok") is True))
     print(f"gate2_{name}={'PASS' if ok else 'FAIL'} code={res.get('code')} ok={res.get('ok')}")
     if not ok:
         bad.append(name)
 
-original_cf = menu_5_domain.system_mutations.op_domain_setup_cloudflare
+original_cf = domain.system_mutations.op_domain_setup_cloudflare
 captured = {}
 contract_ok = False
 try:
@@ -87,8 +74,8 @@ try:
         captured["allow_existing_same_ip"] = allow_existing_same_ip
         return True, "Domain Control - Set Domain (Cloudflare Wizard)", "mocked"
 
-    menu_5_domain.system_mutations.op_domain_setup_cloudflare = fake_cf
-    res_contract = menu_5_domain.handle(
+    domain.system_mutations.op_domain_setup_cloudflare = fake_cf
+    res_contract = domain.handle(
         "setup_domain_cloudflare",
         {
             "root_domain": "vyxara1.web.id",
@@ -97,7 +84,6 @@ try:
             "proxied": "abc",
             "allow_existing_same_ip": "xyz",
         },
-        settings_on,
     )
     warnings = ((res_contract.get("data") or {}).get("warnings") or [])
     contract_ok = bool(
@@ -108,7 +94,7 @@ try:
         and len(warnings) >= 2
     )
 finally:
-    menu_5_domain.system_mutations.op_domain_setup_cloudflare = original_cf
+    domain.system_mutations.op_domain_setup_cloudflare = original_cf
 
 print(f"gate2_bool_invalid_warn_default={'PASS' if contract_ok else 'FAIL'}")
 if not contract_ok:
@@ -128,8 +114,6 @@ run_gate_3() {
     export INTERNAL_SHARED_SECRET="gate3-gateall-secret"
     export BACKEND_HOST="127.0.0.1"
     export BACKEND_PORT="18082"
-    export COMMANDS_FILE="${BOT_DIR}/shared/commands.json"
-    export ENABLE_DANGEROUS_ACTIONS="true"
     "${BOT_DIR}/.venv/bin/uvicorn" app.main:app --host "${BACKEND_HOST}" --port "${BACKEND_PORT}" >"${log_file}" 2>&1 &
     local uv_pid="$!"
     trap 'kill "${uv_pid}" >/dev/null 2>&1 || true' EXIT
@@ -177,17 +161,14 @@ def rec(name, ok):
 
 s, b = get("/health", headers={"X-Internal-Shared-Secret": SECRET})
 rec("health", s == 200 and b.get("status") == "ok")
-s, b = get("/api/main-menu", headers={"X-Internal-Shared-Secret": SECRET})
-menu_ids = [str(m.get("id")) for m in (b.get("menus") or []) if isinstance(m, dict)]
-rec("main_menu_auth", s == 200 and b.get("menu_count", 0) >= 9 and "9" in menu_ids)
-s, b = get_allow_error("/api/main-menu")
+s, b = get_allow_error("/health")
 rec("auth_guard", s == 401)
-s, b = post("/api/menu/5/action", {"action": "domain_info", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
-rec("menu5_domain_info", s == 200 and b.get("code") == "ok")
-s, b = post("/api/menu/1/action", {"action": "tls_info", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
-rec("menu1_tls_info", s == 200 and b.get("code") == "ok")
-s, b = post("/api/menu/9/action", {"action": "overview", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
-rec("menu9_overview", s == 200 and b.get("code") == "ok")
+s, b = post("/api/domain/action", {"action": "info", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
+rec("domain_info", s == 200 and b.get("code") == "ok")
+s, b = post("/api/status/action", {"action": "tls", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
+rec("status_tls", s == 200 and b.get("code") == "ok")
+s, b = post("/api/ops/action", {"action": "traffic_overview", "params": {}}, headers={"X-Internal-Shared-Secret": SECRET})
+rec("ops_traffic_overview", s == 200 and b.get("code") == "ok")
 
 if not all(ok for _, ok in checks):
     raise SystemExit("gate3_failed")
@@ -276,17 +257,14 @@ def rec(name, ok):
 
 s,b=get("/health", headers={"X-Internal-Shared-Secret":SECRET})
 rec("health", s==200 and b.get("status")=="ok")
-s,b=get("/api/main-menu", headers={"X-Internal-Shared-Secret":SECRET})
-menu_ids=[str(m.get("id")) for m in (b.get("menus") or []) if isinstance(m, dict)]
-rec("main_menu_auth", s==200 and b.get("menu_count", 0)>=9 and "9" in menu_ids)
-s,b=get_allow_error("/api/main-menu")
+s,b=get_allow_error("/health")
 rec("auth_guard", s==401)
-s,b=post("/api/menu/5/action", {"action":"domain_info","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
-rec("menu5_domain_info", s==200 and b.get("code")=="ok")
-s,b=post("/api/menu/1/action", {"action":"tls_info","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
-rec("menu1_tls_info", s==200 and b.get("code")=="ok")
-s,b=post("/api/menu/9/action", {"action":"overview","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
-rec("menu9_overview", s==200 and b.get("code")=="ok")
+s,b=post("/api/domain/action", {"action":"info","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
+rec("domain_info", s==200 and b.get("code")=="ok")
+s,b=post("/api/status/action", {"action":"tls","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
+rec("status_tls", s==200 and b.get("code")=="ok")
+s,b=post("/api/ops/action", {"action":"traffic_overview","params":{}}, headers={"X-Internal-Shared-Secret":SECRET})
+rec("ops_traffic_overview", s==200 and b.get("code")=="ok")
 
 if not all(ok for _,ok in checks):
     raise SystemExit("gate3_1_failed")
@@ -366,11 +344,11 @@ def rec(name, ok):
     status_text = "PASS" if ok else "FAIL"
     print(f"gate4_{name}={status_text}")
 
-s,b=request("GET","/api/main-menu", auth=False)
+s,b=request("GET","/health", auth=False)
 rec("auth_guard", s==401)
-s,b=request("POST","/api/menu/5/action", {"action":"setup_domain_cloudflare","params":{"root_domain":"999","proxied":"abc"}}, auth=True)
+s,b=request("POST","/api/domain/action", {"action":"set_auto","params":{"root_domain":"999","proxied":"abc"}}, auth=True)
 rec("invalid_bool", s==200 and b.get("code")=="setup_domain_cloudflare_failed")
-s,b=request("POST","/api/menu/5/action", {"action":"setup_domain_cloudflare","params":{"root_domain":"999"}}, auth=True)
+s,b=request("POST","/api/domain/action", {"action":"set_auto","params":{"root_domain":"999"}}, auth=True)
 rec("invalid_root", s==200 and b.get("code")=="setup_domain_cloudflare_failed")
 
 if not all(ok for _,ok in checks):
@@ -406,7 +384,7 @@ import json, os
 data = json.loads(os.environ["RESP_JSON"])
 names = sorted(str(x.get("name") or "") for x in data if isinstance(x, dict))
 print("gate5_commands=" + ",".join(names))
-required = {"panel", "status", "purge_bot", "set_notif_service"}
+required = {"status", "user", "qac", "domain", "network", "ops", "notify"}
 missing = sorted(required.difference(set(names)))
 if missing:
     raise SystemExit("gate5_commands_missing:" + ",".join(missing))
@@ -466,22 +444,19 @@ def resolve_backend_base_url(default_port: int) -> str:
 
 BASE=resolve_backend_base_url(8080)
 cases=[
-  ("1","overview",{}),
-  ("1","tls_info",{}),
-  ("2","list_users",{}),
-  ("3","summary",{}),
-  ("4","dns_summary",{}),
-  ("5","domain_info",{}),
-  ("5","domain_guard_status",{}),
-  ("6","version",{}),
-  ("7","sysctl_summary",{}),
-  ("8","service_status",{}),
-  ("9","overview",{}),
+  ("status","overview",{}),
+  ("status","tls",{}),
+  ("qac","summary",{"scope":"xray"}),
+  ("network","dns_summary",{}),
+  ("domain","info",{}),
+  ("network","domain_guard_status",{}),
+  ("ops","service_status",{}),
+  ("ops","traffic_overview",{}),
 ]
 
-def post(menu, action, params):
+def post(domain, action, params):
     req=urllib.request.Request(
-      BASE+f"/api/menu/{menu}/action",
+      BASE+f"/api/{domain}/action",
       data=json.dumps({"action":action,"params":params}).encode("utf-8"),
       headers={"Content-Type":"application/json","X-Internal-Shared-Secret":SECRET},
       method="POST",
@@ -490,11 +465,11 @@ def post(menu, action, params):
       return r.getcode(), json.loads(r.read().decode("utf-8","ignore"))
 
 ok_all=True
-for menu, action, params in cases:
-    s,b=post(menu, action, params)
+for domain, action, params in cases:
+    s,b=post(domain, action, params)
     ok=(s==200 and isinstance(b,dict) and "ok" in b and "code" in b and "title" in b)
     status_text = "PASS" if ok else "FAIL"
-    print(f"gate6_menu{menu}_{action}={status_text}")
+    print(f"gate6_{domain}_{action}={status_text}")
     ok_all=ok_all and ok
 if not ok_all:
     raise SystemExit("gate6_failed")

@@ -14,34 +14,12 @@ if not os.getenv("BOT_ENV_FILE") and LOCAL_ENV_FILE.exists():
     load_dotenv(LOCAL_ENV_FILE, override=False)
 
 
-def _get_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 @dataclass(frozen=True)
 class Settings:
     internal_shared_secret: str
-    backend_host: str
-    backend_port: int
-    commands_file: str
-    enable_dangerous_actions: bool
 
 
 _SETTINGS: Settings | None = None
-
-
-def _bot_home() -> Path:
-    raw = (os.getenv("BOT_HOME") or "").strip()
-    if raw:
-        return Path(raw)
-    return BOT_ROOT
-
-
-def _default_commands_file() -> str:
-    return str(_bot_home() / "shared" / "commands.json")
 
 
 def get_settings() -> Settings:
@@ -49,9 +27,5 @@ def get_settings() -> Settings:
     if _SETTINGS is None:
         _SETTINGS = Settings(
             internal_shared_secret=os.getenv("INTERNAL_SHARED_SECRET", "").strip(),
-            backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
-            backend_port=int(os.getenv("BACKEND_PORT", "8080")),
-            commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
-            enable_dangerous_actions=_get_bool("ENABLE_DANGEROUS_ACTIONS", True),
         )
     return _SETTINGS

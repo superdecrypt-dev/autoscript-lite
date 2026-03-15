@@ -1814,47 +1814,6 @@ def _account_refresh_outcome(
     return True, title, "\n".join(message_lines)
 
 
-def _account_info_needs_compat_refresh() -> bool:
-    _ensure_runtime_dirs()
-    for proto in PROTOCOLS:
-        d = ACCOUNT_ROOT / proto
-        if not d.exists():
-            continue
-        for p in sorted(d.glob("*.txt")):
-            stem = p.stem
-            expected_suffix = f"@{proto}"
-            is_noncanonical_name = not stem.endswith(expected_suffix)
-
-            try:
-                text = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                return True
-
-            has_links_block = bool(re.search(r"(?m)^Links Import:\s*$", text))
-            has_grpc_line = bool(re.search(r"(?m)^\s*gRPC\s*:", text))
-            if is_noncanonical_name or not has_links_block or not has_grpc_line:
-                return True
-    return False
-
-
-def op_account_info_compat_refresh_if_needed() -> tuple[bool, str, str]:
-    title = "Xray Users - Account Info Compat Refresh"
-    if not _account_info_needs_compat_refresh():
-        return True, title, "Skip: format account info sudah kompatibel."
-
-    domain = _detect_domain()
-    ip_override: str | None = None
-    ok_ip, ip_or_err = _get_public_ipv4()
-    if ok_ip:
-        ip_override = str(ip_or_err)
-
-    updated, failed = _refresh_all_account_info(domain=domain, ip=ip_override)
-    msg = f"Compat refresh selesai: updated={updated}, failed={failed}"
-    if failed > 0:
-        return False, title, msg
-    return True, title, msg
-
-
 def _speed_policy_file_path(proto: str, username: str) -> Path:
     return SPEED_POLICY_ROOT / proto / f"{username}@{proto}.json"
 

@@ -1,38 +1,47 @@
-# Bot Discord Standalone (UI Button + Select + Modal)
+# Bot Discord Standalone (Slash Command + UI Follow-up)
 
 Bot ini berdiri sendiri dan tidak menjalankan `manage.sh`. Perilaku menunya dibuat mirip struktur `manage.sh`, tetapi seluruh aksi dieksekusi lewat backend sendiri.
 
 ## Arsitektur
-- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash command (`/panel`, `/status`, `/purge_bot`, `/set_notif_service`), tombol, modal, dan select.
+- `gateway-ts/`: Discord gateway (`discord.js`) untuk slash command dan tombol konfirmasi/notifikasi.
 - `backend-py/`: API internal (`FastAPI`) untuk operasi sistem/Xray.
-- `shared/`: kontrak menu/action yang dipakai gateway dan backend.
 - `systemd/`: template service untuk deployment.
 
 ## Alur Interaksi
-1. Admin jalankan `/panel`.
-2. Gateway kirim panel menu utama (button 1-11).
-3. User pilih action via button/select/modal.
-4. Gateway memanggil backend (`/api/menu/{id}/action`) dengan secret internal.
-5. Backend menjalankan aksi dan mengembalikan hasil ke Discord.
+1. Admin jalankan slash command sesuai domain aksi, misalnya `/status`, `/ops`, atau `/notify`.
+2. Gateway memproses command dan, bila perlu, melanjutkan flow dengan tombol konfirmasi/notifikasi.
+3. Gateway memanggil backend domain action (`/api/{domain}/action`) dengan secret internal.
+4. Backend menjalankan aksi dan mengembalikan hasil ke Discord.
+
+## Slash Command Aktif
+- `/status`
+- `/user`
+- `/qac`
+- `/domain`
+- `/network`
+- `/ops`
+- `/notify`
+
+Bot ini memakai slash-native murni. Jalur `/panel` dan interaksi legacy lama tidak dipakai lagi.
 
 ## UX Terkini
-- Alur yang membutuhkan pilihan protokol/user diprioritaskan memakai select untuk menurunkan risiko typo.
+- Option `username`, `root_domain`, dan `service` pada slash command utama memakai autocomplete.
 - `Add Xray User`:
-  - memilih protokol via select,
+  - memilih protokol lewat option slash command,
   - output sukses berupa embed ringkasan (`Username`, `Protokol`, `Masa Aktif`, `Quota`, `IP Limit`, `Speed Limit`),
   - detail `ACCOUNT INFO` tetap ditampilkan,
   - lampiran file `username@protokol.txt`.
 - `Xray Account Info`:
-  - pemilihan user via select,
+  - pemilihan user lewat option slash command,
   - output berupa embed ringkasan + detail `ACCOUNT INFO`,
   - lampiran file `username@protokol.txt`.
 - `SSH Users` dan `SSH QAC` tersedia sebagai menu terpisah.
 - `Domain Control`:
   - `Set Domain Manual` untuk domain sendiri (sudah pointing ke IP VPS),
   - `Set Domain Auto (API Cloudflare)` untuk root domain bawaan sistem,
-  - root domain dipilih via select (`vyxara1.web.id`, `vyxara2.web.id`).
+  - root domain dipilih lewat option slash command (`vyxara1.web.id`, `vyxara2.web.id`).
 - `Network Controls`:
-  - `Set DNS Query Strategy` memakai select.
+  - `Set DNS Query Strategy` memakai option slash command.
 - `Run Speedtest` diringkas ke metrik inti: ISP, Latency, Packet Loss, Download, Upload.
 
 ## Jalankan Lokal
@@ -101,22 +110,14 @@ systemctl status bot-discord-monitor.timer --no-pager
 tail -n 50 /var/log/bot-discord/monitor-lite.log
 ```
 
-## Menu yang Didukung (Mirip manage.sh)
-- `1) Status & Diagnostics`
-- `2) Xray Users`
-- `3) Xray QAC`
-- `4) Network Controls`
-- `5) Domain Control`
-- `6) Speedtest`
-- `7) Security`
-- `8) Maintenance`
-- `9) Traffic Analytics`
-- `10) SSH Users`
-- `11) SSH QAC`
+## Arah UX
+- Slash command dipakai sebagai entrypoint utama.
+- Button dipakai hanya untuk konfirmasi aksi berisiko dan kontrol notifikasi.
+- `/panel` tidak dipakai lagi.
 
 ## Catatan Keamanan
 - Simpan token hanya di env file (`/etc/bot-discord/bot.env` saat deploy).
 - Secret API internal wajib diset (`INTERNAL_SHARED_SECRET`).
 - Wajib isi minimal salah satu ACL admin: `DISCORD_ADMIN_ROLE_IDS` atau `DISCORD_ADMIN_USER_IDS` (gateway fail-closed jika keduanya kosong).
-- Secara default, action mutasi aktif untuk admin yang lolos ACL. Jika perlu mode lebih ketat, set `ENABLE_DANGEROUS_ACTIONS=false`.
+- Action mutasi aktif untuk admin yang lolos ACL.
 - Beberapa aksi maintenance (restart service) butuh root/sudo dan sebaiknya dibatasi role admin Discord.

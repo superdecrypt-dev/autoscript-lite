@@ -90,8 +90,8 @@ curl -fsS "${BACKEND_BASE_URL}/health" \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" | sed 's/.*/&/'
 
 echo
-echo "== menu 1 overview =="
-curl -fsS -X POST "${BACKEND_BASE_URL}/api/menu/1/action" \
+echo "== status overview =="
+curl -fsS -X POST "${BACKEND_BASE_URL}/api/status/action" \
   -H "Content-Type: application/json" \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
   -d '{"action":"overview","params":{}}' | sed 's/.*/&/'

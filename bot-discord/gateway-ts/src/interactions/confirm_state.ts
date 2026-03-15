@@ -1,8 +1,8 @@
 import { randomBytes } from "crypto";
 
 export interface PendingConfirmPayload {
-  menuId: string;
-  actionId: string;
+  domain: string;
+  action: string;
   params: Record<string, string>;
 }
 
@@ -63,8 +63,8 @@ export function consumePendingConfirm(token: string): PendingConfirmPayload | nu
     return null;
   }
   return {
-    menuId: entry.menuId,
-    actionId: entry.actionId,
+    domain: entry.domain,
+    action: entry.action,
     params: entry.params,
   };
 }

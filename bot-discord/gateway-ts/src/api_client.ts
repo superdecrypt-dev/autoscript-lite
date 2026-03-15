@@ -2,15 +2,15 @@ import axios, { AxiosInstance } from "axios";
 
 const DEFAULT_BACKEND_TIMEOUT_MS = 30_000;
 const ACTION_TIMEOUT_MS: Record<string, number> = {
-  "5:setup_domain_custom": 420_000,
-  "5:setup_domain_cloudflare": 420_000,
-  "5:domain_guard_check": 190_000,
-  "5:domain_guard_renew": 320_000,
-  "6:run": 190_000,
+  "domain:set_manual": 420_000,
+  "domain:set_auto": 420_000,
+  "network:domain_guard_check": 190_000,
+  "network:domain_guard_renew": 320_000,
+  "ops:speedtest": 190_000,
 };
 
-function resolveActionTimeoutMs(menuId: string, action: string): number {
-  return ACTION_TIMEOUT_MS[`${menuId}:${action}`] ?? DEFAULT_BACKEND_TIMEOUT_MS;
+function resolveActionTimeoutMs(domain: string, action: string): number {
+  return ACTION_TIMEOUT_MS[`${domain}:${action}`] ?? DEFAULT_BACKEND_TIMEOUT_MS;
 }
 
 export interface BackendActionResponse {
@@ -24,14 +24,7 @@ export interface BackendActionResponse {
 export interface BackendHealthResponse {
   status?: string;
   service?: string;
-  dangerous_actions_enabled?: boolean;
-}
-
-export interface BackendMainMenuResponse {
-  mode?: string;
-  dangerous_actions_enabled?: boolean;
-  menu_count?: number;
-  menus?: unknown[];
+  mutations_enabled?: boolean;
 }
 
 export interface BackendUserOption {
@@ -41,6 +34,24 @@ export interface BackendUserOption {
 
 export interface BackendRootDomainOption {
   root_domain: string;
+}
+
+export interface BackendQacSummary {
+  username: string;
+  quota_limit: string;
+  quota_used: string;
+  expired_at: string;
+  ip_limit: string;
+  block_reason: string;
+  ip_limit_max: string;
+  speed_download: string;
+  speed_upload: string;
+  speed_limit: string;
+  distinct_ip_count?: string;
+  distinct_ips?: string;
+  ip_limit_metric?: string;
+  account_locked?: string;
+  active_sessions_total?: string;
 }
 
 export class BackendClient {
@@ -56,10 +67,10 @@ export class BackendClient {
     });
   }
 
-  async runAction(menuId: string, action: string, params: Record<string, string> = {}): Promise<BackendActionResponse> {
-    const timeout = resolveActionTimeoutMs(menuId, action);
+  async runDomainAction(domain: string, action: string, params: Record<string, string> = {}): Promise<BackendActionResponse> {
+    const timeout = resolveActionTimeoutMs(domain, action);
     const res = await this.client.post<BackendActionResponse>(
-      `/api/menu/${menuId}/action`,
+      `/api/${domain}/action`,
       {
         action,
         params,
@@ -85,13 +96,19 @@ export class BackendClient {
     return roots.filter((item) => item && typeof item.root_domain === "string");
   }
 
-  async getHealth(timeout = 8_000): Promise<BackendHealthResponse> {
-    const res = await this.client.get<BackendHealthResponse>("/health", { timeout });
-    return res.data;
+  async getQacUserSummary(proto: string, username: string): Promise<BackendQacSummary | null> {
+    const res = await this.client.get<{ ok?: boolean; summary?: BackendQacSummary }>("/api/qac/summary", {
+      params: { proto, username },
+      timeout: 8_000,
+    });
+    if (!res.data?.ok || !res.data.summary) {
+      return null;
+    }
+    return res.data.summary;
   }
 
-  async getMainMenu(timeout = 8_000): Promise<BackendMainMenuResponse> {
-    const res = await this.client.get<BackendMainMenuResponse>("/api/main-menu", { timeout });
+  async getHealth(timeout = 8_000): Promise<BackendHealthResponse> {
+    const res = await this.client.get<BackendHealthResponse>("/health", { timeout });
     return res.data;
   }
 }

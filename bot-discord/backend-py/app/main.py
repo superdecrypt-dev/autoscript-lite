@@ -1,34 +1,16 @@
-import logging
-
 from fastapi import Depends, FastAPI
 
-from .adapters import system_mutations
 from .auth import verify_shared_secret
-from .config import get_settings
-from .routes.menus import router as menu_router
+from .routes.actions import router as action_router
 
 app = FastAPI(title="bot-discord-backend", version="1.0.0")
-app.include_router(menu_router)
-logger = logging.getLogger("bot-discord-backend")
-
-
-@app.on_event("startup")
-def startup_account_info_compat_refresh() -> None:
-    try:
-        ok, title, msg = system_mutations.op_account_info_compat_refresh_if_needed()
-        if ok:
-            logger.info("%s | %s", title, msg)
-        else:
-            logger.warning("%s | %s", title, msg)
-    except Exception as exc:
-        logger.warning("Startup compat refresh gagal: %s", exc)
+app.include_router(action_router)
 
 
 @app.get("/health", dependencies=[Depends(verify_shared_secret)])
 def health() -> dict:
-    settings = get_settings()
     return {
         "status": "ok",
         "service": "backend-py",
-        "dangerous_actions_enabled": settings.enable_dangerous_actions,
+        "mutations_enabled": True,
     }

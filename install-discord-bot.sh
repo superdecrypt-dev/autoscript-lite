@@ -248,6 +248,23 @@ set_env_value() {
   rm -f "$tmp" >/dev/null 2>&1 || true
 }
 
+unset_env_value() {
+  local key="$1"
+  local file="$2"
+  local tmp
+
+  [[ -f "$file" ]] || return 0
+
+  tmp="$(mktemp)"
+  awk -v key="$key" '
+    $0 ~ ("^" key "=") { next }
+    { print }
+  ' "$file" > "$tmp"
+
+  install -m 600 "$tmp" "$file"
+  rm -f "$tmp" >/dev/null 2>&1 || true
+}
+
 resolve_persisted_env_file() {
   local candidate unit
 
@@ -433,8 +450,6 @@ DISCORD_ADMIN_USER_IDS=
 BACKEND_BASE_URL=${BACKEND_BASE_URL}
 BACKEND_HOST=${BACKEND_HOST}
 BACKEND_PORT=${BACKEND_PORT}
-COMMANDS_FILE=${BOT_HOME}/shared/commands.json
-ENABLE_DANGEROUS_ACTIONS=true
 ENVEOF
     chmod 600 "${BOT_ENV_FILE}"
     ok "File env dibuat: ${BOT_ENV_FILE}"
@@ -468,9 +483,6 @@ ENVEOF
   fi
   if [[ -z "$(get_env_value BACKEND_PORT "${BOT_ENV_FILE}")" ]]; then
     set_env_value BACKEND_PORT "${BACKEND_PORT}" "${BOT_ENV_FILE}"
-  fi
-  if [[ -z "$(get_env_value COMMANDS_FILE "${BOT_ENV_FILE}")" ]]; then
-    set_env_value COMMANDS_FILE "${BOT_HOME}/shared/commands.json" "${BOT_ENV_FILE}"
   fi
 }
 
@@ -559,8 +571,8 @@ configure_env_interactive() {
   ensure_env_file
   CONFIGURE_ENV_CANCELLED=0
 
-  local current_token current_secret current_app_id current_guild_id current_role_ids current_user_ids current_dangerous
-  local token app_id guild_id role_ids user_ids dangerous secret_input
+  local current_token current_secret current_app_id current_guild_id current_role_ids current_user_ids
+  local token app_id guild_id role_ids user_ids secret_input
   local final_token final_secret staged_env
 
   current_token="$(get_env_value DISCORD_BOT_TOKEN "${BOT_ENV_FILE}")"
@@ -569,8 +581,6 @@ configure_env_interactive() {
   current_guild_id="$(get_env_value DISCORD_GUILD_ID "${BOT_ENV_FILE}")"
   current_role_ids="$(get_env_value DISCORD_ADMIN_ROLE_IDS "${BOT_ENV_FILE}")"
   current_user_ids="$(get_env_value DISCORD_ADMIN_USER_IDS "${BOT_ENV_FILE}")"
-  current_dangerous="$(get_env_value ENABLE_DANGEROUS_ACTIONS "${BOT_ENV_FILE}")"
-
   echo "Konfigurasi env: ${BOT_ENV_FILE}"
   echo "- DISCORD_BOT_TOKEN: $(mask_secret "${current_token}")"
   echo "- INTERNAL_SHARED_SECRET: $(mask_secret "${current_secret}")"
@@ -606,12 +616,6 @@ configure_env_interactive() {
     cancel_env_config
     return 0
   fi
-  dangerous="$(prompt_with_default_or_back "ENABLE_DANGEROUS_ACTIONS (true/false)" "${current_dangerous:-true}")"
-  if [[ "${dangerous}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
-  fi
-
   if [[ -z "${current_secret}" ]]; then
     secret_input="$(generate_secret)"
     final_secret="${secret_input}"
@@ -631,7 +635,6 @@ configure_env_interactive() {
   [[ -n "${guild_id}" ]] && set_env_value DISCORD_GUILD_ID "${guild_id}" "${staged_env}"
   set_env_value DISCORD_ADMIN_ROLE_IDS "${role_ids}" "${staged_env}"
   set_env_value DISCORD_ADMIN_USER_IDS "${user_ids}" "${staged_env}"
-  set_env_value ENABLE_DANGEROUS_ACTIONS "${dangerous:-true}" "${staged_env}"
 
   set_env_value BOT_HOME "${BOT_HOME}" "${staged_env}"
   set_env_value BOT_ENV_FILE "${BOT_ENV_FILE}" "${staged_env}"
@@ -642,8 +645,6 @@ configure_env_interactive() {
   set_env_value BACKEND_BASE_URL "${BACKEND_BASE_URL}" "${staged_env}"
   set_env_value BACKEND_HOST "${BACKEND_HOST}" "${staged_env}"
   set_env_value BACKEND_PORT "${BACKEND_PORT}" "${staged_env}"
-  set_env_value COMMANDS_FILE "${BOT_HOME}/shared/commands.json" "${staged_env}"
-
   chmod 600 "${staged_env}" || true
   mv -f "${staged_env}" "${BOT_ENV_FILE}"
   chmod 600 "${BOT_ENV_FILE}" || true
@@ -699,7 +700,6 @@ validate_source_tree() {
   [[ -f "${src}/gateway-ts/package-lock.json" ]] || die "Source invalid: gateway-ts/package-lock.json tidak ditemukan"
   [[ -f "${src}/backend-py/requirements.txt" ]] || die "Source invalid: backend-py/requirements.txt tidak ditemukan"
   [[ -f "${src}/backend-py/requirements.lock.txt" ]] || die "Source invalid: backend-py/requirements.lock.txt tidak ditemukan"
-  [[ -f "${src}/shared/commands.json" ]] || die "Source invalid: shared/commands.json tidak ditemukan"
   [[ -f "${src}/systemd/bot-discord-backend.service.tpl" ]] || die "Source invalid: template backend service tidak ditemukan"
   [[ -f "${src}/systemd/bot-discord-gateway.service.tpl" ]] || die "Source invalid: template gateway service tidak ditemukan"
 }
