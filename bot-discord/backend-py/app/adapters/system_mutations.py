@@ -136,6 +136,15 @@ def _service_is_active(name: str) -> bool:
     return state == "active"
 
 
+def _service_state(name: str) -> str:
+    ok, out = _run_cmd(["systemctl", "is-active", name], timeout=10)
+    if ok:
+        return out.splitlines()[-1].strip() if out else ""
+    if out:
+        return out.splitlines()[-1].strip()
+    return ""
+
+
 def _zivpn_account_info_enabled() -> bool:
     return _zivpn_runtime_available()
 
@@ -287,24 +296,55 @@ def _edge_runtime_uses_public_http_port_80() -> bool:
 
 
 def _restart_and_wait(name: str, timeout_sec: int = 20) -> bool:
-    _run_cmd(["systemctl", "restart", name], timeout=30)
-    end = time.time() + max(1, timeout_sec)
-    while time.time() < end:
+    if not _service_exists(name):
+        return False
+
+    cmd_timeout = max(4, min(30, timeout_sec + 4))
+    ok_restart, _ = _run_cmd(["systemctl", "restart", name], timeout=cmd_timeout)
+    if ok_restart:
+        end = time.time() + max(1, timeout_sec)
+        while time.time() < end:
+            if _service_is_active(name):
+                return True
+            time.sleep(0.5)
         if _service_is_active(name):
             return True
-        time.sleep(0.5)
-    if _service_is_active(name):
+    else:
+        state_after_restart = _service_state(name)
+        if state_after_restart not in {"failed", "inactive", "activating", "deactivating"}:
+            return False
+
+    state_now = _service_state(name)
+    if state_now in {"failed", "inactive", "activating", "deactivating"}:
+        _run_cmd(["systemctl", "reset-failed", name], timeout=10)
+        ok_start, _ = _run_cmd(["systemctl", "start", name], timeout=cmd_timeout)
+        if not ok_start:
+            return False
+        end2 = time.time() + max(1, timeout_sec)
+        while time.time() < end2:
+            if _service_is_active(name):
+                return True
+            time.sleep(0.5)
+        return _service_is_active(name)
+
+    return False
+
+
+def _stop_and_wait_inactive(name: str, timeout_sec: int = 20) -> bool:
+    if not _service_exists(name):
         return True
 
-    # Recovery path for rapid restart bursts (systemd start-limit-hit).
-    _run_cmd(["systemctl", "reset-failed", name], timeout=10)
-    _run_cmd(["systemctl", "start", name], timeout=30)
-    end2 = time.time() + max(1, timeout_sec)
-    while time.time() < end2:
-        if _service_is_active(name):
+    cmd_timeout = max(4, min(30, timeout_sec + 4))
+    ok_stop, _ = _run_cmd(["systemctl", "stop", name], timeout=cmd_timeout)
+    if not ok_stop:
+        return False
+
+    end = time.time() + max(1, timeout_sec)
+    while time.time() < end:
+        if _service_state(name) == "inactive":
             return True
         time.sleep(0.5)
-    return _service_is_active(name)
+    return _service_state(name) == "inactive"
 
 
 def _read_json(path: Path) -> tuple[bool, Any]:
@@ -1771,7 +1811,7 @@ def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
         if XRAY_DNS_CONF.exists():
             ok_read, raw_cfg = _read_json(XRAY_DNS_CONF)
             if not ok_read:
-                raw_cfg = {}
+                return False, f"Config DNS tidak valid:\n{raw_cfg}"
             cfg_original = raw_cfg if isinstance(raw_cfg, dict) else {}
         else:
             cfg_original = {"dns": {}}
@@ -2827,7 +2867,32 @@ def _xray_apply_quota_update(
             detail += " | state di-rollback"
         return False, title, detail
 
-    return _xray_refresh_account_info_required(title, proto, username, success_msg)
+    ok_refresh, refresh_msg = _refresh_account_info_for_user(proto, username)
+    if ok_refresh:
+        return True, title, success_msg
+
+    rollback_notes: list[str] = [f"refresh account-info: {refresh_msg}"]
+    try:
+        _save_quota(quota_path, previous_payload)
+    except Exception as exc:
+        rollback_notes.append(f"rollback quota: {exc}")
+    else:
+        ok_restore, restore_msg = _xray_apply_runtime_from_quota(
+            proto,
+            username,
+            previous_payload,
+            ensure_client_credential=ensure_client_credential,
+            restore_markers=restore_markers,
+            restart_limit_ip=restart_limit_ip,
+            sync_speed=sync_speed,
+        )
+        if not ok_restore:
+            rollback_notes.append(f"rollback runtime: {restore_msg}")
+        ok_rb_refresh, rb_refresh_msg = _refresh_account_info_for_user(proto, username)
+        if not ok_rb_refresh:
+            rollback_notes.append(f"rollback account-info: {rb_refresh_msg}")
+
+    return False, title, f"{success_msg} | " + " | ".join(rollback_notes)
 
 
 def _xray_restore_deleted_user(
@@ -4019,6 +4084,23 @@ def _normalize_domain(domain: str) -> str:
     return str(domain or "").strip().lower()
 
 
+def _rollback_nginx_domain_change(original: str) -> tuple[bool, str]:
+    notes: list[str] = []
+    try:
+        _write_text_atomic(NGINX_CONF, original)
+    except Exception as exc:
+        notes.append(f"restore config nginx gagal: {exc}")
+    else:
+        ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
+        if not ok_test:
+            notes.append(f"nginx -t gagal saat rollback domain:\n{out_test}")
+        elif not _restart_and_wait("nginx", timeout_sec=20):
+            notes.append("nginx gagal restart saat rollback domain.")
+    if notes:
+        return False, "\n".join(notes)
+    return True, "ok"
+
+
 def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
     if not NGINX_CONF.exists():
         return False, f"Nginx conf tidak ditemukan: {NGINX_CONF}"
@@ -4044,32 +4126,34 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
         _write_text_atomic(NGINX_CONF, candidate)
         ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
         if not ok_test:
-            _write_text_atomic(NGINX_CONF, original)
-            return False, f"nginx -t gagal setelah ubah domain:\n{out_test}"
+            ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+            if ok_rb:
+                return False, f"nginx -t gagal setelah ubah domain:\n{out_test}\nPerubahan nginx sudah di-rollback."
+            return False, f"nginx -t gagal setelah ubah domain:\n{out_test}\nRollback nginx gagal:\n{msg_rb}"
 
         if not _restart_and_wait("nginx", timeout_sec=20):
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-            return False, "nginx gagal restart setelah ubah domain (rollback)."
+            ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+            if ok_rb:
+                return False, "nginx gagal restart setelah ubah domain. Perubahan nginx sudah di-rollback."
+            return False, f"nginx gagal restart setelah ubah domain.\nRollback nginx gagal:\n{msg_rb}"
     except Exception as exc:
-        try:
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-        except Exception:
-            pass
-        return False, f"Gagal apply domain ke nginx: {exc}"
+        ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+        if ok_rb:
+            return False, f"Gagal apply domain ke nginx: {exc}\nPerubahan nginx sudah di-rollback."
+        return False, f"Gagal apply domain ke nginx: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
     # Keep compatibility with compatibility scripts that still read active domain from /etc/xray/domain.
     try:
         XRAY_DOMAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(XRAY_DOMAIN_FILE, f"{domain}\n")
     except Exception as exc:
-        try:
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-        except Exception:
-            pass
-        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}"
+        ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+        if ok_rb:
+            return False, (
+                f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\n"
+                "Perubahan nginx sudah di-rollback."
+            )
+        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
     return True, "ok"
 
@@ -4108,11 +4192,20 @@ def _restore_optional_file(path: Path, snapshot: dict[str, Any]) -> tuple[bool, 
 
 
 def _capture_domain_runtime_snapshot() -> dict[str, Any]:
+    edge_service = _edge_runtime_service_name().strip()
+    if edge_service == "nginx":
+        edge_service = ""
     return {
         "nginx_conf": _snapshot_optional_file(NGINX_CONF),
         "compat_domain": _snapshot_optional_file(XRAY_DOMAIN_FILE),
         "cert_fullchain": _snapshot_optional_file(CERT_FULLCHAIN),
         "cert_privkey": _snapshot_optional_file(CERT_PRIVKEY),
+        "nginx_was_active": _service_exists("nginx") and _service_is_active("nginx"),
+        "sshws_stunnel_was_active": _service_exists("sshws-stunnel") and _service_is_active("sshws-stunnel"),
+        "edge_service_name": edge_service,
+        "edge_service_was_active": bool(
+            edge_service and _service_exists(edge_service) and _service_is_active(edge_service)
+        ),
     }
 
 
@@ -4192,9 +4285,13 @@ def _restore_domain_runtime_snapshot(
     ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
     if not ok_test:
         return False, f"nginx -t gagal saat rollback domain:\n{out_test}"
-    if not _restart_and_wait("nginx", timeout_sec=20):
-        return False, "nginx gagal restart saat rollback domain."
-    ok_tls, msg_tls = _restart_tls_runtime_consumers(skipped_services or set())
+    if bool(snapshot.get("nginx_was_active")):
+        if not _restart_and_wait("nginx", timeout_sec=20):
+            return False, "nginx gagal restart saat rollback domain."
+    elif _service_exists("nginx") and _service_is_active("nginx"):
+        if not _stop_and_wait_inactive("nginx", timeout_sec=20):
+            return False, "nginx gagal dikembalikan ke state inactive saat rollback domain."
+    ok_tls, msg_tls = _restore_tls_runtime_consumers_from_snapshot(snapshot, skipped_services or set())
     if not ok_tls:
         return False, f"Rollback domain selesai, tetapi restart consumer TLS gagal:\n{msg_tls}"
     return True, "ok"
@@ -4322,13 +4419,20 @@ def _ensure_dns_cf_hook() -> tuple[bool, str]:
     return True, "ok"
 
 
-def _stop_conflicting_services() -> list[str]:
+def _stop_conflicting_services() -> tuple[list[str], list[str]]:
     stopped: list[str] = []
+    failures: list[str] = []
     for svc in ("nginx", "apache2", "caddy", "lighttpd"):
-        if _service_exists(svc) and _service_is_active(svc):
-            stopped.append(svc)
-        if _service_exists(svc):
-            _run_cmd(["systemctl", "stop", svc], timeout=25)
+        if not (_service_exists(svc) and _service_is_active(svc)):
+            continue
+        ok_stop, out_stop = _run_cmd(["systemctl", "stop", svc], timeout=25)
+        if not ok_stop:
+            failures.append(f"{svc}: {out_stop}")
+            continue
+        if _service_is_active(svc):
+            failures.append(f"{svc}: masih aktif setelah stop")
+            continue
+        stopped.append(svc)
     edge_svc = _edge_runtime_service_name()
     if (
         _edge_runtime_uses_public_http_port_80()
@@ -4337,15 +4441,29 @@ def _stop_conflicting_services() -> list[str]:
         and _service_exists(edge_svc)
         and _service_is_active(edge_svc)
     ):
-        stopped.append(edge_svc)
-        _run_cmd(["systemctl", "stop", edge_svc], timeout=25)
-    return stopped
+        ok_stop, out_stop = _run_cmd(["systemctl", "stop", edge_svc], timeout=25)
+        if not ok_stop:
+            failures.append(f"{edge_svc}: {out_stop}")
+        elif _service_is_active(edge_svc):
+            failures.append(f"{edge_svc}: masih aktif setelah stop")
+        else:
+            stopped.append(edge_svc)
+    return stopped, failures
 
 
-def _restore_services(services: list[str]) -> None:
+def _restore_services(services: list[str]) -> list[str]:
+    failures: list[str] = []
     for svc in services:
-        if _service_exists(svc):
-            _run_cmd(["systemctl", "start", svc], timeout=25)
+        if not _service_exists(svc):
+            failures.append(f"{svc}: service tidak ditemukan saat restore")
+            continue
+        ok_start, out_start = _run_cmd(["systemctl", "start", svc], timeout=25)
+        if not ok_start:
+            failures.append(f"{svc}: {out_start}")
+            continue
+        if not _service_is_active(svc):
+            failures.append(f"{svc}: inactive setelah start")
+    return failures
 
 
 def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> tuple[bool, str]:
@@ -4366,6 +4484,40 @@ def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> 
             ok_reload, out_reload = _run_cmd(["systemctl", "restart", svc], timeout=30)
         if not ok_reload or not _service_is_active(svc):
             failures.append(f"{svc}: {out_reload}")
+    if failures:
+        return False, "\n".join(failures)
+    return True, "ok"
+
+
+def _restore_tls_runtime_consumers_from_snapshot(
+    snapshot: dict[str, Any],
+    skipped_services: set[str] | None = None,
+) -> tuple[bool, str]:
+    skipped = skipped_services or set()
+    failures: list[str] = []
+    targets: list[tuple[str, bool]] = [
+        ("sshws-stunnel", bool(snapshot.get("sshws_stunnel_was_active"))),
+    ]
+    edge_service = str(snapshot.get("edge_service_name") or "").strip()
+    if edge_service and edge_service not in {"nginx", "sshws-stunnel"}:
+        targets.append((edge_service, bool(snapshot.get("edge_service_was_active"))))
+
+    for svc, should_be_active in targets:
+        if svc in skipped:
+            continue
+        if should_be_active:
+            if not _service_exists(svc):
+                failures.append(f"{svc}: service tidak ditemukan saat rollback")
+                continue
+            ok_reload, out_reload = _run_cmd(["systemctl", "reload", svc], timeout=30)
+            if not ok_reload:
+                ok_reload, out_reload = _run_cmd(["systemctl", "restart", svc], timeout=30)
+            if not ok_reload or not _service_is_active(svc):
+                failures.append(f"{svc}: {out_reload}")
+        elif _service_exists(svc) and _service_is_active(svc):
+            if not _stop_and_wait_inactive(svc, timeout_sec=30):
+                failures.append(f"{svc}: gagal dikembalikan ke inactive")
+
     if failures:
         return False, "\n".join(failures)
     return True, "ok"
@@ -4727,33 +4879,43 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
 
     snapshot = _capture_domain_runtime_snapshot()
     previous_domain = _domain_snapshot_active_domain(snapshot)
-    stopped_services = _stop_conflicting_services()
+    stopped_services, stop_failures = _stop_conflicting_services()
     completed = False
     error_msg: str | None = None
+    if stop_failures:
+        error_msg = "Gagal menghentikan service konflik:\n" + "\n".join(stop_failures)
+    restore_failures: list[str] = []
     try:
-        ok_cert, cert_msg = _issue_cert_standalone(domain_n)
-        if not ok_cert:
-            error_msg = cert_msg
-        else:
-            ok_ng, ng_msg = _apply_nginx_domain(domain_n)
-            if not ok_ng:
-                error_msg = ng_msg
+        if error_msg is None:
+            ok_cert, cert_msg = _issue_cert_standalone(domain_n)
+            if not ok_cert:
+                error_msg = cert_msg
             else:
-                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-                if not ok_tls:
-                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                ok_ng, ng_msg = _apply_nginx_domain(domain_n)
+                if not ok_ng:
+                    error_msg = ng_msg
                 else:
-                    completed = True
+                    ok_tls, tls_msg = _restore_tls_runtime_consumers_from_snapshot(snapshot, set(stopped_services))
+                    if not ok_tls:
+                        error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                    else:
+                        completed = True
     except Exception as exc:
         error_msg = f"Setup domain custom gagal: {exc}"
     finally:
         # Success path: nginx sudah di-restart oleh _apply_nginx_domain, restore service lain
         # yang tadinya aktif agar state sistem kembali seperti sebelum wizard.
         if completed:
-            _restore_services([svc for svc in stopped_services if svc != "nginx"])
+            restore_failures = _restore_services([svc for svc in stopped_services if svc != "nginx"])
         else:
             # Failure path: pastikan semua service yang sebelumnya aktif dipulihkan.
-            _restore_services(stopped_services)
+            restore_failures = _restore_services(stopped_services)
+        if restore_failures:
+            restore_msg = "Restore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            if error_msg:
+                error_msg = f"{error_msg}\n{restore_msg}"
+            else:
+                error_msg = restore_msg
 
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
@@ -4863,35 +5025,45 @@ def op_domain_setup_cloudflare(
     if not ok_dns:
         return False, title, dns_msg
 
-    stopped_services = _stop_conflicting_services()
+    stopped_services, stop_failures = _stop_conflicting_services()
     completed = False
     error_msg: str | None = None
+    if stop_failures:
+        error_msg = "Gagal menghentikan service konflik:\n" + "\n".join(stop_failures)
+    restore_failures: list[str] = []
     try:
-        ok_cert, cert_msg = _issue_cert_dns_cf_wildcard(
-            domain=domain_final,
-            root_domain=root_domain,
-            zone_id=zone_id,
-            account_id=account_id,
-        )
-        if not ok_cert:
-            error_msg = cert_msg
-        else:
-            ok_ng, ng_msg = _apply_nginx_domain(domain_final)
-            if not ok_ng:
-                error_msg = ng_msg
+        if error_msg is None:
+            ok_cert, cert_msg = _issue_cert_dns_cf_wildcard(
+                domain=domain_final,
+                root_domain=root_domain,
+                zone_id=zone_id,
+                account_id=account_id,
+            )
+            if not ok_cert:
+                error_msg = cert_msg
             else:
-                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-                if not ok_tls:
-                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                ok_ng, ng_msg = _apply_nginx_domain(domain_final)
+                if not ok_ng:
+                    error_msg = ng_msg
                 else:
-                    completed = True
+                    ok_tls, tls_msg = _restore_tls_runtime_consumers_from_snapshot(snapshot, set(stopped_services))
+                    if not ok_tls:
+                        error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                    else:
+                        completed = True
     except Exception as exc:
         error_msg = f"Setup Cloudflare wizard gagal: {exc}"
     finally:
         if completed:
-            _restore_services([svc for svc in stopped_services if svc != "nginx"])
+            restore_failures = _restore_services([svc for svc in stopped_services if svc != "nginx"])
         else:
-            _restore_services(stopped_services)
+            restore_failures = _restore_services(stopped_services)
+        if restore_failures:
+            restore_msg = "Restore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            if error_msg:
+                error_msg = f"{error_msg}\n{restore_msg}"
+            else:
+                error_msg = restore_msg
 
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)

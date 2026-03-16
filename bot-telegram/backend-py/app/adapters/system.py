@@ -450,8 +450,7 @@ def _service_group_restart(services: tuple[str, ...] | list[str], title: str) ->
             lines.append(f"- {service}: skip (unit tidak ditemukan)")
             continue
         attempted += 1
-        ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
-        state = service_state(service)
+        ok, state, out = _restart_service_checked(service, timeout=25)
         if ok:
             lines.append(f"- {service}: restarted ({state})")
         else:
@@ -461,6 +460,26 @@ def _service_group_restart(services: tuple[str, ...] | list[str], title: str) ->
     if attempted == 0:
         return False, title, "Tidak ada unit yang ditemukan."
     return (not had_failure), title, "\n".join(lines)
+
+
+def _restart_service_checked(service: str, timeout: int = 25) -> tuple[bool, str, str]:
+    ok, out = run_cmd(["systemctl", "restart", service], timeout=timeout)
+    state = service_state(service)
+    if not ok:
+        return False, state, out
+    if state != "active":
+        return False, state, f"Service {service} tidak aktif setelah restart (state={state})."
+    return True, state, out
+
+
+def _reload_service_checked(service: str, timeout: int = 25) -> tuple[bool, str, str]:
+    ok, out = run_cmd(["systemctl", "reload", service], timeout=timeout)
+    state = service_state(service)
+    if not ok:
+        return False, state, out
+    if state != "active":
+        return False, state, f"Service {service} tidak aktif setelah reload (state={state})."
+    return True, state, out
 
 
 def _fail2ban_client_available() -> bool:
@@ -2299,16 +2318,21 @@ def op_fail2ban_unban_ip(ip: str, jail: str = "") -> tuple[bool, str, str]:
             brief = out.splitlines()[-1].strip() if out else "unknown error"
             failed.append(f"{target}: {brief}")
 
-    if success:
+    if success and not failed:
         lines = [
             f"IP       : {normalized_ip}",
             "Unbanned : " + ", ".join(success),
         ]
-        if failed:
-            lines.extend(["", "Gagal:", *[f"- {line}" for line in failed]])
         return True, title, "\n".join(lines)
 
-    return False, title, "Unban gagal.\n" + "\n".join(f"- {line}" for line in failed)
+    lines = [
+        f"IP       : {normalized_ip}",
+    ]
+    if success:
+        lines.append("Berhasil : " + ", ".join(success))
+    if failed:
+        lines.extend(["Gagal:", *[f"- {line}" for line in failed]])
+    return False, title, "\n".join(lines)
 
 
 def _read_sysctl(key: str) -> str:
@@ -2451,8 +2475,7 @@ def op_maintenance_status() -> tuple[str, str]:
 def op_restart_service(service: str) -> tuple[bool, str, str]:
     if service not in ALLOWED_RESTART_SERVICES:
         return False, "Maintenance - Restart", f"Service tidak diizinkan: {service}"
-    ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
-    state = service_state(service)
+    ok, state, out = _restart_service_checked(service, timeout=25)
     if ok:
         return True, "Maintenance - Restart", f"Restart {service} berhasil.\nState: {state}"
     return False, "Maintenance - Restart", f"Restart {service} gagal.\n{out}\nState: {state}"
@@ -2463,8 +2486,7 @@ def op_reload_service(service: str) -> tuple[bool, str, str]:
         return False, "Security - Reload", f"Service reload tidak diizinkan: {service}"
     if not service_exists(service):
         return False, "Security - Reload", f"Service tidak ditemukan: {service}"
-    ok, out = run_cmd(["systemctl", "reload", service], timeout=25)
-    state = service_state(service)
+    ok, state, out = _reload_service_checked(service, timeout=25)
     if ok:
         return True, "Security - Reload", f"Reload {service} berhasil.\nState: {state}"
     return False, "Security - Reload", f"Reload {service} gagal.\n{out}\nState: {state}"
@@ -2476,8 +2498,7 @@ def op_restart_edge_gateway() -> tuple[bool, str, str]:
         return False, "Maintenance - Restart Edge Gateway", "Edge runtime service tidak terdeteksi."
     if not service_exists(service):
         return False, "Maintenance - Restart Edge Gateway", f"Service edge tidak ditemukan: {service}"
-    ok, out = run_cmd(["systemctl", "restart", service], timeout=25)
-    state = service_state(service)
+    ok, state, out = _restart_service_checked(service, timeout=25)
     if ok:
         return True, "Maintenance - Restart Edge Gateway", f"Restart {service} berhasil.\nState: {state}"
     return False, "Maintenance - Restart Edge Gateway", f"Restart {service} gagal.\n{out}\nState: {state}"

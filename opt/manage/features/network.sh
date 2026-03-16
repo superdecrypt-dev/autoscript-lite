@@ -166,10 +166,26 @@ warp_runtime_snapshot_restore() {
     if [[ "${was_active}" == "1" ]]; then
       warp_wireproxy_restart_checked || return 1
     elif svc_exists wireproxy && svc_is_active wireproxy; then
-      systemctl stop wireproxy >/dev/null 2>&1 || return 1
+      svc_stop_checked wireproxy 30 || return 1
     fi
   fi
   return 0
+}
+
+warp_runtime_snapshot_restore_or_fail() {
+  # args: snap_dir primary_message
+  local snap_dir="$1"
+  local primary_message="$2"
+  if warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1; then
+    warn "${primary_message}"
+  else
+    warn "${primary_message}"
+    warn "Rollback WARP gagal. Runtime mungkin masih berada pada state transisi."
+  fi
+  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+  hr
+  pause
+  exit 1
 }
 
 validate_email_user() {
@@ -441,8 +457,10 @@ PY
     fi
 
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -558,10 +576,11 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+    if ! xray_routing_restart_checked; then
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -680,8 +699,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -792,10 +813,11 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+    if ! xray_routing_restart_checked; then
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -912,8 +934,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -1542,8 +1566,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${ROUTING_LOCK_FILE}"
@@ -1786,10 +1812,11 @@ PY
       }
 
       if [[ "${changed_local}" == "1" ]]; then
-        svc_restart xray || true
-        if ! svc_wait_active xray 240; then
-          restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-          systemctl restart xray || true
+        if ! xray_routing_restart_checked; then
+          if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+            exit 1
+          fi
+          xray_routing_restart_checked || exit 1
           exit 86
         fi
       fi
@@ -1988,7 +2015,10 @@ ssh_dns_adblock_apply_now() {
     return 1
   }
   if ! systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    systemctl start "${SSH_DNS_ADBLOCK_SERVICE}" >/dev/null 2>&1 || true
+    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+      return 1
+    }
   fi
   "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1
 }
@@ -2004,7 +2034,10 @@ adblock_update_now() {
     args+=(--reload-xray)
   fi
   if ! systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    systemctl start "${SSH_DNS_ADBLOCK_SERVICE}" >/dev/null 2>&1 || true
+    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+      return 1
+    }
   fi
   "${SSH_DNS_ADBLOCK_SYNC_BIN}" "${args[@]}" >/dev/null 2>&1
 }
@@ -2013,8 +2046,54 @@ adblock_mark_dirty() {
   adblock_config_set_values AUTOSCRIPT_ADBLOCK_DIRTY 1
 }
 
+adblock_auto_update_timer_state_matches() {
+  local expect_enabled="${1:-}"
+  [[ "${expect_enabled}" == "0" || "${expect_enabled}" == "1" ]] || return 1
+
+  if [[ "${expect_enabled}" == "1" ]]; then
+    systemctl is-enabled --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null || return 1
+    systemctl is-active --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null || return 1
+    return 0
+  fi
+
+  if systemctl is-enabled --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null; then
+    return 1
+  fi
+  if systemctl is-active --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+adblock_auto_update_timer_days_matches() {
+  local expected_days="${1:-}"
+  local timer_path="/etc/systemd/system/${ADBLOCK_AUTO_UPDATE_TIMER}"
+  local current_days=""
+
+  [[ "${expected_days}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ -f "${timer_path}" ]] || return 1
+
+  current_days="$(awk -F'=' '/^[[:space:]]*OnUnitActiveSec=/{print $2; exit}' "${timer_path}" 2>/dev/null | tr -d '[:space:]')"
+  [[ "${current_days}" == "${expected_days}d" ]]
+}
+
+adblock_auto_update_verify_rollback_state() {
+  local expected_enabled="${1:-}"
+  local expected_days="${2:-}"
+  if ! adblock_auto_update_timer_state_matches "${expected_enabled}"; then
+    echo "state timer rollback tidak sesuai target (${expected_enabled})"
+    return 1
+  fi
+  if [[ -n "${expected_days}" ]] && ! adblock_auto_update_timer_days_matches "${expected_days}"; then
+    echo "interval timer rollback tidak sesuai target (${expected_days} hari)"
+    return 1
+  fi
+  return 0
+}
+
 adblock_auto_update_set_enabled() {
   local value="${1:-}"
+  local rollback_notes=()
   [[ "${value}" == "0" || "${value}" == "1" ]] || return 1
 
   if [[ ! -f "/etc/systemd/system/${ADBLOCK_AUTO_UPDATE_TIMER}" ]]; then
@@ -2029,8 +2108,25 @@ adblock_auto_update_set_enabled() {
 
   if [[ "${value}" == "1" ]]; then
     if ! systemctl enable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1; then
-      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 0 >/dev/null 2>&1 || true
-      warn "Gagal mengaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 0 >/dev/null 2>&1 || rollback_notes+=("restore env gagal")
+      systemctl disable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("disable timer rollback gagal")
+      adblock_auto_update_verify_rollback_state 0 >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+      if ((${#rollback_notes[@]} > 0)); then
+        warn "Gagal mengaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}. Rollback juga gagal: ${rollback_notes[*]}"
+      else
+        warn "Gagal mengaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+      fi
+      return 1
+    fi
+    if ! adblock_auto_update_timer_state_matches 1; then
+      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 0 >/dev/null 2>&1 || rollback_notes+=("restore env gagal")
+      systemctl disable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("disable timer rollback gagal")
+      adblock_auto_update_verify_rollback_state 0 >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+      if ((${#rollback_notes[@]} > 0)); then
+        warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} belum benar-benar aktif setelah enable. Rollback juga gagal: ${rollback_notes[*]}"
+      else
+        warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} belum benar-benar aktif setelah enable."
+      fi
       return 1
     fi
     log "Auto Update Adblock diaktifkan."
@@ -2038,8 +2134,25 @@ adblock_auto_update_set_enabled() {
   fi
 
   if ! systemctl disable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1; then
-    adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 1 >/dev/null 2>&1 || true
-    warn "Gagal menonaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+    adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 1 >/dev/null 2>&1 || rollback_notes+=("restore env gagal")
+    systemctl enable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("enable timer rollback gagal")
+    adblock_auto_update_verify_rollback_state 1 >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+    if ((${#rollback_notes[@]} > 0)); then
+      warn "Gagal menonaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}. Rollback juga gagal: ${rollback_notes[*]}"
+    else
+      warn "Gagal menonaktifkan timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+    fi
+    return 1
+  fi
+  if ! adblock_auto_update_timer_state_matches 0; then
+    adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED 1 >/dev/null 2>&1 || rollback_notes+=("restore env gagal")
+    systemctl enable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("enable timer rollback gagal")
+    adblock_auto_update_verify_rollback_state 1 >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+    if ((${#rollback_notes[@]} > 0)); then
+      warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} belum benar-benar nonaktif setelah disable. Rollback juga gagal: ${rollback_notes[*]}"
+    else
+      warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} belum benar-benar nonaktif setelah disable."
+    fi
     return 1
   fi
   log "Auto Update Adblock dinonaktifkan."
@@ -2072,6 +2185,8 @@ EOF
 adblock_auto_update_set_days() {
   local days="${1:-}"
   local previous_days=""
+  local rollback_notes=()
+  local timer_was_enabled="0"
   [[ "${days}" =~ ^[1-9][0-9]*$ ]] || {
     warn "Interval harus berupa angka hari, minimal 1."
     return 1
@@ -2079,6 +2194,9 @@ adblock_auto_update_set_days() {
 
   previous_days="$(ssh_dns_adblock_config_get | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
   [[ "${previous_days}" =~ ^[1-9][0-9]*$ ]] || previous_days="1"
+  if systemctl is-enabled --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null; then
+    timer_was_enabled="1"
+  fi
 
   if ! adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${days}"; then
     warn "Gagal menyimpan interval Auto Update."
@@ -2086,17 +2204,53 @@ adblock_auto_update_set_days() {
   fi
 
   if ! adblock_auto_update_timer_write "${days}"; then
-    adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || true
-    warn "Gagal memperbarui timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+    adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore env hari gagal")
+    adblock_auto_update_timer_write "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore timer file gagal")
+    adblock_auto_update_verify_rollback_state "${timer_was_enabled}" "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+    if ((${#rollback_notes[@]} > 0)); then
+      warn "Gagal memperbarui timer ${ADBLOCK_AUTO_UPDATE_TIMER}. Rollback juga gagal: ${rollback_notes[*]}"
+    else
+      warn "Gagal memperbarui timer ${ADBLOCK_AUTO_UPDATE_TIMER}."
+    fi
     return 1
   fi
 
   if systemctl is-enabled --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null; then
     if ! systemctl restart "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1; then
-      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || true
-      adblock_auto_update_timer_write "${previous_days}" >/dev/null 2>&1 || true
-      systemctl restart "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || true
-      warn "Interval tersimpan, tetapi restart timer gagal."
+      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore env hari gagal")
+      adblock_auto_update_timer_write "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore timer file gagal")
+      systemctl restart "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("restart timer rollback gagal")
+      adblock_auto_update_verify_rollback_state "${timer_was_enabled}" "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+      if ((${#rollback_notes[@]} > 0)); then
+        warn "Gagal restart timer ${ADBLOCK_AUTO_UPDATE_TIMER}. Rollback juga gagal: ${rollback_notes[*]}"
+      else
+        warn "Gagal restart timer ${ADBLOCK_AUTO_UPDATE_TIMER}. Interval lama dipulihkan."
+      fi
+      return 1
+    fi
+    if ! adblock_auto_update_timer_state_matches 1; then
+      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore env hari gagal")
+      adblock_auto_update_timer_write "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore timer file gagal")
+      systemctl restart "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("restart timer rollback gagal")
+      adblock_auto_update_verify_rollback_state "${timer_was_enabled}" "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+      if ((${#rollback_notes[@]} > 0)); then
+        warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} tidak sehat setelah restart. Rollback juga gagal: ${rollback_notes[*]}"
+      else
+        warn "Timer ${ADBLOCK_AUTO_UPDATE_TIMER} tidak sehat setelah restart. Interval lama dipulihkan."
+      fi
+      return 1
+    fi
+    if ! adblock_auto_update_timer_days_matches "${days}"; then
+      rollback_notes=()
+      adblock_config_set_values AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore env hari gagal")
+      adblock_auto_update_timer_write "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("restore timer file gagal")
+      systemctl restart "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || rollback_notes+=("restart timer rollback gagal")
+      adblock_auto_update_verify_rollback_state "${timer_was_enabled}" "${previous_days}" >/dev/null 2>&1 || rollback_notes+=("state timer rollback tidak sesuai")
+      if ((${#rollback_notes[@]} > 0)); then
+        warn "Interval timer ${ADBLOCK_AUTO_UPDATE_TIMER} tidak sesuai setelah restart. Rollback juga gagal: ${rollback_notes[*]}"
+      else
+        warn "Interval timer ${ADBLOCK_AUTO_UPDATE_TIMER} tidak sesuai setelah restart. Interval lama dipulihkan."
+      fi
       return 1
     fi
   fi
@@ -2359,7 +2513,7 @@ adblock_enable_all() {
 
   if ! ssh_dns_adblock_config_set_enabled 1; then
     if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
-      warn "Rollback enable Adblock gagal: ${rollback_msg}"
+      die "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
     warn "Gagal mengaktifkan DNS Adblock SSH."
     return 1
@@ -2367,7 +2521,7 @@ adblock_enable_all() {
 
   if ! ssh_dns_adblock_apply_now; then
     if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
-      warn "Rollback enable Adblock gagal: ${rollback_msg}"
+      die "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
     warn "DNS Adblock SSH gagal diterapkan."
     return 1
@@ -2404,7 +2558,7 @@ adblock_disable_all() {
   fi
 
   if ! rollback_msg="$(adblock_restore_runtime_state_checked "${previous_xray}" "${previous_ssh}")"; then
-    warn "Rollback: ${rollback_msg}"
+    die "Rollback disable Adblock gagal: ${rollback_msg}"
   fi
   warn "Adblock nonaktif sebagian. Xray=${xray_status}, SSH=${ssh_status}."
   return 1
@@ -3436,6 +3590,23 @@ warp_live_tier_get() {
   esac
 }
 
+warp_live_tier_wait_for() {
+  local expected="${1:-}"
+  local timeout="${2:-20}"
+  local checks i live
+  [[ "${expected}" == "free" || "${expected}" == "plus" ]] || return 1
+  if [[ ! "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
+    timeout=20
+  fi
+  checks=$(( timeout < 1 ? 1 : timeout ))
+  for (( i=0; i<checks; i++ )); do
+    live="$(warp_live_tier_get)"
+    [[ "${live}" == "${expected}" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
 warp_tier_target_effective_get() {
   local target live
   target="$(warp_tier_state_target_get)"
@@ -3477,10 +3648,29 @@ warp_tier_state_seed_from_live() {
 }
 
 xray_routing_restart_checked() {
-  if ! systemctl restart xray >/dev/null 2>&1; then
-    return 1
+  local state=""
+
+  if systemctl restart xray >/dev/null 2>&1; then
+    if svc_wait_active xray 60; then
+      return 0
+    fi
+  else
+    state="$(svc_state xray)"
+    if [[ "${state}" == "active" ]]; then
+      return 1
+    fi
   fi
-  svc_wait_active xray 60
+
+  state="$(svc_state xray)"
+  if [[ "${state}" == "failed" || "${state}" == "inactive" || "${state}" == "activating" || "${state}" == "deactivating" ]]; then
+    systemctl reset-failed xray >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl start xray >/dev/null 2>&1 && svc_wait_active xray 60; then
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 xray_routing_post_speed_sync_or_die() {
@@ -3745,58 +3935,30 @@ warp_tier_switch_free() {
       exit 1
     fi
     if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]] && ! rm -f "${WGCF_DIR}/wgcf-account.toml"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      warn "Gagal membersihkan wgcf-account.toml lama."
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal membersihkan wgcf-account.toml lama."
     fi
     if [[ -f "${WGCF_DIR}/wgcf-profile.conf" ]] && ! rm -f "${WGCF_DIR}/wgcf-profile.conf"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      warn "Gagal membersihkan wgcf-profile.conf lama."
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal membersihkan wgcf-profile.conf lama."
     fi
 
     if ! warp_wgcf_register_noninteractive; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wgcf register gagal saat switch WARP free."
     fi
     if ! warp_wgcf_build_profile free; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal build profile WARP free."
     fi
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal apply profile WARP free ke wireproxy."
     fi
 
     if ! warp_wireproxy_restart_checked; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak aktif setelah switch WARP free."
+    fi
+    if ! warp_live_tier_wait_for free 20; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target free setelah switch."
     fi
     if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback state WARP free gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      warn "Gagal menyimpan target tier WARP free."
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
     log "WARP tier target di-set: free"
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
@@ -3869,36 +4031,22 @@ warp_tier_switch_plus() {
     fi
 
     if ! warp_wgcf_build_profile plus "${key}"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal build profile WARP plus."
     fi
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal apply profile WARP plus ke wireproxy."
     fi
 
     if ! warp_wireproxy_restart_checked; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak aktif setelah switch WARP plus."
+    fi
+    if ! warp_live_tier_wait_for plus 20; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target plus setelah switch."
     fi
     if ! network_state_set_many \
       "${WARP_TIER_STATE_KEY}" "plus" \
       "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback state WARP plus gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      warn "Gagal menyimpan target tier WARP plus."
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP plus."
     fi
     log "WARP tier target di-set: plus"
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
@@ -3949,55 +4097,38 @@ warp_tier_reconnect_regenerate() {
       pause
       exit 1
     fi
-    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1; then
-      warn "Gagal menyimpan target tier WARP sebelum reconnect."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
-    fi
-
     if [[ "${target}" == "plus" ]]; then
       key="$(warp_plus_license_state_get)"
       key="$(echo "${key}" | tr -d '[:space:]')"
       if [[ -z "${key}" ]]; then
-        warn "Target plus aktif, tapi license key kosong. Gunakan menu Switch ke WARP Plus dulu."
         rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+        warn "Target plus aktif, tapi license key kosong. Gunakan menu Switch ke WARP Plus dulu."
         hr
         pause
         exit 1
       fi
       if ! warp_wgcf_build_profile plus "${key}"; then
-        warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
-        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-        hr
-        pause
-        exit 1
+        warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal build profile WARP plus saat reconnect."
       fi
     else
       if ! warp_wgcf_build_profile free; then
-        warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
-        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-        hr
-        pause
-        exit 1
+        warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal build profile WARP free saat reconnect."
       fi
     fi
 
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal apply profile WARP saat reconnect."
     fi
 
     if ! warp_wireproxy_restart_checked; then
-      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      hr
-      pause
-      exit 1
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak aktif setelah reconnect/regenerate."
+    fi
+    if ! warp_live_tier_wait_for "${target}" 20; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target setelah reconnect/regenerate."
+    fi
+
+    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     log "Reconnect/regenerate selesai untuk target tier: ${target}"
@@ -4077,7 +4208,12 @@ warp_controls_menu() {
         echo "Restart wireproxy"
         hr
         if svc_exists wireproxy; then
-          svc_restart wireproxy || true
+          if ! warp_wireproxy_restart_checked; then
+            warn "Restart wireproxy gagal."
+            hr
+            pause
+            return 1
+          fi
         else
           warn "wireproxy.service tidak terdeteksi"
         fi
@@ -4257,10 +4393,11 @@ PY
             restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
             exit 1
           }
-          svc_restart xray || true
-          if ! svc_wait_active xray 60; then
-            restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-            systemctl restart xray || true
+          if ! xray_routing_restart_checked; then
+            if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+              exit 1
+            fi
+            xray_routing_restart_checked || exit 1
             exit 86
           fi
         ) 200>"${ROUTING_LOCK_FILE}"
@@ -4340,10 +4477,11 @@ PY
             restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
             exit 1
           }
-          svc_restart xray || true
-          if ! svc_wait_active xray 60; then
-            restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-            systemctl restart xray || true
+          if ! xray_routing_restart_checked; then
+            if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+              exit 1
+            fi
+            xray_routing_restart_checked || exit 1
             exit 86
           fi
         ) 200>"${ROUTING_LOCK_FILE}"
@@ -4452,11 +4590,11 @@ val=str(val).strip()
 with open(src,'r',encoding='utf-8') as f:
   try:
     cfg=json.load(f)
-  except Exception:
-    cfg={}
+  except Exception as exc:
+    raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
-  cfg={}
+  raise SystemExit("Config DNS tidak valid: root JSON bukan object")
 
 dns=cfg.get('dns')
 if not isinstance(dns, dict):
@@ -4489,8 +4627,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${DNS_LOCK_FILE}"
@@ -4531,11 +4671,11 @@ val=str(val).strip()
 with open(src,'r',encoding='utf-8') as f:
   try:
     cfg=json.load(f)
-  except Exception:
-    cfg={}
+  except Exception as exc:
+    raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
-  cfg={}
+  raise SystemExit("Config DNS tidak valid: root JSON bukan object")
 
 dns=cfg.get('dns')
 if not isinstance(dns, dict):
@@ -4571,8 +4711,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${DNS_LOCK_FILE}"
@@ -4613,11 +4755,11 @@ val=str(val).strip()
 with open(src,'r',encoding='utf-8') as f:
   try:
     cfg=json.load(f)
-  except Exception:
-    cfg={}
+  except Exception as exc:
+    raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
-  cfg={}
+  raise SystemExit("Config DNS tidak valid: root JSON bukan object")
 
 dns=cfg.get('dns')
 if not isinstance(dns, dict):
@@ -4638,8 +4780,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${DNS_LOCK_FILE}"
@@ -4676,11 +4820,11 @@ src, dst = sys.argv[1:3]
 with open(src,'r',encoding='utf-8') as f:
   try:
     cfg=json.load(f)
-  except Exception:
-    cfg={}
+  except Exception as exc:
+    raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
-  cfg={}
+  raise SystemExit("Config DNS tidak valid: root JSON bukan object")
 
 dns=cfg.get('dns')
 if not isinstance(dns, dict):
@@ -4699,8 +4843,10 @@ PY
       exit 1
     }
     if ! xray_routing_restart_checked; then
-      restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
-      systemctl restart xray || true
+      if ! restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"; then
+        exit 1
+      fi
+      xray_routing_restart_checked || exit 1
       exit 86
     fi
   ) 200>"${DNS_LOCK_FILE}"
@@ -4743,6 +4889,21 @@ dns_show_status() {
   pause
 }
 
+dns_settings_run_mutation() {
+  local success_msg="$1"
+  shift || true
+  local cmd_output=""
+  if cmd_output="$( ( "$@" ) 2>&1 )"; then
+    log "${success_msg}"
+    return 0
+  fi
+  warn "Operasi DNS gagal."
+  if [[ -n "${cmd_output}" ]]; then
+    printf '%s\n' "${cmd_output}" >&2
+  fi
+  return 1
+}
+
 dns_settings_menu() {
   while true; do
     title
@@ -4764,8 +4925,7 @@ dns_settings_menu() {
         fi
         d="$(echo "${d}" | tr -d '[:space:]')"
         [[ -n "${d}" ]] || { warn "Primary DNS kosong" ; pause ; continue ; }
-        xray_dns_set_primary "${d}"
-        log "Primary DNS updated"
+        dns_settings_run_mutation "Primary DNS updated" xray_dns_set_primary "${d}" || true
         pause
         ;;
       2)
@@ -4775,8 +4935,7 @@ dns_settings_menu() {
         fi
         d="$(echo "${d}" | tr -d '[:space:]')"
         [[ -n "${d}" ]] || { warn "Secondary DNS kosong" ; pause ; continue ; }
-        xray_dns_set_secondary "${d}"
-        log "Secondary DNS updated"
+        dns_settings_run_mutation "Secondary DNS updated" xray_dns_set_secondary "${d}" || true
         pause
         ;;
       3)
@@ -4787,13 +4946,11 @@ dns_settings_menu() {
         qs="$(echo "${qs}" | tr -d '[:space:]')"
         case "${qs}" in
           UseIP|UseIPv4|UseIPv6|PreferIPv4|PreferIPv6)
-            xray_dns_set_query_strategy "${qs}"
-            log "Query Strategy updated: ${qs}"
+            dns_settings_run_mutation "Query Strategy updated: ${qs}" xray_dns_set_query_strategy "${qs}" || true
             pause
             ;;
           off|OFF|clear|CLEAR|none|NONE|-|default|DEFAULT)
-            xray_dns_set_query_strategy "clear"
-            log "Query Strategy dihapus."
+            dns_settings_run_mutation "Query Strategy dihapus." xray_dns_set_query_strategy "clear" || true
             pause
             ;;
           *)
@@ -4803,8 +4960,7 @@ dns_settings_menu() {
         esac
         ;;
       4)
-        xray_dns_toggle_cache
-        log "DNS Cache toggled"
+        dns_settings_run_mutation "DNS Cache toggled" xray_dns_toggle_cache || true
         pause
         ;;
       5) dns_show_status ;;
@@ -4835,9 +4991,11 @@ dns_addons_menu() {
     read -r -p "Pilih: " c
     case "${c}" in
       1)
-        if have_cmd nano; then
-          local snap_dir
-          snap_dir="$(mktemp -d "${WORK_DIR}/.dns-editor.XXXXXX" 2>/dev/null || true)"
+	        if have_cmd nano; then
+	          local fatal_dns_error="false"
+	          local dns_edit_failed="false"
+	          local snap_dir
+	          snap_dir="$(mktemp -d "${WORK_DIR}/.dns-editor.XXXXXX" 2>/dev/null || true)"
           [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.dns-editor.$$"
           mkdir -p "${snap_dir}" "$(dirname "${XRAY_DNS_CONF}")" 2>/dev/null || true
           if ! snapshot_file_capture "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf"; then
@@ -4847,24 +5005,39 @@ dns_addons_menu() {
             continue
           fi
 
-          nano "${XRAY_DNS_CONF}"
-          if ! xray_confdir_syntax_test; then
-            snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1 || true
-            svc_restart xray >/dev/null 2>&1 || true
-            warn "Konfigurasi DNS invalid setelah edit manual. File dikembalikan ke snapshot sebelumnya."
-          elif ! svc_restart xray || ! svc_wait_active xray 60; then
-            snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1 || true
-            systemctl restart xray >/dev/null 2>&1 || true
-            warn "xray tidak aktif setelah edit manual DNS config. File dikembalikan ke snapshot sebelumnya."
-            systemctl status xray --no-pager 2>/dev/null || true
-          else
-            log "DNS config berhasil diperbarui lewat editor manual."
-          fi
-          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-          pause
-        else
-          warn "nano tidak tersedia"
-          pause
+	          nano "${XRAY_DNS_CONF}"
+	          if ! xray_confdir_syntax_test; then
+	            dns_edit_failed="true"
+	            if ! snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1; then
+	              warn "Rollback file DNS dari snapshot gagal setelah syntax error."
+	              fatal_dns_error="true"
+	            elif ! xray_routing_restart_checked; then
+	              warn "Rollback runtime xray gagal setelah syntax error DNS."
+	              fatal_dns_error="true"
+	            fi
+	            warn "Konfigurasi DNS invalid setelah edit manual. File dikembalikan ke snapshot sebelumnya."
+	          elif ! svc_restart xray || ! svc_wait_active xray 60; then
+	            dns_edit_failed="true"
+	            if ! snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1; then
+	              warn "Rollback file DNS dari snapshot gagal setelah restart xray gagal."
+	              fatal_dns_error="true"
+	            elif ! xray_routing_restart_checked; then
+	              warn "Rollback runtime xray gagal setelah restart xray gagal."
+	              fatal_dns_error="true"
+	            fi
+	            warn "xray tidak aktif setelah edit manual DNS config. File dikembalikan ke snapshot sebelumnya."
+	            systemctl status xray --no-pager 2>/dev/null || true
+	          else
+	            log "DNS config berhasil diperbarui lewat editor manual."
+	          fi
+	          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	          pause
+	          if [[ "${fatal_dns_error}" == "true" || "${dns_edit_failed}" == "true" ]]; then
+	            return 1
+	          fi
+	        else
+	          warn "nano tidak tersedia"
+	          pause
         fi
         ;;
       0|kembali|k|back|b) break ;;
@@ -4973,7 +5146,7 @@ network_menu() {
     case "${c}" in
       1) warp_controls_menu ;;
       2) dns_settings_menu ;;
-      3) dns_addons_menu ;;
+      3) if ! dns_addons_menu; then :; fi ;;
       4) network_diagnostics_menu ;;
       5) adblock_menu ;;
       0|kembali|k|back|b) break ;;

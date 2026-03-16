@@ -516,6 +516,10 @@ acme_sh_path_get() {
 }
 
 cert_runtime_restart_active_tls_consumers() {
+  if [[ "${DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID:-0}" == "1" ]]; then
+    domain_control_restore_tls_runtime_consumers_from_snapshot
+    return $?
+  fi
   local edge_svc=""
   if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
     systemctl restart sshws-stunnel >/dev/null 2>&1 || return 1
@@ -563,7 +567,21 @@ cert_menu_renew() {
   local renew_ok="false"
   local port80_conflict="false"
   local renew_log
+  local cert_backup_dir=""
+  local -a rollback_notes=()
   renew_log="$(mktemp)"
+
+  domain_control_clear_stopped_services
+  domain_control_capture_runtime_snapshot
+  cert_backup_dir="${WORK_DIR}/cert-renew-snapshot.$(date +%s).$$"
+  if ! cert_snapshot_create "${cert_backup_dir}"; then
+    warn "Gagal membuat snapshot sertifikat sebelum renew."
+    rm -f "${renew_log}" >/dev/null 2>&1 || true
+    domain_control_clear_runtime_snapshot
+    hr
+    pause
+    return 1
+  fi
 
   if "${acme}" --renew -d "${domain}" --force 2>&1 | tee "${renew_log}"; then
     renew_ok="true"
@@ -578,30 +596,74 @@ cert_menu_renew() {
     if [[ "${port80_conflict}" == "true" ]]; then
       warn "Terdeteksi konflik port 80. Menghentikan web service sementara untuk retry renew..."
       local -a stopped_services=()
+      local stop_failed="false"
       local svc edge_svc=""
       for svc in nginx apache2 caddy lighttpd; do
         if svc_exists "${svc}" && svc_is_active "${svc}"; then
-          stopped_services+=("${svc}")
-          systemctl stop "${svc}" >/dev/null 2>&1 || true
+          if systemctl stop "${svc}" >/dev/null 2>&1 && ! svc_is_active "${svc}"; then
+            stopped_services+=("${svc}")
+          else
+            warn "Gagal menghentikan service konflik: ${svc}"
+            stop_failed="true"
+          fi
         fi
       done
       if edge_runtime_enabled_for_public_ports; then
         edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
         if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
-          stopped_services+=("${edge_svc}")
-          systemctl stop "${edge_svc}" >/dev/null 2>&1 || true
+          if systemctl stop "${edge_svc}" >/dev/null 2>&1 && ! svc_is_active "${edge_svc}"; then
+            stopped_services+=("${edge_svc}")
+          else
+            warn "Gagal menghentikan service konflik: ${edge_svc}"
+            stop_failed="true"
+          fi
         fi
       fi
+
+      if [[ "${stop_failed}" == "true" ]]; then
+        local restore_failed="false"
+        for svc in "${stopped_services[@]}"; do
+        if svc_exists "${svc}"; then
+          if ! systemctl start "${svc}" >/dev/null 2>&1 || ! svc_is_active "${svc}"; then
+            warn "Gagal restore service: ${svc}"
+            restore_failed="true"
+          fi
+        fi
+      done
+      warn "Renew dibatalkan karena tidak semua service konflik berhasil dihentikan."
+      if [[ "${restore_failed}" == "true" ]]; then
+        warn "Sebagian service yang sempat dihentikan juga gagal dipulihkan."
+      fi
+      rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+      domain_control_clear_stopped_services
+      domain_control_clear_runtime_snapshot
+      hr
+      pause
+      return 1
+    fi
 
       if "${acme}" --renew -d "${domain}" --force 2>&1; then
         renew_ok="true"
       fi
 
+      local restore_failed="false"
       for svc in "${stopped_services[@]}"; do
         if svc_exists "${svc}"; then
-          systemctl start "${svc}" >/dev/null 2>&1 || warn "Gagal restore service: ${svc}"
+          if ! systemctl start "${svc}" >/dev/null 2>&1 || ! svc_is_active "${svc}"; then
+            warn "Gagal restore service: ${svc}"
+            restore_failed="true"
+          fi
         fi
       done
+      if [[ "${restore_failed}" == "true" ]]; then
+        warn "Renew berhasil, tetapi sebagian service yang dihentikan sementara tidak kembali aktif."
+        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+        domain_control_clear_stopped_services
+        domain_control_clear_runtime_snapshot
+        hr
+        pause
+        return 1
+      fi
     else
       warn "acme.sh renew domain aktif gagal, mencoba ulang..."
       if "${acme}" --renew -d "${domain}" --force 2>&1; then
@@ -612,15 +674,32 @@ cert_menu_renew() {
 
   if [[ "${renew_ok}" != "true" ]]; then
     warn "Renew gagal. Cek output di atas."
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    domain_control_clear_stopped_services
+    domain_control_clear_runtime_snapshot
     hr
     pause
-    return 0
+    return 1
   fi
 
   echo
   if ! cert_runtime_restart_active_tls_consumers; then
-    warn "Cert berhasil diperbarui, tetapi restart consumer TLS tambahan gagal. Cek sshws-stunnel / edge runtime."
+    warn "Cert berhasil diperbarui, tetapi restart consumer TLS tambahan gagal. Mencoba rollback cert sebelumnya..."
+    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
+    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback cert juga bermasalah: ${rollback_notes[*]}"
+    fi
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    domain_control_clear_stopped_services
+    domain_control_clear_runtime_snapshot
+    hr
+    pause
+    return 1
   fi
+  rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+  domain_control_clear_stopped_services
+  domain_control_clear_runtime_snapshot
   log "Renew certificate selesai (cek expiry untuk memastikan)."
   hr
   pause
@@ -641,11 +720,13 @@ cert_menu_reload_nginx() {
     log "nginx reload: OK"
   else
     warn "nginx reload gagal, mencoba restart..."
-    systemctl restart nginx 2>/dev/null || true
-    if svc_is_active nginx; then
+    if systemctl restart nginx 2>/dev/null && svc_is_active nginx; then
       log "nginx restart: OK"
     else
       warn "nginx masih tidak aktif"
+      hr
+      pause
+      return 1
     fi
   fi
   hr
@@ -901,11 +982,10 @@ fail2ban_menu_restart() {
     return 0
   fi
 
-  systemctl restart fail2ban 2>/dev/null || true
-  if svc_is_active fail2ban; then
+  if svc_restart_checked fail2ban 20; then
     log "fail2ban: active"
   else
-    warn "fail2ban: inactive"
+    warn "fail2ban gagal direstart (state=$(svc_state fail2ban || echo unknown))"
   fi
   hr
   pause
@@ -1922,10 +2002,14 @@ sshws_restart_menu() {
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
   local svc restarted="false"
+  local -a failed=()
   for svc in "${services[@]}"; do
     if svc_exists "${svc}"; then
-      svc_restart "${svc}" || true
-      restarted="true"
+      if svc_restart "${svc}"; then
+        restarted="true"
+      else
+        failed+=("${svc}")
+      fi
     else
       warn "${svc}.service tidak terpasang"
     fi
@@ -1933,6 +2017,9 @@ sshws_restart_menu() {
 
   if [[ "${restarted}" != "true" ]]; then
     warn "Tidak ada service SSH WS yang bisa direstart."
+  fi
+  if (( ${#failed[@]} > 0 )); then
+    warn "Gagal restart service SSH WS: ${failed[*]}"
   fi
   hr
   pause
@@ -4099,9 +4186,17 @@ ssh_add_user_menu() {
       return 0
     fi
   else
-    ssh_qac_enforce_now_warn "${username}" || true
+    if ! ssh_qac_enforce_now_warn "${username}"; then
+      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false"
+      pause
+      return 0
+    fi
   fi
-  ssh_dns_adblock_runtime_refresh_if_available || true
+  if ! ssh_dns_adblock_runtime_refresh_if_available; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false"
+    pause
+    return 0
+  fi
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
     ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info." "${password}" "false"
     pause
@@ -4211,7 +4306,11 @@ ssh_delete_user_menu() {
       cleanup_notes+=("${f}")
     fi
   done
-  ssh_dns_adblock_runtime_refresh_if_available || true
+  if ! ssh_dns_adblock_runtime_refresh_if_available; then
+    warn "User Linux '${username}' sudah dihapus, tetapi refresh runtime DNS adblock gagal."
+    pause
+    return 1
+  fi
   if (( ${#cleanup_notes[@]} > 0 )); then
     warn "User Linux '${username}' sudah dihapus, tetapi cleanup artefak lokal gagal: ${cleanup_notes[*]}"
     pause
@@ -6818,6 +6917,7 @@ sshws_restart_after_dropbear() {
   local dropbear_svc="$1"
   local stunnel_svc="$2"
   local proxy_svc="$3"
+  local rc=0
 
   if ! svc_exists "${dropbear_svc}"; then
     warn "${dropbear_svc} tidak terpasang"
@@ -6829,10 +6929,13 @@ sshws_restart_after_dropbear() {
   local d
   for d in "${stunnel_svc}" "${proxy_svc}"; do
     if svc_exists "${d}"; then
-      svc_restart "${d}" || warn "Gagal restart ${d} setelah ${dropbear_svc}."
+      if ! svc_restart "${d}"; then
+        warn "Gagal restart ${d} setelah ${dropbear_svc}."
+        rc=1
+      fi
     fi
   done
-  return 0
+  return "${rc}"
 }
 
 install_discord_bot_menu() {
@@ -6936,29 +7039,59 @@ daemon_status_menu() {
   fi
   case "${c}" in
     1)
-      if svc_exists xray-expired; then svc_restart xray-expired ; else warn "xray-expired tidak terpasang" ; fi
+      if svc_exists xray-expired; then
+        if ! svc_restart xray-expired; then
+          warn "Restart xray-expired gagal."
+        fi
+      else
+        warn "xray-expired tidak terpasang"
+      fi
       pause
       ;;
     2)
-      if svc_exists xray-quota; then svc_restart xray-quota ; else warn "xray-quota tidak terpasang" ; fi
+      if svc_exists xray-quota; then
+        if ! svc_restart xray-quota; then
+          warn "Restart xray-quota gagal."
+        fi
+      else
+        warn "xray-quota tidak terpasang"
+      fi
       pause
       ;;
     3)
-      if svc_exists xray-limit-ip; then svc_restart xray-limit-ip ; else warn "xray-limit-ip tidak terpasang" ; fi
+      if svc_exists xray-limit-ip; then
+        if ! svc_restart xray-limit-ip; then
+          warn "Restart xray-limit-ip gagal."
+        fi
+      else
+        warn "xray-limit-ip tidak terpasang"
+      fi
       pause
       ;;
     4)
-      if svc_exists xray-speed; then svc_restart xray-speed ; else warn "xray-speed tidak terpasang" ; fi
+      if svc_exists xray-speed; then
+        if ! svc_restart xray-speed; then
+          warn "Restart xray-speed gagal."
+        fi
+      else
+        warn "xray-speed tidak terpasang"
+      fi
       pause
       ;;
     5)
+      local restart_failed="false"
       for d in xray-expired xray-quota xray-limit-ip xray-speed; do
         if svc_exists "${d}"; then
-          svc_restart "${d}"
+          if ! svc_restart "${d}"; then
+            restart_failed="true"
+          fi
         else
           warn "${d} tidak terpasang, skip"
         fi
       done
+      if [[ "${restart_failed}" == "true" ]]; then
+        warn "Sebagian daemon Xray gagal direstart."
+      fi
       pause
       ;;
     6) daemon_log_tail_show xray-expired 20 ;;
@@ -6966,25 +7099,45 @@ daemon_status_menu() {
     8) daemon_log_tail_show xray-limit-ip 20 ;;
     9) daemon_log_tail_show xray-speed 20 ;;
     10)
-      sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}" || true
+      if ! sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
+        warn "Restart SSH WS gagal."
+      fi
       pause
       ;;
     11)
-      if svc_exists "${sshws_stunnel_svc}"; then svc_restart "${sshws_stunnel_svc}" ; else warn "${sshws_stunnel_svc} tidak terpasang" ; fi
+      if svc_exists "${sshws_stunnel_svc}"; then
+        if ! svc_restart "${sshws_stunnel_svc}"; then
+          warn "Restart ${sshws_stunnel_svc} gagal."
+        fi
+      else
+        warn "${sshws_stunnel_svc} tidak terpasang"
+      fi
       pause
       ;;
     12)
-      if svc_exists "${sshws_proxy_svc}"; then svc_restart "${sshws_proxy_svc}" ; else warn "${sshws_proxy_svc} tidak terpasang" ; fi
+      if svc_exists "${sshws_proxy_svc}"; then
+        if ! svc_restart "${sshws_proxy_svc}"; then
+          warn "Restart ${sshws_proxy_svc} gagal."
+        fi
+      else
+        warn "${sshws_proxy_svc} tidak terpasang"
+      fi
       pause
       ;;
     13)
+      local restart_failed="false"
       for d in "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; do
         if svc_exists "${d}"; then
-          svc_restart "${d}"
+          if ! svc_restart "${d}"; then
+            restart_failed="true"
+          fi
         else
           warn "${d} tidak terpasang, skip"
         fi
       done
+      if [[ "${restart_failed}" == "true" ]]; then
+        warn "Sebagian service SSH WS gagal direstart."
+      fi
       pause
       ;;
     14) daemon_log_tail_show "${sshws_dropbear_svc}" 20 ;;

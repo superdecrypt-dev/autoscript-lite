@@ -233,14 +233,16 @@ def _to_rel_path(path: Path) -> str:
     return str(path).lstrip("/")
 
 
-def _enforce_retention(directory: Path, keep: int = BACKUP_RETENTION_KEEP) -> None:
+def _enforce_retention(directory: Path, keep: int = BACKUP_RETENTION_KEEP) -> list[str]:
     files = [p for p in directory.glob("*.tar.gz") if p.is_file()]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    failed: list[str] = []
     for old in files[keep:]:
         try:
             old.unlink()
         except Exception:
-            pass
+            failed.append(old.name)
+    return failed
 
 
 def _add_backup_payloads(
@@ -335,7 +337,7 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
         return False, f"Gagal membuat arsip backup: {exc}", None
 
     _adjust_archive_permissions(archive_path)
-    _enforce_retention(dst_dir)
+    retention_failed_files = _enforce_retention(dst_dir)
     size_bytes = int(archive_path.stat().st_size) if archive_path.exists() else 0
     data = {
         "backup_id": backup_id,
@@ -343,6 +345,7 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
         "archive_path": str(archive_path),
         "archive_filename": archive_path.name,
         "size_bytes": size_bytes,
+        "retention_failed_files": retention_failed_files,
     }
     return True, "ok", data
 
@@ -649,6 +652,18 @@ def _count_reader(reader, *, expected_size: int) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _apply_path_metadata(path: Path, *, uid: int, gid: int, mode: int, kind: str) -> tuple[bool, str]:
+    try:
+        os.chmod(path, mode)
+    except Exception as exc:
+        return False, f"Gagal set mode {kind} {path}: {exc}"
+    try:
+        os.chown(path, uid, gid)
+    except Exception as exc:
+        return False, f"Gagal set owner {kind} {path}: {exc}"
+    return True, "ok"
+
+
 def _write_stream_atomic(
     path: Path,
     source,
@@ -701,15 +716,10 @@ def _write_stream_atomic(
                 raise ValueError(f"ukuran payload tidak sesuai manifest ({total} != {expected_size})")
             fp.flush()
             os.fsync(fp.fileno())
-        try:
-            os.chmod(tmp_path, mode)
-        except Exception:
-            pass
-        try:
-            os.chown(tmp_path, uid, gid)
-        except Exception:
-            pass
         os.replace(tmp_path, str(path))
+        ok_meta, msg_meta = _apply_path_metadata(path, uid=uid, gid=gid, mode=mode, kind="file restore")
+        if not ok_meta:
+            return False, msg_meta
     except Exception as exc:
         if fd >= 0:
             try:
@@ -784,18 +794,15 @@ def _apply_directory_metadata(directories: list[dict[str, Any]]) -> tuple[bool, 
         except Exception as exc:
             return False, f"Gagal menyiapkan direktori restore {path}: {exc}"
         try:
-            if "mode" in item:
-                path.chmod(int(item["mode"]))
-        except Exception:
-            pass
-        try:
-            os.chown(
-                path,
-                int(item["uid"]) if "uid" in item else -1,
-                int(item["gid"]) if "gid" in item else -1,
-            )
-        except Exception:
-            pass
+            st = path.stat()
+            uid = int(item["uid"]) if "uid" in item else int(st.st_uid)
+            gid = int(item["gid"]) if "gid" in item else int(st.st_gid)
+            mode = int(item["mode"]) if "mode" in item else int(st.st_mode & 0o777)
+        except Exception as exc:
+            return False, f"Gagal membaca metadata direktori restore {path}: {exc}"
+        ok_meta, msg_meta = _apply_path_metadata(path, uid=uid, gid=gid, mode=mode, kind="direktori restore")
+        if not ok_meta:
+            return False, msg_meta
     return True, "ok"
 
 
@@ -846,10 +853,19 @@ def _service_exists(name: str) -> bool:
     return f"{name}.service" in out_list
 
 
-def _restart_service_checked(name: str, *, required: bool) -> tuple[bool, str]:
+def _restart_service_checked(
+    name: str,
+    *,
+    required: bool,
+    active_only: bool = False,
+    must_exist: bool = False,
+) -> tuple[bool, str]:
     if not _service_exists(name):
-        if required:
+        if required or must_exist:
             return False, f"Service wajib tidak ditemukan: {name}"
+        return True, "skip"
+
+    if active_only and not _service_is_active(name):
         return True, "skip"
 
     ok_restart, out_restart = run_cmd(["systemctl", "restart", name], timeout=40)
@@ -863,22 +879,35 @@ def _restart_service_checked(name: str, *, required: bool) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _run_post_restore_validation() -> tuple[bool, str]:
+def _run_post_restore_validation(
+    required_active_services: set[str] | None = None,
+    optional_active_services: set[str] | None = None,
+) -> tuple[bool, str]:
+    active_required = set(required_active_services or set())
+    active_optional = set(optional_active_services or set())
     for cmd in VALIDATION_COMMANDS:
         ok, out = run_cmd(cmd, timeout=60)
         if not ok:
             return False, f"Validasi gagal: {' '.join(cmd)}\n{out}"
 
     for svc in REQUIRED_RESTART_SERVICES:
-        ok_service, msg_service = _restart_service_checked(svc, required=True)
+        if active_required and svc not in active_required:
+            continue
+        ok_service, msg_service = _restart_service_checked(svc, required=True, must_exist=True)
         if not ok_service:
             return False, msg_service
 
     for svc in OPTIONAL_RESTART_SERVICES:
-        ok_service, msg_service = _restart_service_checked(svc, required=False)
+        if svc not in active_optional:
+            continue
+        ok_service, msg_service = _restart_service_checked(
+            svc,
+            required=False,
+            active_only=False,
+            must_exist=True,
+        )
         if not ok_service:
-            return False, msg_service
-
+            return False, f"Validasi service optional aktif gagal: {msg_service}"
     return True, "ok"
 
 
@@ -904,18 +933,27 @@ def _restore_archive_with_safety(
     if not ok_safety or safety_data is None:
         return False, f"Gagal membuat snapshot pra-restore: {msg_safety}"
     safety_path = Path(str(safety_data.get("archive_path") or "")).resolve()
+    required_active_services = {
+        svc for svc in REQUIRED_RESTART_SERVICES if _service_exists(svc) and _service_is_active(svc)
+    }
+    optional_active_services = {
+        svc for svc in OPTIONAL_RESTART_SERVICES if _service_exists(svc) and _service_is_active(svc)
+    }
 
     ok_apply, msg_apply = _apply_archive(archive_path, entries, list(manifest.get("directories") or []))
     if ok_apply:
-        ok_validate, msg_validate = _run_post_restore_validation()
+        ok_validate, msg_validate = _run_post_restore_validation(required_active_services, optional_active_services)
         if ok_validate:
+            lines = [
+                f"Restore berhasil dari {source_label}.",
+                f"- File dipulihkan: {len(entries)}",
+                f"- Snapshot safety: {safety_path.name}",
+            ]
+            if msg_validate != "ok":
+                lines.extend(["", msg_validate])
             return (
                 True,
-                (
-                    f"Restore berhasil dari {source_label}.\n"
-                    f"- File dipulihkan: {len(entries)}\n"
-                    f"- Snapshot safety: {safety_path.name}"
-                ),
+                "\n".join(lines),
             )
         msg_apply = msg_validate
 
@@ -927,16 +965,19 @@ def _restore_archive_with_safety(
     if not rb_apply_ok:
         return False, f"Restore gagal: {msg_apply}\nRollback gagal apply: {rb_apply_msg}"
 
-    rb_validate_ok, rb_validate_msg = _run_post_restore_validation()
+    rb_validate_ok, rb_validate_msg = _run_post_restore_validation(required_active_services, optional_active_services)
     if not rb_validate_ok:
         return False, f"Restore gagal: {msg_apply}\nRollback gagal validasi: {rb_validate_msg}"
 
+    rollback_msg = (
+        f"Restore gagal: {msg_apply}\n"
+        f"Rollback otomatis berhasil menggunakan snapshot {safety_path.name}."
+    )
+    if rb_validate_msg != "ok":
+        rollback_msg += f"\nCatatan pasca-rollback:\n{rb_validate_msg}"
     return (
         False,
-        (
-            f"Restore gagal: {msg_apply}\n"
-            f"Rollback otomatis berhasil menggunakan snapshot {safety_path.name}."
-        ),
+        rollback_msg,
     )
 
 
@@ -963,6 +1004,12 @@ def op_backup_create() -> tuple[bool, str, str, dict[str, Any] | None]:
         f"- Size: {_fmt_size(size_bytes)}\n"
         "- Scope: full + cert + runtime env (tanpa env bot)"
     )
+    retention_failed_files = [str(item).strip() for item in (data.get("retention_failed_files") or []) if str(item).strip()]
+    if retention_failed_files:
+        preview = ", ".join(retention_failed_files[:5])
+        if len(retention_failed_files) > 5:
+            preview += ", ..."
+        msg_text += f"\n- Catatan: retensi belum sepenuhnya bersih ({preview})"
     return True, title, msg_text, result_data
 
 
@@ -1010,6 +1057,8 @@ def op_restore_from_upload(upload_path: str) -> tuple[bool, str, str]:
     if not ok_upload or archive_path is None:
         return False, title, msg_upload
 
+    ok_restore = False
+    msg_restore = "Restore upload tidak dijalankan."
     try:
         with file_lock(BACKUP_LOCK_FILE):
             ok_restore, msg_restore = _restore_archive_with_safety(
@@ -1017,12 +1066,15 @@ def op_restore_from_upload(upload_path: str) -> tuple[bool, str, str]:
                 source_label=f"upload:{archive_path.name}",
                 upload_limits=True,
             )
-    finally:
+    except Exception as exc:
+        ok_restore = False
+        msg_restore = f"Restore upload gagal dijalankan: {exc}"
+
+    if ok_restore:
         try:
             archive_path.unlink(missing_ok=True)
         except Exception:
-            pass
-
-    if ok_restore:
+            msg_restore += f"\nCatatan: arsip upload belum terhapus otomatis: {archive_path}"
         return True, title, msg_restore
-    return False, title, msg_restore
+
+    return False, title, f"{msg_restore}\nArsip upload dipertahankan di: {archive_path}"

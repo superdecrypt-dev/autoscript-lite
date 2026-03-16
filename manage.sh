@@ -55,6 +55,9 @@ CF_ACCOUNT_ID=""
 VPS_IPV4=""
 CF_PROXIED="false"
 declare -ag DOMAIN_CTRL_STOPPED_SERVICES=()
+declare -ag DOMAIN_CTRL_STOP_FAILURES=()
+declare -ag DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES=()
+DOMAIN_CTRL_NGINX_WAS_ACTIVE="0"
 
 # Account store (read-only source for Menu 2)
 ACCOUNT_ROOT="/opt/account"
@@ -1057,46 +1060,60 @@ account_info_compat_refresh_if_needed() {
 cert_snapshot_create() {
   # args: backup_dir
   local backup_dir="$1"
-  mkdir -p "${backup_dir}"
-  chmod 700 "${backup_dir}" 2>/dev/null || true
+  mkdir -p "${backup_dir}" || return 1
+  chmod 700 "${backup_dir}" 2>/dev/null || return 1
 
   if [[ -f "${CERT_FULLCHAIN}" ]]; then
-    cp -a "${CERT_FULLCHAIN}" "${backup_dir}/fullchain.pem" 2>/dev/null || true
+    cp -a "${CERT_FULLCHAIN}" "${backup_dir}/fullchain.pem" 2>/dev/null || return 1
     echo "1" > "${backup_dir}/fullchain.exists"
   else
     echo "0" > "${backup_dir}/fullchain.exists"
   fi
 
   if [[ -f "${CERT_PRIVKEY}" ]]; then
-    cp -a "${CERT_PRIVKEY}" "${backup_dir}/privkey.pem" 2>/dev/null || true
+    cp -a "${CERT_PRIVKEY}" "${backup_dir}/privkey.pem" 2>/dev/null || return 1
     echo "1" > "${backup_dir}/privkey.exists"
   else
     echo "0" > "${backup_dir}/privkey.exists"
   fi
+
+  return 0
 }
 
 cert_snapshot_restore() {
   # args: backup_dir
   local backup_dir="$1"
   local fullchain_exists privkey_exists
+  local failed=0
   [[ -d "${backup_dir}" ]] || return 0
 
   fullchain_exists="$(cat "${backup_dir}/fullchain.exists" 2>/dev/null || echo "0")"
   privkey_exists="$(cat "${backup_dir}/privkey.exists" 2>/dev/null || echo "0")"
 
   if [[ "${fullchain_exists}" == "1" && -f "${backup_dir}/fullchain.pem" ]]; then
-    cp -a "${backup_dir}/fullchain.pem" "${CERT_FULLCHAIN}" 2>/dev/null || true
+    cp -a "${backup_dir}/fullchain.pem" "${CERT_FULLCHAIN}" 2>/dev/null || failed=1
   else
-    rm -f "${CERT_FULLCHAIN}" 2>/dev/null || true
+    if [[ -e "${CERT_FULLCHAIN}" ]] && ! rm -f "${CERT_FULLCHAIN}" 2>/dev/null; then
+      failed=1
+    fi
   fi
 
   if [[ "${privkey_exists}" == "1" && -f "${backup_dir}/privkey.pem" ]]; then
-    cp -a "${backup_dir}/privkey.pem" "${CERT_PRIVKEY}" 2>/dev/null || true
+    cp -a "${backup_dir}/privkey.pem" "${CERT_PRIVKEY}" 2>/dev/null || failed=1
   else
-    rm -f "${CERT_PRIVKEY}" 2>/dev/null || true
+    if [[ -e "${CERT_PRIVKEY}" ]] && ! rm -f "${CERT_PRIVKEY}" 2>/dev/null; then
+      failed=1
+    fi
   fi
 
-  chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}" 2>/dev/null || true
+  if [[ -e "${CERT_PRIVKEY}" ]] && ! chmod 600 "${CERT_PRIVKEY}" 2>/dev/null; then
+    failed=1
+  fi
+  if [[ -e "${CERT_FULLCHAIN}" ]] && ! chmod 600 "${CERT_FULLCHAIN}" 2>/dev/null; then
+    failed=1
+  fi
+
+  return "${failed}"
 }
 
 main_info_os_get() {
@@ -1846,17 +1863,27 @@ domain_menu_v2() {
 
 stop_conflicting_services() {
   DOMAIN_CTRL_STOPPED_SERVICES=()
+  DOMAIN_CTRL_STOP_FAILURES=()
 
   local svc
   for svc in nginx apache2 caddy lighttpd; do
     if svc_exists "${svc}" && svc_is_active "${svc}"; then
-      domain_control_append_stopped_service "${svc}"
-    fi
-    if svc_exists "${svc}"; then
-      systemctl stop "${svc}" >/dev/null 2>&1 || true
+      if systemctl stop "${svc}" >/dev/null 2>&1; then
+        if svc_is_active "${svc}"; then
+          DOMAIN_CTRL_STOP_FAILURES+=("${svc}: masih aktif setelah stop")
+        else
+          domain_control_append_stopped_service "${svc}"
+        fi
+      else
+        DOMAIN_CTRL_STOP_FAILURES+=("${svc}: gagal dihentikan")
+      fi
     fi
   done
   domain_control_stop_edge_runtime_if_needed
+  if (( ${#DOMAIN_CTRL_STOP_FAILURES[@]} > 0 )); then
+    return 1
+  fi
+  return 0
 }
 
 domain_control_append_stopped_service() {
@@ -1899,23 +1926,141 @@ domain_control_stop_edge_runtime_if_needed() {
   if domain_control_edge_runtime_http_on_80; then
     svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
     if [[ -n "${svc}" && "${svc}" != "nginx" ]] && svc_exists "${svc}" && svc_is_active "${svc}"; then
-      domain_control_append_stopped_service "${svc}"
-      systemctl stop "${svc}" >/dev/null 2>&1 || true
+      if systemctl stop "${svc}" >/dev/null 2>&1; then
+        if svc_is_active "${svc}"; then
+          DOMAIN_CTRL_STOP_FAILURES+=("${svc}: masih aktif setelah stop")
+        else
+          domain_control_append_stopped_service "${svc}"
+        fi
+      else
+        DOMAIN_CTRL_STOP_FAILURES+=("${svc}: gagal dihentikan")
+      fi
     fi
   fi
 }
 
 domain_control_restart_active_tls_runtime_consumers() {
+  if [[ "${DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID:-0}" == "1" ]]; then
+    domain_control_restore_tls_runtime_consumers_from_snapshot "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"
+    return $?
+  fi
+
   local edge_svc
   if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
-    systemctl restart sshws-stunnel >/dev/null 2>&1 || die "Gagal restart sshws-stunnel setelah update cert."
-    svc_is_active sshws-stunnel || die "sshws-stunnel tidak active setelah update cert."
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || {
+      warn "Gagal restart sshws-stunnel setelah update cert."
+      return 1
+    }
+    svc_is_active sshws-stunnel || {
+      warn "sshws-stunnel tidak active setelah update cert."
+      return 1
+    }
   fi
   edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
   if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
-    systemctl restart "${edge_svc}" >/dev/null 2>&1 || die "Gagal restart ${edge_svc} setelah update cert."
-    svc_is_active "${edge_svc}" || die "${edge_svc} tidak active setelah update cert."
+    systemctl restart "${edge_svc}" >/dev/null 2>&1 || {
+      warn "Gagal restart ${edge_svc} setelah update cert."
+      return 1
+    }
+    svc_is_active "${edge_svc}" || {
+      warn "${edge_svc} tidak active setelah update cert."
+      return 1
+    }
   fi
+  return 0
+}
+
+domain_control_clear_runtime_snapshot() {
+  DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID="0"
+  DOMAIN_CTRL_NGINX_WAS_ACTIVE="0"
+  DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES=()
+}
+
+domain_control_capture_runtime_snapshot() {
+  local edge_svc
+  domain_control_clear_runtime_snapshot
+
+  if svc_exists nginx && svc_is_active nginx; then
+    DOMAIN_CTRL_NGINX_WAS_ACTIVE="1"
+  fi
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES+=("sshws-stunnel")
+  fi
+  edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" && "${edge_svc}" != "sshws-stunnel" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+    DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES+=("${edge_svc}")
+  fi
+  DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID="1"
+}
+
+domain_control_tls_service_was_active() {
+  local svc="${1:-}"
+  local item
+  for item in "${DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES[@]}"; do
+    [[ "${item}" == "${svc}" ]] && return 0
+  done
+  return 1
+}
+
+domain_control_restore_tls_runtime_consumers_from_snapshot() {
+  local -a skipped_services=("$@")
+  local edge_svc svc
+  local rc=0
+  local -a targets=("sshws-stunnel")
+  local skipped
+
+  edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" && "${edge_svc}" != "sshws-stunnel" ]]; then
+    targets+=("${edge_svc}")
+  fi
+
+  for svc in "${targets[@]}"; do
+    for skipped in "${skipped_services[@]}"; do
+      [[ "${skipped}" == "${svc}" ]] && continue 2
+    done
+    if domain_control_tls_service_was_active "${svc}"; then
+      if ! svc_exists "${svc}"; then
+        warn "Service TLS ${svc} tidak ditemukan saat rollback."
+        rc=1
+        continue
+      fi
+      if ! svc_restart_checked "${svc}" 60; then
+        warn "Gagal memulihkan service TLS ${svc} saat rollback."
+        rc=1
+      fi
+    elif svc_exists "${svc}" && svc_is_active "${svc}"; then
+      if ! svc_stop_checked "${svc}" 60; then
+        warn "Gagal mengembalikan ${svc} ke state inactive saat rollback."
+        rc=1
+      fi
+    fi
+  done
+
+  return "${rc}"
+}
+
+domain_control_restore_cert_runtime_after_rollback() {
+  local notes_name="$1"
+  local notes_ref="()"
+  local rc=0
+  declare -n notes_ref="${notes_name}"
+
+  if [[ "${DOMAIN_CTRL_NGINX_WAS_ACTIVE:-0}" == "1" ]]; then
+    if ! svc_restart_checked nginx 60; then
+      notes_ref+=("restore nginx rollback gagal")
+      rc=1
+    fi
+  elif svc_exists nginx && svc_is_active nginx; then
+    if ! svc_stop_checked nginx 60; then
+      notes_ref+=("nginx rollback gagal dikembalikan ke inactive")
+      rc=1
+    fi
+  fi
+  if ! domain_control_restore_tls_runtime_consumers_from_snapshot; then
+    notes_ref+=("reload consumer TLS rollback gagal")
+    rc=1
+  fi
+  return "${rc}"
 }
 
 domain_control_restore_after_cert_success() {
@@ -1923,10 +2068,14 @@ domain_control_restore_after_cert_success() {
   for svc in "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"; do
     [[ "${svc}" == "nginx" ]] && continue
     if svc_exists "${svc}"; then
-      systemctl start "${svc}" >/dev/null 2>&1 || die "Gagal restore service ${svc} setelah update cert."
+      svc_start_checked "${svc}" 60 || {
+        warn "Gagal restore service ${svc} setelah update cert."
+        return 1
+      }
     fi
   done
   domain_control_clear_stopped_services
+  return 0
 }
 
 domain_control_restore_stopped_services() {
@@ -1935,15 +2084,21 @@ domain_control_restore_stopped_services() {
   fi
 
   local svc
+  local rc=0
   for svc in "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"; do
     if svc_exists "${svc}"; then
-      systemctl start "${svc}" >/dev/null 2>&1 || warn "Gagal restore service: ${svc}"
+      if ! svc_start_checked "${svc}" 60; then
+        warn "Gagal restore service: ${svc}"
+        rc=1
+      fi
     fi
   done
+  return "${rc}"
 }
 
 domain_control_clear_stopped_services() {
   DOMAIN_CTRL_STOPPED_SERVICES=()
+  DOMAIN_CTRL_STOP_FAILURES=()
 }
 
 domain_control_restore_on_exit() {
@@ -1951,8 +2106,11 @@ domain_control_restore_on_exit() {
   # service yang sebelumnya aktif dipulihkan otomatis.
   if (( ${#DOMAIN_CTRL_STOPPED_SERVICES[@]} > 0 )); then
     warn "Domain Control berhenti sebelum selesai. Mencoba restore service yang tadi dihentikan..."
-    domain_control_restore_stopped_services
-    domain_control_clear_stopped_services
+    if domain_control_restore_stopped_services; then
+      domain_control_clear_stopped_services
+    else
+      warn "Sebagian service gagal dipulihkan pada EXIT safety-net."
+    fi
   fi
 }
 
@@ -1962,7 +2120,9 @@ install_acme_and_issue_cert() {
   log "Email acme.sh (acak): $email"
 
   if [[ "${ACME_CERT_MODE:-standalone}" != "dns_cf_wildcard" ]]; then
-    stop_conflicting_services
+    if ! stop_conflicting_services; then
+      die "Gagal menghentikan service konflik: $(IFS=' | '; echo "${DOMAIN_CTRL_STOP_FAILURES[*]}")"
+    fi
   else
     domain_control_clear_stopped_services
   fi
@@ -2031,7 +2191,10 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
       --key-file "$CERT_PRIVKEY" \
       --fullchain-file "$CERT_FULLCHAIN" \
-      --reloadcmd "/bin/true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null || {
+        warn "Gagal install-cert wildcard ke ${CERT_DIR}."
+        return 1
+      }
   else
     log "Issue sertifikat untuk $DOMAIN via acme.sh (standalone port 80)..."
     /root/.acme.sh/acme.sh --issue --force --standalone -d "$DOMAIN" --httpport 80 \
@@ -2040,14 +2203,23 @@ install_acme_and_issue_cert() {
     /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
       --key-file "$CERT_PRIVKEY" \
       --fullchain-file "$CERT_FULLCHAIN" \
-      --reloadcmd "/bin/true" >/dev/null
+      --reloadcmd "/bin/true" >/dev/null || {
+        warn "Gagal install-cert standalone ke ${CERT_DIR}."
+        return 1
+      }
   fi
 
   chmod 600 "$CERT_PRIVKEY" "$CERT_FULLCHAIN"
-  nginx -t >/dev/null 2>&1 || die "Konfigurasi nginx tidak valid setelah install-cert."
-  systemctl restart nginx >/dev/null 2>&1 || die "Gagal restart nginx setelah install-cert."
-  domain_control_restart_active_tls_runtime_consumers
-  domain_control_restore_after_cert_success
+  nginx -t >/dev/null 2>&1 || {
+    warn "Konfigurasi nginx tidak valid setelah install-cert."
+    return 1
+  }
+  svc_restart_checked nginx 60 || {
+    warn "Gagal restart nginx setelah install-cert."
+    return 1
+  }
+  domain_control_restart_active_tls_runtime_consumers || return 1
+  domain_control_restore_after_cert_success || return 1
 
   log "Sertifikat tersimpan:"
   log "  - $CERT_FULLCHAIN"
@@ -2067,35 +2239,41 @@ domain_control_apply_nginx_domain() {
   cp -a "${NGINX_CONF}" "${backup}" || die "Gagal membuat backup nginx conf."
 
   if ! sed -E -i "s|^([[:space:]]*server_name[[:space:]]+)[^;]+;|\\1${domain};|g" "${NGINX_CONF}"; then
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Gagal update server_name di nginx conf; restore backup nginx juga gagal."
     die "Gagal update server_name di nginx conf."
   fi
 
   applied_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
   if [[ -z "${applied_domain}" || "${applied_domain}" != "${domain}" ]]; then
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "server_name nginx tidak sesuai setelah update; restore backup nginx juga gagal."
     die "server_name nginx tidak sesuai setelah update (expect=${domain}, got=${applied_domain:-<kosong>})."
   fi
 
   if ! nginx -t >/dev/null 2>&1; then
     warn "nginx -t gagal setelah update domain, rollback ke backup."
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
-    nginx -t >&2 || true
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Konfigurasi nginx invalid setelah ubah domain; restore backup nginx gagal."
+    nginx -t >/dev/null 2>&1 || die "Konfigurasi nginx invalid setelah ubah domain; backup nginx juga tidak valid saat rollback."
     die "Konfigurasi nginx invalid setelah ubah domain."
   fi
 
-  if ! systemctl restart nginx >/dev/null 2>&1; then
+  if ! svc_restart_checked nginx 60; then
     warn "Restart nginx gagal setelah update domain, rollback ke backup."
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
-    systemctl restart nginx >/dev/null 2>&1 || true
-    die "Gagal restart nginx setelah ubah domain."
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Gagal restart nginx setelah ubah domain; restore backup nginx juga gagal."
+    nginx -t >/dev/null 2>&1 || die "Gagal restart nginx setelah ubah domain; backup nginx tidak valid saat rollback."
+    if ! svc_restart_checked nginx 60; then
+      die "Gagal restart nginx setelah ubah domain; rollback nginx juga gagal."
+    fi
+    die "Gagal restart nginx setelah ubah domain. Perubahan nginx sudah di-rollback."
   fi
 
   if ! sync_xray_domain_file "${applied_domain}"; then
     warn "Compat domain file gagal disinkronkan, rollback ke backup nginx."
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
-    systemctl restart nginx >/dev/null 2>&1 || true
-    die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}."
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; restore backup nginx gagal."
+    nginx -t >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; backup nginx tidak valid saat rollback."
+    if ! svc_restart_checked nginx 60; then
+      die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; rollback nginx juga gagal."
+    fi
+    die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Perubahan nginx sudah di-rollback."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"
@@ -2137,19 +2315,43 @@ domain_control_set_domain_after_prompt() {
   local nginx_conf_backup
   local previous_domain
   local rollback_notes=()
+  local metadata_rollback_ok="true"
   cert_backup_dir="${WORK_DIR}/cert-snapshot.$(date +%s).$$"
   nginx_conf_backup="${WORK_DIR}/xray.conf.pre-domain-change.$(date +%s).$$"
   previous_domain="$(detect_domain 2>/dev/null | awk '{print $1}' | tr -d ';' || true)"
-  cert_snapshot_create "${cert_backup_dir}"
+  domain_control_capture_runtime_snapshot
+  if ! cert_snapshot_create "${cert_backup_dir}"; then
+    die "Gagal membuat snapshot sertifikat sebelum set domain."
+  fi
   cp -a "${NGINX_CONF}" "${nginx_conf_backup}" || die "Gagal membuat backup nginx sebelum set domain."
 
-  install_acme_and_issue_cert
-  if ! ( domain_control_apply_nginx_domain "${DOMAIN}" ); then
-    warn "Apply domain ke nginx gagal. Mengembalikan sertifikat sebelumnya..."
-    cert_snapshot_restore "${cert_backup_dir}"
-    systemctl restart nginx >/dev/null 2>&1 || true
+  if ! install_acme_and_issue_cert; then
+    warn "Issue/install sertifikat gagal. Mengembalikan sertifikat sebelumnya..."
+    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
+    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
+    if ! domain_control_restore_stopped_services; then
+      rollback_notes+=("restore service runtime TLS gagal")
+    else
+      domain_control_clear_stopped_services
+    fi
     rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
     rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      die "Set domain dibatalkan karena issue/install sertifikat gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    fi
+    die "Set domain dibatalkan karena issue/install sertifikat gagal; sertifikat sebelumnya berhasil dipulihkan."
+  fi
+  if ! ( domain_control_apply_nginx_domain "${DOMAIN}" ); then
+    warn "Apply domain ke nginx gagal. Mengembalikan sertifikat sebelumnya..."
+    if ! cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1; then
+      rollback_notes+=("restore sertifikat gagal")
+    fi
+    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
+    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      die "Set domain dibatalkan karena update nginx gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    fi
     die "Set domain dibatalkan karena update nginx gagal; sertifikat dipulihkan."
   fi
   MAIN_INFO_CACHE_TS=0
@@ -2159,21 +2361,32 @@ domain_control_set_domain_after_prompt() {
     account_info_domain_sync_state_write "${DOMAIN}"
   else
     warn "ACCOUNT INFO gagal disinkronkan penuh. Mengembalikan domain sebelumnya..."
+    local rollback_domain_ready="true"
     if [[ -f "${nginx_conf_backup}" ]]; then
       if ! cp -a "${nginx_conf_backup}" "${NGINX_CONF}" >/dev/null 2>&1; then
         rollback_notes+=("restore nginx conf gagal")
+        rollback_domain_ready="false"
       fi
     else
       rollback_notes+=("backup nginx conf tidak tersedia")
+      rollback_domain_ready="false"
     fi
     cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
-    systemctl restart nginx >/dev/null 2>&1 || rollback_notes+=("restart nginx rollback gagal")
-    if [[ -n "${previous_domain}" && "${previous_domain}" == *.* ]]; then
-      sync_xray_domain_file "${previous_domain}" >/dev/null 2>&1 || rollback_notes+=("sinkron domain kompatibilitas rollback gagal")
+    domain_control_restore_cert_runtime_after_rollback rollback_notes || rollback_domain_ready="false"
+    if [[ "${rollback_domain_ready}" == "true" && -n "${previous_domain}" && "${previous_domain}" == *.* ]]; then
+      if ! sync_xray_domain_file "${previous_domain}" >/dev/null 2>&1; then
+        rollback_notes+=("sinkron domain kompatibilitas rollback gagal")
+        metadata_rollback_ok="false"
+      fi
       if ! account_refresh_all_info_files "${previous_domain}" "$(detect_public_ip_ipapi)"; then
         rollback_notes+=("refresh ACCOUNT INFO rollback gagal")
+        metadata_rollback_ok="false"
       fi
-      account_info_domain_sync_state_write "${previous_domain}"
+      if [[ "${metadata_rollback_ok}" == "true" ]]; then
+        account_info_domain_sync_state_write "${previous_domain}"
+      fi
+    elif [[ "${rollback_domain_ready}" != "true" ]]; then
+      rollback_notes+=("runtime domain rollback tidak siap untuk sinkronisasi metadata lama")
     else
       rollback_notes+=("domain sebelumnya tidak valid untuk rollback")
     fi
@@ -2186,6 +2399,7 @@ domain_control_set_domain_after_prompt() {
   fi
   rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
   rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+  domain_control_clear_runtime_snapshot
 }
 
 domain_control_show_info() {
@@ -2241,6 +2455,7 @@ domain_control_guard_check() {
   fi
   rm -f "${spin_log}" >/dev/null 2>&1 || true
   pause
+  return "${rc}"
 }
 
 domain_control_guard_renew_if_needed() {
@@ -2288,6 +2503,7 @@ domain_control_guard_renew_if_needed() {
   esac
   rm -f "${spin_log}" >/dev/null 2>&1 || true
   pause
+  return "${rc}"
 }
 
 domain_control_menu() {
@@ -2309,8 +2525,8 @@ domain_control_menu() {
     case "${c}" in
       1) domain_control_set_domain_now ;;
       2) domain_control_show_info ;;
-      3) domain_control_guard_check ;;
-      4) domain_control_guard_renew_if_needed ;;
+      3) domain_control_guard_check || true ;;
+      4) domain_control_guard_renew_if_needed || true ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -2640,6 +2856,104 @@ svc_wait_active() {
   return 1
 }
 
+svc_wait_inactive() {
+  # args: service [timeout_seconds]
+  local svc="$1"
+  local timeout="${2:-20}"
+  local checks i state
+
+  if [[ ! "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
+    timeout=20
+  fi
+  checks=$(( timeout * 4 ))
+  if (( checks < 1 )); then
+    checks=1
+  fi
+
+  for (( i=0; i<checks; i++ )); do
+    state="$(svc_state "${svc}")"
+    if [[ "${state}" == "inactive" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+svc_start_checked() {
+  local svc="$1"
+  local timeout="${2:-20}"
+
+  if systemctl start "${svc}" >/dev/null 2>&1 && svc_wait_active "${svc}" "${timeout}"; then
+    return 0
+  fi
+  return 1
+}
+
+svc_stop_checked() {
+  local svc="$1"
+  local timeout="${2:-20}"
+
+  if systemctl stop "${svc}" >/dev/null 2>&1 && svc_wait_inactive "${svc}" "${timeout}"; then
+    return 0
+  fi
+  return 1
+}
+
+svc_restart_checked() {
+  local svc="$1"
+  local timeout="${2:-20}"
+  local state=""
+
+  if systemctl restart "${svc}" >/dev/null 2>&1; then
+    if svc_wait_active "${svc}" "${timeout}"; then
+      return 0
+    fi
+  else
+    state="$(svc_state "${svc}")"
+    if [[ "${state}" == "active" ]]; then
+      return 1
+    fi
+  fi
+
+  state="$(svc_state "${svc}")"
+  if [[ "${state}" == "failed" || "${state}" == "inactive" || "${state}" == "activating" || "${state}" == "deactivating" ]]; then
+    systemctl reset-failed "${svc}" >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl start "${svc}" >/dev/null 2>&1 && svc_wait_active "${svc}" "${timeout}"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+xray_restart_checked() {
+  local state=""
+
+  if systemctl restart xray >/dev/null 2>&1; then
+    if svc_wait_active xray 60; then
+      return 0
+    fi
+  else
+    state="$(svc_state xray)"
+    if [[ "${state}" == "active" ]]; then
+      return 1
+    fi
+  fi
+
+  state="$(svc_state xray)"
+  if [[ "${state}" == "failed" || "${state}" == "inactive" || "${state}" == "activating" || "${state}" == "deactivating" ]]; then
+    systemctl reset-failed xray >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl start xray >/dev/null 2>&1 && svc_wait_active xray 60; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 svc_exists() {
   local svc="$1"
   local load
@@ -2716,24 +3030,11 @@ svc_status_line() {
 svc_restart_now() {
   local svc="$1"
   local st
-  systemctl restart "${svc}" >/dev/null 2>&1 || true
-  if svc_wait_active "${svc}" 20; then
+  if svc_restart_checked "${svc}" 20; then
     return 0
   fi
 
   st="$(svc_state "${svc}")"
-  if [[ "${st}" == "failed" || "${st}" == "inactive" ]]; then
-    # Recovery best-effort: antisipasi start-limit-hit saat restart beruntun.
-    systemctl reset-failed "${svc}" >/dev/null 2>&1 || true
-    sleep 1
-    systemctl start "${svc}" >/dev/null 2>&1 || true
-    if svc_wait_active "${svc}" 20; then
-      log "Restart recovery sukses: ${svc}"
-      return 0
-    fi
-    st="$(svc_state "${svc}")"
-  fi
-
   echo "Restart dilakukan, tapi status masih tidak aktif: ${svc} (state=${st:-unknown})" >&2
   return 1
 }
@@ -3608,10 +3909,11 @@ xray_restart_or_rollback_file() {
   local target="$1"
   local backup="$2"
   local ctx="${3:-config}"
-  svc_restart xray || true
-  if ! svc_wait_active xray 60; then
-    cp -a "${backup}" "${target}" 2>/dev/null || true
-    systemctl restart xray || true
+  if ! xray_restart_checked; then
+    cp -a "${backup}" "${target}" 2>/dev/null || die "xray tidak aktif setelah update ${ctx}; restore backup juga gagal: ${backup}"
+    if ! xray_restart_checked; then
+      die "xray tidak aktif setelah update ${ctx}; rollback runtime juga gagal setelah restore backup: ${backup}"
+    fi
     die "xray tidak aktif setelah update ${ctx}. Config di-rollback ke backup: ${backup}"
   fi
 }
@@ -3641,11 +3943,12 @@ xray_txn_changed_flag() {
 }
 
 xray_txn_rc_or_die() {
-  # args: rc fail_msg [restart_fail_msg] [syntax_fail_msg]
+  # args: rc fail_msg [restart_fail_msg] [syntax_fail_msg] [rollback_fail_msg]
   local rc="$1"
   local fail_msg="$2"
   local restart_fail_msg="${3:-}"
   local syntax_fail_msg="${4:-}"
+  local rollback_fail_msg="${5:-}"
 
   if (( rc == 0 )); then
     return 0
@@ -3655,6 +3958,9 @@ xray_txn_rc_or_die() {
   fi
   if (( rc == 86 )) && [[ -n "${restart_fail_msg}" ]]; then
     die "${restart_fail_msg}"
+  fi
+  if (( rc == 88 )) && [[ -n "${rollback_fail_msg}" ]]; then
+    die "${rollback_fail_msg}"
   fi
   die "${fail_msg}"
 }
@@ -3762,10 +4068,13 @@ PY
           exit 1
         }
 
-        svc_restart xray || true
-        if ! svc_wait_active xray 60; then
-          restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"
-          systemctl restart xray || true
+        if ! xray_restart_checked; then
+          if ! restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"; then
+            exit 1
+          fi
+          if ! xray_restart_checked; then
+            exit 88
+          fi
           exit 86
         fi
       fi
@@ -3776,7 +4085,9 @@ PY
 
   xray_txn_rc_or_die "${rc}" \
     "Gagal memproses inbounds untuk add user: ${email}" \
-    "xray tidak aktif setelah add user. Config di-rollback ke backup: ${backup}"
+    "xray tidak aktif setelah add user. Config di-rollback ke backup: ${backup}" \
+    "" \
+    "xray tidak aktif setelah add user, dan rollback runtime juga gagal setelah restore backup: ${backup}"
 
   changed="$(xray_txn_changed_flag "${out}")"
   if [[ "${changed}" != "1" ]]; then
@@ -3904,11 +4215,16 @@ PY
           exit 1
         }
 
-        svc_restart xray || true
-        if ! svc_wait_active xray 60; then
-          restore_file_if_exists "${backup_inb}" "${XRAY_INBOUNDS_CONF}"
-          restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"
-          systemctl restart xray || true
+        if ! xray_restart_checked; then
+          if ! restore_file_if_exists "${backup_inb}" "${XRAY_INBOUNDS_CONF}"; then
+            exit 1
+          fi
+          if ! restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"; then
+            exit 1
+          fi
+          if ! xray_restart_checked; then
+            exit 88
+          fi
           exit 86
         fi
       fi
@@ -3919,7 +4235,9 @@ PY
 
   xray_txn_rc_or_die "${rc}" \
     "Gagal memproses delete user (rollback ke backup): ${email}" \
-    "xray tidak aktif setelah delete user. Config di-rollback ke backup."
+    "xray tidak aktif setelah delete user. Config di-rollback ke backup." \
+    "" \
+    "xray tidak aktif setelah delete user, dan rollback runtime juga gagal setelah restore backup."
 
   changed="$(xray_txn_changed_flag "${out}")"
   if [[ "${changed}" != "1" ]]; then
@@ -4018,10 +4336,13 @@ PY
           exit 1
         }
 
-        svc_restart xray || true
-        if ! svc_wait_active xray 60; then
-          restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"
-          systemctl restart xray || true
+        if ! xray_restart_checked; then
+          if ! restore_file_if_exists "${backup}" "${XRAY_INBOUNDS_CONF}"; then
+            exit 1
+          fi
+          if ! xray_restart_checked; then
+            exit 88
+          fi
           exit 86
         fi
       fi
@@ -4032,7 +4353,9 @@ PY
 
   xray_txn_rc_or_die "${rc}" \
     "Gagal reset UUID/password user: ${email}" \
-    "xray tidak aktif setelah reset UUID/password. Config di-rollback ke backup: ${backup}"
+    "xray tidak aktif setelah reset UUID/password. Config di-rollback ke backup: ${backup}" \
+    "" \
+    "xray tidak aktif setelah reset UUID/password, dan rollback runtime juga gagal setelah restore backup: ${backup}"
 
   changed="$(xray_txn_changed_flag "${out}")"
   if [[ "${changed}" != "1" ]]; then
@@ -4142,10 +4465,13 @@ PY
           exit 1
         }
 
-        svc_restart xray || true
-        if ! svc_wait_active xray 60; then
-          restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
-          systemctl restart xray || true
+        if ! xray_restart_checked; then
+          if ! restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"; then
+            exit 1
+          fi
+          if ! xray_restart_checked; then
+            exit 88
+          fi
           exit 86
         fi
       fi
@@ -4156,7 +4482,9 @@ PY
 
   xray_txn_rc_or_die "${rc}" \
     "Gagal memproses routing: ${XRAY_ROUTING_CONF}" \
-    "xray tidak aktif setelah update routing. Routing di-rollback ke backup: ${backup}"
+    "xray tidak aktif setelah update routing. Routing di-rollback ke backup: ${backup}" \
+    "" \
+    "xray tidak aktif setelah update routing, dan rollback runtime juga gagal setelah restore backup: ${backup}"
 
   changed="$(xray_txn_changed_flag "${out}")"
   if [[ "${changed}" != "1" ]]; then
@@ -4384,7 +4712,7 @@ speed_policy_apply_now() {
     /usr/local/bin/xray-speed once --config "${SPEED_CONFIG_FILE}" >/dev/null 2>&1 && return 0
   fi
   if svc_exists xray-speed; then
-    svc_restart xray-speed >/dev/null 2>&1 || true
+    svc_restart_checked xray-speed 20 >/dev/null 2>&1 || return 1
     svc_is_active xray-speed && return 0
   fi
   return 1
@@ -4691,13 +5019,21 @@ PY
       exit 1
     }
 
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
-      restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}"
-      restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"
-      systemctl restart xray || true
-      exit 86
-    fi
+	    if ! xray_restart_checked; then
+	      if ! restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}"; then
+	        echo "rollback speed policy gagal: restore outbounds backup gagal" >&2
+	        exit 1
+	      fi
+	      if ! restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}"; then
+	        echo "rollback speed policy gagal: restore routing backup gagal" >&2
+	        exit 1
+	      fi
+	      if ! xray_restart_checked; then
+	        echo "rollback speed policy gagal: xray tidak aktif setelah restore backup" >&2
+	        exit 1
+	      fi
+	      exit 86
+	    fi
   ) 200>"${ROUTING_LOCK_FILE}"
   rc=$?
   set -e
@@ -5714,6 +6050,10 @@ speed_policy_sync_xray_try() {
   ( speed_policy_sync_xray ) >/dev/null 2>&1
 }
 
+xray_add_client_try() {
+  ( xray_add_client "$@" ) >/dev/null 2>&1
+}
+
 xray_delete_client_try() {
   ( xray_delete_client "$@" ) >/dev/null 2>&1
 }
@@ -5724,6 +6064,51 @@ xray_reset_client_credential_try() {
 
 quota_sync_speed_policy_for_user_try() {
   ( quota_sync_speed_policy_for_user "$@" )
+}
+
+xray_user_expiry_rollback() {
+  # args: quota_file quota_backup proto username email_for_routing current_expiry was_present_in_inbounds readded_now
+  local qf="$1"
+  local backup="$2"
+  local proto="$3"
+  local username="$4"
+  local email_for_routing="$5"
+  local current_expiry="$6"
+  local was_present_in_inbounds="${7:-false}"
+  local readded_now="${8:-false}"
+  local -a notes=()
+
+  if ! cp -f -- "${backup}" "${qf}" >/dev/null 2>&1; then
+    echo "Expiry rollback ke ${current_expiry} gagal: restore quota gagal"
+    return 1
+  fi
+  chmod 600 "${qf}" 2>/dev/null || true
+
+  if [[ "${was_present_in_inbounds}" == "true" ]]; then
+    local rollback_apply_msg=""
+    if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" true true)"; then
+      notes+=("${rollback_apply_msg}")
+    fi
+  else
+    if [[ "${readded_now}" == "true" ]]; then
+      if ! xray_delete_client_try "${proto}" "${username}"; then
+        notes+=("hapus restore sementara gagal")
+      fi
+    fi
+    xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" off >/dev/null 2>&1 || notes+=("restore routing quota expired gagal")
+    xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" off >/dev/null 2>&1 || notes+=("restore routing manual block expired gagal")
+    xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" off >/dev/null 2>&1 || notes+=("restore routing ip-limit expired gagal")
+    if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+      notes+=("refresh XRAY ACCOUNT INFO rollback gagal")
+    fi
+  fi
+
+  if (( ${#notes[@]} > 0 )); then
+    echo "Expiry dirollback ke ${current_expiry}, tetapi rollback belum bersih: $(IFS=' | '; echo "${notes[*]}")"
+    return 1
+  fi
+  echo "Expiry dirollback ke ${current_expiry}."
+  return 0
 }
 
 xray_qac_apply_runtime_from_quota() {
@@ -5825,11 +6210,32 @@ xray_qac_atomic_apply() {
     return 1
   fi
 
+  if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+    local -a rollback_notes=()
+    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+      rollback_notes+=("rollback quota gagal")
+    else
+      chmod 600 "${qf}" 2>/dev/null || true
+      local rollback_apply_msg=""
+      if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
+        rollback_notes+=("rollback runtime gagal: ${rollback_apply_msg}")
+      fi
+      if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+        rollback_notes+=("rollback account info gagal")
+      fi
+    fi
+    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      echo "refresh XRAY ACCOUNT INFO gagal. Rollback: ${rollback_notes[*]}"
+    else
+      echo "refresh XRAY ACCOUNT INFO gagal. State di-rollback."
+    fi
+    return 1
+  fi
+
   rm -f -- "${backup_file}" >/dev/null 2>&1 || true
   return 0
 }
-
-
 
 user_add_menu() {
   local proto
@@ -6622,8 +7028,29 @@ PY
     return 0
   fi
 
-  # Update quota JSON
+  local email_for_routing existing_protos was_present_in_inbounds="false" readded_inbounds="false"
+  local quota_backup_file=""
+  quota_backup_file="$(mktemp "${WORK_DIR}/.quota-expiry.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${quota_backup_file}" ]]; then
+    warn "Gagal membuat backup metadata expiry."
+    pause
+    return 0
+  fi
+  if ! cp -f -- "${quota_file}" "${quota_backup_file}" >/dev/null 2>&1; then
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+    warn "Gagal backup metadata expiry."
+    pause
+    return 0
+  fi
+
+  email_for_routing="${username}@${proto}"
+  existing_protos="$(xray_username_find_protos "${username}" 2>/dev/null || true)"
+  if echo " ${existing_protos} " | grep -q " ${proto} "; then
+    was_present_in_inbounds="true"
+  fi
+
   if ! quota_atomic_update_file "${quota_file}" set_expired_at "${new_expiry}"; then
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
     warn "Gagal update metadata expiry quota."
     pause
     return 0
@@ -6634,9 +7061,7 @@ PY
   # the race window with xray-expired daemon (which runs every 2 seconds).
   # We cannot fully eliminate the race without a distributed lock across bash+python,
   # but minimising the gap between check and add is the best we can do here.
-  local existing_protos
-  existing_protos="$(xray_username_find_protos "${username}" 2>/dev/null || true)"
-  if ! echo " ${existing_protos} " | grep -q " ${proto} "; then
+  if [[ "${was_present_in_inbounds}" != "true" ]]; then
     local restore_failed="false"
     local restore_reason=""
     # User tidak ada di inbounds - baca credential dari account txt lalu re-add
@@ -6648,7 +7073,8 @@ PY
         cred="$(grep -E '^UUID\s*:' "${acc_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
       fi
       if [[ -n "${cred}" ]]; then
-        if xray_add_client "${proto}" "${username}" "${cred}" 2>/dev/null; then
+        if xray_add_client_try "${proto}" "${username}" "${cred}"; then
+          readded_inbounds="true"
           log "User ${username}@${proto} di-restore ke inbounds (expired lalu di-extend)."
         else
           restore_failed="true"
@@ -6664,54 +7090,41 @@ PY
     fi
 
     if [[ "${restore_failed}" == "true" ]]; then
-      quota_atomic_update_file "${quota_file}" set_expired_at "${current_expiry}" >/dev/null 2>&1 || true
+      local rollback_msg=""
+      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
       warn "${restore_reason}"
+      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
       pause
       return 0
     fi
   fi
 
-  # BUG-03 fix: after extending expiry (and possibly restoring user to inbounds),
-  # BUG-FIX #3: xray-expired menghapus user dari SEMUA routing rules (termasuk
-  # dummy-block-user dan dummy-limit-user) saat user expired. Setelah extend expiry,
-  # kita HARUS me-restore routing marker yang masih aktif secara eksplisit.
-  # Komentar sebelumnya "those markers remain intact" TIDAK benar — xray-expired sudah
-  # membersihkannya. Fix: restore dummy-block-user jika manual_block=True,
-  # dan dummy-limit-user jika ip_limit_locked=True.
-  local st_quota st_manual st_iplocked
-  st_quota="$(quota_get_status_bool "${quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
-  st_manual="$(quota_get_status_bool "${quota_file}" "manual_block" 2>/dev/null || echo "false")"
-  st_iplocked="$(quota_get_status_bool "${quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
-
-  if [[ "${st_quota}" == "true" ]]; then
-    # Reset quota_exhausted flag and remove from dummy-quota-user routing rule
+  if [[ "$(quota_get_status_bool "${quota_file}" "quota_exhausted" 2>/dev/null || echo "false")" == "true" ]]; then
     if ! quota_atomic_update_file "${quota_file}" clear_quota_exhausted_recompute; then
+      local rollback_msg=""
+      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
       warn "Gagal reset status quota exhausted setelah extend expiry."
-    else
-      xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" off
-      log "Quota exhausted flag di-reset setelah extend expiry."
+      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+      pause
+      return 0
     fi
+    log "Quota exhausted flag di-reset setelah extend expiry."
   fi
 
-  # BUG-FIX #3: Restore manual block routing jika masih aktif.
-  # xray-expired sudah menghapus user dari dummy-block-user saat expired,
-  # sehingga perlu di-restore eksplisit agar block tetap berlaku.
-  if [[ "${st_manual}" == "true" ]]; then
-    xray_routing_set_user_in_marker "dummy-block-user" "${username}@${proto}" on
-    log "Manual block routing di-restore setelah extend expiry (manual_block=true)."
-  fi
-
-  # BUG-FIX #3: Restore ip_limit routing jika masih terkunci.
-  if [[ "${st_iplocked}" == "true" ]]; then
-    xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" on
-    log "IP limit routing di-restore setelah extend expiry (ip_limit_locked=true)."
-  fi
-
-  if ! account_info_refresh_warn "${proto}" "${username}"; then
-    warn "Expiry berubah, tetapi XRAY ACCOUNT INFO belum sinkron."
+  local apply_msg=""
+  if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${quota_file}" "${proto}" "${username}" "${email_for_routing}" true true)"; then
+    local rollback_msg=""
+    rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
+    warn "Extend expiry gagal: ${apply_msg}"
+    [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
     pause
     return 0
   fi
+
+  rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
 
   title
   echo "Extend/Set Expiry selesai ✅"
@@ -6866,12 +7279,19 @@ PY
     label="UUID baru"
   fi
 
-  xray_reset_client_credential "${proto}" "${username}" "${new_cred}"
+  if ! xray_reset_client_credential_try "${proto}" "${username}" "${new_cred}"; then
+    warn "Gagal mereset ${label,,} untuk ${username}@${proto}."
+    pause
+    return 0
+  fi
 
   if ! account_info_refresh_warn "${proto}" "${username}"; then
     if xray_reset_client_credential_try "${proto}" "${username}" "${previous_cred}"; then
-      account_info_refresh_warn "${proto}" "${username}" || true
-      warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan."
+      if ! account_info_refresh_warn "${proto}" "${username}"; then
+        warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan tetapi rollback account info gagal."
+      else
+        warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan."
+      fi
     else
       warn "Reset ${label,,} gagal dan rollback credential juga gagal."
     fi

@@ -513,6 +513,49 @@ timer_unit_exists() {
   systemctl cat "${timer}.timer" >/dev/null 2>&1
 }
 
+unit_exists_full() {
+  local unit="$1"
+  systemctl cat "${unit}" >/dev/null 2>&1
+}
+
+unit_state() {
+  local unit="$1"
+  systemctl is-active "${unit}" 2>/dev/null || true
+}
+
+restart_unit_checked() {
+  local unit="$1"
+  unit_exists_full "${unit}" || die "Unit tidak ditemukan: ${unit}"
+  systemctl restart "${unit}" >/dev/null 2>&1 || die "Gagal restart unit: ${unit}"
+  local state
+  state="$(unit_state "${unit}")"
+  [[ "${state}" == "active" ]] || die "Unit ${unit} tidak aktif setelah restart (state=${state:-unknown})."
+}
+
+stop_unit_checked() {
+  local unit="$1"
+  if ! unit_exists_full "${unit}"; then
+    return 0
+  fi
+  systemctl stop "${unit}" >/dev/null 2>&1 || die "Gagal menghentikan unit: ${unit}"
+  local state
+  state="$(unit_state "${unit}")"
+  case "${state}" in
+    inactive|failed|unknown)
+      return 0
+      ;;
+  esac
+  die "Unit ${unit} masih berjalan setelah stop (state=${state:-unknown})."
+}
+
+disable_unit_checked() {
+  local unit="$1"
+  if ! unit_exists_full "${unit}"; then
+    return 0
+  fi
+  systemctl disable "${unit}" >/dev/null 2>&1 || die "Gagal disable unit: ${unit}"
+}
+
 show_service_status() {
   local svc="$1"
   local active enabled
@@ -1020,11 +1063,11 @@ start_or_restart_services() {
   service_unit_exists "${BACKEND_SERVICE}" || die "Service ${BACKEND_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."
   service_unit_exists "${GATEWAY_SERVICE}" || die "Service ${GATEWAY_SERVICE}.service belum terpasang. Jalankan menu 6 dulu."
 
-  systemctl restart "${BACKEND_SERVICE}"
+  restart_unit_checked "${BACKEND_SERVICE}.service"
   wait_for_backend_ready
-  systemctl restart "${GATEWAY_SERVICE}"
+  restart_unit_checked "${GATEWAY_SERVICE}.service"
   if timer_unit_exists "${MONITOR_SERVICE}"; then
-    systemctl restart "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
+    restart_unit_checked "${MONITOR_SERVICE}.timer"
   fi
 
   ok "Service bot di-restart."
@@ -1133,9 +1176,13 @@ uninstall_bot() {
     return 0
   }
 
-  systemctl stop "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
-  systemctl stop "${MONITOR_SERVICE}.timer" "${MONITOR_SERVICE}" >/dev/null 2>&1 || true
-  systemctl disable "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
+  stop_unit_checked "${BACKEND_SERVICE}.service"
+  stop_unit_checked "${GATEWAY_SERVICE}.service"
+  stop_unit_checked "${MONITOR_SERVICE}.timer"
+  stop_unit_checked "${MONITOR_SERVICE}.service"
+  disable_unit_checked "${BACKEND_SERVICE}.service"
+  disable_unit_checked "${GATEWAY_SERVICE}.service"
+  disable_unit_checked "${MONITOR_SERVICE}.timer"
   rm -f \
     "/etc/systemd/system/${BACKEND_SERVICE}.service" \
     "/etc/systemd/system/${GATEWAY_SERVICE}.service" \

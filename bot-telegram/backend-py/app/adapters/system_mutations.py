@@ -170,6 +170,15 @@ def _service_is_active(name: str) -> bool:
     return state == "active"
 
 
+def _service_state(name: str) -> str:
+    ok, out = _run_cmd(["systemctl", "is-active", name], timeout=10)
+    if ok:
+        return out.splitlines()[-1].strip() if out else ""
+    if out:
+        return out.splitlines()[-1].strip()
+    return ""
+
+
 def _zivpn_account_info_enabled() -> bool:
     return _zivpn_runtime_available()
 
@@ -326,33 +335,51 @@ def _restart_and_wait(name: str, timeout_sec: int = 20) -> bool:
 
     cmd_timeout = max(4, min(30, timeout_sec + 4))
     ok_restart, _ = _run_cmd(["systemctl", "restart", name], timeout=cmd_timeout)
-    if ok_restart and _service_is_active(name):
+    if ok_restart:
+        end = time.time() + max(1, timeout_sec)
+        while time.time() < end:
+            if _service_is_active(name):
+                return True
+            time.sleep(0.5)
+        if _service_is_active(name):
+            return True
+    else:
+        state_after_restart = _service_state(name)
+        if state_after_restart not in {"failed", "inactive", "activating", "deactivating"}:
+            return False
+
+    # Recovery path for restart failures or services that never came back up.
+    state_now = _service_state(name)
+    if state_now in {"failed", "inactive", "activating", "deactivating"}:
+        _run_cmd(["systemctl", "reset-failed", name], timeout=10)
+        ok_start, _ = _run_cmd(["systemctl", "start", name], timeout=cmd_timeout)
+        if not ok_start:
+            return False
+        end2 = time.time() + max(1, timeout_sec)
+        while time.time() < end2:
+            if _service_is_active(name):
+                return True
+            time.sleep(0.5)
+        return _service_is_active(name)
+
+    return False
+
+
+def _stop_and_wait_inactive(name: str, timeout_sec: int = 20) -> bool:
+    if not _service_exists(name):
         return True
 
-    # Jika restart langsung gagal dan service belum aktif, lakukan recovery sekali
-    # tanpa menunggu loop panjang.
-    if not ok_restart and not _service_is_active(name):
-        _run_cmd(["systemctl", "reset-failed", name], timeout=10)
-        _run_cmd(["systemctl", "start", name], timeout=cmd_timeout)
-        return _service_is_active(name)
+    cmd_timeout = max(4, min(30, timeout_sec + 4))
+    ok_stop, _ = _run_cmd(["systemctl", "stop", name], timeout=cmd_timeout)
+    if not ok_stop:
+        return False
 
     end = time.time() + max(1, timeout_sec)
     while time.time() < end:
-        if _service_is_active(name):
+        if _service_state(name) == "inactive":
             return True
         time.sleep(0.5)
-    if _service_is_active(name):
-        return True
-
-    # Recovery path for rapid restart bursts (systemd start-limit-hit).
-    _run_cmd(["systemctl", "reset-failed", name], timeout=10)
-    _run_cmd(["systemctl", "start", name], timeout=30)
-    end2 = time.time() + max(1, timeout_sec)
-    while time.time() < end2:
-        if _service_is_active(name):
-            return True
-        time.sleep(0.5)
-    return _service_is_active(name)
+    return _service_state(name) == "inactive"
 
 
 def _read_json(path: Path) -> tuple[bool, Any]:
@@ -756,11 +783,20 @@ def _restore_optional_file(path: Path, snapshot: dict[str, Any]) -> tuple[bool, 
 
 
 def _capture_domain_runtime_snapshot() -> dict[str, Any]:
+    edge_service = _edge_runtime_service_name().strip()
+    if edge_service == "nginx":
+        edge_service = ""
     return {
         "nginx_conf": _snapshot_optional_file(NGINX_CONF),
         "compat_domain": _snapshot_optional_file(XRAY_DOMAIN_FILE),
         "cert_fullchain": _snapshot_optional_file(CERT_FULLCHAIN),
         "cert_privkey": _snapshot_optional_file(CERT_PRIVKEY),
+        "nginx_was_active": _service_exists("nginx") and _service_is_active("nginx"),
+        "sshws_stunnel_was_active": _service_exists("sshws-stunnel") and _service_is_active("sshws-stunnel"),
+        "edge_service_name": edge_service,
+        "edge_service_was_active": bool(
+            edge_service and _service_exists(edge_service) and _service_is_active(edge_service)
+        ),
     }
 
 
@@ -814,9 +850,13 @@ def _restore_domain_runtime_snapshot(
     ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
     if not ok_test:
         return False, f"nginx -t gagal saat rollback domain:\n{out_test}"
-    if not _restart_and_wait("nginx", timeout_sec=20):
-        return False, "nginx gagal restart saat rollback domain."
-    ok_tls, msg_tls = _restart_tls_runtime_consumers(skipped_services or set())
+    if bool(snapshot.get("nginx_was_active")):
+        if not _restart_and_wait("nginx", timeout_sec=20):
+            return False, "nginx gagal restart saat rollback domain."
+    elif _service_exists("nginx") and _service_is_active("nginx"):
+        if not _stop_and_wait_inactive("nginx", timeout_sec=20):
+            return False, "nginx gagal dikembalikan ke state inactive saat rollback domain."
+    ok_tls, msg_tls = _restore_tls_runtime_consumers_from_snapshot(snapshot, skipped_services or set())
     if not ok_tls:
         return False, f"Rollback domain selesai, tetapi restart consumer TLS gagal:\n{msg_tls}"
     return True, "ok"
@@ -890,9 +930,8 @@ def _restore_warp_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]
             if not _restart_and_wait("wireproxy", timeout_sec=30):
                 failures.append("wireproxy gagal restart saat rollback WARP.")
         elif _service_is_active("wireproxy"):
-            ok_stop, out_stop = _run_cmd(["systemctl", "stop", "wireproxy"], timeout=30)
-            if not ok_stop:
-                failures.append(f"Gagal stop wireproxy saat rollback WARP:\n{out_stop}")
+            if not _stop_and_wait_inactive("wireproxy", timeout_sec=30):
+                failures.append("wireproxy gagal dikembalikan ke state inactive saat rollback WARP.")
 
     if failures:
         return False, " | ".join(failures)
@@ -1231,6 +1270,66 @@ def _adblock_auto_update_timer_write(days: int) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _adblock_timer_state_matches(timer_name: str, *, enabled: bool) -> tuple[bool, str]:
+    ok_enabled, out_enabled = _run_cmd(["systemctl", "is-enabled", timer_name], timeout=10)
+    enabled_state = out_enabled.splitlines()[-1].strip() if out_enabled else "-"
+    ok_active, out_active = _run_cmd(["systemctl", "is-active", timer_name], timeout=10)
+    active_state = out_active.splitlines()[-1].strip() if out_active else "-"
+
+    if enabled:
+        if enabled_state != "enabled":
+            return False, f"{timer_name} belum enabled (state={enabled_state})."
+        if active_state != "active":
+            return False, f"{timer_name} belum active (state={active_state})."
+        return True, "ok"
+
+    if ok_enabled and enabled_state == "enabled":
+        return False, f"{timer_name} masih enabled."
+    if ok_active and active_state == "active":
+        return False, f"{timer_name} masih active."
+    return True, "ok"
+
+
+def _adblock_timer_days_matches(expected_days: int | str) -> tuple[bool, str]:
+    timer_path = _adblock_timer_path()
+    if not timer_path.exists():
+        return False, f"Timer auto update belum tersedia: {timer_path}"
+
+    try:
+        expected_text = f"{int(expected_days)}d"
+    except Exception:
+        return False, f"Interval rollback tidak valid: {expected_days}"
+
+    try:
+        for raw_line in timer_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if not line.startswith("OnUnitActiveSec="):
+                continue
+            current_value = line.split("=", 1)[1].strip()
+            if current_value == expected_text:
+                return True, "ok"
+            return False, f"OnUnitActiveSec saat ini {current_value}, expected {expected_text}."
+    except Exception as exc:
+        return False, f"Gagal membaca timer auto update: {exc}"
+    return False, "OnUnitActiveSec tidak ditemukan di timer auto update."
+
+
+def _adblock_timer_rollback_verify(
+    timer_name: str,
+    *,
+    enabled: bool,
+    expected_days: int | str | None = None,
+) -> tuple[bool, str]:
+    ok_state, msg_state = _adblock_timer_state_matches(timer_name, enabled=enabled)
+    if not ok_state:
+        return False, f"state timer rollback tidak sesuai: {msg_state}"
+    if expected_days is not None:
+        ok_days, msg_days = _adblock_timer_days_matches(expected_days)
+        if not ok_days:
+            return False, f"interval timer rollback tidak sesuai: {msg_days}"
+    return True, "ok"
+
+
 def _warp_mask_license(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -1381,6 +1480,18 @@ def _warp_tier_reconnect_target_get() -> str:
     if target in {"free", "plus"}:
         return target
     return "free"
+
+
+def _warp_wait_live_tier(expected: str, timeout_sec: int = 20) -> bool:
+    expected_n = str(expected or "").strip().lower()
+    if expected_n not in {"free", "plus"}:
+        return False
+    end = time.time() + max(1, timeout_sec)
+    while time.time() < end:
+        if _warp_live_tier() == expected_n:
+            return True
+        time.sleep(1.0)
+    return _warp_live_tier() == expected_n
 
 
 def _warp_tier_status_message() -> str:
@@ -3008,7 +3119,7 @@ def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
         if XRAY_DNS_CONF.exists():
             ok_read, raw_cfg = _read_json(XRAY_DNS_CONF)
             if not ok_read:
-                raw_cfg = {}
+                return False, f"Config DNS tidak valid:\n{raw_cfg}"
             cfg_original = raw_cfg if isinstance(raw_cfg, dict) else {}
         else:
             cfg_original = {"dns": {}}
@@ -4237,7 +4348,32 @@ def _xray_apply_quota_update(
             detail += " | state di-rollback"
         return False, title, detail
 
-    return _xray_refresh_account_info_required(title, proto, username, success_msg)
+    ok_refresh, refresh_msg = _refresh_account_info_for_user(proto, username)
+    if ok_refresh:
+        return True, title, success_msg
+
+    rollback_notes: list[str] = [f"refresh account-info: {refresh_msg}"]
+    try:
+        _save_quota(quota_path, previous_payload)
+    except Exception as exc:
+        rollback_notes.append(f"rollback quota: {exc}")
+    else:
+        ok_restore, restore_msg = _xray_apply_runtime_from_quota(
+            proto,
+            username,
+            previous_payload,
+            ensure_client_credential=ensure_client_credential,
+            restore_markers=restore_markers,
+            restart_limit_ip=restart_limit_ip,
+            sync_speed=sync_speed,
+        )
+        if not ok_restore:
+            rollback_notes.append(f"rollback runtime: {restore_msg}")
+        ok_rb_refresh, rb_refresh_msg = _refresh_account_info_for_user(proto, username)
+        if not ok_rb_refresh:
+            rollback_notes.append(f"rollback account-info: {rb_refresh_msg}")
+
+    return False, title, f"{success_msg} | " + " | ".join(rollback_notes)
 
 
 def _xray_restore_deleted_user(
@@ -5476,6 +5612,23 @@ def _normalize_domain(domain: str) -> str:
     return str(domain or "").strip().lower()
 
 
+def _rollback_nginx_domain_change(original: str) -> tuple[bool, str]:
+    notes: list[str] = []
+    try:
+        _write_text_atomic(NGINX_CONF, original)
+    except Exception as exc:
+        notes.append(f"restore config nginx gagal: {exc}")
+    else:
+        ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
+        if not ok_test:
+            notes.append(f"nginx -t gagal saat rollback domain:\n{out_test}")
+        elif not _restart_and_wait("nginx", timeout_sec=20):
+            notes.append("nginx gagal restart saat rollback domain.")
+    if notes:
+        return False, "\n".join(notes)
+    return True, "ok"
+
+
 def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
     if not NGINX_CONF.exists():
         return False, f"Nginx conf tidak ditemukan: {NGINX_CONF}"
@@ -5501,32 +5654,34 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
         _write_text_atomic(NGINX_CONF, candidate)
         ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
         if not ok_test:
-            _write_text_atomic(NGINX_CONF, original)
-            return False, f"nginx -t gagal setelah ubah domain:\n{out_test}"
+            ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+            if ok_rb:
+                return False, f"nginx -t gagal setelah ubah domain:\n{out_test}\nPerubahan nginx sudah di-rollback."
+            return False, f"nginx -t gagal setelah ubah domain:\n{out_test}\nRollback nginx gagal:\n{msg_rb}"
 
         if not _restart_and_wait("nginx", timeout_sec=20):
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-            return False, "nginx gagal restart setelah ubah domain (rollback)."
+            ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+            if ok_rb:
+                return False, "nginx gagal restart setelah ubah domain. Perubahan nginx sudah di-rollback."
+            return False, f"nginx gagal restart setelah ubah domain.\nRollback nginx gagal:\n{msg_rb}"
     except Exception as exc:
-        try:
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-        except Exception:
-            pass
-        return False, f"Gagal apply domain ke nginx: {exc}"
+        ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+        if ok_rb:
+            return False, f"Gagal apply domain ke nginx: {exc}\nPerubahan nginx sudah di-rollback."
+        return False, f"Gagal apply domain ke nginx: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
     # Keep compatibility with compatibility scripts that still read active domain from /etc/xray/domain.
     try:
         XRAY_DOMAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(XRAY_DOMAIN_FILE, f"{domain}\n")
     except Exception as exc:
-        try:
-            _write_text_atomic(NGINX_CONF, original)
-            _restart_and_wait("nginx", timeout_sec=20)
-        except Exception:
-            pass
-        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}"
+        ok_rb, msg_rb = _rollback_nginx_domain_change(original)
+        if ok_rb:
+            return False, (
+                f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\n"
+                "Perubahan nginx sudah di-rollback."
+            )
+        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
     return True, "ok"
 
@@ -5653,13 +5808,20 @@ def _ensure_dns_cf_hook() -> tuple[bool, str]:
     return True, "ok"
 
 
-def _stop_conflicting_services() -> list[str]:
+def _stop_conflicting_services() -> tuple[list[str], list[str]]:
     stopped: list[str] = []
+    failures: list[str] = []
     for svc in ("nginx", "apache2", "caddy", "lighttpd"):
-        if _service_exists(svc) and _service_is_active(svc):
-            stopped.append(svc)
-        if _service_exists(svc):
-            _run_cmd(["systemctl", "stop", svc], timeout=25)
+        if not (_service_exists(svc) and _service_is_active(svc)):
+            continue
+        ok_stop, out_stop = _run_cmd(["systemctl", "stop", svc], timeout=25)
+        if not ok_stop:
+            failures.append(f"{svc}: {out_stop}")
+            continue
+        if _service_is_active(svc):
+            failures.append(f"{svc}: masih aktif setelah stop")
+            continue
+        stopped.append(svc)
     edge_svc = _edge_runtime_service_name()
     if (
         _edge_runtime_uses_public_http_port_80()
@@ -5668,15 +5830,29 @@ def _stop_conflicting_services() -> list[str]:
         and _service_exists(edge_svc)
         and _service_is_active(edge_svc)
     ):
-        stopped.append(edge_svc)
-        _run_cmd(["systemctl", "stop", edge_svc], timeout=25)
-    return stopped
+        ok_stop, out_stop = _run_cmd(["systemctl", "stop", edge_svc], timeout=25)
+        if not ok_stop:
+            failures.append(f"{edge_svc}: {out_stop}")
+        elif _service_is_active(edge_svc):
+            failures.append(f"{edge_svc}: masih aktif setelah stop")
+        else:
+            stopped.append(edge_svc)
+    return stopped, failures
 
 
-def _restore_services(services: list[str]) -> None:
+def _restore_services(services: list[str]) -> list[str]:
+    failures: list[str] = []
     for svc in services:
-        if _service_exists(svc):
-            _run_cmd(["systemctl", "start", svc], timeout=25)
+        if not _service_exists(svc):
+            failures.append(f"{svc}: service tidak ditemukan saat restore")
+            continue
+        ok_start, out_start = _run_cmd(["systemctl", "start", svc], timeout=25)
+        if not ok_start:
+            failures.append(f"{svc}: {out_start}")
+            continue
+        if not _service_is_active(svc):
+            failures.append(f"{svc}: inactive setelah start")
+    return failures
 
 
 def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> tuple[bool, str]:
@@ -5697,6 +5873,40 @@ def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> 
             ok_reload, out_reload = _run_cmd(["systemctl", "restart", svc], timeout=30)
         if not ok_reload or not _service_is_active(svc):
             failures.append(f"{svc}: {out_reload}")
+    if failures:
+        return False, "\n".join(failures)
+    return True, "ok"
+
+
+def _restore_tls_runtime_consumers_from_snapshot(
+    snapshot: dict[str, Any],
+    skipped_services: set[str] | None = None,
+) -> tuple[bool, str]:
+    skipped = skipped_services or set()
+    failures: list[str] = []
+    targets: list[tuple[str, bool]] = [
+        ("sshws-stunnel", bool(snapshot.get("sshws_stunnel_was_active"))),
+    ]
+    edge_service = str(snapshot.get("edge_service_name") or "").strip()
+    if edge_service and edge_service not in {"nginx", "sshws-stunnel"}:
+        targets.append((edge_service, bool(snapshot.get("edge_service_was_active"))))
+
+    for svc, should_be_active in targets:
+        if svc in skipped:
+            continue
+        if should_be_active:
+            if not _service_exists(svc):
+                failures.append(f"{svc}: service tidak ditemukan saat rollback")
+                continue
+            ok_reload, out_reload = _run_cmd(["systemctl", "reload", svc], timeout=30)
+            if not ok_reload:
+                ok_reload, out_reload = _run_cmd(["systemctl", "restart", svc], timeout=30)
+            if not ok_reload or not _service_is_active(svc):
+                failures.append(f"{svc}: {out_reload}")
+        elif _service_exists(svc) and _service_is_active(svc):
+            if not _stop_and_wait_inactive(svc, timeout_sec=30):
+                failures.append(f"{svc}: gagal dikembalikan ke inactive")
+
     if failures:
         return False, "\n".join(failures)
     return True, "ok"
@@ -6058,33 +6268,43 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
 
     snapshot = _capture_domain_runtime_snapshot()
     previous_domain = _domain_snapshot_active_domain(snapshot)
-    stopped_services = _stop_conflicting_services()
+    stopped_services, stop_failures = _stop_conflicting_services()
     completed = False
     error_msg: str | None = None
+    if stop_failures:
+        error_msg = "Gagal menghentikan service konflik:\n" + "\n".join(stop_failures)
+    restore_failures: list[str] = []
     try:
-        ok_cert, cert_msg = _issue_cert_standalone(domain_n)
-        if not ok_cert:
-            error_msg = cert_msg
-        else:
-            ok_ng, ng_msg = _apply_nginx_domain(domain_n)
-            if not ok_ng:
-                error_msg = ng_msg
+        if error_msg is None:
+            ok_cert, cert_msg = _issue_cert_standalone(domain_n)
+            if not ok_cert:
+                error_msg = cert_msg
             else:
-                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-                if not ok_tls:
-                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                ok_ng, ng_msg = _apply_nginx_domain(domain_n)
+                if not ok_ng:
+                    error_msg = ng_msg
                 else:
-                    completed = True
+                    ok_tls, tls_msg = _restore_tls_runtime_consumers_from_snapshot(snapshot, set(stopped_services))
+                    if not ok_tls:
+                        error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                    else:
+                        completed = True
     except Exception as exc:
         error_msg = f"Setup domain custom gagal: {exc}"
     finally:
         # Success path: nginx sudah di-restart oleh _apply_nginx_domain, restore service lain
         # yang tadinya aktif agar state sistem kembali seperti sebelum wizard.
         if completed:
-            _restore_services([svc for svc in stopped_services if svc != "nginx"])
+            restore_failures = _restore_services([svc for svc in stopped_services if svc != "nginx"])
         else:
             # Failure path: pastikan semua service yang sebelumnya aktif dipulihkan.
-            _restore_services(stopped_services)
+            restore_failures = _restore_services(stopped_services)
+        if restore_failures:
+            restore_msg = "Restore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            if error_msg:
+                error_msg = f"{error_msg}\n{restore_msg}"
+            else:
+                error_msg = restore_msg
 
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
@@ -6194,35 +6414,45 @@ def op_domain_setup_cloudflare(
     if not ok_dns:
         return False, title, dns_msg
 
-    stopped_services = _stop_conflicting_services()
+    stopped_services, stop_failures = _stop_conflicting_services()
     completed = False
     error_msg: str | None = None
+    if stop_failures:
+        error_msg = "Gagal menghentikan service konflik:\n" + "\n".join(stop_failures)
+    restore_failures: list[str] = []
     try:
-        ok_cert, cert_msg = _issue_cert_dns_cf_wildcard(
-            domain=domain_final,
-            root_domain=root_domain,
-            zone_id=zone_id,
-            account_id=account_id,
-        )
-        if not ok_cert:
-            error_msg = cert_msg
-        else:
-            ok_ng, ng_msg = _apply_nginx_domain(domain_final)
-            if not ok_ng:
-                error_msg = ng_msg
+        if error_msg is None:
+            ok_cert, cert_msg = _issue_cert_dns_cf_wildcard(
+                domain=domain_final,
+                root_domain=root_domain,
+                zone_id=zone_id,
+                account_id=account_id,
+            )
+            if not ok_cert:
+                error_msg = cert_msg
             else:
-                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-                if not ok_tls:
-                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                ok_ng, ng_msg = _apply_nginx_domain(domain_final)
+                if not ok_ng:
+                    error_msg = ng_msg
                 else:
-                    completed = True
+                    ok_tls, tls_msg = _restore_tls_runtime_consumers_from_snapshot(snapshot, set(stopped_services))
+                    if not ok_tls:
+                        error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                    else:
+                        completed = True
     except Exception as exc:
         error_msg = f"Setup Cloudflare wizard gagal: {exc}"
     finally:
         if completed:
-            _restore_services([svc for svc in stopped_services if svc != "nginx"])
+            restore_failures = _restore_services([svc for svc in stopped_services if svc != "nginx"])
         else:
-            _restore_services(stopped_services)
+            restore_failures = _restore_services(stopped_services)
+        if restore_failures:
+            restore_msg = "Restore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            if error_msg:
+                error_msg = f"{error_msg}\n{restore_msg}"
+            else:
+                error_msg = restore_msg
 
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
@@ -6331,6 +6561,7 @@ def op_security_renew_cert() -> tuple[bool, str, str]:
     renew_cmd = [str(acme), "--renew", "-d", domain, "--force"]
     notes: list[str] = [f"Domain aktif : {domain}"]
     snapshot = _capture_domain_runtime_snapshot()
+    restore_failures: list[str] = []
 
     ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
     port80_conflict = (not ok_renew) and bool(
@@ -6338,13 +6569,29 @@ def op_security_renew_cert() -> tuple[bool, str, str]:
     )
 
     if not ok_renew and port80_conflict:
-        stopped_services = _stop_conflicting_services()
+        stopped_services, stop_failures = _stop_conflicting_services()
+        stop_error_msg = None
+        if stop_failures:
+            stop_error_msg = "Gagal menghentikan service konflik:\n" + "\n".join(stop_failures)
         try:
-            ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
+            if stop_error_msg is None:
+                ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
         finally:
-            _restore_services(stopped_services)
+            restore_failures = _restore_services(stopped_services)
         if stopped_services:
             notes.append("Retry renew dijalankan setelah menghentikan service yang memakai port 80.")
+        if stop_error_msg is not None:
+            if restore_failures:
+                stop_error_msg += "\nRestore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            return False, title, stop_error_msg
+        if restore_failures:
+            ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+            restore_msg = "Restore service yang sebelumnya aktif gagal:\n" + "\n".join(restore_failures)
+            if ok_rb:
+                return False, title, (
+                    f"{restore_msg}\nPerubahan cert sudah di-rollback."
+                )
+            return False, title, f"{restore_msg}\nRollback cert gagal:\n{msg_rb}"
 
     if not ok_renew and not port80_conflict:
         ok_renew, renew_out = _run_cmd(renew_cmd, timeout=360)
@@ -6374,7 +6621,7 @@ def op_security_renew_cert() -> tuple[bool, str, str]:
                 f"{nginx_reload_out}\nRollback cert gagal:\n{msg_rb}"
             )
 
-    ok_tls, tls_msg = _restart_tls_runtime_consumers(set())
+    ok_tls, tls_msg = _restore_tls_runtime_consumers_from_snapshot(snapshot, set())
     if ok_tls:
         notes.append("TLS consumer aktif berhasil di-reload/restart.")
     else:
@@ -6624,7 +6871,10 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
             if profile_file.exists():
                 profile_file.unlink()
         except Exception as exc:
-            return False, title, f"Gagal membersihkan artefak wgcf lama: {exc}"
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Gagal membersihkan artefak wgcf lama: {exc}"
+            return False, title, f"Gagal membersihkan artefak wgcf lama: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
         ok_reg, msg_reg = _warp_wgcf_register_noninteractive()
         if not ok_reg:
@@ -6652,6 +6902,11 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
             if ok_rb:
                 return False, title, "wireproxy tidak aktif setelah apply profile free."
             return False, title, f"wireproxy tidak aktif setelah apply profile free.\nRollback WARP gagal:\n{msg_rb}"
+        if not _warp_wait_live_tier("free", timeout_sec=20):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, "Live WARP tier tidak sesuai target free setelah switch."
+            return False, title, f"Live WARP tier tidak sesuai target free setelah switch.\nRollback WARP gagal:\n{msg_rb}"
         try:
             _network_state_update_many(
                 {
@@ -6708,6 +6963,11 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
             if ok_rb:
                 return False, title, "wireproxy tidak aktif setelah apply profile plus."
             return False, title, f"wireproxy tidak aktif setelah apply profile plus.\nRollback WARP gagal:\n{msg_rb}"
+        if not _warp_wait_live_tier("plus", timeout_sec=20):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, "Live WARP tier tidak sesuai target plus setelah switch."
+            return False, title, f"Live WARP tier tidak sesuai target plus setelah switch.\nRollback WARP gagal:\n{msg_rb}"
         try:
             _network_state_update_many(
                 {
@@ -6766,6 +7026,11 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
             if ok_rb:
                 return False, title, "wireproxy tidak aktif setelah reconnect/regenerate."
             return False, title, f"wireproxy tidak aktif setelah reconnect/regenerate.\nRollback WARP gagal:\n{msg_rb}"
+        if not _warp_wait_live_tier(target, timeout_sec=20):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Live WARP tier tidak sesuai target {target} setelah reconnect/regenerate."
+            return False, title, f"Live WARP tier tidak sesuai target {target} setelah reconnect/regenerate.\nRollback WARP gagal:\n{msg_rb}"
 
         try:
             updates: dict[str, str | None] = {WARP_TIER_STATE_KEY: target}
@@ -6927,7 +7192,9 @@ def op_network_adblock_add_domain(domain: str) -> tuple[bool, str, str]:
             return False, title, msg_write
         ok_dirty, msg_dirty = _adblock_mark_dirty()
         if not ok_dirty:
-            _restore_adblock_source_snapshot(blocklist_path, snapshot)
+            ok_restore, msg_restore = _restore_adblock_source_snapshot(blocklist_path, snapshot)
+            if not ok_restore:
+                return False, title, f"{msg_dirty}\nRollback source gagal: {msg_restore}"
             return False, title, msg_dirty
     return True, title, f"Domain ditambahkan: {normalized}\nJalankan Update Adblock untuk build artifact baru."
 
@@ -6959,7 +7226,9 @@ def op_network_adblock_delete_domain(domain: str) -> tuple[bool, str, str]:
             return False, title, msg_write
         ok_dirty, msg_dirty = _adblock_mark_dirty()
         if not ok_dirty:
-            _restore_adblock_source_snapshot(blocklist_path, snapshot)
+            ok_restore, msg_restore = _restore_adblock_source_snapshot(blocklist_path, snapshot)
+            if not ok_restore:
+                return False, title, f"{msg_dirty}\nRollback source gagal: {msg_restore}"
             return False, title, msg_dirty
     return True, title, f"Domain dihapus: {normalized}\nJalankan Update Adblock untuk build artifact baru."
 
@@ -6988,7 +7257,9 @@ def op_network_adblock_add_url_source(url: str) -> tuple[bool, str, str]:
             return False, title, msg_write
         ok_dirty, msg_dirty = _adblock_mark_dirty()
         if not ok_dirty:
-            _restore_adblock_source_snapshot(urls_path, snapshot)
+            ok_restore, msg_restore = _restore_adblock_source_snapshot(urls_path, snapshot)
+            if not ok_restore:
+                return False, title, f"{msg_dirty}\nRollback source gagal: {msg_restore}"
             return False, title, msg_dirty
     return True, title, f"URL source ditambahkan: {normalized}\nJalankan Update Adblock untuk build artifact baru."
 
@@ -7020,7 +7291,9 @@ def op_network_adblock_delete_url_source(url: str) -> tuple[bool, str, str]:
             return False, title, msg_write
         ok_dirty, msg_dirty = _adblock_mark_dirty()
         if not ok_dirty:
-            _restore_adblock_source_snapshot(urls_path, snapshot)
+            ok_restore, msg_restore = _restore_adblock_source_snapshot(urls_path, snapshot)
+            if not ok_restore:
+                return False, title, f"{msg_dirty}\nRollback source gagal: {msg_restore}"
             return False, title, msg_dirty
     return True, title, f"URL source dihapus: {normalized}\nJalankan Update Adblock untuk build artifact baru."
 
@@ -7052,14 +7325,66 @@ def op_network_adblock_toggle_auto_update() -> tuple[bool, str, str]:
         if target_value == "1":
             ok_cmd, out_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
             if not ok_cmd:
-                _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+                rollback_notes: list[str] = []
+                ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+                if not ok_rb_env:
+                    rollback_notes.append(f"restore env gagal: {msg_rb_env}")
+                ok_rb_cmd, out_rb_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
+                if not ok_rb_cmd:
+                    rollback_notes.append(f"disable timer rollback gagal: {out_rb_cmd}")
+                ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(timer_name, enabled=False)
+                if not ok_rb_state:
+                    rollback_notes.append(msg_rb_state)
+                if rollback_notes:
+                    return False, title, f"{out_cmd}\nRollback gagal:\n" + "\n".join(rollback_notes)
                 return False, title, out_cmd
+            ok_state, msg_state = _adblock_timer_state_matches(timer_name, enabled=True)
+            if not ok_state:
+                rollback_notes = []
+                ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "0"})
+                if not ok_rb_env:
+                    rollback_notes.append(f"restore env gagal: {msg_rb_env}")
+                ok_rb_cmd, out_rb_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
+                if not ok_rb_cmd:
+                    rollback_notes.append(f"disable timer rollback gagal: {out_rb_cmd}")
+                ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(timer_name, enabled=False)
+                if not ok_rb_state:
+                    rollback_notes.append(msg_rb_state)
+                if rollback_notes:
+                    return False, title, f"{msg_state}\nRollback gagal:\n" + "\n".join(rollback_notes)
+                return False, title, msg_state
             return True, title, "Auto Update Adblock diaktifkan."
 
         ok_cmd, out_cmd = _run_cmd(["systemctl", "disable", "--now", timer_name], timeout=30)
         if not ok_cmd:
-            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
+            rollback_notes = []
+            ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
+            if not ok_rb_env:
+                rollback_notes.append(f"restore env gagal: {msg_rb_env}")
+            ok_rb_cmd, out_rb_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
+            if not ok_rb_cmd:
+                rollback_notes.append(f"enable timer rollback gagal: {out_rb_cmd}")
+            ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(timer_name, enabled=True)
+            if not ok_rb_state:
+                rollback_notes.append(msg_rb_state)
+            if rollback_notes:
+                return False, title, f"{out_cmd}\nRollback gagal:\n" + "\n".join(rollback_notes)
             return False, title, out_cmd
+        ok_state, msg_state = _adblock_timer_state_matches(timer_name, enabled=False)
+        if not ok_state:
+            rollback_notes = []
+            ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED": "1"})
+            if not ok_rb_env:
+                rollback_notes.append(f"restore env gagal: {msg_rb_env}")
+            ok_rb_cmd, out_rb_cmd = _run_cmd(["systemctl", "enable", "--now", timer_name], timeout=30)
+            if not ok_rb_cmd:
+                rollback_notes.append(f"enable timer rollback gagal: {out_rb_cmd}")
+            ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(timer_name, enabled=True)
+            if not ok_rb_state:
+                rollback_notes.append(msg_rb_state)
+            if rollback_notes:
+                return False, title, f"{msg_state}\nRollback gagal:\n" + "\n".join(rollback_notes)
+            return False, title, msg_state
         return True, title, "Auto Update Adblock dinonaktifkan."
 
 
@@ -7068,20 +7393,77 @@ def op_network_adblock_set_auto_update_days(days: int) -> tuple[bool, str, str]:
     if int(days) < 1:
         return False, title, "Interval harus berupa angka hari, minimal 1."
     with file_lock(ADBLOCK_LOCK_FILE):
+        timer_name = _adblock_auto_update_timer_name()
         previous_days = _adblock_env_value("AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS", "1")
+        previous_days_int = int(previous_days) if str(previous_days).isdigit() else 1
+        timer_was_enabled = _adblock_status_map().get("auto_update_enabled", "0") == "1"
         ok_env, msg_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": str(int(days))})
         if not ok_env:
             return False, title, msg_env
         ok_timer, msg_timer = _adblock_auto_update_timer_write(int(days))
         if not ok_timer:
-            _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+            rollback_notes: list[str] = []
+            ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+            if not ok_rb_env:
+                rollback_notes.append(f"restore env hari gagal: {msg_rb_env}")
+            ok_rb_timer, msg_rb_timer = _adblock_auto_update_timer_write(previous_days_int)
+            if not ok_rb_timer:
+                rollback_notes.append(f"restore timer file gagal: {msg_rb_timer}")
+            ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(
+                timer_name,
+                enabled=timer_was_enabled,
+                expected_days=previous_days_int,
+            )
+            if not ok_rb_state:
+                rollback_notes.append(msg_rb_state)
+            if rollback_notes:
+                return False, title, f"{msg_timer}\nRollback gagal:\n" + "\n".join(rollback_notes)
             return False, title, msg_timer
-        timer_name = _adblock_auto_update_timer_name()
         if _adblock_status_map().get("auto_update_enabled", "0") == "1":
             ok_restart, out_restart = _run_cmd(["systemctl", "restart", timer_name], timeout=30)
             if not ok_restart:
-                _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
-                _adblock_auto_update_timer_write(int(previous_days) if str(previous_days).isdigit() else 1)
-                _run_cmd(["systemctl", "restart", timer_name], timeout=30)
+                rollback_notes = []
+                ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+                if not ok_rb_env:
+                    rollback_notes.append(f"restore env hari gagal: {msg_rb_env}")
+                ok_rb_timer, msg_rb_timer = _adblock_auto_update_timer_write(previous_days_int)
+                if not ok_rb_timer:
+                    rollback_notes.append(f"restore timer file gagal: {msg_rb_timer}")
+                ok_rb_restart, out_rb_restart = _run_cmd(["systemctl", "restart", timer_name], timeout=30)
+                if not ok_rb_restart:
+                    rollback_notes.append(f"restart timer rollback gagal: {out_rb_restart}")
+                ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(
+                    timer_name,
+                    enabled=timer_was_enabled,
+                    expected_days=previous_days_int,
+                )
+                if not ok_rb_state:
+                    rollback_notes.append(msg_rb_state)
+                if rollback_notes:
+                    return False, title, f"{out_restart}\nRollback gagal:\n" + "\n".join(rollback_notes)
                 return False, title, out_restart
+            ok_state, msg_state = _adblock_timer_state_matches(timer_name, enabled=True)
+            ok_days, msg_days = _adblock_timer_days_matches(int(days))
+            if not ok_state or not ok_days:
+                rollback_notes = []
+                ok_rb_env, msg_rb_env = _adblock_update_env_many({"AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS": previous_days})
+                if not ok_rb_env:
+                    rollback_notes.append(f"restore env hari gagal: {msg_rb_env}")
+                ok_rb_timer, msg_rb_timer = _adblock_auto_update_timer_write(previous_days_int)
+                if not ok_rb_timer:
+                    rollback_notes.append(f"restore timer file gagal: {msg_rb_timer}")
+                ok_rb_restart, out_rb_restart = _run_cmd(["systemctl", "restart", timer_name], timeout=30)
+                if not ok_rb_restart:
+                    rollback_notes.append(f"restart timer rollback gagal: {out_rb_restart}")
+                ok_rb_state, msg_rb_state = _adblock_timer_rollback_verify(
+                    timer_name,
+                    enabled=timer_was_enabled,
+                    expected_days=previous_days_int,
+                )
+                if not ok_rb_state:
+                    rollback_notes.append(msg_rb_state)
+                failure_msg = msg_state if not ok_state else msg_days
+                if rollback_notes:
+                    return False, title, f"{failure_msg}\nRollback gagal:\n" + "\n".join(rollback_notes)
+                return False, title, failure_msg
     return True, title, f"Interval Auto Update di-set setiap {int(days)} hari."
