@@ -184,6 +184,51 @@ def _iter_backup_files() -> list[Path]:
     return out
 
 
+def _iter_backup_directories(files: list[Path]) -> list[dict[str, int | str]]:
+    desired: dict[str, dict[str, int | str]] = {}
+    allowed_roots = [base.resolve() for base in RESTORE_ALLOWED_DIRS if base.exists() and base.is_dir()]
+    for root in allowed_roots:
+        rel = _to_rel_path(root)
+        try:
+            st = root.stat()
+        except Exception:
+            continue
+        desired[rel] = {
+            "path": rel,
+            "uid": int(st.st_uid),
+            "gid": int(st.st_gid),
+            "mode": int(st.st_mode & 0o777) or 0o755,
+        }
+
+    for fp in files:
+        try:
+            parent = fp.parent.resolve()
+        except Exception:
+            continue
+        for root in allowed_roots:
+            if not _is_subpath(parent, root):
+                continue
+            cur = parent
+            while True:
+                rel = _to_rel_path(cur)
+                if rel not in desired:
+                    try:
+                        st = cur.stat()
+                    except Exception:
+                        break
+                    desired[rel] = {
+                        "path": rel,
+                        "uid": int(st.st_uid),
+                        "gid": int(st.st_gid),
+                        "mode": int(st.st_mode & 0o777) or 0o755,
+                    }
+                if cur == root or cur.parent == cur or cur == Path("/"):
+                    break
+                cur = cur.parent
+            break
+    return sorted(desired.values(), key=lambda item: str(item["path"]))
+
+
 def _to_rel_path(path: Path) -> str:
     return str(path).lstrip("/")
 
@@ -210,6 +255,8 @@ def _add_backup_payloads(
             size = int(st.st_size)
             mtime = int(st.st_mtime)
             mode = int(st.st_mode & 0o777) or 0o600
+            uid = int(st.st_uid)
+            gid = int(st.st_gid)
         except Exception as exc:
             return False, f"Gagal membaca metadata file backup {fp}: {exc}", None
 
@@ -238,6 +285,9 @@ def _add_backup_payloads(
             {
                 "path": rel,
                 "size_bytes": size,
+                "uid": uid,
+                "gid": gid,
+                "mode": mode,
             }
         )
     return True, "ok", entries
@@ -249,6 +299,7 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
     files = _iter_backup_files()
     if not files:
         return False, "Tidak ada file yang bisa dibackup.", None
+    directories = _iter_backup_directories(files)
 
     backup_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}-{uuid.uuid4().hex[:8]}"
     filename = f"{kind}-backup-{backup_id}.tar.gz"
@@ -268,6 +319,7 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
                 "include_cert": True,
                 "include_runtime_env": True,
                 "entries": manifest_entries,
+                "directories": directories,
             }
             manifest_raw = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("manifest.json")
@@ -417,6 +469,34 @@ def _load_and_validate_manifest(
             if int(manifest.get("schema_version") or 0) != BACKUP_SCHEMA_VERSION:
                 return False, "Versi manifest tidak didukung.", None, None
 
+            directories_raw = manifest.get("directories")
+            directories: list[dict[str, Any]] = []
+            if directories_raw is not None:
+                if not isinstance(directories_raw, list):
+                    return False, "Manifest directories tidak valid.", None, None
+                for item in directories_raw:
+                    if not isinstance(item, dict):
+                        return False, "Manifest directory entry tidak valid.", None, None
+                    rel = str(item.get("path") or "").strip().lstrip("/")
+                    if not rel:
+                        return False, "Directory path kosong pada manifest.", None, None
+                    ok_rel, rel_norm_or_err = _normalize_member_name(rel)
+                    if not ok_rel:
+                        return False, str(rel_norm_or_err), None, None
+                    rel_norm = str(rel_norm_or_err)
+                    target = Path("/") / rel_norm
+                    if not any(_is_subpath(target, base) for base in RESTORE_ALLOWED_DIRS):
+                        return False, f"Directory restore tidak diizinkan: /{rel_norm}", None, None
+                    normalized_dir: dict[str, Any] = {"path": rel_norm}
+                    for key in ("uid", "gid", "mode"):
+                        if key not in item:
+                            continue
+                        try:
+                            normalized_dir[key] = int(item.get(key))
+                        except Exception:
+                            return False, f"{key} tidak valid untuk directory /{rel_norm}", None, None
+                    directories.append(normalized_dir)
+
             entries_raw = manifest.get("entries")
             if not isinstance(entries_raw, list) or not entries_raw:
                 return False, "Manifest entries kosong/tidak valid.", None, None
@@ -486,9 +566,19 @@ def _load_and_validate_manifest(
                 if not ok_count:
                     return False, f"Payload {rel_norm} tidak valid: {count_or_err}", None, None
 
-                entries.append({"path": rel_norm, "size_bytes": size})
+                normalized_entry: dict[str, Any] = {"path": rel_norm, "size_bytes": size}
+                for key in ("uid", "gid", "mode"):
+                    if key not in item:
+                        continue
+                    try:
+                        normalized_entry[key] = int(item.get(key))
+                    except Exception:
+                        return False, f"{key} tidak valid untuk {rel_norm}", None, None
+                entries.append(normalized_entry)
 
-            return True, "ok", manifest, entries
+            manifest_norm = dict(manifest)
+            manifest_norm["directories"] = directories
+            return True, "ok", manifest_norm, entries
     except Exception as exc:
         return False, f"Gagal membaca archive: {exc}", None, None
 
@@ -559,7 +649,15 @@ def _count_reader(reader, *, expected_size: int) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _write_stream_atomic(path: Path, source, *, expected_size: int) -> tuple[bool, str]:
+def _write_stream_atomic(
+    path: Path,
+    source,
+    *,
+    expected_size: int,
+    restore_uid: int | None = None,
+    restore_gid: int | None = None,
+    restore_mode: int | None = None,
+) -> tuple[bool, str]:
     parent = path.parent
     try:
         parent.mkdir(parents=True, exist_ok=True)
@@ -577,6 +675,12 @@ def _write_stream_atomic(path: Path, source, *, expected_size: int) -> tuple[boo
             mode = int(st.st_mode & 0o777)
         except Exception:
             pass
+    if isinstance(restore_uid, int):
+        uid = restore_uid
+    if isinstance(restore_gid, int):
+        gid = restore_gid
+    if isinstance(restore_mode, int) and restore_mode > 0:
+        mode = restore_mode
 
     fd = -1
     tmp_path = ""
@@ -621,8 +725,89 @@ def _write_stream_atomic(path: Path, source, *, expected_size: int) -> tuple[boo
     return True, "ok"
 
 
-def _apply_archive(archive_path: Path, entries: list[dict[str, Any]]) -> tuple[bool, str]:
+def _iter_existing_restore_files() -> list[Path]:
+    out: list[Path] = []
+    seen: set[str] = set()
+    for base in RESTORE_ALLOWED_DIRS:
+        if not base.exists() or not base.is_dir():
+            continue
+        for fp in sorted(base.rglob("*")):
+            if not fp.is_file():
+                continue
+            key = str(fp.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(fp)
+    for fp in RESTORE_ALLOWED_FILES:
+        if not fp.exists() or not fp.is_file():
+            continue
+        key = str(fp.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(fp)
+    return out
+
+
+def _prune_restore_scope(entries: list[dict[str, Any]]) -> tuple[bool, str]:
+    desired: set[Path] = set()
+    for item in entries:
+        desired.add((Path("/") / str(item["path"])).resolve())
+
+    for fp in _iter_existing_restore_files():
+        try:
+            if fp.resolve() in desired:
+                continue
+            fp.unlink()
+        except Exception as exc:
+            return False, f"Gagal membersihkan file restore stale {fp}: {exc}"
+
+    for base in RESTORE_ALLOWED_DIRS:
+        if not base.exists() or not base.is_dir():
+            continue
+        for d in sorted((p for p in base.rglob("*") if p.is_dir()), reverse=True):
+            try:
+                d.rmdir()
+            except OSError:
+                continue
+            except Exception as exc:
+                return False, f"Gagal membersihkan direktori restore stale {d}: {exc}"
+    return True, "ok"
+
+
+def _apply_directory_metadata(directories: list[dict[str, Any]]) -> tuple[bool, str]:
+    for item in directories:
+        path = Path("/") / str(item["path"])
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return False, f"Gagal menyiapkan direktori restore {path}: {exc}"
+        try:
+            if "mode" in item:
+                path.chmod(int(item["mode"]))
+        except Exception:
+            pass
+        try:
+            os.chown(
+                path,
+                int(item["uid"]) if "uid" in item else -1,
+                int(item["gid"]) if "gid" in item else -1,
+            )
+        except Exception:
+            pass
+    return True, "ok"
+
+
+def _apply_archive(
+    archive_path: Path,
+    entries: list[dict[str, Any]],
+    directories: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
     try:
+        ok_prune, msg_prune = _prune_restore_scope(entries)
+        if not ok_prune:
+            return False, msg_prune
         with tarfile.open(archive_path, "r:gz") as tf:
             for item in entries:
                 rel = str(item["path"])
@@ -632,9 +817,20 @@ def _apply_archive(archive_path: Path, entries: list[dict[str, Any]]) -> tuple[b
                 if fp is None:
                     return False, f"Gagal membaca payload: {rel}"
                 dst = Path("/") / rel
-                ok_write, msg_write = _write_stream_atomic(dst, fp, expected_size=size)
+                ok_write, msg_write = _write_stream_atomic(
+                    dst,
+                    fp,
+                    expected_size=size,
+                    restore_uid=int(item["uid"]) if "uid" in item else None,
+                    restore_gid=int(item["gid"]) if "gid" in item else None,
+                    restore_mode=int(item["mode"]) if "mode" in item else None,
+                )
                 if not ok_write:
                     return False, msg_write
+        if directories:
+            ok_dirs, msg_dirs = _apply_directory_metadata(directories)
+            if not ok_dirs:
+                return False, msg_dirs
     except Exception as exc:
         return False, f"Gagal apply archive: {exc}"
     return True, "ok"
@@ -700,8 +896,8 @@ def _restore_archive_with_safety(
             "max_entries": MAX_UPLOAD_RESTORE_ENTRIES,
         }
 
-    ok_manifest, msg_manifest, _, entries = _load_and_validate_manifest(archive_path, **manifest_kwargs)
-    if not ok_manifest or entries is None:
+    ok_manifest, msg_manifest, manifest, entries = _load_and_validate_manifest(archive_path, **manifest_kwargs)
+    if not ok_manifest or entries is None or manifest is None:
         return False, msg_manifest
 
     ok_safety, msg_safety, safety_data = _create_backup_archive("safety")
@@ -709,7 +905,7 @@ def _restore_archive_with_safety(
         return False, f"Gagal membuat snapshot pra-restore: {msg_safety}"
     safety_path = Path(str(safety_data.get("archive_path") or "")).resolve()
 
-    ok_apply, msg_apply = _apply_archive(archive_path, entries)
+    ok_apply, msg_apply = _apply_archive(archive_path, entries, list(manifest.get("directories") or []))
     if ok_apply:
         ok_validate, msg_validate = _run_post_restore_validation()
         if ok_validate:
@@ -723,11 +919,11 @@ def _restore_archive_with_safety(
             )
         msg_apply = msg_validate
 
-    rb_ok, rb_msg, _, rb_entries = _load_and_validate_manifest(safety_path)
-    if not rb_ok or rb_entries is None:
+    rb_ok, rb_msg, rb_manifest, rb_entries = _load_and_validate_manifest(safety_path)
+    if not rb_ok or rb_entries is None or rb_manifest is None:
         return False, f"Restore gagal: {msg_apply}\nRollback gagal: {rb_msg}"
 
-    rb_apply_ok, rb_apply_msg = _apply_archive(safety_path, rb_entries)
+    rb_apply_ok, rb_apply_msg = _apply_archive(safety_path, rb_entries, list(rb_manifest.get("directories") or []))
     if not rb_apply_ok:
         return False, f"Restore gagal: {msg_apply}\nRollback gagal apply: {rb_apply_msg}"
 

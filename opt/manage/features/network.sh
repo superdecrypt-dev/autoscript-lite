@@ -89,6 +89,89 @@ PY
   chmod 600 "${f}" 2>/dev/null || true
 }
 
+snapshot_file_capture() {
+  local path="$1" snap_dir="$2" label="$3"
+  mkdir -p "${snap_dir}" 2>/dev/null || true
+  if [[ -e "${path}" ]]; then
+    cp -a "${path}" "${snap_dir}/${label}.data" 2>/dev/null || return 1
+    printf '1\n' > "${snap_dir}/${label}.exists"
+  else
+    printf '0\n' > "${snap_dir}/${label}.exists"
+  fi
+  return 0
+}
+
+snapshot_file_restore() {
+  local path="$1" snap_dir="$2" label="$3"
+  local exists="0"
+  exists="$(cat "${snap_dir}/${label}.exists" 2>/dev/null || printf '0')"
+  if [[ "${exists}" == "1" ]]; then
+    mkdir -p "$(dirname "${path}")" 2>/dev/null || true
+    cp -a "${snap_dir}/${label}.data" "${path}" 2>/dev/null || return 1
+  else
+    rm -f "${path}" 2>/dev/null || return 1
+  fi
+  return 0
+}
+
+warp_wireproxy_restart_checked() {
+  if ! svc_exists wireproxy; then
+    warn "wireproxy.service tidak terdeteksi"
+    return 1
+  fi
+  if ! svc_restart wireproxy >/dev/null 2>&1; then
+    warn "Restart wireproxy gagal."
+    return 1
+  fi
+  if ! svc_is_active wireproxy; then
+    warn "wireproxy tidak aktif setelah restart."
+    return 1
+  fi
+  return 0
+}
+
+warp_runtime_snapshot_capture() {
+  local snap_dir="$1"
+  mkdir -p "${snap_dir}" 2>/dev/null || true
+  snapshot_file_capture "${WGCF_DIR}/wgcf-account.toml" "${snap_dir}" "wgcf_account" || return 1
+  snapshot_file_capture "${WGCF_DIR}/wgcf-profile.conf" "${snap_dir}" "wgcf_profile" || return 1
+  snapshot_file_capture "${WIREPROXY_CONF}" "${snap_dir}" "wireproxy_conf" || return 1
+  snapshot_file_capture "$(network_state_file)" "${snap_dir}" "network_state" || return 1
+  if svc_exists wireproxy; then
+    printf '1\n' > "${snap_dir}/wireproxy.exists"
+    if svc_is_active wireproxy; then
+      printf '1\n' > "${snap_dir}/wireproxy.active"
+    else
+      printf '0\n' > "${snap_dir}/wireproxy.active"
+    fi
+  else
+    printf '0\n' > "${snap_dir}/wireproxy.exists"
+    printf '0\n' > "${snap_dir}/wireproxy.active"
+  fi
+  return 0
+}
+
+warp_runtime_snapshot_restore() {
+  local snap_dir="$1"
+  local had_service was_active
+  had_service="$(cat "${snap_dir}/wireproxy.exists" 2>/dev/null || printf '0')"
+  was_active="$(cat "${snap_dir}/wireproxy.active" 2>/dev/null || printf '0')"
+
+  snapshot_file_restore "${WGCF_DIR}/wgcf-account.toml" "${snap_dir}" "wgcf_account" || return 1
+  snapshot_file_restore "${WGCF_DIR}/wgcf-profile.conf" "${snap_dir}" "wgcf_profile" || return 1
+  snapshot_file_restore "${WIREPROXY_CONF}" "${snap_dir}" "wireproxy_conf" || return 1
+  snapshot_file_restore "$(network_state_file)" "${snap_dir}" "network_state" || return 1
+
+  if [[ "${had_service}" == "1" ]]; then
+    if [[ "${was_active}" == "1" ]]; then
+      warp_wireproxy_restart_checked || return 1
+    elif svc_exists wireproxy && svc_is_active wireproxy; then
+      systemctl stop wireproxy >/dev/null 2>&1 || return 1
+    fi
+  fi
+  return 0
+}
+
 validate_email_user() {
   # args: email (username@protocol)
   local email="${1:-}"
@@ -242,19 +325,21 @@ PY
 xray_routing_default_rule_set() {
   # args: mode direct|warp
   local mode="$1"
-  local tmp backup rc
+  local tmp backup backup_out rc
   need_python3
 
   [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
   ensure_path_writable "${XRAY_ROUTING_CONF}"
 
   backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
+  backup_out="$(xray_backup_path_prepare "${XRAY_OUTBOUNDS_CONF}")"
   tmp="${WORK_DIR}/30-routing.json.tmp"
 
   set +e
   (
     flock -x 200
     cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
+    cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
     python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${XRAY_OUTBOUNDS_CONF}" "${tmp}" "${mode}" "${SPEED_OUTBOUND_TAG_PREFIX}" || exit 1
 import json, sys
 src, ob_src, dst, mode, speed_out_prefix = sys.argv[1:6]
@@ -355,8 +440,7 @@ PY
       exit 87
     fi
 
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -370,7 +454,7 @@ PY
     "xray tidak aktif setelah update routing default. Config di-rollback ke backup: ${backup}" \
     "Konfigurasi xray invalid setelah update routing default. Config di-rollback ke backup: ${backup}"
 
-  speed_policy_resync_after_warp_change || return 1
+  xray_routing_post_speed_sync_or_die "${backup}" "${backup_out}" "update routing default WARP"
 }
 
 xray_routing_rule_toggle_user_outbound() {
@@ -490,6 +574,128 @@ PY
   return 0
 }
 
+xray_routing_rule_set_user_outbound_mode() {
+  # args: email mode(direct|warp|off)
+  local email="$1"
+  local mode="$2"
+  local tmp backup backup_out rc
+
+  need_python3
+  [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
+  ensure_path_writable "${XRAY_ROUTING_CONF}"
+  backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
+  backup_out="$(xray_backup_path_prepare "${XRAY_OUTBOUNDS_CONF}")"
+  tmp="${WORK_DIR}/30-routing.user-mode.tmp"
+
+  set +e
+  (
+    flock -x 200
+    cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
+    cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
+    python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${tmp}" "${email}" "${mode}" || exit 1
+import json, sys
+
+src, dst, email, mode = sys.argv[1:5]
+mode = (mode or "").strip().lower()
+if mode not in {"direct", "warp", "off"}:
+  raise SystemExit("Mode user harus direct|warp|off.")
+
+with open(src, 'r', encoding='utf-8') as f:
+  cfg = json.load(f)
+routing = cfg.get('routing') or {}
+rules = routing.get('rules')
+if not isinstance(rules, list):
+  raise SystemExit("Invalid routing config: routing.rules bukan list")
+
+def is_default_rule(r):
+  if not isinstance(r, dict): return False
+  if r.get('type') != 'field': return False
+  port = str(r.get('port', '')).strip()
+  if port not in ('1-65535', '0-65535'): return False
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
+  return True
+
+def find_rule_idx(marker, outbound):
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    users = r.get('user') or []
+    if not isinstance(users, list) or 'inboundTag' in r:
+      continue
+    if marker in users:
+      return i
+  return -1
+
+default_idx = -1
+for i, r in enumerate(rules):
+  if is_default_rule(r):
+    default_idx = i
+if default_idx < 0:
+  raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
+
+def toggle_user_marker(marker, outbound, enable):
+  global default_idx
+  idx = find_rule_idx(marker, outbound)
+  if idx < 0 and not enable:
+    return
+  if idx < 0 and enable:
+    rules.insert(default_idx, {"type": "field", "user": [marker], "outboundTag": outbound})
+    idx = default_idx
+    default_idx += 1
+  rule = rules[idx]
+  if not isinstance(rule, dict):
+    rule = {"type": "field", "user": [marker], "outboundTag": outbound}
+  users = rule.get('user')
+  if not isinstance(users, list):
+    users = []
+  users = [u for u in users if u != marker and u != email]
+  users.insert(0, marker)
+  if enable and email not in users:
+    users.append(email)
+  rule['type'] = 'field'
+  rule['outboundTag'] = outbound
+  rule['user'] = users
+  rules[idx] = rule
+
+if mode == 'direct':
+  toggle_user_marker("dummy-warp-user", "warp", False)
+  toggle_user_marker("dummy-direct-user", "direct", True)
+elif mode == 'warp':
+  toggle_user_marker("dummy-direct-user", "direct", False)
+  toggle_user_marker("dummy-warp-user", "warp", True)
+else:
+  toggle_user_marker("dummy-direct-user", "direct", False)
+  toggle_user_marker("dummy-warp-user", "warp", False)
+
+routing['rules'] = rules
+cfg['routing'] = routing
+with open(dst, 'w', encoding='utf-8') as f:
+  json.dump(cfg, f, ensure_ascii=False, indent=2)
+  f.write("\n")
+PY
+    xray_write_file_atomic "${XRAY_ROUTING_CONF}" "${tmp}" || {
+      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
+      exit 1
+    }
+    if ! xray_routing_restart_checked; then
+      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
+      systemctl restart xray || true
+      exit 86
+    fi
+  ) 200>"${ROUTING_LOCK_FILE}"
+  rc=$?
+  set -e
+
+  xray_txn_rc_or_die "${rc}" \
+    "Gagal update routing (rollback ke backup: ${backup})" \
+    "xray tidak aktif setelah update routing per-user warp/direct. Config di-rollback ke backup: ${backup}"
+
+  xray_routing_post_speed_sync_or_die "${backup}" "${backup_out}" "update routing WARP per-user"
+  return 0
+}
+
 xray_routing_rule_toggle_inbounds_outbound() {
   # args: marker outboundTag comma_inboundTags on|off
   local marker="$1"
@@ -599,6 +805,126 @@ PY
   xray_txn_rc_or_die "${rc}" \
     "Gagal update routing (rollback ke backup: ${backup})" \
     "xray tidak aktif setelah update routing per-inbound warp/direct. Config di-rollback ke backup: ${backup}"
+  return 0
+}
+
+xray_routing_rule_set_inbound_outbound_mode() {
+  # args: inbound_tag mode(direct|warp|off)
+  local tag="$1"
+  local mode="$2"
+  local tmp backup backup_out rc
+
+  need_python3
+  [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
+  ensure_path_writable "${XRAY_ROUTING_CONF}"
+  backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
+  backup_out="$(xray_backup_path_prepare "${XRAY_OUTBOUNDS_CONF}")"
+  tmp="${WORK_DIR}/30-routing.inbound-mode.tmp"
+
+  set +e
+  (
+    flock -x 200
+    cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
+    cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
+    python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${tmp}" "${tag}" "${mode}" || exit 1
+import json, sys
+
+src, dst, inbound_tag, mode = sys.argv[1:5]
+mode = (mode or "").strip().lower()
+if mode not in {"direct", "warp", "off"}:
+  raise SystemExit("Mode inbound harus direct|warp|off.")
+
+with open(src, 'r', encoding='utf-8') as f:
+  cfg = json.load(f)
+routing = cfg.get('routing') or {}
+rules = routing.get('rules')
+if not isinstance(rules, list):
+  raise SystemExit("Invalid routing config: routing.rules bukan list")
+
+def is_default_rule(r):
+  if not isinstance(r, dict): return False
+  if r.get('type') != 'field': return False
+  port = str(r.get('port', '')).strip()
+  if port not in ('1-65535', '0-65535'): return False
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
+  return True
+
+def find_rule_idx(marker, outbound):
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    tags = r.get('inboundTag') or []
+    if isinstance(tags, list) and marker in tags:
+      return i
+  return -1
+
+default_idx = -1
+for i, r in enumerate(rules):
+  if is_default_rule(r):
+    default_idx = i
+if default_idx < 0:
+  raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
+
+def toggle_inbound_marker(marker, outbound, enable):
+  global default_idx
+  idx = find_rule_idx(marker, outbound)
+  if idx < 0 and not enable:
+    return
+  if idx < 0 and enable:
+    rules.insert(default_idx, {"type": "field", "inboundTag": [marker], "outboundTag": outbound})
+    idx = default_idx
+    default_idx += 1
+  rule = rules[idx]
+  if not isinstance(rule, dict):
+    rule = {"type": "field", "inboundTag": [marker], "outboundTag": outbound}
+  tags = rule.get('inboundTag')
+  if not isinstance(tags, list):
+    tags = []
+  tags = [t for t in tags if t != marker and t != inbound_tag]
+  tags.insert(0, marker)
+  if enable and inbound_tag not in tags:
+    tags.append(inbound_tag)
+  rule['type'] = 'field'
+  rule['outboundTag'] = outbound
+  rule['inboundTag'] = tags
+  rules[idx] = rule
+
+if mode == 'direct':
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", False)
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", True)
+elif mode == 'warp':
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", False)
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", True)
+else:
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", False)
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", False)
+
+routing['rules'] = rules
+cfg['routing'] = routing
+with open(dst, 'w', encoding='utf-8') as f:
+  json.dump(cfg, f, ensure_ascii=False, indent=2)
+  f.write("\n")
+PY
+    xray_write_file_atomic "${XRAY_ROUTING_CONF}" "${tmp}" || {
+      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
+      exit 1
+    }
+    if ! xray_routing_restart_checked; then
+      restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
+      systemctl restart xray || true
+      exit 86
+    fi
+  ) 200>"${ROUTING_LOCK_FILE}"
+  rc=$?
+  set -e
+
+  xray_txn_rc_or_die "${rc}" \
+    "Gagal update routing (rollback ke backup: ${backup})" \
+    "xray tidak aktif setelah update routing per-inbound warp/direct. Config di-rollback ke backup: ${backup}"
+
+  xray_routing_post_speed_sync_or_die "${backup}" "${backup_out}" "update routing WARP per-inbound"
   return 0
 }
 
@@ -1056,17 +1382,19 @@ xray_routing_custom_domain_entry_set_mode() {
   # args: mode direct|warp|off entry
   local mode="$1"
   local ent="$2"
-  local tmp backup rc
+  local tmp backup backup_out rc
   need_python3
   [[ -f "${XRAY_ROUTING_CONF}" ]] || die "Xray routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
   ensure_path_writable "${XRAY_ROUTING_CONF}"
   backup="$(xray_backup_path_prepare "${XRAY_ROUTING_CONF}")"
+  backup_out="$(xray_backup_path_prepare "${XRAY_OUTBOUNDS_CONF}")"
   tmp="${WORK_DIR}/30-routing.json.tmp"
 
   set +e
   (
     flock -x 200
     cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
+    cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
     python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${tmp}" "${mode}" "${ent}" || exit 1
 import json, sys
 src, dst, mode, ent = sys.argv[1:5]
@@ -1213,8 +1541,7 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_ROUTING_CONF}"
       systemctl restart xray || true
       exit 86
@@ -1226,6 +1553,8 @@ PY
   xray_txn_rc_or_die "${rc}" \
     "Gagal update routing (rollback ke backup: ${backup})" \
     "xray tidak aktif setelah update custom domain mode. Config di-rollback ke backup: ${backup}"
+
+  xray_routing_post_speed_sync_or_die "${backup}" "${backup_out}" "update routing WARP per-domain"
   return 0
 }
 
@@ -1844,7 +2173,7 @@ adblock_manual_domain_normalize() {
 }
 
 adblock_manual_domain_add_menu() {
-  local input normalized
+  local input normalized snap_dir
   while true; do
     title
     echo "5) Network > Adblock > Add Domain"
@@ -1870,20 +2199,36 @@ adblock_manual_domain_add_menu() {
       pause
       continue
     fi
+    snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-domain-add.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-domain-add.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    snapshot_file_capture "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
+      warn "Gagal membuat snapshot blocklist sebelum update."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      continue
+    }
     printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
     if adblock_mark_dirty; then
       log "Domain Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
-    else
-      warn "Domain ditambahkan, tetapi status dirty gagal ditandai."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      return 0
     fi
+    if snapshot_file_restore "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
+      warn "Domain ditambahkan, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
+    else
+      warn "Domain ditambahkan, status dirty gagal ditandai, dan rollback snapshot blocklist juga gagal."
+    fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     pause
-    return 0
+    return 1
   done
 }
 
 adblock_manual_domain_delete_menu() {
   local -a domains=()
-  local line choice idx tmp i
+  local line choice idx tmp i snap_dir
   while true; do
     title
     echo "5) Network > Adblock > Delete Domain"
@@ -1931,20 +2276,61 @@ adblock_manual_domain_delete_menu() {
       printf '%s\n' "${domains[$i]}" >> "${tmp}"
     done
     mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
+    snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-domain-del.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-domain-del.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    snapshot_file_capture "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      warn "Gagal membuat snapshot blocklist sebelum delete."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      continue
+    }
     mv -f "${tmp}" "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
     chmod 644 "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
     if adblock_mark_dirty; then
       log "Domain Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
-    else
-      warn "Domain dihapus, tetapi status dirty gagal ditandai."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      return 0
     fi
+    if snapshot_file_restore "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
+      warn "Domain dihapus, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
+    else
+      warn "Domain dihapus, status dirty gagal ditandai, dan rollback snapshot blocklist juga gagal."
+    fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     pause
-    return 0
+    return 1
   done
 }
 
+adblock_restore_runtime_state_checked() {
+  # args: want_xray_enabled(0/1) want_ssh_enabled(0/1)
+  local want_xray="${1:-0}" want_ssh="${2:-0}"
+  local target_mode="off"
+  local notes=()
+  [[ "${want_xray}" == "1" ]] && target_mode="blocked"
+
+  if ! xray_routing_adblock_rule_set "${target_mode}" >/dev/null 2>&1; then
+    notes+=("rollback Xray gagal")
+  fi
+
+  if ! ssh_dns_adblock_config_set_enabled "${want_ssh}" >/dev/null 2>&1; then
+    notes+=("rollback config SSH gagal")
+  elif ! ssh_dns_adblock_apply_now >/dev/null 2>&1; then
+    notes+=("rollback apply SSH gagal")
+  fi
+
+  if ((${#notes[@]} > 0)); then
+    printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
+    return 1
+  fi
+  return 0
+}
+
 adblock_enable_all() {
-  local status dirty rendered_status xray_was_enabled update_mode
+  local status dirty rendered_status xray_was_enabled update_mode rollback_msg=""
   status="$(ssh_dns_adblock_status_get)"
   dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
   rendered_status="$(printf '%s\n' "${status}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
@@ -1972,18 +2358,16 @@ adblock_enable_all() {
   fi
 
   if ! ssh_dns_adblock_config_set_enabled 1; then
-    if [[ "${xray_was_enabled}" != "1" ]]; then
-      xray_routing_adblock_rule_set off || true
+    if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
+      warn "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
     warn "Gagal mengaktifkan DNS Adblock SSH."
     return 1
   fi
 
   if ! ssh_dns_adblock_apply_now; then
-    ssh_dns_adblock_config_set_enabled 0 || true
-    ssh_dns_adblock_apply_now || true
-    if [[ "${xray_was_enabled}" != "1" ]]; then
-      xray_routing_adblock_rule_set off || true
+    if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
+      warn "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
     warn "DNS Adblock SSH gagal diterapkan."
     return 1
@@ -1996,6 +2380,9 @@ adblock_enable_all() {
 adblock_disable_all() {
   local xray_status="ON"
   local ssh_status="ON"
+  local previous_xray previous_ssh rollback_msg=""
+  previous_xray="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
+  previous_ssh="$(ssh_dns_adblock_status_get | awk -F'=' '/^enabled=/{print $2; exit}')"
 
   if xray_routing_adblock_rule_set off; then
     xray_status="OFF"
@@ -2016,6 +2403,9 @@ adblock_disable_all() {
     return 0
   fi
 
+  if ! rollback_msg="$(adblock_restore_runtime_state_checked "${previous_xray}" "${previous_ssh}")"; then
+    warn "Rollback: ${rollback_msg}"
+  fi
   warn "Adblock nonaktif sebagian. Xray=${xray_status}, SSH=${ssh_status}."
   return 1
 }
@@ -2199,7 +2589,7 @@ ssh_dns_adblock_url_normalize() {
 }
 
 ssh_dns_adblock_url_add_menu() {
-  local input normalized
+  local input normalized snap_dir
   while true; do
     title
     echo "5) Network > Adblock > Add URL Source"
@@ -2225,20 +2615,36 @@ ssh_dns_adblock_url_add_menu() {
       pause
       continue
     fi
+    snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-url-add.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-url-add.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    snapshot_file_capture "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
+      warn "Gagal membuat snapshot URL source sebelum update."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      continue
+    }
     printf '%s\n' "${normalized}" >> "${SSH_DNS_ADBLOCK_URLS_FILE}"
     if adblock_mark_dirty; then
       log "URL source Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
-    else
-      warn "URL ditambahkan, tetapi status dirty gagal ditandai."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      return 0
     fi
+    if snapshot_file_restore "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
+      warn "URL ditambahkan, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
+    else
+      warn "URL ditambahkan, status dirty gagal ditandai, dan rollback snapshot URL juga gagal."
+    fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     pause
-    return 0
+    return 1
   done
 }
 
 ssh_dns_adblock_url_delete_menu() {
   local -a urls=()
-  local line choice idx tmp i
+  local line choice idx tmp i snap_dir
   while true; do
     title
     echo "5) Network > Adblock > Delete URL Source"
@@ -2288,15 +2694,32 @@ ssh_dns_adblock_url_delete_menu() {
       printf '%s\n' "${urls[$i]}" >> "${tmp}"
     done
     mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+    snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-url-del.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-url-del.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    snapshot_file_capture "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      warn "Gagal membuat snapshot URL source sebelum delete."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      continue
+    }
     mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}"
     chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
     if adblock_mark_dirty; then
       log "URL source Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
-    else
-      warn "URL dihapus, tetapi status dirty gagal ditandai."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      pause
+      return 0
     fi
+    if snapshot_file_restore "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
+      warn "URL dihapus, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
+    else
+      warn "URL dihapus, status dirty gagal ditandai, dan rollback snapshot URL juga gagal."
+    fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     pause
-    return 0
+    return 1
   done
 }
 
@@ -2472,31 +2895,9 @@ warp_user_set_effective_mode() {
     return 0
   fi
 
-  local in_warp="no"
-  local in_direct="no"
-  if xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null | grep -Fxq "${email}"; then
-    in_warp="yes"
-  fi
-  if xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null | grep -Fxq "${email}"; then
-    in_direct="yes"
-  fi
-
   case "${desired}" in
-    direct)
-      if [[ "${in_warp}" == "yes" ]]; then
-        xray_routing_rule_toggle_user_outbound "dummy-warp-user" "warp" "${email}" off
-      fi
-      if [[ "${in_direct}" != "yes" ]]; then
-        xray_routing_rule_toggle_user_outbound "dummy-direct-user" "direct" "${email}" on
-      fi
-      ;;
-    warp)
-      if [[ "${in_direct}" == "yes" ]]; then
-        xray_routing_rule_toggle_user_outbound "dummy-direct-user" "direct" "${email}" off
-      fi
-      if [[ "${in_warp}" != "yes" ]]; then
-        xray_routing_rule_toggle_user_outbound "dummy-warp-user" "warp" "${email}" on
-      fi
+    direct|warp)
+      xray_routing_rule_set_user_outbound_mode "${email}" "${desired}"
       ;;
     *) warn "Mode user harus direct|warp" ;;
   esac
@@ -2659,16 +3060,20 @@ warp_per_user_menu() {
 
       case "${s}" in
         1)
-          warp_user_set_effective_mode "${email}" direct
-          log "Per-user di-set DIRECT: ${email}"
+          if warp_user_set_effective_mode "${email}" direct; then
+            log "Per-user di-set DIRECT: ${email}"
+            pause
+            break
+          fi
           pause
-          break
           ;;
         2)
-          warp_user_set_effective_mode "${email}" warp
-          log "Per-user di-set WARP: ${email}"
+          if warp_user_set_effective_mode "${email}" warp; then
+            log "Per-user di-set WARP: ${email}"
+            pause
+            break
+          fi
           pause
-          break
           ;;
         *) warn "Pilihan tidak valid" ; sleep 1 ;;
       esac
@@ -2686,31 +3091,9 @@ warp_inbound_set_effective_mode() {
     return 0
   fi
 
-  local in_warp="no"
-  local in_direct="no"
-  if xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null | grep -Fxq "${tag}"; then
-    in_warp="yes"
-  fi
-  if xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null | grep -Fxq "${tag}"; then
-    in_direct="yes"
-  fi
-
   case "${desired}" in
-    direct)
-      if [[ "${in_warp}" == "yes" ]]; then
-        xray_routing_rule_toggle_inbounds_outbound "dummy-warp-inbounds" "warp" "${tag}" off
-      fi
-      if [[ "${in_direct}" != "yes" ]]; then
-        xray_routing_rule_toggle_inbounds_outbound "dummy-direct-inbounds" "direct" "${tag}" on
-      fi
-      ;;
-    warp)
-      if [[ "${in_direct}" == "yes" ]]; then
-        xray_routing_rule_toggle_inbounds_outbound "dummy-direct-inbounds" "direct" "${tag}" off
-      fi
-      if [[ "${in_warp}" != "yes" ]]; then
-        xray_routing_rule_toggle_inbounds_outbound "dummy-warp-inbounds" "warp" "${tag}" on
-      fi
+    direct|warp)
+      xray_routing_rule_set_inbound_outbound_mode "${tag}" "${desired}"
       ;;
     *) warn "Mode inbound harus direct|warp" ;;
   esac
@@ -2837,21 +3220,25 @@ warp_per_inbounds_menu() {
         break
       fi
 
-      case "${s}" in
-        1)
-          warp_inbound_set_effective_mode "${t}" direct
-          log "Per-inbounds di-set DIRECT: ${t}"
-          pause
-          break
-          ;;
-        2)
-          warp_inbound_set_effective_mode "${t}" warp
-          log "Per-inbounds di-set WARP: ${t}"
-          pause
-          break
-          ;;
-        *) warn "Pilihan tidak valid" ; sleep 1 ;;
-      esac
+	      case "${s}" in
+	        1)
+	          if warp_inbound_set_effective_mode "${t}" direct; then
+	            log "Per-inbounds di-set DIRECT: ${t}"
+	            pause
+	            break
+	          fi
+	          pause
+	          ;;
+	        2)
+	          if warp_inbound_set_effective_mode "${t}" warp; then
+	            log "Per-inbounds di-set WARP: ${t}"
+	            pause
+	            break
+	          fi
+	          pause
+	          ;;
+	        *) warn "Pilihan tidak valid" ; sleep 1 ;;
+	      esac
     done
   done
 }
@@ -3068,12 +3455,70 @@ warp_tier_target_effective_get() {
   esac
 }
 
-warp_tier_state_seed_from_live() {
-  local target
+warp_tier_reconnect_target_get() {
+  local live target
+  live="$(warp_live_tier_get)"
+  case "${live}" in
+    free|plus)
+      echo "${live}"
+      return 0
+      ;;
+  esac
   target="$(warp_tier_target_effective_get)"
-  if [[ "${target}" == "free" || "${target}" == "plus" ]]; then
-    network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1 || true
+  case "${target}" in
+    free|plus) echo "${target}" ;;
+    *) echo "free" ;;
+  esac
+}
+
+warp_tier_state_seed_from_live() {
+  # Status view tidak boleh mengubah persistent state.
+  return 0
+}
+
+xray_routing_restart_checked() {
+  if ! systemctl restart xray >/dev/null 2>&1; then
+    return 1
   fi
+  svc_wait_active xray 60
+}
+
+xray_routing_post_speed_sync_or_die() {
+  # args: backup_routing backup_outbounds context
+  local backup_rt="$1"
+  local backup_out="$2"
+  local context="$3"
+  local rollback_notes=()
+  local need_sync="false"
+
+  if speed_policy_has_entries; then
+    need_sync="true"
+  elif speed_policy_artifacts_present_in_xray; then
+    need_sync="true"
+  fi
+  if [[ "${need_sync}" != "true" ]]; then
+    return 0
+  fi
+
+  if speed_policy_sync_xray && speed_policy_apply_now >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "Sinkronisasi speed policy gagal setelah ${context}. Melakukan rollback..."
+  if [[ -n "${backup_rt}" ]]; then
+    restore_file_if_exists "${backup_rt}" "${XRAY_ROUTING_CONF}" || rollback_notes+=("restore routing gagal")
+  fi
+  if [[ -n "${backup_out}" ]]; then
+    restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}" || rollback_notes+=("restore outbounds gagal")
+  fi
+  if ! xray_routing_restart_checked; then
+    rollback_notes+=("restart xray rollback gagal")
+  fi
+
+  if (( ${#rollback_notes[@]} > 0 )); then
+    die "Sinkronisasi speed policy gagal setelah ${context}; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+  fi
+  die "Sinkronisasi speed policy gagal setelah ${context}; perubahan di-rollback ke state sebelumnya."
 }
 
 warp_wireproxy_socks_block_get() {
@@ -3272,50 +3717,89 @@ warp_tier_switch_free() {
 
   local rc
   (
+    local snap_dir
     flock -x 200
 
     if ! have_cmd wgcf; then
       warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! have_cmd wireproxy; then
       warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
 
     mkdir -p "${WGCF_DIR}"
-    if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]]; then
-      cp -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-account.toml.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-free.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-free.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    if ! warp_runtime_snapshot_capture "${snap_dir}"; then
+      warn "Gagal membuat snapshot WARP sebelum switch free."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
     fi
-    rm -f "${WGCF_DIR}/wgcf-account.toml" "${WGCF_DIR}/wgcf-profile.conf" 2>/dev/null || true
+    if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]] && ! rm -f "${WGCF_DIR}/wgcf-account.toml"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      warn "Gagal membersihkan wgcf-account.toml lama."
+      hr
+      pause
+      exit 1
+    fi
+    if [[ -f "${WGCF_DIR}/wgcf-profile.conf" ]] && ! rm -f "${WGCF_DIR}/wgcf-profile.conf"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      warn "Gagal membersihkan wgcf-profile.conf lama."
+      hr
+      pause
+      exit 1
+    fi
 
     if ! warp_wgcf_register_noninteractive; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! warp_wgcf_build_profile free; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
 
-    network_state_set_many "${WARP_TIER_STATE_KEY}" "free"
-    log "WARP tier target di-set: free"
-    if svc_exists wireproxy; then
-      svc_restart wireproxy || true
-    else
-      warn "wireproxy.service tidak terdeteksi"
+    if ! warp_wireproxy_restart_checked; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
     fi
+    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback state WARP free gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      warn "Gagal menyimpan target tier WARP free."
+      hr
+      pause
+      exit 1
+    fi
+    log "WARP tier target di-set: free"
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     hr
     warp_tier_show_status
     hr
@@ -3332,20 +3816,20 @@ warp_tier_switch_plus() {
   hr
 
   (
-    local saved_key key masked
+    local saved_key key masked snap_dir
     flock -x 200
 
     if ! have_cmd wgcf; then
       warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! have_cmd wireproxy; then
       warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
 
     saved_key="$(warp_plus_license_state_get)"
@@ -3354,14 +3838,14 @@ warp_tier_switch_plus() {
       echo "License tersimpan: ${masked}"
       read -r -p "Input WARP+ License Key (Enter=pakai tersimpan, atau kembali): " key
       if is_back_choice "${key}"; then
-        return 0
+        exit 0
       fi
       key="$(echo "${key}" | tr -d '[:space:]')"
       [[ -n "${key}" ]] || key="${saved_key}"
     else
       read -r -p "Input WARP+ License Key (atau kembali): " key
       if is_back_choice "${key}"; then
-        return 0
+        exit 0
       fi
       key="$(echo "${key}" | tr -d '[:space:]')"
     fi
@@ -3370,29 +3854,54 @@ warp_tier_switch_plus() {
       warn "License key WARP+ kosong"
       hr
       pause
-      return 0
+      exit 1
+    fi
+
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-plus.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-plus.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    if ! warp_runtime_snapshot_capture "${snap_dir}"; then
+      warn "Gagal membuat snapshot WARP sebelum switch plus."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
     fi
 
     if ! warp_wgcf_build_profile plus "${key}"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
 
-    network_state_set_many \
-      "${WARP_TIER_STATE_KEY}" "plus" \
-      "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"
-    log "WARP tier target di-set: plus"
-    if svc_exists wireproxy; then
-      svc_restart wireproxy || true
-    else
-      warn "wireproxy.service tidak terdeteksi"
+    if ! warp_wireproxy_restart_checked; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback WARP plus gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
     fi
+    if ! network_state_set_many \
+      "${WARP_TIER_STATE_KEY}" "plus" \
+      "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback state WARP plus gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      warn "Gagal menyimpan target tier WARP plus."
+      hr
+      pause
+      exit 1
+    fi
+    log "WARP tier target di-set: plus"
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     hr
     warp_tier_show_status
     hr
@@ -3409,61 +3918,88 @@ warp_tier_reconnect_regenerate() {
   hr
 
   (
-    local target key
+    local target key snap_dir
     flock -x 200
 
     if ! have_cmd wgcf; then
       warn "wgcf tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
     if ! have_cmd wireproxy; then
       warn "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
       hr
       pause
-      return 0
+      exit 1
     fi
 
-    target="$(warp_tier_target_effective_get)"
+    target="$(warp_tier_reconnect_target_get)"
     if [[ "${target}" != "free" && "${target}" != "plus" ]]; then
       target="free"
     fi
-    network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1 || true
+
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-reconnect.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-reconnect.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    if ! warp_runtime_snapshot_capture "${snap_dir}"; then
+      warn "Gagal membuat snapshot WARP sebelum reconnect."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
+    fi
+    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1; then
+      warn "Gagal menyimpan target tier WARP sebelum reconnect."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
+    fi
 
     if [[ "${target}" == "plus" ]]; then
       key="$(warp_plus_license_state_get)"
       key="$(echo "${key}" | tr -d '[:space:]')"
       if [[ -z "${key}" ]]; then
         warn "Target plus aktif, tapi license key kosong. Gunakan menu Switch ke WARP Plus dulu."
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
         hr
         pause
-        return 0
+        exit 1
       fi
       if ! warp_wgcf_build_profile plus "${key}"; then
+        warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
         hr
         pause
-        return 0
+        exit 1
       fi
     else
       if ! warp_wgcf_build_profile free; then
+        warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
         hr
         pause
-        return 0
+        exit 1
       fi
     fi
 
     if ! warp_wireproxy_apply_profile "${WGCF_DIR}/wgcf-profile.conf"; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
-      return 0
+      exit 1
     fi
 
-    if svc_exists wireproxy; then
-      svc_restart wireproxy || true
-    else
-      warn "wireproxy.service tidak terdeteksi"
+    if ! warp_wireproxy_restart_checked; then
+      warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 || warn "Rollback reconnect WARP gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
     fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     log "Reconnect/regenerate selesai untuk target tier: ${target}"
     hr
     warp_tier_show_status
@@ -3497,9 +4033,21 @@ warp_tier_menu() {
         hr
         pause
         ;;
-      2) warp_tier_switch_free ;;
-      3) warp_tier_switch_plus ;;
-      4) warp_tier_reconnect_regenerate ;;
+      2)
+        if ! warp_tier_switch_free; then
+          :
+        fi
+        ;;
+      3)
+        if ! warp_tier_switch_plus; then
+          :
+        fi
+        ;;
+      4)
+        if ! warp_tier_reconnect_regenerate; then
+          :
+        fi
+        ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
@@ -3940,8 +4488,7 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -4023,8 +4570,7 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -4091,8 +4637,7 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -4153,8 +4698,7 @@ PY
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       exit 1
     }
-    svc_restart xray || true
-    if ! svc_wait_active xray 60; then
+    if ! xray_routing_restart_checked; then
       restore_file_if_exists "${backup}" "${XRAY_DNS_CONF}"
       systemctl restart xray || true
       exit 86
@@ -4292,12 +4836,31 @@ dns_addons_menu() {
     case "${c}" in
       1)
         if have_cmd nano; then
-          nano "${XRAY_DNS_CONF}"
-          svc_restart xray || true
-          if ! svc_wait_active xray 60; then
-            warn "xray tidak aktif setelah edit manual DNS config."
-            systemctl status xray --no-pager 2>/dev/null || true
+          local snap_dir
+          snap_dir="$(mktemp -d "${WORK_DIR}/.dns-editor.XXXXXX" 2>/dev/null || true)"
+          [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.dns-editor.$$"
+          mkdir -p "${snap_dir}" "$(dirname "${XRAY_DNS_CONF}")" 2>/dev/null || true
+          if ! snapshot_file_capture "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf"; then
+            warn "Gagal membuat snapshot DNS config sebelum edit."
+            rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+            pause
+            continue
           fi
+
+          nano "${XRAY_DNS_CONF}"
+          if ! xray_confdir_syntax_test; then
+            snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1 || true
+            svc_restart xray >/dev/null 2>&1 || true
+            warn "Konfigurasi DNS invalid setelah edit manual. File dikembalikan ke snapshot sebelumnya."
+          elif ! svc_restart xray || ! svc_wait_active xray 60; then
+            snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1 || true
+            systemctl restart xray >/dev/null 2>&1 || true
+            warn "xray tidak aktif setelah edit manual DNS config. File dikembalikan ke snapshot sebelumnya."
+            systemctl status xray --no-pager 2>/dev/null || true
+          else
+            log "DNS config berhasil diperbarui lewat editor manual."
+          fi
+          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
           pause
         else
           warn "nano tidak tersedia"
