@@ -84,7 +84,7 @@ resolve_backend_base_url() {
   printf '%s\n' "${raw_base:-http://127.0.0.1:${default_port}}"
 }
 
-BACKEND_BASE_URL="$(resolve_backend_base_url 8081)"
+BACKEND_BASE_URL="$(resolve_backend_base_url 7081)"
 
 if [[ -z "${SECRET}" ]]; then
   echo "[smoke] INTERNAL_SHARED_SECRET belum diset" >&2

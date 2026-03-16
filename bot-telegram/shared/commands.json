@@ -847,28 +847,31 @@
           "dangerous": true
         },
         {
-          "id": "list_users",
-          "label": "View User List",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "search_user",
-          "label": "Search User",
+          "id": "reset_credential",
+          "label": "Reset UUID/Password",
           "mode": "modal",
           "style": "secondary",
+          "confirm": true,
           "modal": {
-            "title": "Search User",
+            "title": "Reset Xray UUID/Password",
             "fields": [
               {
-                "id": "query",
-                "label": "Username Query",
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
                 "style": "short",
                 "required": true,
                 "placeholder": "contoh: alice"
               }
             ]
-          }
+          },
+          "dangerous": true
         },
         {
           "id": "account_info",
@@ -888,6 +891,30 @@
               {
                 "id": "username",
                 "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "list_users",
+          "label": "View User List",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "search_user",
+          "label": "Search User",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Search User",
+            "fields": [
+              {
+                "id": "query",
+                "label": "Username Query",
                 "style": "short",
                 "required": true,
                 "placeholder": "contoh: alice"

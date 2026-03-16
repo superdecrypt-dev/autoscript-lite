@@ -45,7 +45,7 @@ cp .env.example .env
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r backend-py/requirements.lock.txt
-uvicorn backend-py.app.main:app --host 127.0.0.1 --port 8080 --reload
+uvicorn backend-py.app.main:app --host 127.0.0.1 --port 7080 --reload
 
 # Gateway (terminal lain)
 cd gateway-ts

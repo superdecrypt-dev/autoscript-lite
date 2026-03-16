@@ -151,7 +151,7 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         token=_require_env("TELEGRAM_BOT_TOKEN"),
-        backend_base_url=_resolve_backend_base_url(8081),
+        backend_base_url=_resolve_backend_base_url(7081),
         shared_secret=_require_env("INTERNAL_SHARED_SECRET"),
         commands_file=(os.getenv("COMMANDS_FILE") or _default_commands_file()).strip(),
         admin_chat_ids=admin_chat_ids,

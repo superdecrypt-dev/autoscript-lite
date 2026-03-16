@@ -226,7 +226,7 @@ def resolve_backend_base_url(default_port: int) -> str:
         return derived
     return raw_base or f"http://127.0.0.1:{default_port}"
 
-BASE=resolve_backend_base_url(8080)
+BASE=resolve_backend_base_url(7080)
 
 def get(path, headers=None):
     req=urllib.request.Request(BASE+path, headers=headers or {}, method="GET")
@@ -322,7 +322,7 @@ def resolve_backend_base_url(default_port: int) -> str:
         return derived
     return raw_base or f"http://127.0.0.1:{default_port}"
 
-BASE=resolve_backend_base_url(8080)
+BASE=resolve_backend_base_url(7080)
 
 def request(method, path, payload=None, auth=True):
     headers={"Content-Type":"application/json"}
@@ -442,7 +442,7 @@ def resolve_backend_base_url(default_port: int) -> str:
         return derived
     return raw_base or f"http://127.0.0.1:{default_port}"
 
-BASE=resolve_backend_base_url(8080)
+BASE=resolve_backend_base_url(7080)
 cases=[
   ("status","overview",{}),
   ("status","tls",{}),

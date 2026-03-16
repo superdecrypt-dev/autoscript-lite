@@ -322,7 +322,10 @@ speed_policy_resync_after_warp_change() {
     return 1
   fi
 
-  speed_policy_apply_now >/dev/null 2>&1 || true
+  if ! speed_policy_apply_now >/dev/null 2>&1; then
+    warn "Perubahan WARP global tersimpan, tetapi apply runtime speed policy gagal."
+    return 1
+  fi
   return 0
 }
 
@@ -2089,7 +2092,10 @@ domain_control_apply_nginx_domain() {
   fi
 
   if ! sync_xray_domain_file "${applied_domain}"; then
-    warn "Compat domain file belum berhasil disinkronkan ke ${XRAY_DOMAIN_FILE}."
+    warn "Compat domain file gagal disinkronkan, rollback ke backup nginx."
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || true
+    systemctl restart nginx >/dev/null 2>&1 || true
+    die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"
@@ -2117,7 +2123,7 @@ domain_control_set_domain_now() {
     hr
     rm -f "${spin_log}" >/dev/null 2>&1 || true
     pause
-    return 0
+    return 1
   fi
   rm -f "${spin_log}" >/dev/null 2>&1 || true
   MAIN_INFO_CACHE_TS=0
@@ -2128,27 +2134,58 @@ domain_control_set_domain_now() {
 
 domain_control_set_domain_after_prompt() {
   local cert_backup_dir
+  local nginx_conf_backup
+  local previous_domain
+  local rollback_notes=()
   cert_backup_dir="${WORK_DIR}/cert-snapshot.$(date +%s).$$"
+  nginx_conf_backup="${WORK_DIR}/xray.conf.pre-domain-change.$(date +%s).$$"
+  previous_domain="$(detect_domain 2>/dev/null | awk '{print $1}' | tr -d ';' || true)"
   cert_snapshot_create "${cert_backup_dir}"
+  cp -a "${NGINX_CONF}" "${nginx_conf_backup}" || die "Gagal membuat backup nginx sebelum set domain."
 
   install_acme_and_issue_cert
   if ! ( domain_control_apply_nginx_domain "${DOMAIN}" ); then
     warn "Apply domain ke nginx gagal. Mengembalikan sertifikat sebelumnya..."
     cert_snapshot_restore "${cert_backup_dir}"
     systemctl restart nginx >/dev/null 2>&1 || true
+    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
     rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     die "Set domain dibatalkan karena update nginx gagal; sertifikat dipulihkan."
   fi
-  rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
   MAIN_INFO_CACHE_TS=0
 
   if account_refresh_all_info_files "${DOMAIN}" "$(detect_public_ip_ipapi)"; then
     log "ACCOUNT INFO berhasil disinkronkan ke domain baru."
     account_info_domain_sync_state_write "${DOMAIN}"
   else
-    warn "Sebagian ACCOUNT INFO gagal disinkronkan. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
-    warn "State sinkronisasi domain tidak diubah agar auto-sync bisa retry."
+    warn "ACCOUNT INFO gagal disinkronkan penuh. Mengembalikan domain sebelumnya..."
+    if [[ -f "${nginx_conf_backup}" ]]; then
+      if ! cp -a "${nginx_conf_backup}" "${NGINX_CONF}" >/dev/null 2>&1; then
+        rollback_notes+=("restore nginx conf gagal")
+      fi
+    else
+      rollback_notes+=("backup nginx conf tidak tersedia")
+    fi
+    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
+    systemctl restart nginx >/dev/null 2>&1 || rollback_notes+=("restart nginx rollback gagal")
+    if [[ -n "${previous_domain}" && "${previous_domain}" == *.* ]]; then
+      sync_xray_domain_file "${previous_domain}" >/dev/null 2>&1 || rollback_notes+=("sinkron domain kompatibilitas rollback gagal")
+      if ! account_refresh_all_info_files "${previous_domain}" "$(detect_public_ip_ipapi)"; then
+        rollback_notes+=("refresh ACCOUNT INFO rollback gagal")
+      fi
+      account_info_domain_sync_state_write "${previous_domain}"
+    else
+      rollback_notes+=("domain sebelumnya tidak valid untuk rollback")
+    fi
+    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      die "Set domain dibatalkan karena sinkronisasi ACCOUNT INFO gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    fi
+    die "Set domain dibatalkan karena sinkronisasi ACCOUNT INFO gagal; domain sebelumnya berhasil dipulihkan."
   fi
+  rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
+  rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
 }
 
 domain_control_show_info() {
@@ -2723,9 +2760,10 @@ svc_restart() {
 svc_restart_if_exists() {
   local svc="$1"
   if systemctl cat "${svc}" >/dev/null 2>&1; then
-    systemctl restart "${svc}" >/dev/null 2>&1 || true
-    svc_wait_active "${svc}" 20 >/dev/null 2>&1 || true
-    return 0
+    if svc_restart_now "${svc}" >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
   fi
   return 1
 }
@@ -4195,6 +4233,23 @@ speed_policy_remove() {
   ) 200>"${SPEED_POLICY_LOCK_FILE}"
 }
 
+speed_policy_remove_checked() {
+  # args: proto username
+  local proto="$1"
+  local username="$2"
+  local f
+  f="$(speed_policy_file_path "${proto}" "${username}")"
+  speed_policy_lock_prepare
+  (
+    flock -x 200
+    if [[ ! -f "${f}" ]]; then
+      exit 0
+    fi
+    rm -f "${f}" || exit 1
+    [[ ! -e "${f}" ]]
+  ) 200>"${SPEED_POLICY_LOCK_FILE}"
+}
+
 speed_policy_upsert() {
   # args: proto username down_mbit up_mbit
   local proto="$1"
@@ -4658,14 +4713,29 @@ rollback_new_user_after_create_failure() {
   local proto="$1"
   local username="$2"
   local reason="${3:-operasi create gagal}"
-  local email="${username}@${proto}"
+  local email="${username}@${proto}" failed=0
 
   warn "Rollback akun ${email}: ${reason}."
-  speed_policy_remove "${proto}" "${username}"
-  speed_policy_sync_xray >/dev/null 2>&1 || true
-  speed_policy_apply_now >/dev/null 2>&1 || true
-  xray_delete_client "${proto}" "${username}" >/dev/null 2>&1 || true
-  delete_account_artifacts "${proto}" "${username}" >/dev/null 2>&1 || true
+  if ! xray_delete_client_try "${proto}" "${username}"; then
+    warn "Rollback inbounds gagal untuk ${email}"
+    failed=1
+  fi
+  if ! delete_account_artifacts_checked "${proto}" "${username}"; then
+    warn "Rollback artefak lokal gagal untuk ${email}"
+    failed=1
+  fi
+  if ! speed_policy_remove_checked "${proto}" "${username}"; then
+    warn "Rollback cleanup speed policy file gagal untuk ${email}"
+    failed=1
+  fi
+  if ! speed_policy_sync_xray_try; then
+    warn "Rollback sinkronisasi speed policy gagal untuk ${email}"
+    failed=1
+  elif ! speed_policy_apply_now >/dev/null 2>&1; then
+    warn "Rollback apply runtime speed policy gagal untuk ${email}"
+    failed=1
+  fi
+  return "${failed}"
 }
 
 rollback_new_user_after_speed_failure() {
@@ -5603,7 +5673,160 @@ delete_account_artifacts() {
   delete_one_file "${quota_file}.lock"
   delete_one_file "${quota_file_compatfmt}"
   delete_one_file "${quota_file_compatfmt}.lock"
-  speed_policy_remove "${proto}" "${username}"
+  speed_policy_remove_checked "${proto}" "${username}" >/dev/null 2>&1 || true
+}
+
+delete_account_artifacts_checked() {
+  # args: protocol username
+  local proto="$1"
+  local username="$2"
+  local failed=0
+  local p=""
+  for p in \
+    "${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt" \
+    "${ACCOUNT_ROOT}/${proto}/${username}.txt" \
+    "${QUOTA_ROOT}/${proto}/${username}@${proto}.json" \
+    "${QUOTA_ROOT}/${proto}/${username}@${proto}.json.lock" \
+    "${QUOTA_ROOT}/${proto}/${username}.json" \
+    "${QUOTA_ROOT}/${proto}/${username}.json.lock"; do
+    if [[ ! -e "${p}" && ! -L "${p}" ]]; then
+      continue
+    fi
+    chmod u+w "${p}" 2>/dev/null || true
+    if ! rm -f "${p}" 2>/dev/null; then
+      warn "Gagal hapus artefak: ${p}"
+      failed=1
+      continue
+    fi
+    if [[ -e "${p}" || -L "${p}" ]]; then
+      warn "Artefak masih ada setelah unlink: ${p}"
+      failed=1
+    fi
+  done
+  if ! speed_policy_remove_checked "${proto}" "${username}"; then
+    warn "Gagal hapus speed policy: ${username}@${proto}"
+    failed=1
+  fi
+  return "${failed}"
+}
+
+speed_policy_sync_xray_try() {
+  ( speed_policy_sync_xray ) >/dev/null 2>&1
+}
+
+xray_delete_client_try() {
+  ( xray_delete_client "$@" ) >/dev/null 2>&1
+}
+
+xray_reset_client_credential_try() {
+  ( xray_reset_client_credential "$@" ) >/dev/null 2>&1
+}
+
+quota_sync_speed_policy_for_user_try() {
+  ( quota_sync_speed_policy_for_user "$@" )
+}
+
+xray_qac_apply_runtime_from_quota() {
+  # args: quota_file proto username email_for_routing restart_limit_ip sync_speed
+  local qf="$1"
+  local proto="$2"
+  local username="$3"
+  local email_for_routing="$4"
+  local restart_limit_ip="${5:-false}"
+  local sync_speed="${6:-false}"
+  local st_quota st_manual st_iplocked
+
+  st_quota="$(quota_get_status_bool "${qf}" "quota_exhausted" 2>/dev/null || echo "false")"
+  st_manual="$(quota_get_status_bool "${qf}" "manual_block" 2>/dev/null || echo "false")"
+  st_iplocked="$(quota_get_status_bool "${qf}" "ip_limit_locked" 2>/dev/null || echo "false")"
+
+  if ! xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" "$( [[ "${st_quota}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1; then
+    echo "routing quota marker gagal"
+    return 1
+  fi
+  if ! xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" "$( [[ "${st_manual}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1; then
+    echo "routing manual-block marker gagal"
+    return 1
+  fi
+  if ! xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" "$( [[ "${st_iplocked}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1; then
+    echo "routing ip-limit marker gagal"
+    return 1
+  fi
+
+  if [[ "${restart_limit_ip}" == "true" ]]; then
+    if ! svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1; then
+      echo "restart service limit-ip gagal"
+      return 1
+    fi
+  fi
+
+  if [[ "${sync_speed}" == "true" ]]; then
+    if ! quota_sync_speed_policy_for_user_try "${proto}" "${username}" "${qf}"; then
+      echo "sinkronisasi speed policy gagal"
+      return 1
+    fi
+  fi
+
+  if ! account_info_refresh_warn "${proto}" "${username}"; then
+    echo "XRAY ACCOUNT INFO belum sinkron"
+    return 1
+  fi
+
+  return 0
+}
+
+xray_qac_atomic_apply() {
+  # args: quota_file proto username email_for_routing restart_limit_ip sync_speed action [action_args...]
+  local qf="$1"
+  local proto="$2"
+  local username="$3"
+  local email_for_routing="$4"
+  local restart_limit_ip="${5:-false}"
+  local sync_speed="${6:-false}"
+  local action="$7"
+  shift 7 || true
+
+  local backup_file
+  backup_file="$(mktemp "${WORK_DIR}/.quota-qac.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${backup_file}" ]]; then
+    echo "gagal membuat backup quota"
+    return 1
+  fi
+  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
+    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+    echo "gagal backup quota"
+    return 1
+  fi
+
+  if ! quota_atomic_update_file "${qf}" "${action}" "$@"; then
+    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+    echo "gagal update metadata quota"
+    return 1
+  fi
+
+  local apply_msg=""
+  if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
+    local -a rollback_notes=()
+    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+      rollback_notes+=("rollback quota gagal")
+    else
+      chmod 600 "${qf}" 2>/dev/null || true
+      local rollback_apply_msg=""
+      if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
+        rollback_notes+=("rollback runtime gagal: ${rollback_apply_msg}")
+      fi
+    fi
+    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      echo "${apply_msg}. Rollback: ${rollback_notes[*]}"
+    else
+      echo "${apply_msg}. State di-rollback."
+    fi
+    return 1
+  fi
+
+  rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+  return 0
 }
 
 
@@ -5841,7 +6064,9 @@ PY
   xray_add_client "${proto}" "${username}" "${cred}"
   if ! write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"; then
     warn "Akun ${username}@${proto} dibatalkan: gagal menulis metadata akun/quota."
-    rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menulis metadata akun/quota"
+    if ! rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menulis metadata akun/quota"; then
+      warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+    fi
     pause
     return 0
   fi
@@ -5858,7 +6083,9 @@ PY
 
     if [[ -n "${speed_err}" ]]; then
       warn "Akun ${username}@${proto} dibatalkan: ${speed_err}."
-      rollback_new_user_after_create_failure "${proto}" "${username}" "${speed_err}"
+      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "${speed_err}"; then
+        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+      fi
       pause
       return 0
     fi
@@ -5866,10 +6093,31 @@ PY
     log "Speed policy aktif untuk ${username}@${proto} (mark=${speed_mark}, down=${speed_down_mbit}Mbps, up=${speed_up_mbit}Mbps)"
   else
     if speed_policy_exists "${proto}" "${username}"; then
-      speed_policy_remove "${proto}" "${username}"
-      speed_policy_sync_xray >/dev/null 2>&1 || true
+      if ! speed_policy_remove_checked "${proto}" "${username}"; then
+        warn "Akun ${username}@${proto} dibatalkan: gagal membersihkan speed policy lama."
+        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "cleanup speed policy lama gagal"; then
+          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+        fi
+        pause
+        return 0
+      fi
+      if ! speed_policy_sync_xray; then
+        warn "Akun ${username}@${proto} dibatalkan: sinkronisasi speed policy lama gagal."
+        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "sinkronisasi speed policy lama gagal"; then
+          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+        fi
+        pause
+        return 0
+      fi
     fi
-    speed_policy_apply_now >/dev/null 2>&1 || true
+    if ! speed_policy_apply_now >/dev/null 2>&1; then
+      warn "Akun ${username}@${proto} dibatalkan: apply runtime speed policy gagal."
+      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "apply runtime speed policy gagal"; then
+        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+      fi
+      pause
+      return 0
+    fi
   fi
 
   title
@@ -6018,22 +6266,131 @@ user_del_menu() {
   done
 
   hr
-  local speed_sync_ok="true"
+  local partial_failure="false"
+  local rollback_restored="false"
+  local rollback_notes=()
+  local previous_cred="" speed_policy_file="" rollback_tmpdir="" rollback_account_backup="" rollback_quota_backup="" rollback_speed_backup="" rollback_account_compat_backup="" rollback_quota_compat_backup=""
+  local canonical_account_file compat_account_file canonical_quota_file compat_quota_file
+
+  if proto_uses_password "${proto}"; then
+    previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
+  else
+    previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
+  fi
+  speed_policy_file="$(speed_policy_file_path "${proto}" "${username}")"
+  canonical_account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  compat_account_file="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  canonical_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+  compat_quota_file="${QUOTA_ROOT}/${proto}/${username}.json"
+  rollback_tmpdir="$(mktemp -d 2>/dev/null || true)"
+  if [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]]; then
+    rollback_account_backup="${rollback_tmpdir}/account.txt"
+    rollback_quota_backup="${rollback_tmpdir}/quota.json"
+    rollback_speed_backup="${rollback_tmpdir}/speed.json"
+    rollback_account_compat_backup="${rollback_tmpdir}/account.compat.txt"
+    rollback_quota_compat_backup="${rollback_tmpdir}/quota.compat.json"
+    [[ -f "${canonical_account_file}" ]] && cp -f "${canonical_account_file}" "${rollback_account_backup}" 2>/dev/null || true
+    [[ -f "${compat_account_file}" ]] && cp -f "${compat_account_file}" "${rollback_account_compat_backup}" 2>/dev/null || true
+    [[ -f "${canonical_quota_file}" ]] && cp -f "${canonical_quota_file}" "${rollback_quota_backup}" 2>/dev/null || true
+    [[ -f "${compat_quota_file}" ]] && cp -f "${compat_quota_file}" "${rollback_quota_compat_backup}" 2>/dev/null || true
+    [[ -f "${speed_policy_file}" ]] && cp -f "${speed_policy_file}" "${rollback_speed_backup}" 2>/dev/null || true
+  fi
 
   xray_delete_client "${proto}" "${username}"
-  delete_account_artifacts "${proto}" "${username}"
-  if ! speed_policy_sync_xray; then
-    speed_sync_ok="false"
-    warn "Delete user selesai, tetapi sinkronisasi speed policy gagal (cek log xray / konfigurasi routing)."
+  if ! delete_account_artifacts_checked "${proto}" "${username}"; then
+    partial_failure="true"
+    warn "Delete user selesai parsial: cleanup artefak lokal gagal."
   fi
-  speed_policy_apply_now >/dev/null 2>&1 || true
+  if ! speed_policy_sync_xray_try; then
+    partial_failure="true"
+    warn "Delete user selesai parsial: sinkronisasi speed policy gagal."
+  elif ! speed_policy_apply_now >/dev/null 2>&1; then
+    partial_failure="true"
+    warn "Delete user selesai parsial: apply runtime speed policy gagal."
+  fi
+
+  if [[ "${partial_failure}" == "true" ]]; then
+    if [[ -n "${previous_cred}" ]]; then
+      if ! xray_add_client "${proto}" "${username}" "${previous_cred}" >/dev/null 2>&1; then
+        rollback_notes+=("restore inbounds gagal")
+      fi
+    else
+      rollback_notes+=("credential lama tidak tersedia")
+    fi
+
+    if [[ -n "${rollback_quota_backup}" && -f "${rollback_quota_backup}" ]]; then
+      if ! cp -f "${rollback_quota_backup}" "${canonical_quota_file}" 2>/dev/null; then
+        rollback_notes+=("restore quota gagal")
+      else
+        chmod 600 "${canonical_quota_file}" 2>/dev/null || true
+      fi
+    fi
+    if [[ -n "${rollback_quota_compat_backup}" && -f "${rollback_quota_compat_backup}" ]]; then
+      if ! cp -f "${rollback_quota_compat_backup}" "${compat_quota_file}" 2>/dev/null; then
+        rollback_notes+=("restore quota compat gagal")
+      else
+        chmod 600 "${compat_quota_file}" 2>/dev/null || true
+      fi
+    fi
+    if [[ -n "${rollback_account_backup}" && -f "${rollback_account_backup}" ]]; then
+      if ! cp -f "${rollback_account_backup}" "${canonical_account_file}" 2>/dev/null; then
+        rollback_notes+=("restore account info gagal")
+      else
+        chmod 600 "${canonical_account_file}" 2>/dev/null || true
+      fi
+    fi
+    if [[ -n "${rollback_account_compat_backup}" && -f "${rollback_account_compat_backup}" ]]; then
+      if ! cp -f "${rollback_account_compat_backup}" "${compat_account_file}" 2>/dev/null; then
+        rollback_notes+=("restore account info compat gagal")
+      else
+        chmod 600 "${compat_account_file}" 2>/dev/null || true
+      fi
+    fi
+    if [[ -n "${rollback_speed_backup}" && -f "${rollback_speed_backup}" ]]; then
+      mkdir -p "$(dirname "${speed_policy_file}")" 2>/dev/null || true
+      if ! cp -f "${rollback_speed_backup}" "${speed_policy_file}" 2>/dev/null; then
+        rollback_notes+=("restore speed policy gagal")
+      else
+        chmod 600 "${speed_policy_file}" 2>/dev/null || true
+      fi
+    fi
+
+    if [[ -f "${canonical_quota_file}" ]]; then
+      local st_quota st_manual st_iplocked
+      st_quota="$(quota_get_status_bool "${canonical_quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
+      st_manual="$(quota_get_status_bool "${canonical_quota_file}" "manual_block" 2>/dev/null || echo "false")"
+      st_iplocked="$(quota_get_status_bool "${canonical_quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
+      xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" "$( [[ "${st_quota}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing quota gagal")
+      xray_routing_set_user_in_marker "dummy-block-user" "${username}@${proto}" "$( [[ "${st_manual}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing manual gagal")
+      xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" "$( [[ "${st_iplocked}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing ip-limit gagal")
+      if ! quota_sync_speed_policy_for_user "${proto}" "${username}" "${canonical_quota_file}" >/dev/null 2>&1; then
+        rollback_notes+=("restore speed policy runtime gagal")
+      fi
+      if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+        rollback_notes+=("refresh account info rollback gagal")
+      fi
+    fi
+
+    if (( ${#rollback_notes[@]} == 0 )); then
+      rollback_restored="true"
+      partial_failure="false"
+    fi
+  fi
+
+  [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]] && rm -rf "${rollback_tmpdir}" 2>/dev/null || true
 
   title
-  if [[ "${speed_sync_ok}" == "true" ]]; then
-    echo "Delete user selesai ✅"
+  if [[ "${rollback_restored}" == "true" ]]; then
+    echo "Delete user dibatalkan ⚠"
+    echo "Cleanup akhir gagal, tetapi rollback berhasil memulihkan akun."
+  elif [[ "${partial_failure}" == "true" ]]; then
+    echo "Delete user selesai parsial ⚠"
+    echo "Perubahan utama sudah diterapkan, tetapi cleanup/sinkronisasi lanjutan belum bersih."
+    if (( ${#rollback_notes[@]} > 0 )); then
+      printf 'Rollback gagal: %s\n' "$(IFS=' | '; echo "${rollback_notes[*]}")"
+    fi
   else
-    echo "Delete user selesai dengan peringatan ⚠"
-    echo "Perubahan akun sudah diterapkan, namun sinkronisasi speed policy gagal."
+    echo "Delete user selesai ✅"
   fi
   hr
   pause
@@ -6272,8 +6629,6 @@ PY
     return 0
   fi
 
-  account_info_refresh_warn "${proto}" "${username}" || true
-
   # Re-add user ke xray inbounds jika sudah dihapus oleh xray-expired daemon
   # BUG-09 fix: fetch existing_protos immediately before attempting re-add to reduce
   # the race window with xray-expired daemon (which runs every 2 seconds).
@@ -6282,6 +6637,8 @@ PY
   local existing_protos
   existing_protos="$(xray_username_find_protos "${username}" 2>/dev/null || true)"
   if ! echo " ${existing_protos} " | grep -q " ${proto} "; then
+    local restore_failed="false"
+    local restore_reason=""
     # User tidak ada di inbounds - baca credential dari account txt lalu re-add
     if [[ -f "${acc_file}" ]]; then
       local cred=""
@@ -6294,13 +6651,23 @@ PY
         if xray_add_client "${proto}" "${username}" "${cred}" 2>/dev/null; then
           log "User ${username}@${proto} di-restore ke inbounds (expired lalu di-extend)."
         else
-          warn "Gagal me-restore ${username}@${proto} ke inbounds. Cek credential di: ${acc_file}"
+          restore_failed="true"
+          restore_reason="Gagal me-restore ${username}@${proto} ke inbounds. Cek credential di: ${acc_file}"
         fi
       else
-        warn "Credential tidak ditemukan di ${acc_file}. Re-add user manual jika diperlukan."
+        restore_failed="true"
+        restore_reason="Credential tidak ditemukan di ${acc_file}. Re-add user manual jika diperlukan."
       fi
     else
-      warn "Account file tidak ada: ${acc_file}. User mungkin perlu di-add ulang secara manual."
+      restore_failed="true"
+      restore_reason="Account file tidak ada: ${acc_file}. User mungkin perlu di-add ulang secara manual."
+    fi
+
+    if [[ "${restore_failed}" == "true" ]]; then
+      quota_atomic_update_file "${quota_file}" set_expired_at "${current_expiry}" >/dev/null 2>&1 || true
+      warn "${restore_reason}"
+      pause
+      return 0
     fi
   fi
 
@@ -6338,6 +6705,12 @@ PY
   if [[ "${st_iplocked}" == "true" ]]; then
     xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" on
     log "IP limit routing di-restore setelah extend expiry (ip_limit_locked=true)."
+  fi
+
+  if ! account_info_refresh_warn "${proto}" "${username}"; then
+    warn "Expiry berubah, tetapi XRAY ACCOUNT INFO belum sinkron."
+    pause
+    return 0
   fi
 
   title
@@ -6469,7 +6842,18 @@ user_reset_credential_menu() {
     fi
   done
 
-  local new_cred label
+  local previous_cred="" new_cred label
+  if proto_uses_password "${proto}"; then
+    previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
+  else
+    previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
+  fi
+  if [[ -z "${previous_cred}" ]]; then
+    warn "Credential lama tidak ditemukan di ${selected_file}"
+    pause
+    return 0
+  fi
+
   if proto_uses_password "${proto}"; then
     new_cred="$(python3 - <<'PY'
 import secrets
@@ -6484,9 +6868,15 @@ PY
 
   xray_reset_client_credential "${proto}" "${username}" "${new_cred}"
 
-  local refresh_ok="true"
   if ! account_info_refresh_warn "${proto}" "${username}"; then
-    refresh_ok="false"
+    if xray_reset_client_credential_try "${proto}" "${username}" "${previous_cred}"; then
+      account_info_refresh_warn "${proto}" "${username}" || true
+      warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan."
+    else
+      warn "Reset ${label,,} gagal dan rollback credential juga gagal."
+    fi
+    pause
+    return 0
   fi
 
   title
@@ -6494,9 +6884,6 @@ PY
   hr
   echo "User         : ${username}@${proto}"
   echo "${label} : ${new_cred}"
-  if [[ "${refresh_ok}" != "true" ]]; then
-    echo "Warning      : XRAY ACCOUNT INFO belum sinkron"
-  fi
   local account_file
   account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   hr
@@ -7047,13 +7434,24 @@ quota_sync_speed_policy_for_user() {
   fi
 
   if speed_policy_exists "${proto}" "${username}"; then
-    speed_policy_remove "${proto}" "${username}"
+    if ! speed_policy_remove_checked "${proto}" "${username}"; then
+      warn "Speed limit dinonaktifkan, tetapi file speed policy gagal dihapus"
+      return 1
+    fi
     if ! speed_policy_sync_xray; then
       warn "Speed limit dinonaktifkan, tetapi sinkronisasi speed policy ke xray gagal"
       return 1
     fi
+    if ! speed_policy_apply_now; then
+      warn "Speed limit dinonaktifkan, tetapi apply runtime gagal (cek service xray-speed)"
+      return 1
+    fi
+    return 0
   fi
-  speed_policy_apply_now >/dev/null 2>&1 || true
+  if ! speed_policy_apply_now; then
+    warn "Speed policy runtime gagal di-refresh (cek service xray-speed)"
+    return 1
+  fi
   return 0
 }
 
@@ -7496,24 +7894,24 @@ quota_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
-        if ! quota_atomic_update_file "${qf}" set_quota_limit_recompute "${qb}"; then
-          warn "Gagal update quota limit."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false set_quota_limit_recompute "${qb}")"; then
+          warn "Quota limit gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         log "Quota limit diubah: ${gb_num} GB"
         pause
         ;;
       3)
         # BUG-06 fix: read mb/il BEFORE resetting qe so lock_reason is computed correctly.
         # BUG-05 fix: correct priority quota > ip_limit.
-        if ! quota_atomic_update_file "${qf}" reset_quota_used_recompute; then
-          warn "Gagal reset quota used."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false reset_quota_used_recompute)"; then
+          warn "Reset quota gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        xray_routing_set_user_in_marker "dummy-quota-user" "${email_for_routing}" off
         log "Quota used di-reset: 0 (status quota dibersihkan)"
         pause
         ;;
@@ -7525,20 +7923,20 @@ quota_edit_flow() {
           # Previously mb was read AFTER being set to False, so it was always False
           # and lock_reason could never be 'manual' in this branch.
           # BUG-05 fix applied here too: correct priority is quota > ip_limit (not reversed).
-          if ! quota_atomic_update_file "${qf}" manual_block_set off; then
-            warn "Gagal menonaktifkan manual block."
+          local apply_msg=""
+          if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false manual_block_set off)"; then
+            warn "Manual block OFF gagal diterapkan: ${apply_msg}"
             pause
             continue
           fi
-          xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" off
           log "Manual block: OFF"
         else
-          if ! quota_atomic_update_file "${qf}" manual_block_set on; then
-            warn "Gagal mengaktifkan manual block."
+          local apply_msg=""
+          if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false manual_block_set on)"; then
+            warn "Manual block ON gagal diterapkan: ${apply_msg}"
             pause
             continue
           fi
-          xray_routing_set_user_in_marker "dummy-block-user" "${email_for_routing}" on
           log "Manual block: ON"
         fi
         pause
@@ -7549,24 +7947,22 @@ quota_edit_flow() {
         if [[ "${ip_on}" == "true" ]]; then
           # BUG-06 fix: read il BEFORE resetting ip_limit_locked, then determine lock_reason.
           # BUG-05 fix: correct priority is quota > ip_limit.
-          if ! quota_atomic_update_file "${qf}" ip_limit_enabled_set off; then
-            warn "Gagal menonaktifkan IP limit."
+          local apply_msg=""
+          if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false ip_limit_enabled_set off)"; then
+            warn "IP limit OFF gagal diterapkan: ${apply_msg}"
             pause
             continue
           fi
-          xray_routing_set_user_in_marker "dummy-limit-user" "${email_for_routing}" off
-          svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
           log "IP limit: OFF"
         else
-          if ! quota_atomic_update_file "${qf}" ip_limit_enabled_set on; then
-            warn "Gagal mengaktifkan IP limit."
+          local apply_msg=""
+          if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false ip_limit_enabled_set on)"; then
+            warn "IP limit ON gagal diterapkan: ${apply_msg}"
             pause
             continue
           fi
-          svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
           log "IP limit: ON"
         fi
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
         ;;
       6)
@@ -7582,26 +7978,31 @@ quota_edit_flow() {
           pause
           continue
         fi
-        if ! quota_atomic_update_file "${qf}" set_ip_limit "${lim}"; then
-          warn "Gagal set IP limit."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false set_ip_limit "${lim}")"; then
+          warn "Set IP limit gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
         log "IP limit diubah: ${lim}"
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
         ;;
       7)
-        /usr/local/bin/limit-ip unlock "${email_for_routing}" >/dev/null 2>&1 || true
+        if [[ -x /usr/local/bin/limit-ip ]]; then
+          if ! /usr/local/bin/limit-ip unlock "${email_for_routing}" >/dev/null 2>&1; then
+            warn "Gagal menjalankan unlock pada service limit-ip."
+            pause
+            continue
+          fi
+        fi
         # BUG-06 fix: read il BEFORE resetting, evaluate lock_reason correctly after.
         # BUG-05 fix: correct priority quota > ip_limit.
-        if ! quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute; then
-          warn "Gagal unlock IP lock."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false clear_ip_limit_locked_recompute)"; then
+          warn "Unlock IP lock gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        svc_restart_any xray-limit-ip xray-limit >/dev/null 2>&1 || true
         log "IP lock di-unlock"
         pause
         ;;
@@ -7619,16 +8020,13 @@ quota_edit_flow() {
           pause
           continue
         fi
-        if ! quota_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"; then
-          warn "Gagal set speed download."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true set_speed_down "${speed_down_input}")"; then
+          warn "Speed download gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
-          quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
-        fi
         log "Speed download diubah: ${speed_down_input} Mbps"
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
         ;;
       9)
@@ -7645,30 +8043,26 @@ quota_edit_flow() {
           pause
           continue
         fi
-        if ! quota_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"; then
-          warn "Gagal set speed upload."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true set_speed_up "${speed_up_input}")"; then
+          warn "Speed upload gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        if [[ "$(quota_get_status_bool "${qf}" "speed_limit_enabled")" == "true" ]]; then
-          quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
-        fi
         log "Speed upload diubah: ${speed_up_input} Mbps"
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
         ;;
       10)
         local speed_on speed_down_now speed_up_now
         speed_on="$(quota_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
-          if ! quota_atomic_update_file "${qf}" speed_limit_set off; then
-            warn "Gagal menonaktifkan speed limit."
+          local apply_msg=""
+          if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true speed_limit_set off)"; then
+            warn "Speed limit OFF gagal diterapkan: ${apply_msg}"
             pause
             continue
           fi
-          quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
           log "Speed limit: OFF"
-          account_info_refresh_warn "${proto}" "${speed_username}" || true
           pause
           continue
         fi
@@ -7707,14 +8101,13 @@ quota_edit_flow() {
           fi
         fi
 
-        if ! quota_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
-          warn "Gagal mengaktifkan speed limit."
+        local apply_msg=""
+        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true set_speed_all_enable "${speed_down_now}" "${speed_up_now}")"; then
+          warn "Speed limit ON gagal diterapkan: ${apply_msg}"
           pause
           continue
         fi
-        quota_sync_speed_policy_for_user "${proto}" "${speed_username}" "${qf}" || true
         log "Speed limit: ON"
-        account_info_refresh_warn "${proto}" "${speed_username}" || true
         pause
         ;;
       *)

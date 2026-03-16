@@ -4,7 +4,7 @@
 Bot Telegram ini standalone dan tidak mengeksekusi `manage.sh` secara langsung.
 
 ## Runtime
-- Backend API: `backend-py` (FastAPI) pada `127.0.0.1:8081`
+- Backend API: `backend-py` (FastAPI) pada `127.0.0.1:7081`
 - Gateway Telegram: `gateway-py` (long polling)
 - Shared contract: `shared/commands.json`
 

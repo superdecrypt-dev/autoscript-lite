@@ -48,7 +48,7 @@ format_host_for_url() {
 
 wait_backend_ready() {
   local host="${BACKEND_HOST:-127.0.0.1}"
-  local port="${BACKEND_PORT:-8080}"
+  local port="${BACKEND_PORT:-7080}"
   local url
   local -a curl_args=(-fsS)
   url="http://$(format_host_for_url "${host}"):${port}/health"
@@ -112,7 +112,7 @@ else
     . .venv/bin/activate
     pip install -r backend-py/requirements.lock.txt >/dev/null
     cd backend-py
-    uvicorn app.main:app --host "${BACKEND_HOST:-127.0.0.1}" --port "${BACKEND_PORT:-8080}" >"${BACKEND_LOG}" 2>&1 &
+    uvicorn app.main:app --host "${BACKEND_HOST:-127.0.0.1}" --port "${BACKEND_PORT:-7080}" >"${BACKEND_LOG}" 2>&1 &
     echo $! >"${BACKEND_PID_FILE}"
   )
   started_backend=1

@@ -253,6 +253,33 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             return ok_response(title, msg_ext)
         return error_response("user_extend_failed", title, msg_ext)
 
+    if scope == "xray" and action == "reset_credential":
+        if not settings.mutations_enabled:
+            return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")
+        title = _scope_title(scope, "Reset UUID/Password")
+        ok_p, proto_or_err = _resolve_proto(params, title, scope)
+        if not ok_p:
+            return proto_or_err
+        proto = str(proto_or_err)
+        ok_u, user_or_err = require_username(params, title)
+        if not ok_u:
+            return user_or_err
+        username = str(user_or_err)
+
+        ok_reset, _title_reset, msg_reset = system_mutations.op_xray_reset_credential(proto, username)
+        if not ok_reset:
+            return error_response("user_reset_credential_failed", title, msg_reset)
+
+        data: dict[str, object] = {}
+        ok_download, download_or_err = system_mutations.op_user_account_file_download(proto, username)
+        if ok_download and isinstance(download_or_err, dict):
+            data["download_file"] = download_or_err
+        else:
+            msg_reset = f"{msg_reset}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
+        if proto == "trojan":
+            data["allow_sensitive_output"] = True
+        return ok_response(title, msg_reset, data=data)
+
     if action == "reset_password":
         if not settings.mutations_enabled:
             return error_response("forbidden", _scope_title(scope, ""), "Dangerous actions dinonaktifkan via env.")

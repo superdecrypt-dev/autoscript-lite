@@ -2343,6 +2343,17 @@ zivpn_user_password_synced() {
   [[ -f "$(zivpn_password_file "${username}")" ]]
 }
 
+zivpn_password_read() {
+  local username="${1:-}"
+  local path
+  path="$(zivpn_password_file "${username}")"
+  [[ -f "${path}" ]] || {
+    echo "-"
+    return 0
+  }
+  tr -d '\r\n' < "${path}" 2>/dev/null || echo "-"
+}
+
 zivpn_sync_runtime_now() {
   zivpn_runtime_available || return 1
   "${ZIVPN_SYNC_BIN}" \
@@ -2396,7 +2407,15 @@ zivpn_sync_user_password_warn() {
 zivpn_remove_user_password_warn() {
   local username="${1:-}"
   zivpn_runtime_available || return 0
-  rm -f "$(zivpn_password_file "${username}")" >/dev/null 2>&1 || true
+  local path
+  path="$(zivpn_password_file "${username}")"
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    rm -f "${path}" >/dev/null 2>&1 || true
+    if [[ -e "${path}" || -L "${path}" ]]; then
+      warn "File password ZIVPN gagal dihapus untuk '${username}'."
+      return 1
+    fi
+  fi
   if ! zivpn_sync_runtime_now; then
     warn "Runtime ZIVPN gagal disinkronkan setelah hapus akun '${username}'."
     return 1
@@ -3109,6 +3128,17 @@ ssh_account_info_password_get() {
   awk '/^Password[[:space:]]*:/{sub(/^Password[[:space:]]*:[[:space:]]*/, ""); print; found=1; exit} END{if(!found) print "-"}' "${acc_file}" 2>/dev/null
 }
 
+ssh_previous_password_get() {
+  local username="${1:-}"
+  local password
+  password="$(zivpn_password_read "${username}")"
+  if [[ -n "${password}" && "${password}" != "-" ]]; then
+    echo "${password}"
+    return 0
+  fi
+  ssh_account_info_password_get "${username}"
+}
+
 ssh_qac_traffic_enforcement_ready() {
   local proxy_svc="${SSHWS_PROXY_SERVICE:-sshws-proxy}"
   [[ -x /usr/local/bin/sshws-proxy ]] && return 0
@@ -3527,6 +3557,48 @@ ssh_apply_password() {
   printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1
 }
 
+ssh_apply_expiry() {
+  local username="${1:-}"
+  local expiry="${2:-}"
+  [[ -n "${username}" ]] || return 1
+  case "${expiry}" in
+    ""|"-"|never|Never|unlimited|Unlimited)
+      chage -E -1 "${username}" >/dev/null 2>&1
+      ;;
+    *)
+      chage -E "${expiry}" "${username}" >/dev/null 2>&1
+      ;;
+  esac
+}
+
+ssh_user_state_expired_at_get() {
+  local username="${1:-}"
+  local qf
+  qf="$(ssh_user_state_resolve_file "${username}")"
+  [[ -f "${qf}" ]] || return 1
+
+  need_python3
+  python3 - <<'PY' "${qf}"
+import json
+import sys
+
+path = sys.argv[1]
+try:
+  data = json.load(open(path, "r", encoding="utf-8"))
+except Exception:
+  data = {}
+
+if not isinstance(data, dict):
+  data = {}
+
+value = str(data.get("expired_at") or "").strip()
+if not value or value == "-":
+  print("-")
+else:
+  print(value[:10])
+PY
+}
+
 ssh_password_reset_rollback() {
   local username="${1:-}"
   local previous_password="${2:-}"
@@ -3542,12 +3614,48 @@ ssh_password_reset_rollback() {
     echo "rollback Linux password gagal"
     return 1
   fi
+  local rollback_notes=""
   if ! ssh_account_info_refresh_from_state "${username}" "${previous_password}"; then
-    echo "password Linux dipulihkan, tetapi account info rollback gagal"
-    return 1
+    rollback_notes="account info rollback gagal"
   fi
   if ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
-    echo "password Linux dipulihkan, tetapi rollback ZIVPN gagal"
+    if [[ -n "${rollback_notes}" ]]; then
+      rollback_notes="${rollback_notes} | rollback ZIVPN gagal"
+    else
+      rollback_notes="rollback ZIVPN gagal"
+    fi
+  fi
+  if [[ -n "${rollback_notes}" ]]; then
+    echo "password Linux dipulihkan, tetapi ${rollback_notes}"
+    return 1
+  fi
+  echo "ok"
+  return 0
+}
+
+ssh_expiry_update_rollback() {
+  local username="${1:-}"
+  local previous_expiry="${2:--}"
+  [[ -n "${username}" ]] || {
+    echo "username rollback kosong"
+    return 1
+  }
+  if ! ssh_apply_expiry "${username}" "${previous_expiry}"; then
+    echo "rollback expiry Linux gagal"
+    return 1
+  fi
+
+  local created_at
+  created_at="$(ssh_user_state_created_at_get "${username}")"
+  if [[ -z "${created_at}" ]]; then
+    created_at="$(date '+%Y-%m-%d')"
+  fi
+  if ! ssh_user_state_write "${username}" "${created_at}" "${previous_expiry}"; then
+    echo "expiry Linux dipulihkan, tetapi metadata rollback gagal"
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}"; then
+    echo "expiry Linux dipulihkan, tetapi SSH ACCOUNT INFO rollback gagal"
     return 1
   fi
   echo "ok"
@@ -3555,12 +3663,22 @@ ssh_password_reset_rollback() {
 }
 
 ssh_add_user_rollback() {
-  # args: username qf acc_file reason
+  # args: username qf acc_file reason raw_password cleanup_zivpn
   local username="${1:-}"
   local qf="${2:-}"
   local acc_file="${3:-}"
   local reason="${4:-Gagal membuat akun SSH.}"
+  local raw_password="${5:-}"
+  local cleanup_zivpn="${6:-false}"
   local deleted="false"
+
+  if [[ "${cleanup_zivpn}" == "true" ]]; then
+    if ! zivpn_remove_user_password_warn "${username}"; then
+      warn "${reason}"
+      warn "Rollback parsial: cleanup ZIVPN gagal untuk '${username}'. Akun dipertahankan agar bisa dipulihkan/manual cleanup."
+      return 1
+    fi
+  fi
 
   if id "${username}" >/dev/null 2>&1; then
     if userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1; then
@@ -3571,19 +3689,45 @@ ssh_add_user_rollback() {
   fi
 
   if [[ "${deleted}" == "true" ]]; then
+    local -a cleanup_notes=()
     if [[ -n "${qf}" ]]; then
-      rm -f "${qf}" "${SSH_USERS_STATE_DIR}/${username}.json" >/dev/null 2>&1 || true
+      local f=""
+      for f in "${qf}" "${SSH_USERS_STATE_DIR}/${username}.json"; do
+        [[ -e "${f}" || -L "${f}" ]] || continue
+        rm -f "${f}" >/dev/null 2>&1 || true
+        if [[ -e "${f}" || -L "${f}" ]]; then
+          cleanup_notes+=("${f}")
+        fi
+      done
     fi
     if [[ -n "${acc_file}" ]]; then
-      rm -f "${acc_file}" "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
+      local f=""
+      for f in "${acc_file}" "${SSH_ACCOUNT_DIR}/${username}.txt"; do
+        [[ -e "${f}" || -L "${f}" ]] || continue
+        rm -f "${f}" >/dev/null 2>&1 || true
+        if [[ -e "${f}" || -L "${f}" ]]; then
+          cleanup_notes+=("${f}")
+        fi
+      done
     fi
     warn "${reason}"
+    if (( ${#cleanup_notes[@]} > 0 )); then
+      warn "Cleanup artefak lokal gagal: ${cleanup_notes[*]}"
+      return 1
+    fi
     return 0
   fi
 
   # Hindari orphan-silent: saat userdel gagal, pertahankan metadata agar status masih terlihat.
   warn "${reason}"
   warn "Rollback parsial: gagal menghapus user Linux '${username}'."
+  if [[ "${cleanup_zivpn}" == "true" && -n "${raw_password}" && "${raw_password}" != "-" ]]; then
+    if ! zivpn_sync_user_password_warn "${username}" "${raw_password}"; then
+      warn "Rollback parsial tambahan: rollback ZIVPN gagal untuk '${username}'."
+    else
+      warn "Rollback parsial tambahan: rollback ZIVPN berhasil untuk '${username}'."
+    fi
+  fi
   warn "Metadata dipertahankan. Jalankan manual: userdel -r '${username}'"
   return 1
 }
@@ -3894,25 +4038,25 @@ ssh_add_user_menu() {
   fi
 
   if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "" "" "Gagal set password user '${username}'."
+    ssh_add_user_rollback "${username}" "" "" "Gagal set password user '${username}'." "${password}" "false"
     pause
     return 0
   fi
 
   if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "" "" "Gagal set expiry user '${username}'."
+    ssh_add_user_rollback "${username}" "" "" "Gagal set expiry user '${username}'." "${password}" "false"
     pause
     return 0
   fi
 
   if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "" "Gagal menulis metadata akun SSH."
+    ssh_add_user_rollback "${username}" "${qf}" "" "Gagal menulis metadata akun SSH." "${password}" "false"
     pause
     return 0
   fi
 
   if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH." "${password}" "false"
     pause
     return 0
   fi
@@ -3943,25 +4087,33 @@ ssh_add_user_menu() {
   fi
 
   if [[ -n "${add_fail_msg}" ]]; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}"
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}" "${password}" "false"
     pause
     return 0
   fi
 
-  ssh_qac_enforce_now_warn "${username}" || true
+  if [[ "${ip_enabled}" == "true" ]]; then
+    if ! ssh_qac_enforce_now_warn "${username}"; then
+      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false"
+      pause
+      return 0
+    fi
+  else
+    ssh_qac_enforce_now_warn "${username}" || true
+  fi
   ssh_dns_adblock_runtime_refresh_if_available || true
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info." "${password}" "false"
     pause
     return 0
   fi
   if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true"
     pause
     return 0
   fi
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info."
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true"
     pause
     return 0
   fi
@@ -4013,20 +4165,58 @@ ssh_delete_user_menu() {
     return 0
   fi
 
+  local previous_password
+  previous_password="$(ssh_previous_password_get "${username}")"
+  local linux_exists="false"
+  if id "${username}" >/dev/null 2>&1; then
+    linux_exists="true"
+  fi
+  if [[ "${linux_exists}" == "true" ]] && zivpn_runtime_available && [[ -z "${previous_password}" || "${previous_password}" == "-" ]]; then
+    warn "Delete akun dibatalkan: password rollback ZIVPN untuk '${username}' tidak tersedia. Akun belum dihapus agar rollback aman tetap memungkinkan."
+    pause
+    return 1
+  fi
+  if ! zivpn_remove_user_password_warn "${username}"; then
+    warn "Delete akun dibatalkan: cleanup ZIVPN gagal untuk '${username}'. Akun belum dihapus agar bisa dicoba ulang."
+    pause
+    return 1
+  fi
+
   if id "${username}" >/dev/null 2>&1; then
     userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1 || {
-      warn "Gagal menghapus user Linux '${username}'."
+      if [[ -n "${previous_password}" && "${previous_password}" != "-" ]]; then
+        if ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
+          warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN juga gagal."
+        else
+          warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN berhasil."
+        fi
+      else
+        warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN tidak bisa dilakukan karena password lama tidak tersedia."
+      fi
       pause
       return 0
     }
   fi
 
-  rm -f "$(ssh_user_state_file "${username}")" \
-        "${SSH_USERS_STATE_DIR}/${username}.json" \
-        "$(ssh_account_info_file "${username}")" \
-        "${SSH_ACCOUNT_DIR}/${username}.txt" >/dev/null 2>&1 || true
+  local -a cleanup_notes=()
+  local f=""
+  for f in \
+    "$(ssh_user_state_file "${username}")" \
+    "${SSH_USERS_STATE_DIR}/${username}.json" \
+    "$(ssh_account_info_file "${username}")" \
+    "${SSH_ACCOUNT_DIR}/${username}.txt"; do
+    [[ -e "${f}" || -L "${f}" ]] || continue
+    rm -f "${f}" >/dev/null 2>&1 || true
+    if [[ -e "${f}" || -L "${f}" ]]; then
+      cleanup_notes+=("${f}")
+    fi
+  done
   ssh_dns_adblock_runtime_refresh_if_available || true
-  zivpn_remove_user_password_warn "${username}" || true
+  if (( ${#cleanup_notes[@]} > 0 )); then
+    warn "User Linux '${username}' sudah dihapus, tetapi cleanup artefak lokal gagal: ${cleanup_notes[*]}"
+    pause
+    return 1
+  fi
   log "Akun SSH '${username}' dihapus."
   pause
 }
@@ -4111,7 +4301,11 @@ ssh_extend_expiry_menu() {
     return 0
   fi
 
-  if ! chage -E "${new_expiry}" "${username}" >/dev/null 2>&1; then
+  local previous_expiry
+  previous_expiry="$(ssh_user_state_expired_at_get "${username}" 2>/dev/null || true)"
+  [[ -n "${previous_expiry}" ]] || previous_expiry="-"
+
+  if ! ssh_apply_expiry "${username}" "${new_expiry}"; then
     warn "Gagal update expiry untuk '${username}'."
     pause
     return 0
@@ -4123,10 +4317,26 @@ ssh_extend_expiry_menu() {
     created_at="$(date '+%Y-%m-%d')"
   fi
   if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
-    warn "Metadata SSH gagal diperbarui untuk '${username}'."
+    local rollback_msg=""
+    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Metadata SSH gagal diperbarui untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Metadata SSH gagal diperbarui untuk '${username}'."
+    fi
+    pause
+    return 0
   fi
   if ! ssh_account_info_refresh_from_state "${username}"; then
-    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    local rollback_msg=""
+    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 0
   fi
 
   log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
@@ -4150,7 +4360,12 @@ ssh_reset_password_menu() {
   fi
 
   local previous_password
-  previous_password="$(ssh_account_info_password_get "${username}")"
+  previous_password="$(ssh_previous_password_get "${username}")"
+  if [[ -z "${previous_password}" || "${previous_password}" == "-" ]]; then
+    warn "Password lama untuk '${username}' tidak tersedia, jadi rollback aman tidak bisa dijamin."
+    pause
+    return 0
+  fi
 
   local password=""
   if ! ssh_read_password_confirm password; then
@@ -5972,6 +6187,129 @@ ssh_qac_atomic_update_file() {
   ssh_qac_atomic_update_file_unlocked "${qf}" "${action}" "$@"
 }
 
+ssh_qac_apply_with_required_enforcer() {
+  # args: username json_file action [args...]
+  local username="${1:-}"
+  local qf="${2:-}"
+  local action="${3:-}"
+  shift 3 || true
+
+  if [[ -z "${username}" || -z "${qf}" || -z "${action}" ]]; then
+    warn "Helper SSH QAC dipanggil tanpa argumen lengkap."
+    return 1
+  fi
+
+  local backup_file=""
+  backup_file="$(mktemp "/tmp/ssh-qac.${username}.XXXXXX")" || {
+    warn "Gagal menyiapkan backup state SSH."
+    return 1
+  }
+  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
+    rm -f -- "${backup_file}"
+    warn "Gagal membuat backup state SSH."
+    return 1
+  fi
+
+  if ! ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
+    rm -f -- "${backup_file}"
+    return 1
+  fi
+
+  if ! ssh_qac_enforce_now "${username}"; then
+    warn "Enforcer SSH QAC gagal untuk '${username}'. State di-rollback."
+    local -a rollback_notes=()
+    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+      rollback_notes+=("rollback state gagal")
+    else
+      chmod 600 "${qf}" 2>/dev/null || true
+      if ! ssh_qac_enforce_now "${username}"; then
+        rollback_notes+=("rollback enforcer gagal")
+      fi
+    fi
+    if ! ssh_account_info_refresh_warn "${username}"; then
+      rollback_notes+=("rollback account info gagal")
+    fi
+    rm -f -- "${backup_file}"
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback SSH QAC belum sepenuhnya bersih: ${rollback_notes[*]}"
+    fi
+    return 1
+  fi
+
+  if ! ssh_account_info_refresh_warn "${username}"; then
+    warn "Refresh SSH ACCOUNT INFO gagal untuk '${username}'. State di-rollback."
+    local -a rollback_notes=()
+    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+      rollback_notes+=("rollback state gagal")
+    else
+      chmod 600 "${qf}" 2>/dev/null || true
+      if ! ssh_qac_enforce_now "${username}"; then
+        rollback_notes+=("rollback enforcer gagal")
+      fi
+      if ! ssh_account_info_refresh_warn "${username}"; then
+        rollback_notes+=("rollback account info gagal")
+      fi
+    fi
+    rm -f -- "${backup_file}"
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback SSH QAC belum sepenuhnya bersih: ${rollback_notes[*]}"
+    fi
+    return 1
+  fi
+  rm -f -- "${backup_file}"
+  return 0
+}
+
+ssh_qac_apply_with_required_refresh() {
+  # args: username json_file action [args...]
+  local username="${1:-}"
+  local qf="${2:-}"
+  local action="${3:-}"
+  shift 3 || true
+
+  if [[ -z "${username}" || -z "${qf}" || -z "${action}" ]]; then
+    warn "Helper SSH speed/QAC dipanggil tanpa argumen lengkap."
+    return 1
+  fi
+
+  local backup_file=""
+  backup_file="$(mktemp "/tmp/ssh-qac.${username}.XXXXXX")" || {
+    warn "Gagal menyiapkan backup state SSH."
+    return 1
+  }
+  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
+    rm -f -- "${backup_file}"
+    warn "Gagal membuat backup state SSH."
+    return 1
+  fi
+
+  if ! ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
+    rm -f -- "${backup_file}"
+    return 1
+  fi
+
+  if ! ssh_account_info_refresh_from_state "${username}"; then
+    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. State di-rollback."
+    local -a rollback_notes=()
+    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+      rollback_notes+=("rollback state gagal")
+    else
+      chmod 600 "${qf}" 2>/dev/null || true
+      if ! ssh_account_info_refresh_from_state "${username}"; then
+        rollback_notes+=("rollback account info gagal")
+      fi
+    fi
+    rm -f -- "${backup_file}"
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback SSH speed/QAC belum sepenuhnya bersih: ${rollback_notes[*]}"
+    fi
+    return 1
+  fi
+
+  rm -f -- "${backup_file}"
+  return 0
+}
+
 ssh_qac_view_json() {
   local qf="$1"
   title
@@ -6195,24 +6533,20 @@ ssh_qac_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
-        if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${qb}"; then
+        if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" set_quota_limit "${qb}"; then
           warn "Gagal update quota limit SSH."
           pause
           continue
         fi
-        ssh_qac_enforce_now_warn "${username}" || true
-        ssh_account_info_refresh_warn "${username}" || true
         log "Quota limit SSH diubah: ${gb_num} GB"
         pause
         ;;
       3)
-        if ! ssh_qac_atomic_update_file "${qf}" reset_quota_used; then
+        if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" reset_quota_used; then
           warn "Gagal reset quota used SSH."
           pause
           continue
         fi
-        ssh_qac_enforce_now_warn "${username}" || true
-        ssh_account_info_refresh_warn "${username}" || true
         log "Quota used SSH di-reset: 0"
         pause
         ;;
@@ -6220,22 +6554,18 @@ ssh_qac_edit_flow() {
         local st_mb
         st_mb="$(ssh_qac_get_status_bool "${qf}" "manual_block")"
         if [[ "${st_mb}" == "true" ]]; then
-          if ! ssh_qac_atomic_update_file "${qf}" manual_block_set off; then
+          if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" manual_block_set off; then
             warn "Gagal menonaktifkan manual block SSH."
             pause
             continue
           fi
-          ssh_qac_enforce_now_warn "${username}" || true
-          ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: OFF"
         else
-          if ! ssh_qac_atomic_update_file "${qf}" manual_block_set on; then
+          if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" manual_block_set on; then
             warn "Gagal mengaktifkan manual block SSH."
             pause
             continue
           fi
-          ssh_qac_enforce_now_warn "${username}" || true
-          ssh_account_info_refresh_warn "${username}" || true
           log "Manual block SSH: ON"
         fi
         pause
@@ -6244,22 +6574,18 @@ ssh_qac_edit_flow() {
         local ip_on
         ip_on="$(ssh_qac_get_status_bool "${qf}" "ip_limit_enabled")"
         if [[ "${ip_on}" == "true" ]]; then
-          if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+          if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" ip_limit_enabled_set off; then
             warn "Gagal menonaktifkan IP limit SSH."
             pause
             continue
           fi
-          ssh_qac_enforce_now_warn "${username}" || true
-          ssh_account_info_refresh_warn "${username}" || true
           log "IP limit SSH: OFF"
         else
-          if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+          if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" ip_limit_enabled_set on; then
             warn "Gagal mengaktifkan IP limit SSH."
             pause
             continue
           fi
-          ssh_qac_enforce_now_warn "${username}" || true
-          ssh_account_info_refresh_warn "${username}" || true
           log "IP limit SSH: ON"
         fi
         pause
@@ -6277,24 +6603,20 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${lim}"; then
+        if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" set_ip_limit "${lim}"; then
           warn "Gagal set IP limit SSH."
           pause
           continue
         fi
-        ssh_qac_enforce_now_warn "${username}" || true
-        ssh_account_info_refresh_warn "${username}" || true
         log "IP limit SSH diubah: ${lim}"
         pause
         ;;
       7)
-        if ! ssh_qac_atomic_update_file "${qf}" clear_ip_limit_locked; then
+        if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" clear_ip_limit_locked; then
           warn "Gagal unlock IP lock SSH."
           pause
           continue
         fi
-        ssh_qac_enforce_now_warn "${username}" || true
-        ssh_account_info_refresh_warn "${username}" || true
         log "IP lock SSH di-unlock"
         pause
         ;;
@@ -6312,12 +6634,11 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        if ! ssh_qac_atomic_update_file "${qf}" set_speed_down "${speed_down_input}"; then
+        if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" set_speed_down "${speed_down_input}"; then
           warn "Gagal set speed download SSH."
           pause
           continue
         fi
-        ssh_account_info_refresh_warn "${username}" || true
         log "Speed download SSH diubah: ${speed_down_input} Mbps"
         pause
         ;;
@@ -6335,12 +6656,11 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
-        if ! ssh_qac_atomic_update_file "${qf}" set_speed_up "${speed_up_input}"; then
+        if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" set_speed_up "${speed_up_input}"; then
           warn "Gagal set speed upload SSH."
           pause
           continue
         fi
-        ssh_account_info_refresh_warn "${username}" || true
         log "Speed upload SSH diubah: ${speed_up_input} Mbps"
         pause
         ;;
@@ -6348,12 +6668,11 @@ ssh_qac_edit_flow() {
         local speed_on speed_down_now speed_up_now
         speed_on="$(ssh_qac_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
-          if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
+          if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" speed_limit_set off; then
             warn "Gagal menonaktifkan speed limit SSH."
             pause
             continue
           fi
-          ssh_account_info_refresh_warn "${username}" || true
           log "Speed limit SSH: OFF"
           pause
           continue
@@ -6393,12 +6712,11 @@ ssh_qac_edit_flow() {
           fi
         fi
 
-        if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
+        if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
           warn "Gagal mengaktifkan speed limit SSH."
           pause
           continue
         fi
-        ssh_account_info_refresh_warn "${username}" || true
         log "Speed limit SSH: ON"
         pause
         ;;

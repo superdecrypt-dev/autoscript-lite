@@ -147,7 +147,7 @@ export function loadConfig(): AppConfig {
     token: requireEnv("DISCORD_BOT_TOKEN"),
     applicationId: requireEnv("DISCORD_APPLICATION_ID"),
     guildId: requireEnv("DISCORD_GUILD_ID"),
-    backendBaseUrl: resolveBackendBaseUrl(8080),
+    backendBaseUrl: resolveBackendBaseUrl(7080),
     sharedSecret: requireEnv("INTERNAL_SHARED_SECRET"),
     adminRoleIds,
     adminUserIds,

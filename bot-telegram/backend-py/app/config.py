@@ -61,7 +61,7 @@ def get_settings() -> Settings:
         _SETTINGS = Settings(
             internal_shared_secret=os.getenv("INTERNAL_SHARED_SECRET", "").strip(),
             backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
-            backend_port=_get_port("BACKEND_PORT", 8081),
+            backend_port=_get_port("BACKEND_PORT", 7081),
             commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
             mutations_enabled=True,
         )

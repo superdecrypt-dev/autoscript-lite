@@ -1,4 +1,5 @@
 import base64
+import copy
 import grp
 import ipaddress
 import json
@@ -237,6 +238,16 @@ def _zivpn_user_password_synced(username: str) -> bool:
     if not _zivpn_runtime_available():
         return False
     return _zivpn_password_file(username).exists()
+
+
+def _zivpn_password_read(username: str) -> str:
+    if not _zivpn_runtime_available():
+        return "-"
+    try:
+        text = _zivpn_password_file(username).read_text(encoding="utf-8").strip()
+    except Exception:
+        return "-"
+    return text or "-"
 
 
 def _edge_runtime_get_env(key: str) -> str:
@@ -693,6 +704,13 @@ def _ssh_password_from_account_info(username: str) -> str:
     return password or "-"
 
 
+def _ssh_previous_password(username: str) -> str:
+    password = _zivpn_password_read(username)
+    if password and password != "-":
+        return password
+    return _ssh_password_from_account_info(username)
+
+
 def _ssh_collect_existing_tokens(state_dir: Path, current_path: Path | None = None) -> set[str]:
     tokens: set[str] = set()
     current_real = current_path.resolve() if current_path and current_path.exists() else None
@@ -963,10 +981,16 @@ def _ssh_refresh_account_info(username: str, password_override: str = "") -> tup
     return _ssh_write_account_info(username, password=password, quota_payload=quota_payload)
 
 
-def _ssh_run_enforcer() -> tuple[bool, str]:
+def _ssh_run_enforcer(*, username: str = "", require_available: bool = False) -> tuple[bool, str]:
     if not SSHWS_QAC_ENFORCER_BIN.exists():
+        if require_available:
+            return False, "sshws-qac-enforcer tidak tersedia"
         return True, "skip: sshws-qac-enforcer tidak tersedia"
-    ok, out = _run_cmd([str(SSHWS_QAC_ENFORCER_BIN), "--once"], timeout=20)
+    args = [str(SSHWS_QAC_ENFORCER_BIN), "--once"]
+    target_user = str(username or "").strip()
+    if target_user:
+        args.extend(["--user", target_user])
+    ok, out = _run_cmd(args, timeout=20)
     if ok:
         return True, "ok"
     return False, out
@@ -974,13 +998,114 @@ def _ssh_run_enforcer() -> tuple[bool, str]:
 
 def _ssh_post_update_warnings(username: str, password_override: str = "") -> list[str]:
     warnings: list[str] = []
-    ok_enforce, enforce_msg = _ssh_run_enforcer()
+    ok_enforce, enforce_msg = _ssh_run_enforcer(username=username)
     if not ok_enforce:
         warnings.append(f"enforcer: {enforce_msg}")
     ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
     if not ok_refresh:
         warnings.append(f"account-info: {refresh_msg}")
     return warnings
+
+
+def _ssh_apply_state_update(
+    username: str,
+    path: Path,
+    previous_payload: dict[str, Any],
+    next_payload: dict[str, Any],
+    *,
+    password_override: str = "",
+    require_enforcer: bool = False,
+    require_account_info: bool = False,
+) -> tuple[bool, list[str], str]:
+    try:
+        _ssh_save_state(path, next_payload)
+    except Exception as exc:
+        return False, [], f"Gagal menyimpan state SSH: {exc}"
+
+    if not require_enforcer and not require_account_info:
+        return True, _ssh_post_update_warnings(username, password_override=password_override), ""
+
+    if not require_enforcer:
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
+        if ok_refresh:
+            return True, [], ""
+        rollback_notes: list[str] = []
+        try:
+            _ssh_save_state(path, previous_payload)
+        except Exception as exc:
+            rollback_notes.append(f"rollback-state: {exc}")
+        else:
+            ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
+                username,
+                password_override=password_override,
+            )
+            if not ok_rollback_refresh:
+                rollback_notes.append(f"rollback-account-info: {rollback_refresh_msg}")
+
+        detail = f"account-info: {refresh_msg}"
+        if rollback_notes:
+            detail += " | " + " | ".join(rollback_notes)
+        else:
+            detail += " | state di-rollback"
+        return False, [], detail
+
+    ok_enforce, enforce_msg = _ssh_run_enforcer(username=username, require_available=True)
+    if ok_enforce:
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
+        if ok_refresh:
+            return True, [], ""
+
+        rollback_notes: list[str] = []
+        try:
+            _ssh_save_state(path, previous_payload)
+        except Exception as exc:
+            rollback_notes.append(f"rollback-state: {exc}")
+        else:
+            ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
+                username=username,
+                require_available=True,
+            )
+            if not ok_rollback_enforce:
+                rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+            ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
+                username,
+                password_override=password_override,
+            )
+            if not ok_rollback_refresh:
+                rollback_notes.append(f"rollback-account-info: {rollback_refresh_msg}")
+
+        detail = f"account-info: {refresh_msg}"
+        if rollback_notes:
+            detail += " | " + " | ".join(rollback_notes)
+        else:
+            detail += " | state di-rollback"
+        return False, [], detail
+
+    rollback_notes: list[str] = []
+    try:
+        _ssh_save_state(path, previous_payload)
+    except Exception as exc:
+        rollback_notes.append(f"rollback-state: {exc}")
+    else:
+        ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
+            username=username,
+            require_available=True,
+        )
+        if not ok_rollback_enforce:
+            rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+        ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
+            username,
+            password_override=password_override,
+        )
+        if not ok_rollback_refresh:
+            rollback_notes.append(f"rollback-account-info: {rollback_refresh_msg}")
+
+    detail = f"enforcer: {enforce_msg}"
+    if rollback_notes:
+        detail += " | " + " | ".join(rollback_notes)
+    else:
+        detail += " | state di-rollback"
+    return False, [], detail
 
 
 def _ssh_restore_linux_password(username: str, password: str) -> tuple[bool, str]:
@@ -990,6 +1115,18 @@ def _ssh_restore_linux_password(username: str, password: str) -> tuple[bool, str
     )
 
 
+def _ssh_delete_linux_user(username: str) -> tuple[bool, str]:
+    if not _linux_user_exists(username):
+        return True, "skip"
+    ok_del, out_del = _run_cmd(["userdel", "-r", username], timeout=20)
+    if ok_del or not _linux_user_exists(username):
+        return True, out_del
+    ok_del2, out_del2 = _run_cmd(["userdel", username], timeout=20)
+    if ok_del2 or not _linux_user_exists(username):
+        return True, out_del2
+    return False, out_del2
+
+
 def _ssh_password_reset_rollback(username: str, previous_password: str) -> tuple[bool, str]:
     previous = str(previous_password or "").strip()
     if not previous or previous == "-":
@@ -997,12 +1134,108 @@ def _ssh_password_reset_rollback(username: str, previous_password: str) -> tuple
     ok_restore, restore_msg = _ssh_restore_linux_password(username, previous)
     if not ok_restore:
         return False, f"rollback Linux password gagal: {restore_msg}"
+    rollback_notes: list[str] = []
     ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=previous)
     if not ok_refresh:
-        return False, f"password Linux dipulihkan, tetapi account info rollback gagal: {refresh_msg}"
+        rollback_notes.append(f"account info rollback gagal: {refresh_msg}")
     ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, previous)
     if not ok_zivpn:
-        return False, f"password Linux dipulihkan, tetapi rollback ZIVPN gagal: {zivpn_msg}"
+        rollback_notes.append(f"rollback ZIVPN gagal: {zivpn_msg}")
+    if rollback_notes:
+        return False, "password Linux dipulihkan, tetapi " + " | ".join(rollback_notes)
+    return True, "ok"
+
+
+def _ssh_delete_zivpn_rollback(username: str, previous_password: str) -> tuple[bool, str]:
+    previous = str(previous_password or "").strip()
+    if not previous or previous == "-":
+        return False, "password lama tidak tersedia untuk rollback ZIVPN"
+    return _zivpn_sync_user_password(username, previous)
+
+
+def _ssh_add_user_rollback(
+    username: str,
+    quota_path: Path | None,
+    account_path: Path,
+    *,
+    raw_password: str,
+    error_prefix: str,
+    cleanup_zivpn: bool,
+) -> tuple[bool, str, str]:
+    title = "User Management - Add User"
+    if cleanup_zivpn:
+        ok_cleanup, cleanup_msg = _zivpn_remove_user_password(username)
+        if not ok_cleanup:
+            return (
+                False,
+                title,
+                (
+                    f"{error_prefix}\n"
+                    f"- Rollback ZIVPN gagal: {cleanup_msg}\n"
+                    f"- Akun dipertahankan agar bisa dipulihkan/manual cleanup"
+                ),
+            )
+
+    ok_del, del_msg = _ssh_delete_linux_user(username)
+    if not ok_del:
+        rollback_note = ""
+        if cleanup_zivpn:
+            ok_restore, restore_msg = _zivpn_sync_user_password(username, raw_password)
+            rollback_note = (
+                f"\n- Rollback ZIVPN: {restore_msg}"
+                if ok_restore
+                else f"\n- Rollback ZIVPN gagal: {restore_msg}"
+            )
+        return (
+            False,
+            title,
+            (
+                f"{error_prefix}\n"
+                f"- Rollback user Linux gagal: {del_msg}\n"
+                f"- Akun dipertahankan agar bisa dipulihkan/manual cleanup"
+                f"{rollback_note}"
+            ),
+        )
+
+    for path in (quota_path, account_path):
+        if path is None:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except Exception as exc:
+            error_prefix += f"\n- Cleanup artefak gagal: {path} ({exc})"
+            continue
+        if path.exists() or path.is_symlink():
+            error_prefix += f"\n- Cleanup artefak gagal: {path} masih ada"
+    return False, title, error_prefix
+
+
+def _ssh_apply_linux_expiry(username: str, expiry: str) -> tuple[bool, str]:
+    expiry_n = str(expiry or "").strip()
+    if not expiry_n or expiry_n == "-":
+        return _run_cmd(["chage", "-E", "-1", username], timeout=20)
+    return _run_cmd(["chage", "-E", expiry_n, username], timeout=20)
+
+
+def _ssh_expiry_update_rollback(
+    username: str,
+    previous_expiry: str,
+    quota_path: Path,
+    previous_payload: dict[str, Any],
+) -> tuple[bool, str]:
+    notes: list[str] = []
+    ok_expiry, expiry_msg = _ssh_apply_linux_expiry(username, previous_expiry)
+    if not ok_expiry:
+        notes.append(f"rollback-expiry: {expiry_msg}")
+    try:
+        _ssh_save_state(quota_path, previous_payload)
+    except Exception as exc:
+        notes.append(f"rollback-state: {exc}")
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
+    if not ok_refresh:
+        notes.append(f"rollback-account-info: {refresh_msg}")
+    if notes:
+        return False, " | ".join(notes)
     return True, "ok"
 
 
@@ -1524,6 +1757,16 @@ def _is_valid_dns_server_value(value: str) -> bool:
 
 def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
     with file_lock(DNS_LOCK_FILE):
+        existed_before = XRAY_DNS_CONF.exists()
+        raw_snapshot: bytes | None = None
+        raw_mode: int | None = None
+        if existed_before:
+            try:
+                raw_snapshot = XRAY_DNS_CONF.read_bytes()
+                raw_mode = int(XRAY_DNS_CONF.stat().st_mode & 0o777)
+            except Exception as exc:
+                return False, f"Gagal membaca snapshot DNS asli: {exc}"
+
         cfg_original: dict[str, Any]
         if XRAY_DNS_CONF.exists():
             ok_read, raw_cfg = _read_json(XRAY_DNS_CONF)
@@ -1535,7 +1778,23 @@ def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
 
         cfg_work = json.loads(json.dumps(cfg_original))
         cfg_work = _normalize_dns_root(cfg_work)
-        cfg_snapshot = json.loads(json.dumps(cfg_work))
+
+        def restore_raw_snapshot() -> None:
+            if existed_before:
+                XRAY_DNS_CONF.parent.mkdir(parents=True, exist_ok=True)
+                tmp = XRAY_DNS_CONF.parent / f".{XRAY_DNS_CONF.name}.rollback.{uuid.uuid4().hex}.tmp"
+                tmp.write_bytes(raw_snapshot or b"")
+                os.chmod(tmp, raw_mode if raw_mode is not None else 0o600)
+                os.replace(tmp, XRAY_DNS_CONF)
+                if raw_mode is not None:
+                    os.chmod(XRAY_DNS_CONF, raw_mode)
+                else:
+                    _chmod_600(XRAY_DNS_CONF)
+            else:
+                try:
+                    XRAY_DNS_CONF.unlink()
+                except FileNotFoundError:
+                    pass
 
         try:
             ok_mut, msg_mut = mutator(cfg_work)
@@ -1544,13 +1803,13 @@ def _apply_dns_transaction(mutator: Any) -> tuple[bool, str]:
 
             _write_json_atomic(XRAY_DNS_CONF, cfg_work)
             if not _restart_and_wait("xray", timeout_sec=20):
-                _write_json_atomic(XRAY_DNS_CONF, cfg_snapshot)
+                restore_raw_snapshot()
                 _restart_and_wait("xray", timeout_sec=20)
                 return False, "xray tidak aktif setelah update DNS (rollback)."
             return True, str(msg_mut)
         except Exception as exc:
             try:
-                _write_json_atomic(XRAY_DNS_CONF, cfg_snapshot)
+                restore_raw_snapshot()
                 _restart_and_wait("xray", timeout_sec=20)
             except Exception:
                 pass
@@ -2341,11 +2600,17 @@ def _quota_sync_speed_policy_for_user(proto: str, username: str, quota_data: dic
 
     removed = _speed_policy_exists(proto, username)
     if removed:
-        _speed_policy_remove(proto, username)
+        ok_remove, remove_msg = _speed_policy_remove_checked(proto, username)
+        if not ok_remove:
+            return False, remove_msg
         ok_sync, sync_msg = _speed_policy_sync_xray()
         if not ok_sync:
             return False, sync_msg
-    _speed_policy_apply_now()
+        if not _speed_policy_apply_now():
+            return False, "Speed policy dimatikan, tetapi apply runtime gagal (xray-speed)."
+        return True, "ok"
+    if not _speed_policy_apply_now():
+        return False, "Speed policy runtime gagal di-refresh (xray-speed)."
     return True, "ok"
 
 
@@ -2363,11 +2628,242 @@ def _delete_account_artifacts(proto: str, username: str) -> None:
             pass
 
 
-def _run_limit_ip_restart_if_present() -> None:
+def _delete_account_artifacts_checked(proto: str, username: str) -> list[str]:
+    notes: list[str] = []
+    for p in [
+        ACCOUNT_ROOT / proto / f"{username}@{proto}.txt",
+        ACCOUNT_ROOT / proto / f"{username}.txt",
+        QUOTA_ROOT / proto / f"{username}@{proto}.json",
+        QUOTA_ROOT / proto / f"{username}.json",
+    ]:
+        exists_before = p.exists() or p.is_symlink()
+        if not exists_before:
+            continue
+        try:
+            p.unlink(missing_ok=True)
+        except Exception as exc:
+            notes.append(f"{p}: {exc}")
+            continue
+        if p.exists() or p.is_symlink():
+            notes.append(f"{p}: masih ada setelah unlink")
+    return notes
+
+
+def _run_limit_ip_restart_if_present() -> tuple[bool, str]:
     for name in ("xray-limit-ip", "xray-limit"):
         if _service_exists(name):
-            _restart_and_wait(name, timeout_sec=15)
-            break
+            if _restart_and_wait(name, timeout_sec=15):
+                return True, "ok"
+            return False, f"Service {name} gagal restart/apply"
+    return True, "skip"
+
+
+def _xray_refresh_account_info_required(
+    title: str,
+    proto: str,
+    username: str,
+    success_msg: str,
+) -> tuple[bool, str, str]:
+    ok_refresh, refresh_msg = _refresh_account_info_for_user(proto, username)
+    if ok_refresh:
+        return True, title, success_msg
+    return (
+        False,
+        title,
+        (
+            f"{success_msg}\n"
+            f"- Refresh XRAY ACCOUNT INFO gagal: {refresh_msg}\n"
+            f"- Perubahan runtime/metadata sudah diterapkan, tetapi file account belum sinkron"
+        ),
+    )
+
+
+def _xray_cleanup_new_user_after_failure(proto: str, username: str) -> tuple[bool, str]:
+    notes: list[str] = []
+
+    ok_del, del_msg = _xray_delete_client(proto, username)
+    if not ok_del and "tidak ditemukan" not in del_msg.lower():
+        notes.append(f"cleanup inbounds: {del_msg}")
+
+    cleanup_notes = _delete_account_artifacts_checked(proto, username)
+    for note in cleanup_notes:
+        notes.append(f"cleanup artefak: {note}")
+
+    ok_remove, remove_msg = _speed_policy_remove_checked(proto, username)
+    if not ok_remove:
+        notes.append(f"cleanup speed policy file: {remove_msg}")
+    ok_sync, sync_msg = _speed_policy_sync_xray()
+    if not ok_sync:
+        notes.append(f"cleanup speed policy: {sync_msg}")
+    elif not _speed_policy_apply_now():
+        notes.append("cleanup speed policy: apply runtime gagal (xray-speed)")
+
+    if notes:
+        return False, "; ".join(notes)
+    return True, "ok"
+
+
+def _restore_account_artifacts_from_snapshots(
+    proto: str,
+    username: str,
+    *,
+    account_snapshot: str | None,
+    quota_snapshot: dict[str, Any] | None,
+) -> list[str]:
+    notes: list[str] = []
+    account_path = ACCOUNT_ROOT / proto / f"{username}@{proto}.txt"
+    quota_path = QUOTA_ROOT / proto / f"{username}@{proto}.json"
+
+    if quota_snapshot is not None:
+        try:
+            _save_quota(quota_path, copy.deepcopy(quota_snapshot))
+        except Exception as exc:
+            notes.append(f"restore quota: {exc}")
+    if account_snapshot is not None:
+        try:
+            _write_text_atomic(account_path, account_snapshot)
+            _chmod_600(account_path)
+        except Exception as exc:
+            notes.append(f"restore account: {exc}")
+    return notes
+
+
+def _xray_apply_runtime_from_quota(
+    proto: str,
+    username: str,
+    quota_data: dict[str, Any],
+    *,
+    ensure_client_credential: str = "",
+    restore_markers: bool = False,
+    restart_limit_ip: bool = False,
+    sync_speed: bool = False,
+) -> tuple[bool, str]:
+    if ensure_client_credential and not _user_exists_in_inbounds(proto, username):
+        ok_add, add_msg = _xray_add_client(proto, username, ensure_client_credential)
+        if not ok_add and "sudah ada" not in add_msg.lower():
+            return False, f"restore inbounds: {add_msg}"
+
+    status = quota_data.get("status") if isinstance(quota_data.get("status"), dict) else {}
+    if restore_markers:
+        marker_states = (
+            ("dummy-quota-user", bool(status.get("quota_exhausted"))),
+            ("dummy-block-user", bool(status.get("manual_block"))),
+            ("dummy-limit-user", bool(status.get("ip_limit_locked"))),
+        )
+        for marker, enabled in marker_states:
+            ok_marker, marker_msg = _routing_set_user_in_marker(
+                marker,
+                _email(proto, username),
+                "on" if enabled else "off",
+                outbound_tag="blocked",
+            )
+            if not ok_marker:
+                return False, f"routing {marker}: {marker_msg}"
+
+    if restart_limit_ip:
+        ok_restart, restart_msg = _run_limit_ip_restart_if_present()
+        if not ok_restart:
+            return False, restart_msg
+
+    if sync_speed:
+        ok_speed, speed_msg = _quota_sync_speed_policy_for_user(proto, username, quota_data)
+        if not ok_speed:
+            return False, speed_msg
+
+    return True, "ok"
+
+
+def _xray_apply_quota_update(
+    title: str,
+    proto: str,
+    username: str,
+    quota_path: Path,
+    previous_payload: dict[str, Any],
+    next_payload: dict[str, Any],
+    success_msg: str,
+    *,
+    ensure_client_credential: str = "",
+    restore_markers: bool = False,
+    restart_limit_ip: bool = False,
+    sync_speed: bool = False,
+) -> tuple[bool, str, str]:
+    _save_quota(quota_path, next_payload)
+
+    ok_runtime, runtime_msg = _xray_apply_runtime_from_quota(
+        proto,
+        username,
+        next_payload,
+        ensure_client_credential=ensure_client_credential,
+        restore_markers=restore_markers,
+        restart_limit_ip=restart_limit_ip,
+        sync_speed=sync_speed,
+    )
+    if not ok_runtime:
+        rollback_notes: list[str] = []
+        try:
+            _save_quota(quota_path, previous_payload)
+        except Exception as exc:
+            rollback_notes.append(f"rollback quota: {exc}")
+        else:
+            ok_restore, restore_msg = _xray_apply_runtime_from_quota(
+                proto,
+                username,
+                previous_payload,
+                ensure_client_credential=ensure_client_credential,
+                restore_markers=restore_markers,
+                restart_limit_ip=restart_limit_ip,
+                sync_speed=sync_speed,
+            )
+            if not ok_restore:
+                rollback_notes.append(f"rollback runtime: {restore_msg}")
+            ok_refresh, refresh_msg = _refresh_account_info_for_user(proto, username)
+            if not ok_refresh:
+                rollback_notes.append(f"rollback account-info: {refresh_msg}")
+
+        detail = runtime_msg
+        if rollback_notes:
+            detail += " | " + " | ".join(rollback_notes)
+        else:
+            detail += " | state di-rollback"
+        return False, title, detail
+
+    return _xray_refresh_account_info_required(title, proto, username, success_msg)
+
+
+def _xray_restore_deleted_user(
+    proto: str,
+    username: str,
+    *,
+    credential: str,
+    account_snapshot: str | None,
+    quota_snapshot: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    notes = _restore_account_artifacts_from_snapshots(
+        proto,
+        username,
+        account_snapshot=account_snapshot,
+        quota_snapshot=quota_snapshot,
+    )
+
+    ok_runtime, runtime_msg = _xray_apply_runtime_from_quota(
+        proto,
+        username,
+        quota_snapshot or {},
+        ensure_client_credential=credential,
+        restore_markers=True,
+        restart_limit_ip=True,
+        sync_speed=True,
+    )
+    if not ok_runtime:
+        notes.append(f"restore runtime: {runtime_msg}")
+
+    ok_refresh, refresh_msg = _refresh_account_info_for_user(proto, username)
+    if not ok_refresh:
+        notes.append(f"restore account-info: {refresh_msg}")
+
+    if notes:
+        return False, " | ".join(notes)
+    return True, "ok"
 
 
 def op_user_add(
@@ -2428,13 +2924,25 @@ def op_user_add(
             timeout=20,
         )
         if not ok_passwd:
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            return False, "User Management - Add User", f"Gagal set password user '{username}': {out_passwd}"
+            return _ssh_add_user_rollback(
+                username,
+                None,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=f"Gagal set password user '{username}': {out_passwd}",
+                cleanup_zivpn=False,
+            )
 
-        ok_expiry, out_expiry = _run_cmd(["chage", "-E", expiry, username], timeout=20)
+        ok_expiry, out_expiry = _ssh_apply_linux_expiry(username, expiry)
         if not ok_expiry:
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            return False, "User Management - Add User", f"Gagal set expiry user '{username}': {out_expiry}"
+            return _ssh_add_user_rollback(
+                username,
+                None,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=f"Gagal set expiry user '{username}': {out_expiry}",
+                cleanup_zivpn=False,
+            )
 
         try:
             with file_lock(str(SSHWS_LOCK_FILE)):
@@ -2471,44 +2979,61 @@ def op_user_add(
                 quota_payload["status"] = status
                 _ssh_save_state(quota_path, quota_payload)
         except Exception as exc:
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            for path in (quota_path, account_path):
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            return False, "User Management - Add User", f"Gagal menulis metadata SSH: {exc}"
+            return _ssh_add_user_rollback(
+                username,
+                quota_path if "quota_path" in locals() else None,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=f"Gagal menulis metadata SSH: {exc}",
+                cleanup_zivpn=False,
+            )
+
+        if ip_enabled:
+            ok_enforce, enforce_msg = _ssh_run_enforcer(
+                username=username,
+                require_available=True,
+            )
+            if not ok_enforce:
+                return _ssh_add_user_rollback(
+                    username,
+                    quota_path,
+                    account_path,
+                    raw_password=raw_password,
+                    error_prefix=f"Gagal enforcement awal SSH untuk '{username}': {enforce_msg}",
+                    cleanup_zivpn=False,
+                )
 
         ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
         if not ok_account:
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            for path in (quota_path, account_path):
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            return False, "User Management - Add User", str(account_msg)
+            return _ssh_add_user_rollback(
+                username,
+                quota_path,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=str(account_msg),
+                cleanup_zivpn=False,
+            )
 
         ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, raw_password)
         if not ok_zivpn:
-            _zivpn_remove_user_password(username)
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            for path in (quota_path, account_path):
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            return False, "User Management - Add User", f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}"
+            return _ssh_add_user_rollback(
+                username,
+                quota_path,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}",
+                cleanup_zivpn=True,
+            )
         ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
         if not ok_account:
-            _zivpn_remove_user_password(username)
-            _run_cmd(["userdel", "-r", username], timeout=20)
-            for path in (quota_path, account_path):
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            return False, "User Management - Add User", f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {account_msg}"
+            return _ssh_add_user_rollback(
+                username,
+                quota_path,
+                account_path,
+                raw_password=raw_password,
+                error_prefix=f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {account_msg}",
+                cleanup_zivpn=True,
+            )
 
         warnings = _ssh_post_update_warnings(username, password_override=raw_password)
         msg = (
@@ -2555,12 +3080,17 @@ def op_user_add(
                 },
             )
             if not ok_sync:
-                _speed_policy_remove(proto, username)
-                _speed_policy_sync_xray()
-                _speed_policy_apply_now()
-                _xray_delete_client(proto, username)
-                _delete_account_artifacts(proto, username)
-                return False, "User Management - Add User", f"Rollback add user karena speed policy gagal: {sync_msg}"
+                ok_cleanup, cleanup_msg = _xray_cleanup_new_user_after_failure(proto, username)
+                suffix = (
+                    f"\n- Cleanup rollback: {cleanup_msg}"
+                    if ok_cleanup
+                    else f"\n- Cleanup rollback gagal: {cleanup_msg}"
+                )
+                return (
+                    False,
+                    "User Management - Add User",
+                    f"Rollback add user karena speed policy gagal: {sync_msg}{suffix}",
+                )
 
         msg = (
             f"Add user sukses.\n"
@@ -2570,9 +3100,13 @@ def op_user_add(
         )
         return True, "User Management - Add User", msg
     except Exception as exc:
-        _xray_delete_client(proto, username)
-        _delete_account_artifacts(proto, username)
-        return False, "User Management - Add User", f"Gagal menyimpan artefak user: {exc}"
+        ok_cleanup, cleanup_msg = _xray_cleanup_new_user_after_failure(proto, username)
+        suffix = (
+            f" Cleanup rollback: {cleanup_msg}."
+            if ok_cleanup
+            else f" Cleanup rollback gagal: {cleanup_msg}."
+        )
+        return False, "User Management - Add User", f"Gagal menyimpan artefak user: {exc}.{suffix}"
 
 
 def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
@@ -2610,27 +3144,104 @@ def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
         return False, "User Management - Delete User", "Username tidak valid."
 
     if proto == SSH_PROTOCOL:
-        if _linux_user_exists(username):
-            ok_del, out_del = _run_cmd(["userdel", "-r", username], timeout=20)
-            if not ok_del:
-                ok_del2, out_del2 = _run_cmd(["userdel", username], timeout=20)
-                if not ok_del2:
-                    return False, "User Management - Delete User", f"Gagal menghapus user Linux '{username}': {out_del2}"
-        _delete_account_artifacts(proto, username)
+        previous_password = _ssh_previous_password(username)
+        linux_exists = _linux_user_exists(username)
+        if linux_exists and _zivpn_runtime_available() and (not previous_password or previous_password == "-"):
+            return (
+                False,
+                "User Management - Delete User",
+                (
+                    f"Delete user dibatalkan untuk {username}@{proto}\n"
+                    f"- Password rollback ZIVPN tidak tersedia\n"
+                    f"- Akun belum dihapus agar rollback aman tetap memungkinkan"
+                ),
+            )
         ok_zivpn, zivpn_msg = _zivpn_remove_user_password(username)
-        msg = f"Delete user selesai: {username}@{proto}"
         if not ok_zivpn:
-            msg += f"\n- Warning: sinkronisasi hapus ZIVPN gagal ({zivpn_msg})"
-        return True, "User Management - Delete User", msg
+            return (
+                False,
+                "User Management - Delete User",
+                (
+                    f"Delete user gagal untuk {username}@{proto}\n"
+                    f"- Cleanup ZIVPN gagal: {zivpn_msg}\n"
+                    f"- Akun belum dihapus agar bisa dicoba ulang dengan aman"
+                ),
+            )
+        ok_del, del_msg = _ssh_delete_linux_user(username)
+        if not ok_del:
+            ok_rollback, rollback_msg = _ssh_delete_zivpn_rollback(username, previous_password)
+            suffix = (
+                f" Rollback ZIVPN: {rollback_msg}"
+                if ok_rollback
+                else f" Rollback ZIVPN gagal: {rollback_msg}"
+            )
+            return (
+                False,
+                "User Management - Delete User",
+                f"Gagal menghapus user Linux '{username}': {del_msg}.{suffix}",
+            )
+        cleanup_notes = _delete_account_artifacts_checked(proto, username)
+        if cleanup_notes:
+            return (
+                False,
+                "User Management - Delete User",
+                (
+                    f"User Linux '{username}' sudah dihapus, tetapi cleanup artefak lokal gagal.\n- "
+                    + "\n- ".join(cleanup_notes)
+                ),
+            )
+        return True, "User Management - Delete User", f"Delete user selesai: {username}@{proto}"
+
+    previous_credential = _find_credential_in_inbounds(proto, username) or _find_credential_from_account(proto, username)
+    if not previous_credential:
+        return False, "User Management - Delete User", f"Credential tidak ditemukan untuk restore {username}@{proto}"
+    account_path = _resolve_existing(_account_candidates(proto, username))
+    account_snapshot = None
+    if account_path is not None:
+        try:
+            account_snapshot = account_path.read_text(encoding="utf-8")
+        except Exception:
+            account_snapshot = None
+    ok_prev_quota, _, prev_quota_or_msg = _load_quota(proto, username)
+    previous_quota = copy.deepcopy(prev_quota_or_msg) if ok_prev_quota and isinstance(prev_quota_or_msg, dict) else None
 
     ok_del, del_msg = _xray_delete_client(proto, username)
     if not ok_del:
         return False, "User Management - Delete User", del_msg
 
-    _delete_account_artifacts(proto, username)
-    _speed_policy_remove(proto, username)
-    _speed_policy_sync_xray()
-    _speed_policy_apply_now()
+    cleanup_notes = _delete_account_artifacts_checked(proto, username)
+    ok_remove, remove_msg = _speed_policy_remove_checked(proto, username)
+    ok_sync, sync_msg = _speed_policy_sync_xray()
+    apply_ok = ok_sync and _speed_policy_apply_now()
+    notes: list[str] = []
+    if cleanup_notes:
+        notes.extend(f"cleanup artefak: {note}" for note in cleanup_notes)
+    if not ok_remove:
+        notes.append(f"cleanup speed policy file: {remove_msg}")
+    if not ok_sync:
+        notes.append(f"sync speed policy: {sync_msg}")
+    elif not apply_ok:
+        notes.append("apply speed policy runtime gagal (xray-speed)")
+    if notes:
+        ok_restore, restore_msg = _xray_restore_deleted_user(
+            proto,
+            username,
+            credential=previous_credential,
+            account_snapshot=account_snapshot,
+            quota_snapshot=previous_quota,
+        )
+        if ok_restore:
+            notes.append("rollback: user dipulihkan")
+        else:
+            notes.append(f"rollback gagal: {restore_msg}")
+        return (
+            False,
+            "User Management - Delete User",
+            (
+                f"Delete user untuk {username}@{proto} selesai parsial.\n- "
+                + "\n- ".join(notes)
+            ),
+        )
 
     return True, "User Management - Delete User", f"Delete user selesai: {username}@{proto}"
 
@@ -2685,6 +3296,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
         quota_data = q_data_or_msg
         assert isinstance(quota_path, Path)
         assert isinstance(quota_data, dict)
+        previous_payload = copy.deepcopy(quota_data)
 
         current_expiry = str(quota_data.get("expired_at") or "").strip()[:10]
         today = date.today()
@@ -2705,21 +3317,45 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
         else:
             return False, "User Management - Extend Expiry", "Mode harus extend atau set."
 
-        ok_expiry, out_expiry = _run_cmd(["chage", "-E", new_expiry, username], timeout=20)
+        ok_expiry, out_expiry = _ssh_apply_linux_expiry(username, new_expiry)
         if not ok_expiry:
             return False, "User Management - Extend Expiry", f"Gagal update expiry untuk '{username}': {out_expiry}"
 
         quota_data["expired_at"] = new_expiry
-        _ssh_save_state(quota_path, quota_data)
-        warnings = _ssh_post_update_warnings(username)
-        msg = (
-            f"Expiry diperbarui: {username}@{proto}\n"
-            f"- Lama: {current_expiry or '-'}\n"
-            f"- Baru: {new_expiry}"
+        try:
+            _ssh_save_state(quota_path, quota_data)
+        except Exception as exc:
+            ok_rollback, rollback_msg = _ssh_expiry_update_rollback(
+                username,
+                current_expiry,
+                quota_path,
+                previous_payload,
+            )
+            suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+            return (
+                False,
+                "User Management - Extend Expiry",
+                f"Gagal menyimpan metadata expiry untuk '{username}': {exc}.{suffix}",
+            )
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
+        if not ok_refresh:
+            ok_rollback, rollback_msg = _ssh_expiry_update_rollback(
+                username,
+                current_expiry,
+                quota_path,
+                previous_payload,
+            )
+            suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+            return (
+                False,
+                "User Management - Extend Expiry",
+                f"Gagal sinkron SSH ACCOUNT INFO untuk '{username}': {refresh_msg}.{suffix}",
+            )
+        return (
+            True,
+            "User Management - Extend Expiry",
+            f"Expiry diperbarui: {username}@{proto}\n- Lama: {current_expiry or '-'}\n- Baru: {new_expiry}",
         )
-        if warnings:
-            msg += "\n- Warning: " + " | ".join(warnings)
-        return True, "User Management - Extend Expiry", msg
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
@@ -2749,6 +3385,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
     else:
         return False, "User Management - Extend Expiry", "Mode harus extend atau set."
 
+    previous_payload = copy.deepcopy(quota_data)
     quota_data["expired_at"] = new_expiry
     status = quota_data.get("status") if isinstance(quota_data.get("status"), dict) else {}
 
@@ -2761,26 +3398,24 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
 
     _status_apply_lock_fields(status)
     quota_data["status"] = status
-    _save_quota(quota_path, quota_data)
 
-    if st_quota:
-        _routing_set_user_in_marker("dummy-quota-user", _email(proto, username), "off", outbound_tag="blocked")
-    if st_manual:
-        _routing_set_user_in_marker("dummy-block-user", _email(proto, username), "on", outbound_tag="blocked")
-    if st_iplocked:
-        _routing_set_user_in_marker("dummy-limit-user", _email(proto, username), "on", outbound_tag="blocked")
-
+    ensure_credential = ""
     if not _user_exists_in_inbounds(proto, username):
-        cred = _find_credential_from_account(proto, username)
-        if cred:
-            _xray_add_client(proto, username, cred)
+        ensure_credential = _find_credential_from_account(proto, username)
+        if not ensure_credential:
+            return False, "User Management - Extend Expiry", f"Credential tidak ditemukan untuk restore {username}@{proto}"
 
-    _refresh_account_info_for_user(proto, username)
-
-    return (
-        True,
+    return _xray_apply_quota_update(
         "User Management - Extend Expiry",
+        proto,
+        username,
+        quota_path,
+        previous_payload,
+        quota_data,
         f"Expiry diperbarui: {username}@{proto}\n- Lama: {current_expiry or '-'}\n- Baru: {new_expiry}",
+        ensure_client_credential=ensure_credential,
+        restore_markers=True,
+        restart_limit_ip=True,
     )
 
 
@@ -2795,7 +3430,11 @@ def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]
         return False, title, "Password SSH tidak boleh sama dengan username."
     if not _linux_user_exists(username):
         return False, title, f"User Linux '{username}' tidak ditemukan."
-    previous_password = _ssh_password_from_account_info(username)
+    previous_password = _ssh_previous_password(username)
+    if not previous_password or previous_password == "-":
+        return False, title, (
+            f"Password lama untuk '{username}' tidak tersedia, jadi rollback aman tidak bisa dijamin."
+        )
 
     ok_passwd, out_passwd = _run_cmd(
         ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, raw_password],
@@ -2850,13 +3489,23 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         q_data["quota_limit"] = int(round(quota_gb * (1024**3)))
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         _status_apply_lock_fields(status)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Set Limit", (
+                f"Quota limit gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"Quota limit diubah ke {_fmt_number(quota_gb)} GB untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -2870,14 +3519,21 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     q_data["quota_limit"] = int(round(quota_gb * (1024**3)))
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     _status_apply_lock_fields(st)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Set Limit", f"Quota limit diubah ke {_fmt_number(quota_gb)} GB untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Set Limit",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Quota limit diubah ke {_fmt_number(quota_gb)} GB untuk {username}@{proto}",
+        restore_markers=True,
+    )
 
 
 def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
@@ -2889,14 +3545,24 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         q_data["quota_used"] = 0
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["quota_exhausted"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Reset Used", (
+                f"Reset quota gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"Quota used di-reset untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -2910,16 +3576,22 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     q_data["quota_used"] = 0
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["quota_exhausted"] = False
     _status_apply_lock_fields(st)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    _routing_set_user_in_marker("dummy-quota-user", _email(proto, username), "off", outbound_tag="blocked")
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Reset Used", f"Quota used di-reset untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Reset Used",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Quota used di-reset untuk {username}@{proto}",
+        restore_markers=True,
+    )
 
 
 def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
@@ -2931,13 +3603,24 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["manual_block"] = bool(enabled)
         _status_apply_lock_fields(status)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Manual Block", (
+                f"Manual block {'ON' if enabled else 'OFF'} gagal diterapkan untuk "
+                f"{username}@{proto}: {apply_error}"
+            )
         msg = f"Manual block {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -2951,22 +3634,21 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["manual_block"] = bool(enabled)
     _status_apply_lock_fields(st)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    if enabled:
-        ok_rt, msg_rt = _routing_set_user_in_marker("dummy-block-user", _email(proto, username), "on", outbound_tag="blocked")
-        if not ok_rt:
-            return False, "Quota - Manual Block", msg_rt
-        return True, "Quota - Manual Block", f"Manual block ON untuk {username}@{proto}"
-
-    ok_rt, msg_rt = _routing_set_user_in_marker("dummy-block-user", _email(proto, username), "off", outbound_tag="blocked")
-    if not ok_rt:
-        return False, "Quota - Manual Block", msg_rt
-    return True, "Quota - Manual Block", f"Manual block OFF untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Manual Block",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Manual block {'ON' if enabled else 'OFF'} untuk {username}@{proto}",
+        restore_markers=True,
+    )
 
 
 def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
@@ -2978,6 +3660,7 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["ip_limit_enabled"] = bool(enabled)
@@ -2985,8 +3668,18 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
             status["ip_limit_locked"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - IP Limit", (
+                f"IP/Login limit {'ON' if enabled else 'OFF'} gagal diterapkan untuk "
+                f"{username}@{proto}: {apply_error}"
+            )
         msg = f"IP/Login limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -3000,20 +3693,24 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["ip_limit_enabled"] = bool(enabled)
     if not enabled:
         st["ip_limit_locked"] = False
     _status_apply_lock_fields(st)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    if not enabled:
-        _routing_set_user_in_marker("dummy-limit-user", _email(proto, username), "off", outbound_tag="blocked")
-
-    _run_limit_ip_restart_if_present()
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - IP Limit", f"IP limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - IP Limit",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"IP limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}",
+        restore_markers=True,
+        restart_limit_ip=True,
+    )
 
 
 def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, str, str]:
@@ -3028,12 +3725,22 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["ip_limit"] = int(limit)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Set IP Limit", (
+                f"IP/Login limit gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"IP/Login limit diubah ke {limit} untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -3047,14 +3754,21 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["ip_limit"] = int(limit)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    _run_limit_ip_restart_if_present()
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Set IP Limit", f"IP limit diubah ke {limit} untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Set IP Limit",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"IP limit diubah ke {limit} untuk {username}@{proto}",
+        restore_markers=True,
+        restart_limit_ip=True,
+    )
 
 
 def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
@@ -3066,21 +3780,27 @@ def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["ip_limit_locked"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_enforcer=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Unlock IP Lock", (
+                f"IP/Login unlock gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"IP/Login lock di-unlock untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Unlock IP Lock", msg
-
-    email = _email(proto, username)
-    if Path("/usr/local/bin/limit-ip").exists():
-        _run_cmd(["/usr/local/bin/limit-ip", "unlock", email], timeout=15)
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
     if not ok_q:
@@ -3090,15 +3810,28 @@ def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    email = _email(proto, username)
+    previous_payload = copy.deepcopy(q_data)
+    if Path("/usr/local/bin/limit-ip").exists():
+        ok_unlock, unlock_msg = _run_cmd(["/usr/local/bin/limit-ip", "unlock", email], timeout=15)
+        if not ok_unlock:
+            return False, "Quota - Unlock IP Lock", unlock_msg
+
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["ip_limit_locked"] = False
     _status_apply_lock_fields(st)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    _routing_set_user_in_marker("dummy-limit-user", email, "off", outbound_tag="blocked")
-    _run_limit_ip_restart_if_present()
-    return True, "Quota - Unlock IP Lock", f"IP lock di-unlock untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Unlock IP Lock",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"IP lock di-unlock untuk {username}@{proto}",
+        restore_markers=True,
+        restart_limit_ip=True,
+    )
 
 
 def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tuple[bool, str, str]:
@@ -3113,12 +3846,22 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["speed_down_mbit"] = float(speed_down)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_account_info=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Speed Download", (
+                f"Speed download gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"Speed download diubah ke {_fmt_number(speed_down)} Mbps untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -3132,18 +3875,20 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["speed_down_mbit"] = float(speed_down)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    if bool(st.get("speed_limit_enabled")):
-        ok_sync, msg_sync = _quota_sync_speed_policy_for_user(proto, username, q_data)
-        if not ok_sync:
-            return False, "Quota - Speed Download", msg_sync
-
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Speed Download", f"Speed download diubah ke {_fmt_number(speed_down)} Mbps untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Speed Download",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Speed download diubah ke {_fmt_number(speed_down)} Mbps untuk {username}@{proto}",
+        sync_speed=bool(st.get("speed_limit_enabled")),
+    )
 
 
 def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[bool, str, str]:
@@ -3158,12 +3903,22 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["speed_up_mbit"] = float(speed_up)
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_account_info=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Speed Upload", (
+                f"Speed upload gagal diterapkan untuk {username}@{proto}: {apply_error}"
+            )
         msg = f"Speed upload diubah ke {_fmt_number(speed_up)} Mbps untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -3177,18 +3932,20 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["speed_up_mbit"] = float(speed_up)
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    if bool(st.get("speed_limit_enabled")):
-        ok_sync, msg_sync = _quota_sync_speed_policy_for_user(proto, username, q_data)
-        if not ok_sync:
-            return False, "Quota - Speed Upload", msg_sync
-
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Speed Upload", f"Speed upload diubah ke {_fmt_number(speed_up)} Mbps untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Speed Upload",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Speed upload diubah ke {_fmt_number(speed_up)} Mbps untuk {username}@{proto}",
+        sync_speed=bool(st.get("speed_limit_enabled")),
+    )
 
 
 def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
@@ -3200,6 +3957,7 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
         q_data = q_data_or_msg
         assert isinstance(q_path, Path)
         assert isinstance(q_data, dict)
+        previous_payload = copy.deepcopy(q_data)
 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["speed_limit_enabled"] = bool(enabled)
@@ -3209,8 +3967,18 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
             if down <= 0 or up <= 0:
                 return False, "Quota - Speed Limit", "Set speed download/upload > 0 dulu sebelum ON."
         q_data["status"] = status
-        _ssh_save_state(q_path, q_data)
-        warnings = _ssh_post_update_warnings(username)
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
+            username,
+            q_path,
+            previous_payload,
+            q_data,
+            require_account_info=True,
+        )
+        if not ok_apply:
+            return False, "Quota - Speed Limit", (
+                f"Speed limit {'ON' if enabled else 'OFF'} gagal diterapkan untuk "
+                f"{username}@{proto}: {apply_error}"
+            )
         msg = f"Speed limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
         if warnings:
             msg += "\n- Warning: " + " | ".join(warnings)
@@ -3224,6 +3992,7 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
     assert isinstance(q_path, Path)
     assert isinstance(q_data, dict)
 
+    previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["speed_limit_enabled"] = bool(enabled)
 
@@ -3234,14 +4003,16 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
             return False, "Quota - Speed Limit", "Set speed download/upload > 0 dulu sebelum ON."
 
     q_data["status"] = st
-    _save_quota(q_path, q_data)
-
-    ok_sync, msg_sync = _quota_sync_speed_policy_for_user(proto, username, q_data)
-    if not ok_sync:
-        return False, "Quota - Speed Limit", msg_sync
-
-    _refresh_account_info_for_user(proto, username)
-    return True, "Quota - Speed Limit", f"Speed limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}"
+    return _xray_apply_quota_update(
+        "Quota - Speed Limit",
+        proto,
+        username,
+        q_path,
+        previous_payload,
+        q_data,
+        f"Speed limit {'ON' if enabled else 'OFF'} untuk {username}@{proto}",
+        sync_speed=True,
+    )
 
 
 def _normalize_domain(domain: str) -> str:
@@ -3292,9 +4063,140 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
     try:
         XRAY_DOMAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(XRAY_DOMAIN_FILE, f"{domain}\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        try:
+            _write_text_atomic(NGINX_CONF, original)
+            _restart_and_wait("nginx", timeout_sec=20)
+        except Exception:
+            pass
+        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}"
 
+    return True, "ok"
+
+
+def _snapshot_optional_file(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {"exists": False}
+    try:
+        st = path.stat()
+        return {
+            "exists": True,
+            "payload": path.read_bytes(),
+            "mode": int(st.st_mode & 0o777),
+        }
+    except Exception:
+        return {"exists": False}
+
+
+def _restore_optional_file(path: Path, snapshot: dict[str, Any]) -> tuple[bool, str]:
+    try:
+        if bool(snapshot.get("exists")):
+            ok_write, msg_write = _write_bytes_atomic(path, bytes(snapshot.get("payload") or b""))
+            if not ok_write:
+                return False, msg_write
+            mode = snapshot.get("mode")
+            if isinstance(mode, int):
+                try:
+                    os.chmod(path, mode)
+                except Exception:
+                    pass
+        elif path.exists():
+            path.unlink()
+    except Exception as exc:
+        return False, f"Gagal restore file {path}: {exc}"
+    return True, "ok"
+
+
+def _capture_domain_runtime_snapshot() -> dict[str, Any]:
+    return {
+        "nginx_conf": _snapshot_optional_file(NGINX_CONF),
+        "compat_domain": _snapshot_optional_file(XRAY_DOMAIN_FILE),
+        "cert_fullchain": _snapshot_optional_file(CERT_FULLCHAIN),
+        "cert_privkey": _snapshot_optional_file(CERT_PRIVKEY),
+    }
+
+
+def _capture_xray_network_runtime_snapshot() -> dict[str, Any]:
+    return {
+        "routing": _snapshot_optional_file(XRAY_ROUTING_CONF),
+        "outbounds": _snapshot_optional_file(XRAY_OUTBOUNDS_CONF),
+    }
+
+
+def _restore_xray_network_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]:
+    failures: list[str] = []
+    for path, key in (
+        (XRAY_ROUTING_CONF, "routing"),
+        (XRAY_OUTBOUNDS_CONF, "outbounds"),
+    ):
+        entry = snapshot.get(key)
+        if not isinstance(entry, dict):
+            continue
+        ok_restore, msg_restore = _restore_optional_file(path, entry)
+        if not ok_restore:
+            failures.append(msg_restore)
+    if failures:
+        return False, " | ".join(failures)
+    if not _restart_and_wait("xray", timeout_sec=20):
+        return False, "xray gagal restart saat rollback network controls."
+    return True, "ok"
+
+
+def _domain_snapshot_active_domain(snapshot: dict[str, Any]) -> str:
+    compat = snapshot.get("compat_domain")
+    if isinstance(compat, dict) and compat.get("exists"):
+        try:
+            value = bytes(compat.get("payload") or b"").decode("utf-8", errors="ignore").strip()
+        except Exception:
+            value = ""
+        if DOMAIN_RE.match(value):
+            return value
+
+    nginx_conf = snapshot.get("nginx_conf")
+    if isinstance(nginx_conf, dict) and nginx_conf.get("exists"):
+        try:
+            text = bytes(nginx_conf.get("payload") or b"").decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        for line in text.splitlines():
+            m = re.match(r"^\s*server_name\s+([^;]+);", line)
+            if not m:
+                continue
+            domain = m.group(1).strip().split()[0]
+            if DOMAIN_RE.match(domain):
+                return domain
+    return ""
+
+
+def _restore_domain_runtime_snapshot(
+    snapshot: dict[str, Any],
+    skipped_services: set[str] | None = None,
+) -> tuple[bool, str]:
+    failures: list[str] = []
+    for path, key in (
+        (CERT_FULLCHAIN, "cert_fullchain"),
+        (CERT_PRIVKEY, "cert_privkey"),
+        (XRAY_DOMAIN_FILE, "compat_domain"),
+        (NGINX_CONF, "nginx_conf"),
+    ):
+        entry = snapshot.get(key)
+        if not isinstance(entry, dict):
+            continue
+        ok_restore, msg_restore = _restore_optional_file(path, entry)
+        if not ok_restore:
+            failures.append(msg_restore)
+
+    if failures:
+        return False, " | ".join(failures)
+
+    ok_test, out_test = _run_cmd(["nginx", "-t"], timeout=20)
+    if not ok_test:
+        return False, f"nginx -t gagal saat rollback domain:\n{out_test}"
+    if not _restart_and_wait("nginx", timeout_sec=20):
+        return False, "nginx gagal restart saat rollback domain."
+    ok_tls, msg_tls = _restart_tls_runtime_consumers(skipped_services or set())
+    if not ok_tls:
+        return False, f"Rollback domain selesai, tetapi restart consumer TLS gagal:\n{msg_tls}"
     return True, "ok"
 
 
@@ -3823,22 +4725,27 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if not DOMAIN_RE.match(domain_n):
         return False, title, "Domain tidak valid."
 
+    snapshot = _capture_domain_runtime_snapshot()
+    previous_domain = _domain_snapshot_active_domain(snapshot)
     stopped_services = _stop_conflicting_services()
     completed = False
+    error_msg: str | None = None
     try:
         ok_cert, cert_msg = _issue_cert_standalone(domain_n)
         if not ok_cert:
-            return False, title, cert_msg
-
-        ok_ng, ng_msg = _apply_nginx_domain(domain_n)
-        if not ok_ng:
-            return False, title, ng_msg
-        ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-        if not ok_tls:
-            return False, title, f"Restart consumer TLS gagal:\n{tls_msg}"
-        completed = True
+            error_msg = cert_msg
+        else:
+            ok_ng, ng_msg = _apply_nginx_domain(domain_n)
+            if not ok_ng:
+                error_msg = ng_msg
+            else:
+                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
+                if not ok_tls:
+                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                else:
+                    completed = True
     except Exception as exc:
-        return False, title, f"Setup domain custom gagal: {exc}"
+        error_msg = f"Setup domain custom gagal: {exc}"
     finally:
         # Success path: nginx sudah di-restart oleh _apply_nginx_domain, restore service lain
         # yang tadinya aktif agar state sistem kembali seperti sebelum wizard.
@@ -3848,23 +4755,47 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
             # Failure path: pastikan semua service yang sebelumnya aktif dipulihkan.
             _restore_services(stopped_services)
 
+    if error_msg:
+        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+        if ok_rb and previous_domain:
+            _, rb_failed = _refresh_all_account_info(domain=previous_domain)
+            if rb_failed > 0:
+                return False, title, (
+                    f"{error_msg}\nRollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama "
+                    "gagal direfresh."
+                )
+        if ok_rb:
+            return False, title, error_msg
+        return False, title, f"{error_msg}\nRollback domain gagal:\n{msg_rb}"
+
     ip_override: str | None = None
     ok_ip, ip_or_err = _get_public_ipv4()
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed = _refresh_all_account_info(domain=domain_n, ip=ip_override)
-    return _account_refresh_outcome(
-        title,
+    if failed > 0:
+        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+        if ok_rb and previous_domain:
+            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=ip_override)
+            if rb_failed > 0:
+                return False, title, (
+                    "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui.\n"
+                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
+                )
+            return False, title, (
+                "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui. "
+                "Perubahan sudah di-rollback ke state sebelumnya."
+            )
+        return False, title, (
+            "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui.\n"
+            f"Rollback domain gagal:\n{msg_rb}"
+        )
+    return True, title, "\n".join(
         [
             f"Domain aktif sekarang: {domain_n}",
             "- Certificate mode : standalone",
-        ],
-        updated=updated,
-        failed=failed,
-        partial_failure_hint=(
-            "Sebagian ACCOUNT INFO gagal direfresh. Domain dan certificate sudah diperbarui, "
-            "tetapi sebagian file akun mungkin masih stale."
-        ),
+            f"- ACCOUNT INFO updated: {updated}",
+        ]
     )
 
 
@@ -3876,6 +4807,8 @@ def op_domain_setup_cloudflare(
     allow_existing_same_ip: Any = False,
 ) -> tuple[bool, str, str]:
     title = "Domain Control - Set Domain (Cloudflare Wizard)"
+    snapshot = _capture_domain_runtime_snapshot()
+    previous_domain = _domain_snapshot_active_domain(snapshot)
 
     ok_root, root_or_err = _resolve_root_domain_input(root_domain_input)
     if not ok_root:
@@ -3932,6 +4865,7 @@ def op_domain_setup_cloudflare(
 
     stopped_services = _stop_conflicting_services()
     completed = False
+    error_msg: str | None = None
     try:
         ok_cert, cert_msg = _issue_cert_dns_cf_wildcard(
             domain=domain_final,
@@ -3940,22 +4874,37 @@ def op_domain_setup_cloudflare(
             account_id=account_id,
         )
         if not ok_cert:
-            return False, title, cert_msg
-
-        ok_ng, ng_msg = _apply_nginx_domain(domain_final)
-        if not ok_ng:
-            return False, title, ng_msg
-        ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
-        if not ok_tls:
-            return False, title, f"Restart consumer TLS gagal:\n{tls_msg}"
-        completed = True
+            error_msg = cert_msg
+        else:
+            ok_ng, ng_msg = _apply_nginx_domain(domain_final)
+            if not ok_ng:
+                error_msg = ng_msg
+            else:
+                ok_tls, tls_msg = _restart_tls_runtime_consumers(set(stopped_services))
+                if not ok_tls:
+                    error_msg = f"Restart consumer TLS gagal:\n{tls_msg}"
+                else:
+                    completed = True
     except Exception as exc:
-        return False, title, f"Setup Cloudflare wizard gagal: {exc}"
+        error_msg = f"Setup Cloudflare wizard gagal: {exc}"
     finally:
         if completed:
             _restore_services([svc for svc in stopped_services if svc != "nginx"])
         else:
             _restore_services(stopped_services)
+
+    if error_msg:
+        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+        if ok_rb and previous_domain:
+            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=vps_ipv4)
+            if rb_failed > 0:
+                return False, title, (
+                    f"{error_msg}\nRollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama "
+                    "gagal direfresh."
+                )
+        if ok_rb:
+            return False, title, error_msg
+        return False, title, f"{error_msg}\nRollback domain gagal:\n{msg_rb}"
 
     updated, failed = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
     lines = [
@@ -3967,16 +4916,25 @@ def op_domain_setup_cloudflare(
     ]
     if not ok_acc:
         lines.append(f"- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})")
-    return _account_refresh_outcome(
-        title,
-        lines,
-        updated=updated,
-        failed=failed,
-        partial_failure_hint=(
-            "Sebagian ACCOUNT INFO gagal direfresh. Domain, DNS, dan certificate sudah diperbarui, "
-            "tetapi sebagian file akun mungkin masih stale."
-        ),
-    )
+    if failed > 0:
+        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+        if ok_rb and previous_domain:
+            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=vps_ipv4)
+            if rb_failed > 0:
+                return False, title, (
+                    "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui.\n"
+                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
+                )
+            return False, title, (
+                "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui. "
+                "Perubahan sudah di-rollback ke state sebelumnya."
+            )
+        return False, title, (
+            "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui.\n"
+            f"Rollback domain gagal:\n{msg_rb}"
+        )
+    lines.append(f"- ACCOUNT INFO updated: {updated}")
+    return True, title, "\n".join(lines)
 
 
 def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str]:
@@ -3991,21 +4949,31 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
             return False, title, msg_setup
         return True, title, msg_setup
 
+    snapshot = _capture_domain_runtime_snapshot()
+    previous_domain = _domain_snapshot_active_domain(snapshot)
     ok_ng, ng_msg = _apply_nginx_domain(domain_n)
     if not ok_ng:
         return False, title, ng_msg
 
     updated, failed = _refresh_all_account_info(domain=domain_n)
-    return _account_refresh_outcome(
-        title,
-        [f"Domain berhasil diubah ke: {domain_n}"],
-        updated=updated,
-        failed=failed,
-        partial_failure_hint=(
-            "Sebagian ACCOUNT INFO gagal direfresh. Domain aktif sudah berubah, "
-            "tetapi sebagian file akun mungkin masih stale."
-        ),
-    )
+    if failed > 0:
+        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
+        if ok_rb and previous_domain:
+            _, rb_failed = _refresh_all_account_info(domain=previous_domain)
+            if rb_failed > 0:
+                return False, title, (
+                    "Refresh ACCOUNT INFO gagal setelah domain diubah.\n"
+                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
+                )
+            return False, title, (
+                "Refresh ACCOUNT INFO gagal setelah domain diubah. "
+                "Perubahan sudah di-rollback ke domain sebelumnya."
+            )
+        return False, title, (
+            "Refresh ACCOUNT INFO gagal setelah domain diubah.\n"
+            f"Rollback domain gagal:\n{msg_rb}"
+        )
+    return True, title, f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
 
 
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
@@ -4022,6 +4990,7 @@ def op_domain_refresh_accounts() -> tuple[bool, str, str]:
 def op_network_apply_warp_global_mode(mode: str) -> tuple[bool, str, str]:
     title = "Network Controls - WARP Global"
     mode_n = str(mode or "").strip().lower()
+    snapshot = _capture_xray_network_runtime_snapshot()
 
     ok_apply, msg_apply = _apply_routing_transaction(
         lambda rt_cfg, out_cfg: _routing_set_default_warp_global_mode(rt_cfg, out_cfg, mode_n)
@@ -4031,7 +5000,15 @@ def op_network_apply_warp_global_mode(mode: str) -> tuple[bool, str, str]:
 
     ok_sync, msg_sync = _speed_policy_sync_xray()
     if not ok_sync:
-        return True, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}"
+        ok_rb, msg_rb = _restore_xray_network_runtime_snapshot(snapshot)
+        if ok_rb:
+            return False, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}"
+        return False, title, f"{msg_apply}\nCatatan sinkronisasi speed policy: {msg_sync}\nRollback network controls gagal:\n{msg_rb}"
+    if not _speed_policy_apply_now():
+        ok_rb, msg_rb = _restore_xray_network_runtime_snapshot(snapshot)
+        if ok_rb:
+            return False, title, f"{msg_apply}\nCatatan apply runtime speed policy gagal (xray-speed)."
+        return False, title, f"{msg_apply}\nCatatan apply runtime speed policy gagal (xray-speed).\nRollback network controls gagal:\n{msg_rb}"
     return True, title, msg_apply
 
 

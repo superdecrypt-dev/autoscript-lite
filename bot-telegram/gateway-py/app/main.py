@@ -68,7 +68,7 @@ SSH_QAC_MENU_ID = "25"
 BACKUP_MENU_ID = "32"
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
-ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password"}
+ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password", "reset_credential"}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -79,6 +79,7 @@ FORM_CHOICE_USERNAME_ACTIONS = {
     "extend_expiry",
     "account_info",
     "reset_password",
+    "reset_credential",
     "detail",
     "set_quota_limit",
     "reset_quota_used",

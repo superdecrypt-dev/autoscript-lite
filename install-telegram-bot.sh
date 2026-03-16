@@ -65,7 +65,7 @@ BOT_STATE_DIR="${BOT_STATE_DIR:-/var/lib/bot-telegram}"
 BOT_LOG_DIR="${BOT_LOG_DIR:-/var/log/bot-telegram}"
 GATEWAY_RUN_USER="${GATEWAY_RUN_USER:-bot-telegram-gateway}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
+BACKEND_PORT="${BACKEND_PORT:-7081}"
 BACKEND_BASE_URL="${BACKEND_BASE_URL:-}"
 if [[ -z "${BACKEND_BASE_URL}" ]]; then
   BACKEND_BASE_URL="http://$(format_host_for_url "${BACKEND_HOST}"):${BACKEND_PORT}"

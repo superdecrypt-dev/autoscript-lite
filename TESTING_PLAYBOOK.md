@@ -198,7 +198,7 @@ systemctl is-active bot-telegram-backend bot-telegram-gateway
 /opt/bot-telegram/scripts/smoke-test.sh
 curl -fsS --max-time 8 \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
-  "http://127.0.0.1:8080/api/main-menu" >/dev/null
+  "http://127.0.0.1:7081/api/main-menu" >/dev/null
 ```
 
 Kriteria lulus:
@@ -328,7 +328,7 @@ systemctl is-active bot-telegram-backend bot-telegram-gateway bot-telegram-monit
 /opt/bot-telegram/scripts/smoke-test.sh
 curl -fsS --max-time 8 \
   -H "X-Internal-Shared-Secret: ${INTERNAL_SHARED_SECRET}" \
-  "http://127.0.0.1:8080/api/main-menu" >/dev/null
+  "http://127.0.0.1:7081/api/main-menu" >/dev/null
 ```
 
 Catatan:

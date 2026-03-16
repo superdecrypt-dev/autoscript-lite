@@ -77,7 +77,7 @@ resolve_backend_base_url() {
   printf '%s\n' "${raw_base:-http://127.0.0.1:${default_port}}"
 }
 
-BACKEND_BASE_URL="$(resolve_backend_base_url 8080)"
+BACKEND_BASE_URL="$(resolve_backend_base_url 7080)"
 INTERNAL_SHARED_SECRET="${INTERNAL_SHARED_SECRET:-}"
 
 if [[ -z "${INTERNAL_SHARED_SECRET}" ]]; then
