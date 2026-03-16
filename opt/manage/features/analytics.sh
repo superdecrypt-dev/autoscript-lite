@@ -2336,6 +2336,13 @@ zivpn_password_file() {
   printf '%s/%s.pass\n' "${ZIVPN_PASSWORDS_DIR}" "${username}"
 }
 
+zivpn_user_password_synced() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 1
+  zivpn_runtime_available || return 1
+  [[ -f "$(zivpn_password_file "${username}")" ]]
+}
+
 zivpn_sync_runtime_now() {
   zivpn_runtime_available || return 1
   "${ZIVPN_SYNC_BIN}" \
@@ -3303,7 +3310,11 @@ PY
   printf -v running_badvpn '%-*s : %s' "${running_label_width}" "BadVPN UDPGW" "${badvpn_port_disp}"
   if zivpn_account_info_enabled; then
     local zivpn_password_line
-    printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "same as SSH password"
+    if zivpn_user_password_synced "${username}"; then
+      printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "same as SSH password"
+    else
+      printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "not synced to runtime"
+    fi
     zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"
   fi
   if ! cat > "${acc_file}" <<EOF
@@ -3507,6 +3518,39 @@ ssh_read_password_confirm() {
     return 1
   fi
   _out_ref="${p1}"
+  return 0
+}
+
+ssh_apply_password() {
+  local username="${1:-}"
+  local password="${2:-}"
+  printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1
+}
+
+ssh_password_reset_rollback() {
+  local username="${1:-}"
+  local previous_password="${2:-}"
+  [[ -n "${username}" ]] || {
+    echo "username rollback kosong"
+    return 1
+  }
+  if [[ -z "${previous_password}" || "${previous_password}" == "-" ]]; then
+    echo "password lama tidak tersedia untuk rollback"
+    return 1
+  fi
+  if ! ssh_apply_password "${username}" "${previous_password}"; then
+    echo "rollback Linux password gagal"
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${previous_password}"; then
+    echo "password Linux dipulihkan, tetapi account info rollback gagal"
+    return 1
+  fi
+  if ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
+    echo "password Linux dipulihkan, tetapi rollback ZIVPN gagal"
+    return 1
+  fi
+  echo "ok"
   return 0
 }
 
@@ -3911,7 +3955,16 @@ ssh_add_user_menu() {
     pause
     return 0
   fi
-  zivpn_sync_user_password_warn "${username}" "${password}" || true
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN."
+    pause
+    return 0
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info."
+    pause
+    return 0
+  fi
 
   log "Akun SSH berhasil dibuat: ${username}"
   title
@@ -4096,22 +4149,54 @@ ssh_reset_password_menu() {
     return 0
   fi
 
+  local previous_password
+  previous_password="$(ssh_account_info_password_get "${username}")"
+
   local password=""
   if ! ssh_read_password_confirm password; then
     pause
     return 0
   fi
 
-  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+  if ! ssh_apply_password "${username}" "${password}"; then
     warn "Gagal reset password user '${username}'."
     pause
     return 0
   fi
 
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 0
   fi
-  zivpn_sync_user_password_warn "${username}" "${password}" || true
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 0
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'."
+    fi
+    pause
+    return 0
+  fi
   if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
     hr
     echo "One-time Password : ${password}"

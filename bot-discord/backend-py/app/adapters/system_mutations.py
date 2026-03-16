@@ -78,6 +78,11 @@ SSHWS_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
 ZIVPN_SERVICE = "zivpn"
 ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
 ZIVPN_SYNC_BIN = Path("/usr/local/bin/zivpn-password-sync")
+ZIVPN_PASSWORDS_DIR = Path("/etc/zivpn/passwords.d")
+ZIVPN_CERT_FILE = Path("/etc/zivpn/zivpn.crt")
+ZIVPN_KEY_FILE = Path("/etc/zivpn/zivpn.key")
+ZIVPN_DEFAULT_LISTEN = ":5667"
+ZIVPN_DEFAULT_OBFS = "zivpn"
 
 
 def _run_cmd(
@@ -131,9 +136,107 @@ def _service_is_active(name: str) -> bool:
 
 
 def _zivpn_account_info_enabled() -> bool:
+    return _zivpn_runtime_available()
+
+
+def _zivpn_runtime_available() -> bool:
     if not ZIVPN_SYNC_BIN.exists():
         return False
     return _service_exists(ZIVPN_SERVICE) or ZIVPN_CONFIG_FILE.exists()
+
+
+def _zivpn_password_file(username: str) -> Path:
+    return ZIVPN_PASSWORDS_DIR / f"{str(username or '').strip()}.pass"
+
+
+def _zivpn_runtime_settings() -> dict[str, str]:
+    settings = {
+        "listen": ZIVPN_DEFAULT_LISTEN,
+        "cert": str(ZIVPN_CERT_FILE),
+        "key": str(ZIVPN_KEY_FILE),
+        "obfs": ZIVPN_DEFAULT_OBFS,
+    }
+    ok, payload = _read_json(ZIVPN_CONFIG_FILE)
+    if ok and isinstance(payload, dict):
+        for key in ("listen", "cert", "key", "obfs"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                settings[key] = value
+    listen = str(settings.get("listen") or "").strip() or ZIVPN_DEFAULT_LISTEN
+    if listen.isdigit():
+        listen = f":{listen}"
+    settings["listen"] = listen
+    return settings
+
+
+def _zivpn_sync_runtime() -> tuple[bool, str]:
+    if not _zivpn_runtime_available():
+        return True, "skip"
+    settings = _zivpn_runtime_settings()
+    return _run_cmd(
+        [
+            str(ZIVPN_SYNC_BIN),
+            "--config",
+            str(ZIVPN_CONFIG_FILE),
+            "--passwords-dir",
+            str(ZIVPN_PASSWORDS_DIR),
+            "--listen",
+            settings["listen"],
+            "--cert",
+            settings["cert"],
+            "--key",
+            settings["key"],
+            "--obfs",
+            settings["obfs"],
+            "--account-dir",
+            str(SSH_ACCOUNT_DIR),
+            "--service",
+            ZIVPN_SERVICE,
+            "--sync-service-state",
+        ],
+        timeout=30,
+    )
+
+
+def _zivpn_store_user_password(username: str, password: str) -> tuple[bool, str]:
+    username_n = str(username or "").strip()
+    password_n = str(password or "").strip()
+    if not username_n or not password_n:
+        return False, "username/password ZIVPN tidak valid"
+    try:
+        ZIVPN_PASSWORDS_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(ZIVPN_PASSWORDS_DIR, 0o700)
+        dst = _zivpn_password_file(username_n)
+        _write_text_atomic(dst, password_n + "\n")
+        _chmod_600(dst)
+        return True, str(dst)
+    except Exception as exc:
+        return False, f"Gagal menyimpan password ZIVPN: {exc}"
+
+
+def _zivpn_sync_user_password(username: str, password: str) -> tuple[bool, str]:
+    if not _zivpn_runtime_available():
+        return True, "skip"
+    ok_store, store_msg = _zivpn_store_user_password(username, password)
+    if not ok_store:
+        return False, store_msg
+    return _zivpn_sync_runtime()
+
+
+def _zivpn_remove_user_password(username: str) -> tuple[bool, str]:
+    if not _zivpn_runtime_available():
+        return True, "skip"
+    try:
+        _zivpn_password_file(username).unlink(missing_ok=True)
+    except Exception as exc:
+        return False, f"Gagal menghapus password ZIVPN: {exc}"
+    return _zivpn_sync_runtime()
+
+
+def _zivpn_user_password_synced(username: str) -> bool:
+    if not _zivpn_runtime_available():
+        return False
+    return _zivpn_password_file(username).exists()
 
 
 def _edge_runtime_get_env(key: str) -> str:
@@ -590,6 +693,41 @@ def _ssh_password_from_account_info(username: str) -> str:
     return password or "-"
 
 
+def _ssh_collect_existing_tokens(state_dir: Path, current_path: Path | None = None) -> set[str]:
+    tokens: set[str] = set()
+    current_real = current_path.resolve() if current_path and current_path.exists() else None
+    try:
+        candidates = sorted(state_dir.glob("*.json"))
+    except Exception:
+        return tokens
+    for candidate in candidates:
+        try:
+            if current_real is not None and candidate.resolve() == current_real:
+                continue
+        except Exception:
+            pass
+        ok, payload = _read_json(candidate)
+        if not ok or not isinstance(payload, dict):
+            continue
+        token = str(payload.get("sshws_token") or "").strip().lower()
+        if re.fullmatch(r"[a-f0-9]{10}", token or ""):
+            tokens.add(token)
+    return tokens
+
+
+def _ssh_ensure_state_token(payload: dict[str, Any], state_path: Path | None = None) -> str:
+    candidate = str(payload.get("sshws_token") or "").strip().lower()
+    state_dir = state_path.parent if state_path is not None else SSH_QUOTA_DIR
+    used = _ssh_collect_existing_tokens(state_dir, current_path=state_path)
+    if re.fullmatch(r"[a-f0-9]{10}", candidate or "") and candidate not in used:
+        return candidate
+    for _ in range(128):
+        token = secrets.token_hex(5)
+        if token not in used:
+            return token
+    raise RuntimeError("Gagal membuat sshws_token unik.")
+
+
 def _ssh_ws_public_ports_label() -> str:
     return "443 & 80"
 
@@ -612,6 +750,7 @@ def _ssh_normalize_state_payload(
     *,
     created_at: str = "",
     expired_at: str = "",
+    state_path: Path | None = None,
 ) -> dict[str, Any]:
     existing = payload if isinstance(payload, dict) else {}
     status_raw = existing.get("status") if isinstance(existing.get("status"), dict) else {}
@@ -631,6 +770,7 @@ def _ssh_normalize_state_payload(
         "quota_limit": quota_limit,
         "quota_unit": quota_unit,
         "quota_used": quota_used,
+        "sshws_token": _ssh_ensure_state_token(existing, state_path=state_path),
         "status": {
             "manual_block": bool(status_raw.get("manual_block")),
             "quota_exhausted": bool(status_raw.get("quota_exhausted")),
@@ -675,6 +815,7 @@ def _ssh_load_state(
         payload,
         created_at=created_at,
         expired_at=expired_at,
+        state_path=target,
     )
     return True, target, normalized
 
@@ -685,6 +826,7 @@ def _ssh_save_state(path: Path, payload: dict[str, Any]) -> None:
         payload,
         created_at=str(payload.get("created_at") or ""),
         expired_at=str(payload.get("expired_at") or ""),
+        state_path=path,
     )
     _write_json_atomic(path, normalized)
     _chmod_600(path)
@@ -777,11 +919,12 @@ def _ssh_write_account_info(
         f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}",
     ]
     if _zivpn_account_info_enabled():
+        zivpn_password_state = "same as SSH password" if _zivpn_user_password_synced(username) else "not synced to runtime"
         lines.extend(
             [
                 "",
                 "=== ZIVPN UDP ===",
-                f"{'ZIVPN Password':<{running_label_width}} : same as SSH password",
+                f"{'ZIVPN Password':<{running_label_width}} : {zivpn_password_state}",
             ]
         )
     lines.extend(
@@ -808,8 +951,14 @@ def _ssh_refresh_account_info(username: str, password_override: str = "") -> tup
     ok_state, state_path_or_err, payload_or_err = _ssh_load_state(username)
     if not ok_state:
         return False, str(state_path_or_err)
+    state_path = state_path_or_err
     quota_payload = payload_or_err
+    assert isinstance(state_path, Path)
     assert isinstance(quota_payload, dict)
+    try:
+        _ssh_save_state(state_path, quota_payload)
+    except Exception as exc:
+        return False, f"Gagal menyimpan state SSH: {exc}"
     password = str(password_override or "").strip() or _ssh_password_from_account_info(username)
     return _ssh_write_account_info(username, password=password, quota_payload=quota_payload)
 
@@ -832,6 +981,29 @@ def _ssh_post_update_warnings(username: str, password_override: str = "") -> lis
     if not ok_refresh:
         warnings.append(f"account-info: {refresh_msg}")
     return warnings
+
+
+def _ssh_restore_linux_password(username: str, password: str) -> tuple[bool, str]:
+    return _run_cmd(
+        ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, password],
+        timeout=20,
+    )
+
+
+def _ssh_password_reset_rollback(username: str, previous_password: str) -> tuple[bool, str]:
+    previous = str(previous_password or "").strip()
+    if not previous or previous == "-":
+        return False, "password lama tidak tersedia untuk rollback"
+    ok_restore, restore_msg = _ssh_restore_linux_password(username, previous)
+    if not ok_restore:
+        return False, f"rollback Linux password gagal: {restore_msg}"
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=previous)
+    if not ok_refresh:
+        return False, f"password Linux dipulihkan, tetapi account info rollback gagal: {refresh_msg}"
+    ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, previous)
+    if not ok_zivpn:
+        return False, f"password Linux dipulihkan, tetapi rollback ZIVPN gagal: {zivpn_msg}"
+    return True, "ok"
 
 
 def _load_quota(proto: str, username: str) -> tuple[bool, Path | str, dict[str, Any] | str]:
@@ -2317,6 +2489,27 @@ def op_user_add(
                     pass
             return False, "User Management - Add User", str(account_msg)
 
+        ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, raw_password)
+        if not ok_zivpn:
+            _zivpn_remove_user_password(username)
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            for path in (quota_path, account_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False, "User Management - Add User", f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}"
+        ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
+        if not ok_account:
+            _zivpn_remove_user_password(username)
+            _run_cmd(["userdel", "-r", username], timeout=20)
+            for path in (quota_path, account_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False, "User Management - Add User", f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {account_msg}"
+
         warnings = _ssh_post_update_warnings(username, password_override=raw_password)
         msg = (
             f"Add user SSH sukses.\n"
@@ -2424,7 +2617,11 @@ def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
                 if not ok_del2:
                     return False, "User Management - Delete User", f"Gagal menghapus user Linux '{username}': {out_del2}"
         _delete_account_artifacts(proto, username)
-        return True, "User Management - Delete User", f"Delete user selesai: {username}@{proto}"
+        ok_zivpn, zivpn_msg = _zivpn_remove_user_password(username)
+        msg = f"Delete user selesai: {username}@{proto}"
+        if not ok_zivpn:
+            msg += f"\n- Warning: sinkronisasi hapus ZIVPN gagal ({zivpn_msg})"
+        return True, "User Management - Delete User", msg
 
     ok_del, del_msg = _xray_delete_client(proto, username)
     if not ok_del:
@@ -2598,6 +2795,7 @@ def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]
         return False, title, "Password SSH tidak boleh sama dengan username."
     if not _linux_user_exists(username):
         return False, title, f"User Linux '{username}' tidak ditemukan."
+    previous_password = _ssh_password_from_account_info(username)
 
     ok_passwd, out_passwd = _run_cmd(
         ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, raw_password],
@@ -2606,7 +2804,27 @@ def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]
     if not ok_passwd:
         return False, title, f"Gagal reset password user '{username}': {out_passwd}"
 
-    warnings = _ssh_post_update_warnings(username, password_override=raw_password)
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=raw_password)
+    if not ok_refresh:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
+        suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+        return False, title, f"Gagal sinkron SSH ACCOUNT INFO untuk '{username}': {refresh_msg}.{suffix}"
+
+    ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, raw_password)
+    if not ok_zivpn:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
+        suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+        return False, title, f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}.{suffix}"
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=raw_password)
+    if not ok_refresh:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
+        suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+        return False, title, f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {refresh_msg}.{suffix}"
+
+    warnings: list[str] = []
+    ok_enforce, enforce_msg = _ssh_run_enforcer()
+    if not ok_enforce:
+        warnings.append(f"enforcer: {enforce_msg}")
     msg = f"Password berhasil direset untuk {username}@{SSH_PROTOCOL}"
     if warnings:
         msg += "\n- Warning: " + " | ".join(warnings)
