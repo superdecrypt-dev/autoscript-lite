@@ -69,6 +69,14 @@ maintenance_restart_core_now() {
       pre_runtime_healthy="false"
     fi
   fi
+  echo "Pre-check     : xray=${xray_was_active}, nginx=${nginx_was_active}, runtime_healthy=${pre_runtime_healthy}"
+  if [[ "${pre_runtime_healthy}" == "false" ]]; then
+    warn "Runtime sebelum restart core sudah terdeteksi tidak sehat."
+    if ! confirm_menu_apply_now "Lanjutkan restart core dalam mode best-effort recovery juga?"; then
+      warn "Restart core dibatalkan."
+      return 0
+    fi
+  fi
   if ! confirm_menu_apply_now "Restart Core akan me-restart Xray dan Nginx. Recovery yang tersedia bersifat best-effort, bukan snapshot runtime penuh. Lanjutkan sekarang?"; then
     warn "Restart core dibatalkan."
     return 0
@@ -124,6 +132,9 @@ maintenance_restart_core_now() {
     return 1
   fi
   if ! maintenance_core_runtime_health_check; then
+    sleep 2
+  fi
+  if ! maintenance_core_runtime_health_check; then
     warn "Restart core selesai, tetapi post-check runtime belum sehat. Mencoba restore state service sebelumnya..."
     maintenance_restore_service_state_exact xray "${xray_was_active}" || true
     maintenance_restore_service_state_exact nginx "${nginx_was_active}" || true
@@ -133,6 +144,11 @@ maintenance_restart_core_now() {
       warn "Runtime belum kembali ke kondisi sehat seperti sebelum restart core."
     fi
     return 1
+  fi
+  if [[ "${pre_runtime_healthy}" == "true" ]]; then
+    log "Restart core selesai dan runtime sehat kembali."
+  else
+    warn "Restart core selesai. Runtime kini lolos post-check, tetapi aksi ini tetap memakai recovery best-effort."
   fi
   return 0
 }

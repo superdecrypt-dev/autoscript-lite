@@ -461,7 +461,7 @@ account_info_restore_file_locked() {
   # args: backup_file target_file
   local src="${1:-}"
   local dst="${2:-}"
-  local dir="" tmp=""
+  local dir="" tmp="" dst_mode="600" dst_uid="0" dst_gid="0"
   [[ -n "${src}" && -n "${dst}" ]] || return 1
   if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" != "1" ]]; then
     account_info_run_locked account_info_restore_file_locked "${src}" "${dst}"
@@ -470,15 +470,32 @@ account_info_restore_file_locked() {
 
   dir="$(dirname "${dst}")"
   mkdir -p "${dir}" 2>/dev/null || true
+  if ! account_info_target_write_preflight "${dst}"; then
+    return 1
+  fi
+  if [[ -e "${dst}" || -L "${dst}" ]]; then
+    dst_mode="$(stat -c '%a' "${dst}" 2>/dev/null || echo '600')"
+    dst_uid="$(stat -c '%u' "${dst}" 2>/dev/null || echo '0')"
+    dst_gid="$(stat -c '%g' "${dst}" 2>/dev/null || echo '0')"
+  fi
   tmp="$(mktemp "${dir}/.account-restore.XXXXXX" 2>/dev/null || true)"
   [[ -n "${tmp}" ]] || return 1
   if ! cp -f -- "${src}" "${tmp}"; then
     rm -f "${tmp}" >/dev/null 2>&1 || true
     return 1
   fi
+  chmod "${dst_mode}" "${tmp}" 2>/dev/null || chmod 600 "${tmp}" 2>/dev/null || true
+  chown "${dst_uid}:${dst_gid}" "${tmp}" 2>/dev/null || true
   if ! mv -f "${tmp}" "${dst}"; then
-    rm -f "${tmp}" >/dev/null 2>&1 || true
-    return 1
+    if install -m 600 "${tmp}" "${dst}" >/dev/null 2>&1; then
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+    elif cp -f -- "${tmp}" "${dst}" >/dev/null 2>&1; then
+      chmod 600 "${dst}" 2>/dev/null || true
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+    else
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      return 1
+    fi
   fi
   chmod 600 "${dst}" 2>/dev/null || true
   return 0
@@ -1375,6 +1392,10 @@ account_info_domain_sync_state_write() {
   fi
   rm -f "${tmp}" >/dev/null 2>&1 || true
   return 0
+}
+
+account_info_domain_sync_state_mark_pending() {
+  account_info_domain_sync_state_write "-"
 }
 
 account_info_probe_domain_from_any_account_file() {
@@ -3595,14 +3616,23 @@ cert_renew_cert_recover_if_needed() {
   fi
   if svc_exists nginx && svc_is_active nginx; then
     if ! nginx_restart_checked_with_listener >/dev/null 2>&1; then
-      notes+=("restart nginx gagal")
+      sleep 2
+      if ! nginx_restart_checked_with_listener >/dev/null 2>&1; then
+        notes+=("restart nginx gagal")
+      fi
     fi
   fi
   if ! cert_runtime_restart_active_tls_consumers >/dev/null 2>&1; then
-    notes+=("restart consumer TLS gagal")
+    sleep 2
+    if ! cert_runtime_restart_active_tls_consumers >/dev/null 2>&1; then
+      notes+=("restart consumer TLS gagal")
+    fi
   fi
   if [[ -n "${domain}" ]] && ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
-    notes+=("probe TLS hostname gagal")
+    sleep 2
+    if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
+      notes+=("probe TLS hostname gagal")
+    fi
   fi
   if (( ${#notes[@]} > 0 )); then
     warn "Recovery cert renew belum bersih: $(IFS=' | '; echo "${notes[*]}"). Snapshot tetap dipertahankan di ${backup_dir}."
@@ -3865,7 +3895,13 @@ domain_control_apply_nginx_domain() {
   fi
 
   if ! sync_xray_domain_file "${applied_domain}"; then
-    warn "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Domain nginx tetap aktif; sinkronkan manual bila perlu."
+    warn "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Mengembalikan candidate nginx agar domain tidak aktif setengah jadi."
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan; restore backup nginx juga gagal."
+    nginx -t >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan; backup nginx tidak valid saat rollback."
+    if ! svc_restart_checked nginx 60; then
+      die "Compat domain file gagal disinkronkan; rollback nginx juga gagal."
+    fi
+    die "Compat domain file gagal disinkronkan setelah apply domain."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"
@@ -3928,13 +3964,23 @@ domain_control_set_domain_now() {
   local refresh_log="" refresh_warn_lines="" refresh_ip=""
   refresh_ip="$(normalize_ip_token "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)")"
   if ! ui_run_logged_command_with_spinner refresh_log "Refresh ACCOUNT INFO ke domain baru" domain_control_refresh_account_info_batches_run "${DOMAIN}" "${refresh_ip}" "all" "10"; then
-    warn "Set Domain selesai, tetapi refresh otomatis ACCOUNT INFO gagal."
+    warn "Refresh otomatis ACCOUNT INFO gagal pada percobaan pertama. Mencoba sekali lagi sebelum menandai sync pending..."
     hr
     tail -n 60 "${refresh_log}" 2>/dev/null || true
     hr
     rm -f "${refresh_log}" >/dev/null 2>&1 || true
-    pause
-    return 1
+    if ! ui_run_logged_command_with_spinner refresh_log "Retry refresh ACCOUNT INFO ke domain baru" domain_control_refresh_account_info_batches_run "${DOMAIN}" "${refresh_ip}" "all" "10"; then
+      account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
+      warn "Set Domain sudah mengaktifkan runtime utama, tetapi refresh otomatis ACCOUNT INFO tetap gagal."
+      warn "Status dikembalikan gagal agar sinkronisasi file akun tidak terlihat selesai penuh."
+      warn "Domain aktif tetap: ${DOMAIN}. Jalankan 'Refresh Account Info' untuk menyelesaikan sinkronisasi file akun."
+      hr
+      tail -n 60 "${refresh_log}" 2>/dev/null || true
+      hr
+      rm -f "${refresh_log}" >/dev/null 2>&1 || true
+      pause
+      return 1
+    fi
   fi
   refresh_warn_lines="$(grep '\[manage\]\[WARN\]' "${refresh_log}" 2>/dev/null | tail -n 12 || true)"
   if [[ -n "${refresh_warn_lines}" ]]; then
@@ -4257,6 +4303,7 @@ domain_control_refresh_account_info_now() {
       fi
     fi
     if [[ "${total_count:-0}" =~ ^[0-9]+$ ]] && (( total_count > max_targets_per_run )); then
+      account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
       warn "Eksekusi ini hanya memproses ${max_targets_per_run} target pertama. Jalankan ulang menu ini untuk batch berikutnya."
     fi
     rm -f "${spin_log}" >/dev/null 2>&1 || true
@@ -4264,7 +4311,9 @@ domain_control_refresh_account_info_now() {
     return 0
   fi
 
+  account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
   warn "Refresh ACCOUNT INFO gagal."
+  warn "Batch yang sudah berhasil sebelum titik gagal dipertahankan. State sinkronisasi domain ditandai pending sampai refresh selesai penuh."
   hr
   tail -n 60 "${spin_log}" 2>/dev/null || true
   hr
@@ -4389,7 +4438,6 @@ domain_control_sync_compat_domain_now() {
   fi
 
   if sync_xray_domain_file "${domain}"; then
-    account_info_domain_sync_state_write "${domain}" >/dev/null 2>&1 || true
     log "Compat domain file berhasil disinkronkan ke ${domain}."
     [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
     pause
@@ -4480,6 +4528,7 @@ domain_control_sync_target_dns_now() {
 
   if [[ -z "${domain}" || -z "${zone_id}" || -z "${ipv4}" ]]; then
     warn "State pending repair target DNS Cloudflare tidak lengkap."
+    warn "File pending : ${pending_file}"
     warn "File pending dipertahankan agar operator masih bisa meninjau atau membersihkannya secara sadar."
     pause
     return 1
@@ -4568,6 +4617,12 @@ domain_control_sync_target_dns_now() {
   [[ "${remaining_pending}" =~ ^[0-9]+$ ]] || remaining_pending=0
   if (( remaining_pending > 0 )); then
     warn "Masih ada ${remaining_pending} pending repair DNS lain yang belum dibereskan."
+    if confirm_yn_or_back "Lanjutkan repair pending DNS berikutnya sekarang juga?"; then
+      if ! domain_control_sync_target_dns_now; then
+        return 1
+      fi
+      return 0
+    fi
   fi
   pause
   return 0
@@ -4777,8 +4832,8 @@ domain_control_guard_renew_if_needed() {
   fi
   if (( rc == 0 )); then
     if (( post_check_rc == 0 && ${#post_notes[@]} == 0 )); then
+      local guard_followup_pending="false"
       log "Postflight guard sehat: domain/nginx/compat/cert tetap sinkron."
-      account_info_domain_sync_state_write "${domain}" >/dev/null 2>&1 || true
       if [[ -n "${domain}" ]] && domain_control_cf_sync_pending_exists; then
         if confirm_yn_or_back "Terdapat pending repair target DNS Cloudflare setelah guard renew. Repair sekarang?"; then
           domain_control_sync_target_dns_now "${domain}" || rc=1
@@ -4786,8 +4841,12 @@ domain_control_guard_renew_if_needed() {
           dns_prompt_rc=$?
           if (( dns_prompt_rc == 1 || dns_prompt_rc == 2 )); then
             warn "Repair target DNS Cloudflare ditunda. Pending task tetap dipertahankan."
+            guard_followup_pending="true"
           fi
         fi
+      fi
+      if [[ "${rc}" == "0" && -n "${domain}" ]] && domain_control_cf_sync_pending_exists; then
+        guard_followup_pending="true"
       fi
       compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
       compat_domain="$(normalize_domain_token "${compat_domain}")"
@@ -4798,8 +4857,36 @@ domain_control_guard_renew_if_needed() {
           compat_prompt_rc=$?
           if (( compat_prompt_rc == 1 || compat_prompt_rc == 2 )); then
             warn "Repair compat domain ditunda. Anda masih bisa menjalankannya manual dari Domain Control."
+            guard_followup_pending="true"
           fi
         fi
+      fi
+      compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+      compat_domain="$(normalize_domain_token "${compat_domain}")"
+      if [[ "${rc}" == "0" && -n "${domain}" && "${compat_domain}" != "${domain}" ]]; then
+        guard_followup_pending="true"
+      fi
+      if [[ "${rc}" == "0" && -n "${domain}" ]]; then
+        local refresh_ip="" guard_refresh_log=""
+        refresh_ip="$(normalize_ip_token "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)")"
+        if ui_run_logged_command_with_spinner guard_refresh_log "Refresh ACCOUNT INFO pasca-guard renew" domain_control_refresh_account_info_batches_run "${domain}" "${refresh_ip}" "all" "10"; then
+          if [[ "${guard_followup_pending}" == "true" ]]; then
+            account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
+            warn "Refresh ACCOUNT INFO pasca-guard renew berhasil, tetapi follow-up domain masih pending."
+          else
+            account_info_domain_sync_state_write "${domain}" >/dev/null 2>&1 || true
+          fi
+          rm -f "${guard_refresh_log}" >/dev/null 2>&1 || true
+        else
+          account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
+          warn "Postflight guard sehat, tetapi refresh otomatis ACCOUNT INFO pasca-guard renew gagal."
+          hr
+          tail -n 60 "${guard_refresh_log}" 2>/dev/null || true
+          hr
+          rm -f "${guard_refresh_log}" >/dev/null 2>&1 || true
+        fi
+      elif [[ -n "${domain}" && ( "${guard_followup_pending}" == "true" || "${rc}" != "0" ) ]]; then
+        account_info_domain_sync_state_mark_pending >/dev/null 2>&1 || true
       fi
     else
       rc=1
@@ -4813,11 +4900,14 @@ domain_control_guard_renew_if_needed() {
 
 domain_control_menu() {
   local pending_prompted="false"
+  local compat_prompted="false"
   while true; do
     local -a items=()
     local cf_pending="false"
     local cf_pending_count=0
     local pending_prompt_rc=0
+    local compat_prompt_rc=0
+    local active_domain="" sync_state_domain="" compat_domain=""
     domain_control_cf_sync_pending_exists && cf_pending="true"
     if [[ "${cf_pending}" == "true" ]]; then
       cf_pending_count="$(domain_control_cf_sync_pending_list_files | wc -l | tr -d '[:space:]' || true)"
@@ -4825,6 +4915,10 @@ domain_control_menu() {
     else
       pending_prompted="false"
     fi
+    active_domain="$(normalize_domain_token "$(detect_domain 2>/dev/null || true)")"
+    sync_state_domain="$(normalize_domain_token "$(account_info_domain_sync_state_read)")"
+    compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+    compat_domain="$(normalize_domain_token "${compat_domain}")"
     items=(
       "1|Set Domain"
       "2|Current Domain"
@@ -4851,6 +4945,31 @@ domain_control_menu() {
           hr
         fi
       fi
+    fi
+    if [[ "${sync_state_domain}" == "-" ]]; then
+      warn "Sync state ACCOUNT INFO masih pending. Jalankan 'Refresh Account Info' sampai semua batch selesai."
+      hr
+    elif [[ -n "${active_domain}" && -n "${sync_state_domain}" && "${sync_state_domain}" != "${active_domain}" ]]; then
+      warn "Sync state ACCOUNT INFO terakhir (${sync_state_domain}) belum cocok dengan domain aktif (${active_domain})."
+      hr
+    fi
+    if [[ "${cf_pending}" != "true" && -n "${active_domain}" && -n "${compat_domain}" && "${compat_domain}" != "${active_domain}" ]]; then
+      warn "Compat domain drift terdeteksi: ${compat_domain} != ${active_domain}"
+      hr
+      if [[ "${compat_prompted}" != "true" ]]; then
+        compat_prompted="true"
+        if confirm_yn_or_back "Buka repair 'Repair Compat Domain Drift' sekarang?"; then
+          menu_run_isolated_report "Repair Compat Domain" domain_control_sync_compat_domain_now
+          continue
+        fi
+        compat_prompt_rc=$?
+        if (( compat_prompt_rc == 1 || compat_prompt_rc == 2 )); then
+          warn "Repair compat domain tidak dibuka otomatis. Anda masih bisa memilih menu 6 kapan saja."
+          hr
+        fi
+      fi
+    else
+      compat_prompted="false"
     fi
     ui_menu_render_options items 76
     hr
@@ -8880,14 +8999,16 @@ account_refresh_xray_batch_apply() {
 }
 
 account_refresh_ssh_batch_apply() {
-  # args: start_idx end_idx users_ref targets_ref updated_ref failed_ref skipped_ref
+  # args: start_idx end_idx domain ip users_ref targets_ref updated_ref failed_ref skipped_ref
   local start_idx="${1:-0}"
   local end_idx="${2:-0}"
-  local -n _users_ref="${3}"
-  local -n _targets_ref="${4}"
-  local -n _updated_ref="${5}"
-  local -n _failed_ref="${6}"
-  local -n _skipped_ref="${7}"
+  local domain="${3:-}"
+  local ip="${4:-}"
+  local -n _users_ref="${5}"
+  local -n _targets_ref="${6}"
+  local -n _updated_ref="${7}"
+  local -n _failed_ref="${8}"
+  local -n _skipped_ref="${9}"
   local snap_dir="" manifest_file="" i username target_file state_file candidate_file=""
 
   snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh-ssh.XXXXXX" 2>/dev/null || true)"
@@ -8924,15 +9045,22 @@ account_refresh_ssh_batch_apply() {
   for (( i=start_idx; i<end_idx; i++ )); do
     username="${_users_ref[$i]}"
     state_file="$(ssh_user_state_resolve_file "${username}")"
+    target_file="${_targets_ref[$i]}"
+    [[ -n "${target_file}" ]] || target_file="$(ssh_account_info_file "${username}")"
+    if ! account_info_target_write_preflight "${target_file}"; then
+      warn "Preflight target ACCOUNT INFO SSH gagal: ${target_file}"
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
     if [[ ! -f "${state_file}" ]]; then
       warn "Refresh ACCOUNT INFO SSH skip '${username}': metadata state SSH tidak ditemukan."
       _skipped_ref=$((_skipped_ref + 1))
       continue
     fi
-    target_file="${_targets_ref[$i]}"
     candidate_file="${snap_dir}/ssh.${i}.candidate.txt"
     rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-    if ! ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}"; then
+    if ! ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}" "${domain}" "${ip}"; then
       _failed_ref=$((_failed_ref + 1))
       warn "Refresh ACCOUNT INFO SSH gagal untuk ${username}. Batch saat ini akan di-rollback."
       account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
@@ -9067,7 +9195,7 @@ account_refresh_all_info_files() {
       (( batch_end > ${#ssh_refresh_users[@]} )) && batch_end="${#ssh_refresh_users[@]}"
       current_batch=$((batch_start / batch_size + 1))
       log "Refresh ACCOUNT INFO SSH batch ${current_batch}/${total_batches}."
-      if ! account_refresh_ssh_batch_apply "${batch_start}" "${batch_end}" ssh_refresh_users ssh_refresh_targets ssh_updated ssh_failed ssh_skipped; then
+      if ! account_refresh_ssh_batch_apply "${batch_start}" "${batch_end}" "${domain}" "${ip}" ssh_refresh_users ssh_refresh_targets ssh_updated ssh_failed ssh_skipped; then
         log "Refresh ACCOUNT INFO (scope=${scope}) berhenti pada batch SSH ${current_batch}/${total_batches}: xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
         return 1
       fi
@@ -9105,7 +9233,11 @@ domain_control_refresh_account_info_batches_run() {
 
   while (( offset < total_count )); do
     if ! account_refresh_all_info_files "${domain}" "${ip}" "${scope}" "${batch_limit}" "${offset}"; then
-      return 1
+      warn "Batch refresh ACCOUNT INFO pada offset ${offset} gagal. Mencoba ulang sekali lagi..."
+      sleep 1
+      if ! account_refresh_all_info_files "${domain}" "${ip}" "${scope}" "${batch_limit}" "${offset}"; then
+        return 1
+      fi
     fi
     offset=$((offset + batch_limit))
   done
@@ -12942,12 +13074,12 @@ manage_modules_dir_ready() {
 resolve_manage_modules_dir() {
   local installed_modules="/usr/local/lib/autoscript-manage/opt/manage"
   local local_modules="${MANAGE_SCRIPT_DIR}/opt/manage"
-  if manage_modules_dir_ready "/opt/manage"; then
-    printf '%s\n' "/opt/manage"
-    return 0
-  fi
   if [[ "${MANAGE_SCRIPT_DIR}" != "/usr/local/bin" ]] && manage_modules_dir_ready "${local_modules}"; then
     printf '%s\n' "${local_modules}"
+    return 0
+  fi
+  if manage_modules_dir_ready "/opt/manage"; then
+    printf '%s\n' "/opt/manage"
     return 0
   fi
   if manage_modules_dir_ready "${installed_modules}"; then

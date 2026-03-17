@@ -2532,6 +2532,7 @@ adblock_source_change_commit_and_sync() {
   local success_label="${3:-Perubahan source Adblock tersimpan.}"
   local prev_dirty="0" snap_dir="" restore_ok="true"
   local restore_mode="" xray_enabled=""
+  local current_dirty="0"
   shift 3 || true
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
     adblock_run_locked adblock_source_change_commit_and_sync "${source_file}" "${snapshot_label}" "${success_label}" "$@"
@@ -2569,17 +2570,23 @@ adblock_source_change_commit_and_sync() {
       restore_mode="reload-xray"
     fi
     if ! adblock_update_now "${restore_mode}"; then
-      restore_ok="false"
-      adblock_mark_dirty >/dev/null 2>&1 || adblock_dirty_flag_restore "1" >/dev/null 2>&1 || true
-      warn "Rollback runtime Adblock ke source sebelumnya gagal setelah auto-update source baru gagal."
+      sleep 1
+      if ! adblock_update_now "${restore_mode}"; then
+        restore_ok="false"
+        adblock_mark_dirty >/dev/null 2>&1 || adblock_dirty_flag_restore "1" >/dev/null 2>&1 || true
+        warn "Rollback runtime Adblock ke source sebelumnya gagal setelah auto-update source baru gagal."
+      fi
     fi
   fi
-  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
   if [[ "${restore_ok}" == "true" ]]; then
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     warn "Update Adblock otomatis gagal. Perubahan source dibatalkan agar source dan runtime tetap sinkron."
   else
     adblock_mark_dirty >/dev/null 2>&1 || adblock_dirty_flag_restore "1" >/dev/null 2>&1 || true
-    warn "Update Adblock otomatis gagal dan rollback source tidak sepenuhnya bersih. Periksa source/runtime Adblock sebelum lanjut."
+    current_dirty="$(adblock_dirty_flag_get)"
+    warn "Update Adblock otomatis gagal dan rollback source/runtime tidak sepenuhnya bersih."
+    warn "Status akhir : dirty=${current_dirty}, snapshot source dipertahankan di ${snap_dir}"
+    warn "Tinjau source/runtime Adblock lalu jalankan 'Update Adblock' lagi setelah state dipastikan benar."
   fi
   return 1
 }
@@ -5228,12 +5235,31 @@ warp_wgcf_install_live_files_from_dir() {
 
 warp_tier_show_status() {
   local target live live_display svc_state license_raw license_masked socks_state="unknown"
-  local last_verified_at=""
+  local last_verified="" last_verified_at="" last_verified_age=""
   target="$(warp_tier_target_effective_get)"
   live="$(warp_live_tier_get)"
   live_display="$(warp_live_tier_display_get)"
   license_raw="$(warp_plus_license_state_get)"
   license_masked="$(warp_plus_license_mask "${license_raw}")"
+  last_verified="$(network_state_get "warp_tier_last_verified" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+  last_verified_at="$(network_state_get "warp_tier_last_verified_at" 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "${last_verified_at}" ]] && have_cmd date; then
+    local now_ts="" verified_ts="" age_sec=""
+    now_ts="$(date +%s 2>/dev/null || true)"
+    verified_ts="$(date -d "${last_verified_at}" +%s 2>/dev/null || true)"
+    if [[ "${now_ts}" =~ ^[0-9]+$ && "${verified_ts}" =~ ^[0-9]+$ && "${now_ts}" -ge "${verified_ts}" ]]; then
+      age_sec="$((now_ts - verified_ts))"
+      if (( age_sec < 60 )); then
+        last_verified_age="${age_sec}s lalu"
+      elif (( age_sec < 3600 )); then
+        last_verified_age="$((age_sec / 60))m lalu"
+      elif (( age_sec < 86400 )); then
+        last_verified_age="$((age_sec / 3600))j lalu"
+      else
+        last_verified_age="$((age_sec / 86400))h lalu"
+      fi
+    fi
+  fi
   warp_tier_state_seed_from_live
   if svc_exists wireproxy; then
     svc_state="$(svc_state wireproxy)"
@@ -5247,19 +5273,20 @@ warp_tier_show_status() {
   fi
 
   printf "Target Tier   : %s\n" "${target}"
-  printf "Live Tier     : %s\n" "${live_display}"
+  printf "Live Probe    : %s\n" "${live_display}"
   printf "wireproxy     : %s\n" "${svc_state}"
   printf "SOCKS5        : %s\n" "${socks_state}"
   if [[ "${live}" == "unknown" ]]; then
     printf "Probe Status  : trace Cloudflare via SOCKS belum konklusif; gunakan target + status wireproxy sebagai petunjuk sementara.\n"
-    local last_verified=""
-    last_verified="$(network_state_get "warp_tier_last_verified" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
-    last_verified_at="$(network_state_get "warp_tier_last_verified_at" 2>/dev/null | tr -d '\r' || true)"
+    if [[ "${target}" == "free" || "${target}" == "plus" ]]; then
+      printf "Operational   : estimasi %s (wireproxy=%s, socks=%s)\n" "${target}" "${svc_state}" "${socks_state}"
+    fi
     case "${last_verified}" in
       free|plus) printf "Last Verified : %s\n" "${last_verified}" ;;
     esac
     if [[ -n "${last_verified_at}" ]]; then
       printf "Verified At   : %s\n" "${last_verified_at}"
+      [[ -n "${last_verified_age}" ]] && printf "Verified Age  : %s\n" "${last_verified_age}"
     fi
   fi
   if [[ -n "${license_raw}" ]]; then
@@ -6862,6 +6889,7 @@ dns_addons_edit_with_nano() {
       fi
     fi
 	    warn "Editor ini akan mengganti keseluruhan DNS config live, bukan patch per-field."
+	    warn "Gunakan menu DNS Settings bila Anda hanya ingin mengubah server/query-strategy/cache secara per-field."
 	    if ! confirm_yn_or_back "Terapkan hasil edit DNS ke file live sekarang?"; then
 	      apply_rc=$?
 	      if (( apply_rc == 1 || apply_rc == 2 )); then
@@ -6879,7 +6907,7 @@ dns_addons_edit_with_nano() {
 	      return 0
 	    else
 	      local replace_ack=""
-	      read -r -p "Ketik persis 'REPLACE DNS' untuk lanjut full-replace DNS config (atau kembali): " replace_ack
+	      read -r -p "Ketik persis 'REPLACE DNS FULL' untuk lanjut full-replace DNS config (atau kembali): " replace_ack
 	      if is_back_choice "${replace_ack}"; then
 	        warn "Perubahan editor DNS dibatalkan pada checkpoint full-replace."
 	        rm -f "${diff_report}" >/dev/null 2>&1 || true
@@ -6887,7 +6915,7 @@ dns_addons_edit_with_nano() {
 	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	        return 0
 	      fi
-	      if [[ "${replace_ack}" != "REPLACE DNS" ]]; then
+	      if [[ "${replace_ack}" != "REPLACE DNS FULL" ]]; then
 	        warn "Konfirmasi full-replace DNS tidak cocok. Dibatalkan."
 	        rm -f "${diff_report}" >/dev/null 2>&1 || true
 	        [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
@@ -6896,7 +6924,7 @@ dns_addons_edit_with_nano() {
 	      fi
 	      if (( added_lines + removed_lines >= 40 )); then
 	        local replace_full_ack=""
-	        read -r -p "Diff DNS cukup besar (+${added_lines}/-${removed_lines}). Ketik persis 'REPLACE DNS FULL' untuk lanjut (atau kembali): " replace_full_ack
+	        read -r -p "Diff DNS cukup besar (+${added_lines}/-${removed_lines}). Ketik persis 'CONFIRM DNS LARGE' untuk lanjut (atau kembali): " replace_full_ack
 	        if is_back_choice "${replace_full_ack}"; then
 	          warn "Perubahan editor DNS dibatalkan pada checkpoint diff besar."
 	          rm -f "${diff_report}" >/dev/null 2>&1 || true
@@ -6904,7 +6932,7 @@ dns_addons_edit_with_nano() {
 	          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	          return 0
 	        fi
-	        if [[ "${replace_full_ack}" != "REPLACE DNS FULL" ]]; then
+	        if [[ "${replace_full_ack}" != "CONFIRM DNS LARGE" ]]; then
 	          warn "Konfirmasi tambahan full-replace DNS tidak cocok. Dibatalkan."
 	          rm -f "${diff_report}" >/dev/null 2>&1 || true
 	          [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
@@ -6931,6 +6959,7 @@ dns_addons_edit_with_nano() {
       log "DNS config berhasil diperbarui lewat editor manual."
       if [[ -n "${live_backup}" && -f "${live_backup}" ]]; then
         echo "Backup pre-apply: ${live_backup}"
+        echo "Restore hint   : cp -f '${live_backup}' '${XRAY_DNS_CONF}' && systemctl restart xray"
       fi
     fi
   fi

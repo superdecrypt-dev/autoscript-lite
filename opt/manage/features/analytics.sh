@@ -644,6 +644,14 @@ cert_menu_renew() {
   echo "Domain terdeteksi: ${domain}"
   echo "Catatan       : bila port 80 bentrok, renew sekarang fail-closed dan tidak menghentikan service publik otomatis."
   hr
+  if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
+    warn "Runtime TLS hostname untuk ${domain} belum sehat sebelum renew."
+    warn "Renew dibatalkan agar perubahan cert baru tidak diterapkan di atas baseline runtime yang sudah bermasalah."
+    warn "Perbaiki dulu runtime TLS atau jalankan 'Recover Pending Renew' bila memang ada recovery tertunda."
+    hr
+    pause
+    return 1
+  fi
   if ! confirm_menu_apply_now "Jalankan renew certificate untuk domain ${domain} sekarang?"; then
     hr
     pause
@@ -765,6 +773,7 @@ cert_menu_renew() {
       fi
       if cert_renew_cert_recover_if_needed >/dev/null 2>&1; then
         log "Rollback cert berhasil diselesaikan langsung pada flow renew ini."
+        warn "Renew cert dibatalkan, tetapi runtime TLS sudah dipulihkan kembali."
       fi
     else
       cert_renew_cert_journal_clear
@@ -795,6 +804,7 @@ cert_menu_renew() {
       fi
       if cert_renew_cert_recover_if_needed >/dev/null 2>&1; then
         log "Rollback cert berhasil diselesaikan langsung pada flow renew ini."
+        warn "Renew cert dibatalkan, tetapi runtime TLS sudah dipulihkan kembali."
       fi
     else
       cert_renew_cert_journal_clear
@@ -3776,7 +3786,7 @@ ssh_direct_public_ports_label() {
 }
 
 ssh_account_info_write() {
-  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token [output_file_override]
+  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token [output_file_override] [domain_override] [ip_override] [isp_override] [country_override]
   local username="${1:-}"
   local password_raw="${2:-}"
   local password_mode password_out
@@ -3790,6 +3800,10 @@ ssh_account_info_write() {
   local speed_up="${10:-0}"
   local sshws_token="${11:-}"
   local output_file_override="${12:-}"
+  local domain_override="${13:-}"
+  local ip_override="${14:-}"
+  local isp_override="${15:-}"
+  local country_override="${16:-}"
 
   ssh_state_dirs_prepare
   password_mode="$(ssh_account_info_password_mode)"
@@ -3804,12 +3818,22 @@ ssh_account_info_write() {
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
   [[ -n "${output_file_override}" ]] && acc_file="${output_file_override}"
-  domain="$(detect_domain)"
-  ip="$(main_info_ip_quiet_get)"
-  [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
-  geo="$(main_info_geo_lookup "${ip}")"
-  IFS='|' read -r geo_ip isp country <<<"${geo}"
-  [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
+  domain="$(normalize_domain_token "${domain_override}")"
+  [[ -n "${domain}" ]] || domain="$(detect_domain)"
+  ip="$(normalize_ip_token "${ip_override}")"
+  if [[ -z "${ip}" ]]; then
+    ip="$(main_info_ip_quiet_get)"
+    [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
+  fi
+  isp="${isp_override}"
+  country="${country_override}"
+  if [[ -z "${isp}" || -z "${country}" ]]; then
+    geo="$(main_info_geo_lookup "${ip}")"
+    IFS='|' read -r geo_ip isp_geo country_geo <<<"${geo}"
+    [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
+    [[ -n "${isp}" ]] || isp="${isp_geo:-}"
+    [[ -n "${country}" ]] || country="${country_geo:-}"
+  fi
   [[ -n "${domain}" ]] || domain="-"
   [[ -n "${ip}" ]] || ip="-"
   [[ -n "${isp}" ]] || isp="-"
@@ -3971,10 +3995,14 @@ EOF
 }
 
 ssh_account_info_refresh_from_state() {
-  # args: username [password_override] [output_file_override]
+  # args: username [password_override] [output_file_override] [domain_override] [ip_override] [isp_override] [country_override]
   local username="${1:-}"
   local password_override="${2:-}"
   local output_file_override="${3:-}"
+  local domain_override="${4:-}"
+  local ip_override="${5:-}"
+  local isp_override="${6:-}"
+  local country_override="${7:-}"
   local qf
   qf="$(ssh_user_state_resolve_file "${username}")"
   [[ -f "${qf}" ]] || return 1
@@ -4055,7 +4083,7 @@ PY
     sshws_token="$(ssh_user_state_ensure_token "${username}" 2>/dev/null || true)"
   fi
 
-  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "${sshws_token}" "${output_file_override}"
+  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "${sshws_token}" "${output_file_override}" "${domain_override}" "${ip_override}" "${isp_override}" "${country_override}"
 }
 
 ssh_account_info_refresh_warn() {
@@ -4814,6 +4842,10 @@ ssh_add_txn_recover_dir() {
       warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak pre-Linux gagal (${cleanup_failed})."
       return 1
     fi
+    marker_id="$(ssh_add_txn_marker_read "${username}" 2>/dev/null || true)"
+    if [[ -n "${txn_id}" && -n "${marker_id}" && "${marker_id}" == "${txn_id}" ]]; then
+      ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
+    fi
     mutation_txn_dir_remove "${txn_dir}"
     log "Recovery add SSH membersihkan metadata pre-Linux untuk '${username}'."
     return 0
@@ -4829,6 +4861,10 @@ ssh_add_txn_recover_dir() {
     if [[ -n "${cleanup_failed}" ]]; then
       warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak gagal (${cleanup_failed})."
       return 1
+    fi
+    marker_id="$(ssh_add_txn_marker_read "${username}" 2>/dev/null || true)"
+    if [[ -n "${txn_id}" && -n "${marker_id}" && "${marker_id}" == "${txn_id}" ]]; then
+      ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
     fi
     mutation_txn_dir_remove "${txn_dir}"
     log "Recovery add SSH membuang journal yatim untuk '${username}' karena user Linux tidak ada."
@@ -4891,11 +4927,14 @@ ssh_add_txn_recover_dir() {
   if (( ${#notes[@]} == 0 )) && ! ssh_user_home_dir_prepare "${username}"; then
     notes+=("menyiapkan home dir Linux gagal")
   fi
-  if (( ${#notes[@]} == 0 )) && ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+  if (( ${#notes[@]} == 0 )) && ! ssh_apply_password "${username}" "${password}"; then
     notes+=("set password Linux gagal")
   fi
-  if (( ${#notes[@]} == 0 )) && ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+  if (( ${#notes[@]} == 0 )) && ! ssh_apply_expiry "${username}" "${expired_at}"; then
     notes+=("set expiry Linux gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! usermod -U "${username}" >/dev/null 2>&1; then
+    notes+=("membuka lock akun Linux gagal")
   fi
   if (( ${#notes[@]} == 0 )) && ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
     notes+=("aktifkan shell login gagal")
@@ -5399,7 +5438,7 @@ ssh_add_user_apply_locked_inner() {
   local speed_down="${11}"
   local speed_up="${12}"
   local add_txn_dir="" add_txn_id="" pending_shell="/usr/sbin/nologin"
-  local password_hash="" home_dir=""
+  local password_hash="" home_dir="" pending_expired_at="1970-01-02"
   local -a useradd_args=()
 
   add_txn_dir="$(mutation_txn_dir_new "ssh-add.${username}" 2>/dev/null || true)"
@@ -5502,10 +5541,7 @@ ssh_add_user_apply_locked_inner() {
     return 1
   fi
   home_dir="$(ssh_user_home_dir_default "${username}")"
-  useradd_args=(-M -d "${home_dir}" -s "${pending_shell}" -p "${password_hash}")
-  if [[ -n "${expired_at}" && "${expired_at}" != "-" ]]; then
-    useradd_args+=(-e "${expired_at}")
-  fi
+  useradd_args=(-M -d "${home_dir}" -s "${pending_shell}" -p '!' -e "${pending_expired_at}")
   if ! useradd "${useradd_args[@]}" "${username}" >/dev/null 2>&1; then
     ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "true" "false" "${add_txn_dir}"
     pause
@@ -5513,16 +5549,6 @@ ssh_add_user_apply_locked_inner() {
   fi
   SSH_ADD_ABORT_LINUX_CREATED="true"
   mutation_txn_field_write "${add_txn_dir}" linux_created "true" >/dev/null 2>&1 || true
-  if ! usermod -L "${username}" >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengunci akun Linux '${username}' saat status masih pending." "${password}" "true" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  if ! chage -E 0 "${username}" >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menandai akun Linux '${username}' sebagai pending/disabled sementara." "${password}" "true" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
 
   if ! ssh_qac_enforce_now_warn "${username}"; then
     if [[ "${ip_enabled}" == "true" ]]; then
@@ -5535,6 +5561,16 @@ ssh_add_user_apply_locked_inner() {
   fi
   if ! ssh_user_home_dir_prepare "${username}"; then
     ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan home dir user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! usermod -p "${password_hash}" "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menerapkan hash password final user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! ssh_apply_expiry "${username}" "${expired_at}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal memulihkan expiry final user '${username}' setelah status pending." "${password}" "true" "true" "${add_txn_dir}"
     pause
     return 1
   fi
