@@ -1839,20 +1839,6 @@ sync_setup_runtime_layout() {
 }
 
 refresh_account_info_runtime() {
-  local current_domain ip
-  [[ -x "${MANAGE_BIN}" ]] || return 0
-
-  current_domain="$(detect_domain 2>/dev/null || true)"
-  current_domain="$(printf '%s' "${current_domain}" | awk '{print $1}' | tr -d ';')"
-  [[ -n "${current_domain}" ]] || return 0
-
-  ip="$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)"
-
-  if MANAGE_MODULES_DIR="${MANAGE_MODULES_DST_DIR}" "${MANAGE_BIN}" __refresh-account-info "${current_domain}" "${ip}" >/dev/null 2>&1; then
-    ok "ACCOUNT INFO aktif disegarkan: ${current_domain}"
-    return 0
-  fi
-
-  warn "Refresh ACCOUNT INFO otomatis gagal setelah sinkronisasi manage."
-  return 1
+  ok "Refresh ACCOUNT INFO otomatis dilewati; jalankan manual via Domain Control bila diperlukan."
+  return 0
 }

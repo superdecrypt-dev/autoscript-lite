@@ -25,6 +25,7 @@ XRAY_ROUTING_CONF="${XRAY_CONFDIR}/30-routing.json"
 XRAY_POLICY_CONF="${XRAY_CONFDIR}/40-policy.json"
 XRAY_STATS_CONF="${XRAY_CONFDIR}/50-stats.json"
 XRAY_DOMAIN_FILE="/etc/xray/domain"
+NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
 NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
@@ -58,6 +59,15 @@ declare -ag DOMAIN_CTRL_STOPPED_SERVICES=()
 declare -ag DOMAIN_CTRL_STOP_FAILURES=()
 declare -ag DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES=()
 DOMAIN_CTRL_NGINX_WAS_ACTIVE="0"
+DOMAIN_CTRL_TXN_ACTIVE="0"
+DOMAIN_CTRL_TXN_CERT_SNAPSHOT=""
+DOMAIN_CTRL_TXN_NGINX_BACKUP=""
+DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT=""
+DOMAIN_CTRL_TXN_CF_SNAPSHOT=""
+DOMAIN_CTRL_TXN_CF_PREPARED="0"
+DOMAIN_CTRL_TXN_DOMAIN=""
+DOMAIN_CTRL_TXN_CF_ZONE_ID=""
+DOMAIN_CTRL_TXN_CF_IPV4=""
 
 # Account store (read-only source for Menu 2)
 ACCOUNT_ROOT="/opt/account"
@@ -76,6 +86,9 @@ SPEED_MARK_MAX=59999
 SPEED_OUTBOUND_TAG_PREFIX="speed-mark-"
 SPEED_RULE_MARKER_PREFIX="dummy-speed-user-"
 SPEED_POLICY_LOCK_FILE="/var/lock/xray-speed-policy.lock"
+ACCOUNT_INFO_LOCK_FILE="/run/autoscript/locks/account-info.lock"
+DOMAIN_CONTROL_LOCK_FILE="/run/autoscript/locks/xray-domain-control.lock"
+USER_DATA_MUTATION_LOCK_FILE="/run/autoscript/locks/user-data-mutation.lock"
 XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
 XRAY_DOMAIN_GUARD_CONFIG_FILE="/etc/xray-domain-guard/config.env"
 XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-domain-guard/domain-guard.log"
@@ -151,6 +164,7 @@ MAIN_INFO_CACHE_IP="-"
 MAIN_INFO_CACHE_ISP="-"
 MAIN_INFO_CACHE_COUNTRY="-"
 MAIN_INFO_CACHE_DOMAIN="-"
+MAIN_INFO_CACHE_INVALIDATION_FILE="${WORK_DIR}/main-info.cache.invalidate"
 ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE="${WORK_DIR}/account-info-domain.state"
 ACCOUNT_INFO_DOMAIN_SYNC_CHECK_TTL=15
 ACCOUNT_INFO_DOMAIN_SYNC_LAST_CHECK_TS=0
@@ -189,6 +203,9 @@ init_runtime_dirs() {
 
   local lock_dir
   for lock_dir in \
+    "$(dirname "${ACCOUNT_INFO_LOCK_FILE}")" \
+    "$(dirname "${DOMAIN_CONTROL_LOCK_FILE}")" \
+    "$(dirname "${USER_DATA_MUTATION_LOCK_FILE}")" \
     "$(dirname "${ROUTING_LOCK_FILE}")" \
     "$(dirname "${DNS_LOCK_FILE}")" \
     "$(dirname "${WARP_LOCK_FILE}")"; do
@@ -233,6 +250,256 @@ ensure_speed_policy_dirs() {
 
 speed_policy_lock_prepare() {
   mkdir -p "$(dirname "${SPEED_POLICY_LOCK_FILE}")" 2>/dev/null || true
+}
+
+speed_policy_run_locked() {
+  local rc=0
+  if [[ "${SPEED_POLICY_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  speed_policy_lock_prepare
+  if have_cmd flock; then
+    if (
+      flock -x 200 || exit 1
+      SPEED_POLICY_LOCK_HELD=1 "$@"
+    ) 200>"${SPEED_POLICY_LOCK_FILE}"; then
+      return 0
+    fi
+    rc=$?
+    return "${rc}"
+  fi
+  SPEED_POLICY_LOCK_HELD=1 "$@"
+  rc=$?
+  return "${rc}"
+}
+
+normalize_domain_token() {
+  local domain="${1:-}"
+  domain="$(printf '%s' "${domain}" | tr '[:upper:]' '[:lower:]' | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  printf '%s\n' "${domain}"
+}
+
+normalize_ip_token() {
+  local ip="${1:-}"
+  ip="$(printf '%s' "${ip}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  printf '%s\n' "${ip}"
+}
+
+ip_literal_normalize() {
+  local raw="${1:-}"
+  raw="$(normalize_ip_token "${raw}")"
+  [[ -n "${raw}" ]] || return 1
+  need_python3
+  python3 - <<'PY' "${raw}"
+import ipaddress
+import sys
+
+value = str(sys.argv[1]).strip()
+try:
+    addr = ipaddress.ip_address(value)
+except Exception:
+    raise SystemExit(1)
+print(addr.compressed)
+PY
+}
+
+date_ymd_is_past() {
+  local value="${1:-}"
+  local value_ts="" today_ts=""
+  [[ -n "${value}" ]] || return 1
+  value_ts="$(date -d "${value}" +%s 2>/dev/null || true)"
+  [[ -n "${value_ts}" ]] || return 1
+  today_ts="$(date -d "$(date '+%Y-%m-%d')" +%s 2>/dev/null || true)"
+  [[ -n "${today_ts}" ]] || return 1
+  (( value_ts < today_ts ))
+}
+
+preview_report_path_prepare() {
+  local prefix="${1:-preview}"
+  local base_dir="${REPORT_DIR}"
+  local out=""
+
+  mkdir -p "${base_dir}" 2>/dev/null || base_dir="${WORK_DIR}"
+  out="$(mktemp "${base_dir}/${prefix}.XXXXXX.txt" 2>/dev/null || true)"
+  if [[ -z "${out}" ]]; then
+    out="${WORK_DIR}/${prefix}.$(date +%s).$$.txt"
+    : > "${out}" 2>/dev/null || return 1
+  fi
+  printf '%s\n' "${out}"
+}
+
+preview_report_show_file() {
+  local path="${1:-}"
+  local total_lines=0
+  [[ -f "${path}" ]] || return 1
+  if have_cmd less; then
+    less -R "${path}"
+    return $?
+  fi
+  total_lines="$(wc -l < "${path}" 2>/dev/null || echo 0)"
+  sed -n '1,400p' "${path}" || return 1
+  if [[ "${total_lines}" =~ ^[0-9]+$ ]] && (( total_lines > 400 )); then
+    echo
+    echo "... output dipotong; buka file report untuk daftar lengkap:"
+    echo "  ${path}"
+  fi
+  return 0
+}
+
+account_info_lock_prepare() {
+  mkdir -p "$(dirname "${ACCOUNT_INFO_LOCK_FILE}")" 2>/dev/null || true
+}
+
+account_info_run_locked() {
+  local rc=0
+  if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  if ! have_cmd flock; then
+    ACCOUNT_INFO_LOCK_HELD=1 "$@"
+    return $?
+  fi
+  account_info_lock_prepare
+  if (
+    flock -x 200 || exit 1
+    ACCOUNT_INFO_LOCK_HELD=1 "$@"
+  ) 200>"${ACCOUNT_INFO_LOCK_FILE}"; then
+    return 0
+  fi
+  rc=$?
+  return "${rc}"
+}
+
+domain_control_lock_prepare() {
+  mkdir -p "$(dirname "${DOMAIN_CONTROL_LOCK_FILE}")" 2>/dev/null || true
+}
+
+domain_control_run_locked() {
+  local rc=0
+  if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  if ! have_cmd flock; then
+    DOMAIN_CONTROL_LOCK_HELD=1 "$@"
+    return $?
+  fi
+  domain_control_lock_prepare
+  if (
+    flock -x 200 || exit 1
+    DOMAIN_CONTROL_LOCK_HELD=1 "$@"
+  ) 200>"${DOMAIN_CONTROL_LOCK_FILE}"; then
+    return 0
+  fi
+  rc=$?
+  return "${rc}"
+}
+
+user_data_mutation_lock_prepare() {
+  mkdir -p "$(dirname "${USER_DATA_MUTATION_LOCK_FILE}")" 2>/dev/null || true
+}
+
+user_data_mutation_run_locked() {
+  local rc=0
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  user_data_mutation_lock_prepare
+  if have_cmd flock; then
+    if (
+      flock -x 200 || exit 1
+      USER_DATA_MUTATION_LOCK_HELD=1 "$@"
+    ) 200>"${USER_DATA_MUTATION_LOCK_FILE}"; then
+      return 0
+    fi
+    rc=$?
+    return "${rc}"
+  fi
+  USER_DATA_MUTATION_LOCK_HELD=1 "$@"
+  rc=$?
+  return "${rc}"
+}
+
+quota_lock_file_path() {
+  local qf="${1:-}"
+  printf '%s.lock\n' "${qf}"
+}
+
+quota_restore_file_locked() {
+  # args: backup_file target_file
+  local src="${1:-}"
+  local dst="${2:-}"
+  local lockf
+  [[ -n "${src}" && -n "${dst}" ]] || return 1
+  lockf="$(quota_lock_file_path "${dst}")"
+  mkdir -p "$(dirname "${lockf}")" 2>/dev/null || true
+
+  if have_cmd flock; then
+    (
+      flock -x 200 || exit 1
+      cp -f -- "${src}" "${dst}" || exit 1
+      chmod 600 "${dst}" 2>/dev/null || true
+    ) 200>"${lockf}"
+    return $?
+  fi
+
+  cp -f -- "${src}" "${dst}" || return 1
+  chmod 600 "${dst}" 2>/dev/null || true
+  return 0
+}
+
+account_info_restore_file_locked() {
+  # args: backup_file target_file
+  local src="${1:-}"
+  local dst="${2:-}"
+  [[ -n "${src}" && -n "${dst}" ]] || return 1
+  if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" != "1" ]]; then
+    account_info_run_locked account_info_restore_file_locked "${src}" "${dst}"
+    return $?
+  fi
+
+  mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
+  cp -f -- "${src}" "${dst}" || return 1
+  chmod 600 "${dst}" 2>/dev/null || true
+  return 0
+}
+
+speed_policy_restore_file_locked() {
+  # args: backup_file target_file
+  local src="${1:-}"
+  local dst="${2:-}"
+  [[ -n "${src}" && -n "${dst}" ]] || return 1
+  if [[ "${SPEED_POLICY_LOCK_HELD:-0}" != "1" ]]; then
+    speed_policy_run_locked speed_policy_restore_file_locked "${src}" "${dst}"
+    return $?
+  fi
+  mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
+  cp -f -- "${src}" "${dst}" || return 1
+  chmod 600 "${dst}" 2>/dev/null || true
+  return 0
+}
+
+xray_expired_pause_if_active() {
+  # args: out_var_name
+  local __outvar="${1:-}"
+  local was_active="false"
+  if svc_exists xray-expired && svc_is_active xray-expired; then
+    if ! svc_stop_checked xray-expired 20; then
+      return 1
+    fi
+    was_active="true"
+  fi
+  [[ -n "${__outvar}" ]] && printf -v "${__outvar}" '%s' "${was_active}"
+  return 0
+}
+
+xray_expired_resume_if_needed() {
+  local was_active="${1:-false}"
+  [[ "${was_active}" == "true" ]] || return 0
+  svc_start_checked xray-expired 20
 }
 
 speed_policy_has_entries() {
@@ -302,6 +569,10 @@ PY
 
 ssh_dns_adblock_runtime_refresh_if_available() {
   [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || return 0
+  if declare -F adblock_run_locked >/dev/null 2>&1 && [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked ssh_dns_adblock_runtime_refresh_if_available
+    return $?
+  fi
   "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1 || return 1
 }
 
@@ -337,9 +608,14 @@ quota_migrate_dates_to_dateonly() {
   # - created_at -> YYYY-MM-DD
   # - expired_at -> YYYY-MM-DD
   # Idempotent untuk nilai yang sudah sesuai.
+  local -a quota_targets=("$@")
+  if (( ${#quota_targets[@]} == 0 )); then
+    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
+  fi
   need_python3
-  python3 - <<'PY' "${QUOTA_ROOT}" "${QUOTA_PROTO_DIRS[@]}"
+  python3 - <<'PY' "${QUOTA_ROOT}" "${quota_targets[@]}"
 import json
+import fcntl
 import os
 import re
 import sys
@@ -348,6 +624,8 @@ from datetime import datetime
 
 quota_root = sys.argv[1]
 protos = tuple(sys.argv[2:])
+had_warnings = False
+snapshots = {}
 
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DATETIME_MIN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
@@ -399,47 +677,211 @@ for proto in protos:
     if not name.endswith(".json"):
       continue
     p = os.path.join(d, name)
+    lock_path = p + ".lock"
     try:
-      with open(p, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-      if not isinstance(meta, dict):
-        continue
+      os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
     except Exception:
-      print(f"[manage][WARN] Skip migrasi (JSON invalid): {p}", file=sys.stderr)
+      pass
+    try:
+      lock_handle = open(lock_path, "a+", encoding="utf-8")
+      fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    except Exception:
+      had_warnings = True
+      print(f"[manage][WARN] Skip migrasi (lock gagal): {p}", file=sys.stderr)
+      try:
+        lock_handle.close()
+      except Exception:
+        pass
       continue
+    try:
+      try:
+        with open(p, "r", encoding="utf-8") as f:
+          meta = json.load(f)
+        if not isinstance(meta, dict):
+          continue
+      except Exception:
+        had_warnings = True
+        print(f"[manage][WARN] Skip migrasi (JSON invalid): {p}", file=sys.stderr)
+        continue
 
-    changed = False
+      changed = False
+      for key in ("created_at", "expired_at"):
+        if key not in meta:
+          continue
+        nd = normalize_date(meta.get(key))
+        if nd is None:
+          had_warnings = True
+          print(f"[manage][WARN] Skip field {key} (format tidak dikenali) di: {p}", file=sys.stderr)
+          continue
+        if meta.get(key) != nd:
+          meta[key] = nd
+          changed = True
+
+      if changed:
+        try:
+          snapshots[p] = (open(p, "rb").read(), int(os.stat(p).st_mode & 0o777))
+        except Exception:
+          had_warnings = True
+          print(f"[manage][WARN] Skip migrasi (snapshot gagal): {p}", file=sys.stderr)
+          continue
+        dirn = os.path.dirname(p) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+        try:
+          with os.fdopen(fd, "w", encoding="utf-8") as wf:
+            json.dump(meta, wf, ensure_ascii=False, indent=2)
+            wf.write("\n")
+            wf.flush()
+            os.fsync(wf.fileno())
+          os.replace(tmp, p)
+          try:
+            os.chmod(p, 0o600)
+          except Exception:
+            pass
+        finally:
+          try:
+            if os.path.exists(tmp):
+              os.remove(tmp)
+          except Exception:
+            pass
+    finally:
+      try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+      except Exception:
+        pass
+      try:
+        lock_handle.close()
+      except Exception:
+        pass
+
+if had_warnings and snapshots:
+  for path, (payload, mode) in snapshots.items():
+    dirn = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".rollback.", suffix=".json", dir=dirn)
+    try:
+      with os.fdopen(fd, "wb") as wf:
+        wf.write(payload)
+        wf.flush()
+        os.fsync(wf.fileno())
+      os.replace(tmp, path)
+      try:
+        if isinstance(mode, int):
+          os.chmod(path, mode)
+      except Exception:
+        pass
+    finally:
+      try:
+        if os.path.exists(tmp):
+          os.remove(tmp)
+      except Exception:
+        pass
+raise SystemExit(2 if had_warnings else 0)
+PY
+}
+
+quota_migrate_dates_report_write() {
+  local outfile="${1:-}"
+  shift || true
+  local -a quota_targets=("$@")
+  if (( ${#quota_targets[@]} == 0 )); then
+    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
+  fi
+  [[ -n "${outfile}" ]] || return 1
+  need_python3
+  python3 - <<'PY' "${outfile}" "${QUOTA_ROOT}" "${quota_targets[@]}"
+import json
+import os
+import re
+import sys
+from datetime import datetime
+
+outfile = sys.argv[1]
+quota_root = sys.argv[2]
+protos = tuple(sys.argv[3:])
+
+DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+def normalize_date(value):
+  if value is None:
+    return None
+  s = str(value).strip()
+  if not s:
+    return None
+  s = s.replace("T", " ")
+  if s.endswith("Z"):
+    s = s[:-1]
+  if DATE_ONLY_RE.match(s):
+    return s
+  candidates = [s]
+  if s.endswith("+00:00"):
+    candidates.append(s[:-6])
+  if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
+    candidates.append(s + ":00")
+  candidates.append(s.replace(" ", "T"))
+  for c in candidates:
+    try:
+      d = datetime.fromisoformat(c)
+      return d.strftime("%Y-%m-%d")
+    except Exception:
+      pass
+  for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+    try:
+      d = datetime.strptime(s, fmt)
+      return d.strftime("%Y-%m-%d")
+    except Exception:
+      pass
+  if len(s) >= 10 and DATE_ONLY_RE.match(s[:10]):
+    return s[:10]
+  return None
+
+rows = []
+summary = {"ok": 0, "would_normalize": 0, "warning": 0}
+for proto in protos:
+  d = os.path.join(quota_root, proto)
+  if not os.path.isdir(d):
+    rows.append((proto, "(directory missing)", "skip", "proto directory tidak ditemukan"))
+    continue
+  for name in sorted(os.listdir(d)):
+    if not name.endswith(".json"):
+      continue
+    path = os.path.join(d, name)
+    try:
+      with open(path, "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+      if not isinstance(meta, dict):
+        raise ValueError("root JSON bukan object")
+    except Exception as exc:
+      rows.append((proto, path, "warning", f"JSON invalid: {exc}"))
+      summary["warning"] += 1
+      continue
+    notes = []
+    warning = False
     for key in ("created_at", "expired_at"):
       if key not in meta:
         continue
       nd = normalize_date(meta.get(key))
       if nd is None:
-        print(f"[manage][WARN] Skip field {key} (format tidak dikenali) di: {p}", file=sys.stderr)
-        continue
-      if meta.get(key) != nd:
-        meta[key] = nd
-        changed = True
+        warning = True
+        notes.append(f"{key}=format-tidak-dikenali")
+      elif meta.get(key) != nd:
+        notes.append(f"{key}:{meta.get(key)} -> {nd}")
+    if warning:
+      status = "warning"
+      summary["warning"] += 1
+    elif notes:
+      status = "would-normalize"
+      summary["would_normalize"] += 1
+    else:
+      status = "ok"
+      summary["ok"] += 1
+    rows.append((proto, path, status, ", ".join(notes) if notes else "-"))
 
-    if changed:
-      dirn = os.path.dirname(p) or "."
-      fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
-      try:
-        with os.fdopen(fd, "w", encoding="utf-8") as wf:
-          json.dump(meta, wf, ensure_ascii=False, indent=2)
-          wf.write("\n")
-          wf.flush()
-          os.fsync(wf.fileno())
-        os.replace(tmp, p)
-        try:
-          os.chmod(p, 0o600)
-        except Exception:
-          pass
-      finally:
-        try:
-          if os.path.exists(tmp):
-            os.remove(tmp)
-        except Exception:
-          pass
+os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
+with open(outfile, "w", encoding="utf-8") as out:
+  out.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+  out.write("Mode: dry-run normalize quota dates (tanpa write)\n")
+  out.write(f"Summary: ok={summary['ok']} would_normalize={summary['would_normalize']} warning={summary['warning']}\n\n")
+  for proto, path, status, note in rows:
+    out.write(f"[{proto}] {status}\t{path}\t{note}\n")
 PY
 }
 
@@ -758,7 +1200,7 @@ sync_xray_domain_file() {
   if [[ -z "${domain}" ]]; then
     domain="$(detect_domain)"
   fi
-  normalized="$(printf '%s' "${domain}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  normalized="$(normalize_domain_token "${domain}")"
   [[ -n "${normalized}" ]] || return 1
 
   mkdir -p "$(dirname "${XRAY_DOMAIN_FILE}")" 2>/dev/null || return 1
@@ -814,9 +1256,22 @@ account_info_domain_sync_state_read() {
 
 account_info_domain_sync_state_write() {
   local domain="${1:-}"
+  local tmp=""
+  domain="$(normalize_domain_token "${domain}")"
   [[ -n "${domain}" ]] || domain="-"
-  { printf '%s\n' "${domain}" > "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}"; } 2>/dev/null || true
-  chmod 600 "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}" 2>/dev/null || true
+  mkdir -p "${WORK_DIR}" 2>/dev/null || return 1
+  tmp="$(mktemp "${WORK_DIR}/account-info-domain.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/account-info-domain.$$"
+  if ! printf '%s\n' "${domain}" > "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! install -m 600 "${tmp}" "${ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE}" >/dev/null 2>&1; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
 }
 
 account_info_probe_domain_from_any_account_file() {
@@ -928,48 +1383,336 @@ ssh_account_info_refresh_all_from_state() {
   (( failed == 0 ))
 }
 
+account_info_refresh_collect_ssh_users() {
+  local -n _out_ref="$1"
+  local username state_file account_file pass_file
+  local -A seen=()
+  _out_ref=()
+
+  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
+    ssh_state_dirs_prepare >/dev/null 2>&1 || true
+  fi
+
+  while IFS= read -r -d '' state_file; do
+    username="$(basename "${state_file}")"
+    username="${username%@ssh.json}"
+    username="${username%.json}"
+    [[ -n "${username}" ]] || continue
+    [[ -n "${seen["${username}"]+x}" ]] && continue
+    seen["${username}"]=1
+    _out_ref+=("${username}")
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r -d '' account_file; do
+    username="$(basename "${account_file}")"
+    username="${username%@ssh.txt}"
+    username="${username%.txt}"
+    [[ -n "${username}" ]] || continue
+    [[ -n "${seen["${username}"]+x}" ]] && continue
+    seen["${username}"]=1
+    _out_ref+=("${username}")
+  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' ! -name '.*' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r -d '' pass_file; do
+    username="$(basename "${pass_file}")"
+    username="${username%.pass}"
+    [[ -n "${username}" ]] || continue
+    [[ -n "${seen["${username}"]+x}" ]] && continue
+    seen["${username}"]=1
+    _out_ref+=("${username}")
+  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' ! -name '.*' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r username; do
+    [[ -n "${username}" ]] || continue
+    [[ -n "${seen["${username}"]+x}" ]] && continue
+    seen["${username}"]=1
+    _out_ref+=("${username}")
+  done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
+}
+
+account_info_refresh_targets_summary() {
+  local scope="${1:-all}"
+  local sample_limit="${2:-5}"
+  local i proto username
+  local xray_count=0 ssh_count=0
+  local -A seen_xray=() seen_ssh=()
+  local -a xray_preview_items=() ssh_preview_items=()
+  local -a ssh_users=()
+  local xray_preview="-" ssh_preview="-"
+
+  [[ "${sample_limit}" =~ ^[0-9]+$ ]] || sample_limit=5
+
+  ensure_account_quota_dirs
+  if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
+    account_collect_files
+
+    if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+      for i in "${!ACCOUNT_FILES[@]}"; do
+        proto="${ACCOUNT_FILE_PROTOS[$i]}"
+        username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+        [[ -n "${username}" ]] || continue
+        if [[ -n "${seen_xray["${proto}|${username}"]+x}" ]]; then
+          continue
+        fi
+        seen_xray["${proto}|${username}"]=1
+        xray_count=$((xray_count + 1))
+        if (( sample_limit > 0 && ${#xray_preview_items[@]} < sample_limit )); then
+          xray_preview_items+=("${username}@${proto}")
+        fi
+      done
+    fi
+  fi
+
+  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+    account_info_refresh_collect_ssh_users ssh_users
+    for username in "${ssh_users[@]}"; do
+      [[ -n "${username}" ]] || continue
+      if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
+        continue
+      fi
+      seen_ssh["${username}"]=1
+      ssh_count=$((ssh_count + 1))
+      if (( sample_limit > 0 && ${#ssh_preview_items[@]} < sample_limit )); then
+        ssh_preview_items+=("${username}")
+      fi
+    done
+  fi
+
+  if (( ${#xray_preview_items[@]} > 0 )); then
+    xray_preview="$(printf '%s, ' "${xray_preview_items[@]}")"
+    xray_preview="${xray_preview%, }"
+    if (( sample_limit > 0 && xray_count > sample_limit )); then
+      xray_preview="${xray_preview}, ..."
+    fi
+  fi
+  if (( ${#ssh_preview_items[@]} > 0 )); then
+    ssh_preview="$(printf '%s, ' "${ssh_preview_items[@]}")"
+    ssh_preview="${ssh_preview%, }"
+    if (( sample_limit > 0 && ssh_count > sample_limit )); then
+      ssh_preview="${ssh_preview}, ..."
+    fi
+  fi
+
+  printf '%s|%s|%s|%s|%s\n' "${xray_count}" "${ssh_count}" "$((xray_count + ssh_count))" "${xray_preview}" "${ssh_preview}"
+}
+
+account_info_refresh_targets_report_write() {
+  local scope="${1:-all}"
+  local outfile="${2:-}"
+  local i proto username
+  local -A seen_xray=() seen_ssh=()
+  local -a ssh_users=()
+
+  [[ -n "${outfile}" ]] || return 1
+  ensure_account_quota_dirs
+  mkdir -p "$(dirname "${outfile}")" 2>/dev/null || true
+  : > "${outfile}" || return 1
+
+  {
+    printf 'Scope: %s\n' "${scope}"
+    printf 'Generated: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '\n'
+
+    if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
+      printf '[XRAY]\n'
+      account_collect_files
+      if (( ${#ACCOUNT_FILES[@]} == 0 )); then
+        printf '(tidak ada target)\n'
+      else
+        for i in "${!ACCOUNT_FILES[@]}"; do
+          proto="${ACCOUNT_FILE_PROTOS[$i]}"
+          username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+          [[ -n "${username}" ]] || continue
+          if [[ -n "${seen_xray["${proto}|${username}"]+x}" ]]; then
+            continue
+          fi
+          seen_xray["${proto}|${username}"]=1
+          printf '%s\t%s\t%s\n' "${username}@${proto}" "${proto}" "$(account_info_refresh_target_file_for_user "${proto}" "${username}")"
+        done
+      fi
+      printf '\n'
+    fi
+
+    if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+      printf '[SSH]\n'
+      account_info_refresh_collect_ssh_users ssh_users
+      if (( ${#ssh_users[@]} == 0 )); then
+        printf '(tidak ada target)\n'
+      else
+        for username in "${ssh_users[@]}"; do
+          [[ -n "${username}" ]] || continue
+          if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
+            continue
+          fi
+          seen_ssh["${username}"]=1
+          printf '%s\tssh\t%s\n' "${username}" "$(ssh_account_info_file "${username}")"
+        done
+        if (( ${#seen_ssh[@]} == 0 )); then
+          printf '(tidak ada target)\n'
+        fi
+      fi
+    fi
+  } > "${outfile}" || return 1
+
+  chmod 600 "${outfile}" 2>/dev/null || true
+  return 0
+}
+
+account_info_refresh_dry_run_status_for_file() {
+  local target_file="${1:-}"
+  local candidate_file="${2:-}"
+  local hint="${3:-}"
+
+  if [[ -z "${target_file}" || ! -f "${target_file}" ]]; then
+    printf '%s\n' "would-create${hint:+ (${hint})}"
+    return 0
+  fi
+  if [[ -z "${candidate_file}" || ! -f "${candidate_file}" ]]; then
+    printf '%s\n' "preview-unavailable${hint:+ (${hint})}"
+    return 0
+  fi
+  if cmp -s -- "${target_file}" "${candidate_file}"; then
+    printf '%s\n' "no-rendered-drift"
+    return 0
+  fi
+  printf '%s\n' "would-refresh${hint:+ (${hint})}"
+}
+
+account_info_refresh_append_diff_to_report() {
+  local report_file="${1:-}"
+  local current_file="${2:-}"
+  local candidate_file="${3:-}"
+  local label="${4:-rendered diff}"
+  [[ -n "${report_file}" ]] || return 1
+  {
+    printf -- '--- %s\n' "${label}"
+    if [[ ! -f "${candidate_file}" ]]; then
+      printf '(candidate render tidak tersedia)\n'
+    elif [[ ! -f "${current_file}" ]]; then
+      printf '[current missing]\n'
+      cat "${candidate_file}"
+      [[ -s "${candidate_file}" ]] || printf '(candidate kosong)\n'
+    elif cmp -s -- "${current_file}" "${candidate_file}"; then
+      printf '(tidak ada perbedaan konten)\n'
+    else
+      diff -u --label "current:${current_file}" --label "rendered:${candidate_file}" "${current_file}" "${candidate_file}" || true
+    fi
+    printf '\n'
+  } >> "${report_file}" || return 1
+}
+
+account_info_refresh_dry_run_report_write() {
+  local scope="${1:-all}"
+  local outfile="${2:-}"
+  local domain="${3:-}"
+  local ip="${4:-}"
+  local target_isp="${5:-}"
+  local target_country="${6:-}"
+  local i proto username status target_file
+  local stage_dir="" candidate_file="" state_file="" hint=""
+  local -A seen_xray=() seen_ssh=()
+  local -a ssh_users=()
+
+  [[ -n "${outfile}" ]] || return 1
+  ensure_account_quota_dirs
+  mkdir -p "$(dirname "${outfile}")" 2>/dev/null || true
+  : > "${outfile}" || return 1
+
+  {
+    printf 'Scope: %s\n' "${scope}"
+    printf 'Mode: dry-run rendered content diff (tanpa write)\n'
+    printf 'Target domain: %s\n' "${domain:-"-"}"
+    printf 'Target ip: %s\n' "${ip:-"-"}"
+    printf 'Target isp: %s\n' "${target_isp:-"-"}"
+    printf 'Target country: %s\n' "${target_country:-"-"}"
+    printf 'Generated: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '\n'
+
+    if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
+      printf '[XRAY dry-run]\n'
+      account_collect_files
+      if (( ${#ACCOUNT_FILES[@]} == 0 )); then
+        printf '(tidak ada target)\n'
+      else
+        for i in "${!ACCOUNT_FILES[@]}"; do
+          proto="${ACCOUNT_FILE_PROTOS[$i]}"
+          username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+          [[ -n "${username}" ]] || continue
+          if [[ -n "${seen_xray["${proto}|${username}"]+x}" ]]; then
+            continue
+          fi
+          seen_xray["${proto}|${username}"]=1
+          target_file="$(account_info_refresh_target_file_for_user "${proto}" "${username}")"
+          stage_dir="$(mktemp -d "${WORK_DIR}/.account-dryrun.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+          candidate_file=""
+          if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
+            candidate_file="${stage_dir}/candidate.txt"
+            if ! account_info_refresh_for_user "${proto}" "${username}" "${domain}" "${ip}" "" "${candidate_file}" >/dev/null 2>&1; then
+              candidate_file=""
+            fi
+          fi
+          hint=""
+          [[ -n "${target_isp}" && "${target_isp}" != "-" ]] && hint="target ISP=${target_isp}, Country=${target_country:-"-"}"
+          status="$(account_info_refresh_dry_run_status_for_file "${target_file}" "${candidate_file}" "${hint}")"
+          printf '%s\t%s\t%s\n' "${username}@${proto}" "${status}" "${target_file}"
+          if [[ -n "${candidate_file}" ]]; then
+            account_info_refresh_append_diff_to_report "${outfile}" "${target_file}" "${candidate_file}" "${username}@${proto}" || true
+          fi
+          [[ -n "${stage_dir}" ]] && rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+        done
+      fi
+      printf '\n'
+    fi
+
+    if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+      printf '[SSH dry-run]\n'
+      account_info_refresh_collect_ssh_users ssh_users
+      if (( ${#ssh_users[@]} == 0 )); then
+        printf '(tidak ada target)\n'
+      else
+        for username in "${ssh_users[@]}"; do
+          [[ -n "${username}" ]] || continue
+          if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
+            continue
+          fi
+          seen_ssh["${username}"]=1
+          target_file="$(ssh_account_info_file "${username}")"
+          state_file="$(ssh_user_state_resolve_file "${username}")"
+          stage_dir="$(mktemp -d "${WORK_DIR}/.ssh-account-dryrun.${username}.XXXXXX" 2>/dev/null || true)"
+          candidate_file=""
+          hint=""
+          if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
+            candidate_file="${stage_dir}/candidate.txt"
+            if [[ -f "${state_file}" ]] && ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}" >/dev/null 2>&1; then
+              :
+            else
+              candidate_file=""
+              if [[ ! -f "${state_file}" ]]; then
+                hint="would-bootstrap-state"
+              fi
+            fi
+          fi
+          status="$(account_info_refresh_dry_run_status_for_file "${target_file}" "${candidate_file}" "${hint}")"
+          printf '%s\t%s\t%s\n' "${username}" "${status}" "${target_file}"
+          if [[ -n "${candidate_file}" ]]; then
+            account_info_refresh_append_diff_to_report "${outfile}" "${target_file}" "${candidate_file}" "${username}@ssh" || true
+          fi
+          [[ -n "${stage_dir}" ]] && rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+        done
+        if (( ${#seen_ssh[@]} == 0 )); then
+          printf '(tidak ada target)\n'
+        fi
+      fi
+    fi
+  } > "${outfile}" || return 1
+
+  chmod 600 "${outfile}" 2>/dev/null || true
+  return 0
+}
+
 account_info_sync_after_domain_change_if_needed() {
-  local now elapsed current_domain previous_domain ip
-  now="$(date +%s 2>/dev/null || echo 0)"
-  elapsed=$(( now - ACCOUNT_INFO_DOMAIN_SYNC_LAST_CHECK_TS ))
-  if (( ACCOUNT_INFO_DOMAIN_SYNC_LAST_CHECK_TS > 0 && elapsed >= 0 && elapsed < ACCOUNT_INFO_DOMAIN_SYNC_CHECK_TTL )); then
-    return 0
-  fi
-  ACCOUNT_INFO_DOMAIN_SYNC_LAST_CHECK_TS="${now}"
-
-  current_domain="$(detect_domain)"
-  current_domain="$(echo "${current_domain}" | awk '{print $1}' | tr -d ';')"
-  [[ -n "${current_domain}" ]] || current_domain="-"
-
-  previous_domain="$(account_info_domain_sync_state_read)"
-  if [[ -z "${previous_domain}" ]]; then
-    previous_domain="$(account_info_probe_domain_from_any_account_file)"
-  fi
-  if [[ -z "${previous_domain}" ]]; then
-    account_info_domain_sync_state_write "${current_domain}"
-    return 0
-  fi
-
-  if [[ "${previous_domain}" == "${current_domain}" ]]; then
-    account_info_domain_sync_state_write "${current_domain}"
-    return 0
-  fi
-
-  if [[ "${current_domain}" != *.* ]]; then
-    warn "Domain aktif tidak valid (${current_domain}), skip sinkronisasi ACCOUNT INFO."
-    account_info_domain_sync_state_write "${current_domain}"
-    return 0
-  fi
-
-  log "Perubahan domain terdeteksi (${previous_domain} -> ${current_domain}), sinkronisasi ACCOUNT INFO..."
-  ip="$(detect_public_ip_ipapi)"
-  if account_refresh_all_info_files "${current_domain}" "${ip}"; then
-    log "ACCOUNT INFO berhasil disinkronkan otomatis."
-    account_info_domain_sync_state_write "${current_domain}"
-  else
-    warn "Sebagian ACCOUNT INFO gagal disinkronkan otomatis. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
-    warn "State sinkronisasi dipertahankan (${previous_domain}) agar retry otomatis berjalan."
-  fi
+  # Deprecated on CLI: render/startup must not trigger bulk rewrites anymore.
+  return 0
 }
 
 account_info_compat_needs_refresh() {
@@ -1034,27 +1777,8 @@ account_info_compat_needs_refresh() {
 }
 
 account_info_compat_refresh_if_needed() {
-  # Sinkronisasi one-shot saat startup manage untuk migrasi format account info kompatibilitas.
-  local domain ip
-  if ! account_info_compat_needs_refresh; then
-    return 0
-  fi
-
-  domain="$(detect_domain)"
-  domain="$(echo "${domain}" | awk '{print $1}' | tr -d ';')"
-  [[ -n "${domain}" ]] || domain="-"
-  ip="$(detect_public_ip_ipapi)"
-
-  log "Format ACCOUNT INFO kompatibilitas terdeteksi, menjalankan sinkronisasi..."
-  if account_refresh_all_info_files "${domain}" "${ip}"; then
-    log "Sinkronisasi kompatibilitas ACCOUNT INFO selesai."
-    account_info_domain_sync_state_write "${domain}"
-    return 0
-  fi
-
-  warn "Sebagian ACCOUNT INFO gagal disinkronkan saat migrasi kompatibilitas."
-  warn "Silakan cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
-  return 1
+  # Deprecated on CLI: compatibility refresh must be triggered explicitly from menu.
+  return 0
 }
 
 cert_snapshot_create() {
@@ -1114,6 +1838,130 @@ cert_snapshot_restore() {
   fi
 
   return "${failed}"
+}
+
+domain_control_optional_file_snapshot_create() {
+  local path="$1"
+  local backup_dir="$2"
+  local key="$3"
+  mkdir -p "${backup_dir}" 2>/dev/null || return 1
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    cp -a "${path}" "${backup_dir}/${key}.snapshot" 2>/dev/null || return 1
+    printf '1\n' > "${backup_dir}/${key}.exists"
+  else
+    printf '0\n' > "${backup_dir}/${key}.exists"
+  fi
+  return 0
+}
+
+domain_control_optional_file_snapshot_restore() {
+  local path="$1"
+  local backup_dir="$2"
+  local key="$3"
+  local exists_flag="0"
+  exists_flag="$(cat "${backup_dir}/${key}.exists" 2>/dev/null || printf '0')"
+  if [[ "${exists_flag}" == "1" && -e "${backup_dir}/${key}.snapshot" ]]; then
+    mkdir -p "$(dirname "${path}")" 2>/dev/null || true
+    cp -a "${backup_dir}/${key}.snapshot" "${path}" 2>/dev/null || return 1
+    return 0
+  fi
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    rm -f -- "${path}" 2>/dev/null || return 1
+  fi
+  return 0
+}
+
+domain_control_txn_clear() {
+  DOMAIN_CTRL_TXN_ACTIVE="0"
+  DOMAIN_CTRL_TXN_CERT_SNAPSHOT=""
+  DOMAIN_CTRL_TXN_NGINX_BACKUP=""
+  DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT=""
+  DOMAIN_CTRL_TXN_CF_SNAPSHOT=""
+  DOMAIN_CTRL_TXN_CF_PREPARED="0"
+  DOMAIN_CTRL_TXN_DOMAIN=""
+  DOMAIN_CTRL_TXN_CF_ZONE_ID=""
+  DOMAIN_CTRL_TXN_CF_IPV4=""
+}
+
+domain_control_txn_begin() {
+  local cert_snapshot="$1"
+  local nginx_backup="$2"
+  local compat_snapshot="$3"
+  local domain="$4"
+  DOMAIN_CTRL_TXN_ACTIVE="1"
+  DOMAIN_CTRL_TXN_CERT_SNAPSHOT="${cert_snapshot}"
+  DOMAIN_CTRL_TXN_NGINX_BACKUP="${nginx_backup}"
+  DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT="${compat_snapshot}"
+  DOMAIN_CTRL_TXN_CF_SNAPSHOT=""
+  DOMAIN_CTRL_TXN_CF_PREPARED="0"
+  DOMAIN_CTRL_TXN_DOMAIN="${domain}"
+  DOMAIN_CTRL_TXN_CF_ZONE_ID=""
+  DOMAIN_CTRL_TXN_CF_IPV4=""
+}
+
+domain_control_txn_register_cf_snapshot() {
+  local zone_id="$1"
+  local domain="$2"
+  local ipv4="$3"
+  local snapshot="$4"
+  DOMAIN_CTRL_TXN_CF_ZONE_ID="${zone_id}"
+  DOMAIN_CTRL_TXN_DOMAIN="${domain}"
+  DOMAIN_CTRL_TXN_CF_IPV4="${ipv4}"
+  DOMAIN_CTRL_TXN_CF_SNAPSHOT="${snapshot}"
+  DOMAIN_CTRL_TXN_CF_PREPARED="0"
+}
+
+domain_control_txn_mark_cf_prepared() {
+  DOMAIN_CTRL_TXN_CF_PREPARED="1"
+}
+
+domain_control_txn_restore() {
+  local notes_name="$1"
+  local rc=0
+  declare -n notes_ref="${notes_name}"
+
+  if [[ -n "${DOMAIN_CTRL_TXN_CF_SNAPSHOT}" && -f "${DOMAIN_CTRL_TXN_CF_SNAPSHOT}" && "${DOMAIN_CTRL_TXN_CF_PREPARED:-0}" == "1" ]]; then
+    if ! cf_restore_relevant_a_records_snapshot "${DOMAIN_CTRL_TXN_CF_ZONE_ID}" "${DOMAIN_CTRL_TXN_DOMAIN}" "${DOMAIN_CTRL_TXN_CF_IPV4}" "${DOMAIN_CTRL_TXN_CF_SNAPSHOT}"; then
+      notes_ref+=("restore DNS Cloudflare gagal")
+      rc=1
+    fi
+  fi
+
+  if [[ -n "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" && -d "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" ]]; then
+    if ! domain_control_optional_file_snapshot_restore "${XRAY_DOMAIN_FILE}" "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" compat_domain; then
+      notes_ref+=("restore compat domain gagal")
+      rc=1
+    fi
+  fi
+
+  if [[ -n "${DOMAIN_CTRL_TXN_NGINX_BACKUP}" && -f "${DOMAIN_CTRL_TXN_NGINX_BACKUP}" ]]; then
+    if ! cp -a "${DOMAIN_CTRL_TXN_NGINX_BACKUP}" "${NGINX_CONF}" >/dev/null 2>&1; then
+      notes_ref+=("restore nginx conf gagal")
+      rc=1
+    fi
+  fi
+
+  if [[ -n "${DOMAIN_CTRL_TXN_CERT_SNAPSHOT}" && -d "${DOMAIN_CTRL_TXN_CERT_SNAPSHOT}" ]]; then
+    if ! cert_snapshot_restore "${DOMAIN_CTRL_TXN_CERT_SNAPSHOT}" >/dev/null 2>&1; then
+      notes_ref+=("restore sertifikat gagal")
+      rc=1
+    fi
+  fi
+
+  domain_control_restore_cert_runtime_after_rollback notes_ref || rc=1
+  if ! domain_control_restore_stopped_services; then
+    notes_ref+=("restore service runtime TLS gagal")
+    rc=1
+  else
+    domain_control_clear_stopped_services
+  fi
+
+  [[ -n "${DOMAIN_CTRL_TXN_CF_SNAPSHOT}" ]] && rm -f "${DOMAIN_CTRL_TXN_CF_SNAPSHOT}" >/dev/null 2>&1 || true
+  [[ -n "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" ]] && rm -rf "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" >/dev/null 2>&1 || true
+  [[ -n "${DOMAIN_CTRL_TXN_CERT_SNAPSHOT}" ]] && rm -rf "${DOMAIN_CTRL_TXN_CERT_SNAPSHOT}" >/dev/null 2>&1 || true
+  [[ -n "${DOMAIN_CTRL_TXN_NGINX_BACKUP}" ]] && rm -f "${DOMAIN_CTRL_TXN_NGINX_BACKUP}" >/dev/null 2>&1 || true
+  domain_control_txn_clear
+  return "${rc}"
 }
 
 main_info_os_get() {
@@ -1288,9 +2136,35 @@ account_count_by_proto() {
   echo "${#seen[@]}"
 }
 
+main_info_cache_invalidated_at_get() {
+  local ts="0"
+  if [[ -s "${MAIN_INFO_CACHE_INVALIDATION_FILE}" ]]; then
+    ts="$(head -n1 "${MAIN_INFO_CACHE_INVALIDATION_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' || true)"
+  fi
+  [[ "${ts}" =~ ^[0-9]+$ ]] || ts="0"
+  printf '%s\n' "${ts}"
+}
+
+main_info_cache_invalidate() {
+  local ts tmp
+  ts="$(date +%s 2>/dev/null || echo 0)"
+  MAIN_INFO_CACHE_TS=0
+  mkdir -p "${WORK_DIR}" 2>/dev/null || true
+  tmp="$(mktemp "${WORK_DIR}/main-info.invalidate.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/main-info.invalidate.$$"
+  if printf '%s\n' "${ts}" > "${tmp}"; then
+    install -m 600 "${tmp}" "${MAIN_INFO_CACHE_INVALIDATION_FILE}" >/dev/null 2>&1 || true
+  fi
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+}
+
 main_info_cache_refresh() {
-  local now elapsed ip geo isp country
+  local now elapsed ip geo isp country invalidated_at
   now="$(date +%s 2>/dev/null || echo 0)"
+  invalidated_at="$(main_info_cache_invalidated_at_get)"
+  if [[ "${invalidated_at}" =~ ^[0-9]+$ ]] && (( invalidated_at > MAIN_INFO_CACHE_TS )); then
+    MAIN_INFO_CACHE_TS=0
+  fi
   elapsed=$(( now - MAIN_INFO_CACHE_TS ))
   if (( MAIN_INFO_CACHE_TS > 0 && elapsed >= 0 && elapsed < MAIN_INFO_CACHE_TTL )); then
     return 0
@@ -1440,6 +2314,21 @@ confirm_yn_or_back() {
   done
 }
 
+confirm_menu_apply_now() {
+  local prompt="$1"
+  local ask_rc=0
+  if confirm_yn_or_back "${prompt}"; then
+    return 0
+  fi
+  ask_rc=$?
+  if (( ask_rc == 2 )); then
+    warn "Aksi dibatalkan (kembali)."
+    return 2
+  fi
+  warn "Aksi dibatalkan."
+  return 1
+}
+
 get_public_ipv4() {
   local ip=""
   ip="$(curl -4fsSL https://api.ipify.org 2>/dev/null || true)"
@@ -1558,7 +2447,36 @@ cf_delete_record() {
   local zone_id="$1"
   local record_id="$2"
   cf_api DELETE "/zones/${zone_id}/dns_records/${record_id}" >/dev/null \
-    || die "Gagal delete DNS record Cloudflare: $record_id"
+    || {
+      warn "Gagal delete DNS record Cloudflare: ${record_id}"
+      return 1
+    }
+}
+
+cf_create_a_record_with_ttl() {
+  local zone_id="$1"
+  local name="$2"
+  local ip="$3"
+  local proxied="${4:-false}"
+  local ttl="${5:-1}"
+
+  if [[ "$proxied" != "true" && "$proxied" != "false" ]]; then
+    proxied="false"
+  fi
+  if [[ ! "${ttl}" =~ ^[0-9]+$ ]] || (( ttl < 1 )); then
+    ttl=1
+  fi
+
+  local payload
+  payload="$(cat <<EOF
+{"type":"A","name":"$name","content":"$ip","ttl":$ttl,"proxied":$proxied}
+EOF
+  )"
+  cf_api POST "/zones/${zone_id}/dns_records" "$payload" >/dev/null \
+    || {
+      warn "Gagal membuat A record Cloudflare untuk ${name}"
+      return 1
+    }
 }
 
 cf_create_a_record() {
@@ -1566,28 +2484,23 @@ cf_create_a_record() {
   local name="$2"
   local ip="$3"
   local proxied="${4:-false}"
-
-  if [[ "$proxied" != "true" && "$proxied" != "false" ]]; then
-    proxied="false"
-  fi
-
-  local payload
-  payload="$(cat <<EOF
-{"type":"A","name":"$name","content":"$ip","ttl":1,"proxied":$proxied}
-EOF
-  )"
-  cf_api POST "/zones/${zone_id}/dns_records" "$payload" >/dev/null \
-    || die "Gagal membuat A record Cloudflare untuk $name"
+  cf_create_a_record_with_ttl "${zone_id}" "${name}" "${ip}" "${proxied}" 1
 }
 
-cf_force_a_record_dns_only() {
-  # args: zone_id fqdn ip
+cf_sync_a_record_proxy_mode() {
+  # args: zone_id fqdn ip desired_proxied
   local zone_id="$1"
   local fqdn="$2"
   local ip="$3"
+  local desired_proxied="${4:-false}"
   local json
   local lines=()
   local line rid rip rprox payload
+  local failed=0
+
+  if [[ "${desired_proxied}" != "true" && "${desired_proxied}" != "false" ]]; then
+    desired_proxied="false"
+  fi
 
   json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
   if [[ -z "${json:-}" ]] || ! echo "$json" | jq -e '.success == true' >/dev/null 2>&1; then
@@ -1604,15 +2517,73 @@ cf_force_a_record_dns_only() {
     line="${line#*$'\t'}"
     rip="${line%%$'\t'*}"
     rprox="${line#*$'\t'}"
-    if [[ "${rip}" == "${ip}" && "${rprox}" == "true" ]]; then
+    if [[ "${rip}" == "${ip}" && "${rprox}" != "${desired_proxied}" ]]; then
       payload="$(cat <<EOF
-{"type":"A","name":"$fqdn","content":"$ip","ttl":1,"proxied":false}
+{"type":"A","name":"$fqdn","content":"$ip","ttl":1,"proxied":$desired_proxied}
 EOF
 )"
       cf_api PUT "/zones/${zone_id}/dns_records/${rid}" "$payload" >/dev/null \
-        || warn "Gagal memaksa DNS only untuk record ${fqdn} (${rid})"
+        || {
+          warn "Gagal menyelaraskan mode proxy Cloudflare untuk record ${fqdn} (${rid})"
+          failed=1
+        }
     fi
   done
+  return "${failed}"
+}
+
+cf_validate_subdomain_a_record_choice() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local proxied="${4:-false}"
+  local json rec_ips any_same any_diff
+  local cip ask_rc=0
+
+  if [[ "${proxied}" != "true" && "${proxied}" != "false" ]]; then
+    proxied="false"
+  fi
+
+  log "Preflight DNS A record Cloudflare untuk: $fqdn"
+  json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
+  if [[ -z "${json:-}" ]] || ! echo "$json" | jq -e '.success == true' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mapfile -t rec_ips < <(echo "$json" | jq -r '.result[].content' 2>/dev/null || true)
+  if [[ ${#rec_ips[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  any_same="0"
+  any_diff="0"
+  for cip in "${rec_ips[@]}"; do
+    if [[ "${cip}" == "${ip}" ]]; then
+      any_same="1"
+    else
+      any_diff="1"
+    fi
+  done
+
+  if [[ "${any_diff}" == "1" ]]; then
+    die "Subdomain ${fqdn} sudah ada di Cloudflare tetapi IP berbeda (${rec_ips[*]}). Gunakan nama subdomain lain."
+  fi
+
+  if [[ "${any_same}" == "1" ]]; then
+    warn "A record target sudah ada: ${fqdn} -> ${ip}"
+    echo "Mode proxy target akan diselaraskan ke pilihan saat apply domain."
+    if ! confirm_yn_or_back "Lanjut menggunakan domain ini?"; then
+      ask_rc=$?
+      if (( ask_rc == 2 )); then
+        warn "Dibatalkan oleh pengguna (kembali)."
+        return 2
+      fi
+      warn "Dibatalkan oleh pengguna."
+      return 1
+    fi
+  fi
+
+  return 0
 }
 
 gen_subdomain_random() {
@@ -1634,7 +2605,7 @@ cf_prepare_subdomain_a_record() {
   local ip="$3"
   local proxied="${4:-false}"
 
-  log "Validasi DNS A record Cloudflare untuk: $fqdn"
+  log "Menyiapkan DNS A record Cloudflare untuk: $fqdn"
 
   local json rec_ips any_same any_diff target_ready
   target_ready="0"
@@ -1659,27 +2630,20 @@ cf_prepare_subdomain_a_record() {
 
       if [[ "$any_same" == "1" ]]; then
         warn "A record sudah ada: $fqdn -> $ip (sama dengan IP VPS)"
-        local ask_rc=0
-        if confirm_yn_or_back "Lanjut menggunakan domain ini?"; then
-          cf_force_a_record_dns_only "$zone_id" "$fqdn" "$ip"
-          log "Melanjutkan proses."
-          target_ready="1"
-        else
-          ask_rc=$?
-          if (( ask_rc == 2 )); then
-            warn "Dibatalkan oleh pengguna (kembali)."
-            return 2
-          fi
-          warn "Dibatalkan oleh pengguna."
+        if ! cf_sync_a_record_proxy_mode "$zone_id" "$fqdn" "$ip" "$proxied"; then
           return 1
         fi
+        log "Melanjutkan proses dengan record target yang sudah ada."
+        target_ready="1"
       fi
     fi
   fi
 
   if [[ "${target_ready}" != "1" ]]; then
     log "Membuat DNS A record: $fqdn -> $ip"
-    cf_create_a_record "$zone_id" "$fqdn" "$ip" "$proxied"
+    if ! cf_create_a_record "$zone_id" "$fqdn" "$ip" "$proxied"; then
+      return 1
+    fi
     target_ready="1"
   fi
 
@@ -1695,10 +2659,118 @@ cf_prepare_subdomain_a_record() {
       if [[ "$rname" != "$fqdn" ]]; then
         warn "Ditemukan A record lain dengan IP sama ($ip): $rname -> $ip"
         warn "Menghapus A record: $rname"
-        cf_delete_record "$zone_id" "$rid"
+        if ! cf_delete_record "$zone_id" "$rid"; then
+          return 1
+        fi
       fi
     done
   fi
+  return 0
+}
+
+cf_snapshot_relevant_a_records() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local outfile="${4:-}"
+  local target_file="" same_file="" target_json="" same_json=""
+
+  [[ -n "${outfile}" ]] || return 1
+  target_file="$(mktemp "${WORK_DIR}/.cf-target.XXXXXX" 2>/dev/null || true)"
+  same_file="$(mktemp "${WORK_DIR}/.cf-same-ip.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${target_file}" && -n "${same_file}" ]] || {
+    rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  target_json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" 2>/dev/null || true)"
+  same_json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&content=${ip}&per_page=100" 2>/dev/null || true)"
+  printf '%s\n' "${target_json:-{\"result\":[]}}" > "${target_file}" || return 1
+  printf '%s\n' "${same_json:-{\"result\":[]}}" > "${same_file}" || return 1
+
+  if ! jq -s '
+    [.[0].result // [], .[1].result // []]
+    | add
+    | map(select((.type // "A") == "A"))
+    | unique_by(.id)
+    | map({
+        id: (.id // ""),
+        name: (.name // ""),
+        content: (.content // ""),
+        proxied: (.proxied // false),
+        ttl: (.ttl // 1)
+      })
+  ' "${target_file}" "${same_file}" > "${outfile}" 2>/dev/null; then
+    rm -f -- "${outfile}" "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  chmod 600 "${outfile}" >/dev/null 2>&1 || true
+  rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+  return 0
+}
+
+cf_restore_relevant_a_records_snapshot() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local snapshot_file="${4:-}"
+  local target_file="" same_file="" current_target="" current_same=""
+  local -a current_ids=()
+
+  [[ -f "${snapshot_file}" ]] || return 1
+  target_file="$(mktemp "${WORK_DIR}/.cf-restore-target.XXXXXX" 2>/dev/null || true)"
+  same_file="$(mktemp "${WORK_DIR}/.cf-restore-same.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${target_file}" && -n "${same_file}" ]] || {
+    rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  current_target="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" 2>/dev/null || true)"
+  current_same="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&content=${ip}&per_page=100" 2>/dev/null || true)"
+  printf '%s\n' "${current_target:-{\"result\":[]}}" > "${target_file}" || return 1
+  printf '%s\n' "${current_same:-{\"result\":[]}}" > "${same_file}" || return 1
+
+  mapfile -t current_ids < <(
+    jq -s -r '
+      [.[0].result // [], .[1].result // []]
+      | add
+      | map(select((.type // "A") == "A"))
+      | unique_by(.id)
+      | .[] | (.id // empty)
+    ' "${target_file}" "${same_file}" 2>/dev/null || true
+  )
+
+  local rid name content proxied ttl
+  for rid in "${current_ids[@]}"; do
+    [[ -n "${rid}" ]] || continue
+    if ! cf_delete_record "${zone_id}" "${rid}"; then
+      rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done
+
+  while IFS=$'\t' read -r name content proxied ttl; do
+    [[ -n "${name}" && -n "${content}" ]] || continue
+    if ! cf_create_a_record_with_ttl "${zone_id}" "${name}" "${content}" "${proxied}" "${ttl}"; then
+      rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done < <(
+    jq -r '
+      .[]
+      | [
+          (.name // ""),
+          (.content // ""),
+          (if (.proxied // false) then "true" else "false" end),
+          ((.ttl // 1) | tostring)
+        ]
+      | @tsv
+    ' "${snapshot_file}" 2>/dev/null || true
+  )
+
+  rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+  return 0
 }
 
 domain_menu_v2() {
@@ -1831,9 +2903,8 @@ domain_menu_v2() {
   echo
   local proxy_rc=0
   if confirm_yn_or_back "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    warn "Cloudflare proxy (orange cloud) dinonaktifkan pada mode ini."
-    CF_PROXIED="false"
-    log "Cloudflare proxy: OFF (proxied=false)"
+    CF_PROXIED="true"
+    log "Cloudflare proxy: ON (proxied=true)"
   else
     proxy_rc=$?
     if (( proxy_rc == 2 )); then
@@ -1848,7 +2919,7 @@ domain_menu_v2() {
   log "Domain final: $DOMAIN"
 
   local cf_rc=0
-  cf_prepare_subdomain_a_record "$CF_ZONE_ID" "$DOMAIN" "$VPS_IPV4" "$CF_PROXIED" || cf_rc=$?
+  cf_validate_subdomain_a_record_choice "$CF_ZONE_ID" "$DOMAIN" "$VPS_IPV4" "$CF_PROXIED" || cf_rc=$?
   if (( cf_rc != 0 )); then
     if (( cf_rc == 1 || cf_rc == 2 )); then
       warn "Input domain dibatalkan, kembali ke menu Domain Control."
@@ -2104,6 +3175,16 @@ domain_control_clear_stopped_services() {
 domain_control_restore_on_exit() {
   # Safety net: jika proses domain control gagal di tengah (die/exit),
   # service yang sebelumnya aktif dipulihkan otomatis.
+  if [[ "${DOMAIN_CTRL_TXN_ACTIVE:-0}" == "1" ]]; then
+    local -a txn_notes=()
+    warn "Domain Control berhenti sebelum transaksi domain selesai. Mencoba rollback snapshot..."
+    if ! domain_control_txn_restore txn_notes; then
+      if (( ${#txn_notes[@]} > 0 )); then
+        warn "Rollback transaksi domain belum bersih: $(IFS=' | '; echo "${txn_notes[*]}")"
+      fi
+    fi
+    domain_control_clear_runtime_snapshot
+  fi
   if (( ${#DOMAIN_CTRL_STOPPED_SERVICES[@]} > 0 )); then
     warn "Domain Control berhenti sebelum selesai. Mencoba restore service yang tadi dihentikan..."
     if domain_control_restore_stopped_services; then
@@ -2210,44 +3291,79 @@ install_acme_and_issue_cert() {
   fi
 
   chmod 600 "$CERT_PRIVKEY" "$CERT_FULLCHAIN"
-  nginx -t >/dev/null 2>&1 || {
-    warn "Konfigurasi nginx tidak valid setelah install-cert."
-    return 1
-  }
-  svc_restart_checked nginx 60 || {
-    warn "Gagal restart nginx setelah install-cert."
-    return 1
-  }
-  domain_control_restart_active_tls_runtime_consumers || return 1
-  domain_control_restore_after_cert_success || return 1
 
   log "Sertifikat tersimpan:"
   log "  - $CERT_FULLCHAIN"
   log "  - $CERT_PRIVKEY"
 }
 
+domain_control_activate_cert_runtime_after_install() {
+  if ! domain_control_restart_active_tls_runtime_consumers; then
+    warn "Gagal restart consumer TLS tambahan setelah update cert."
+    return 1
+  fi
+  if ! domain_control_restore_after_cert_success; then
+    warn "Gagal memulihkan service konflik setelah update cert."
+    return 1
+  fi
+  return 0
+}
+
 domain_control_apply_nginx_domain() {
   local domain="$1"
   local applied_domain
+  local backup candidate preflight_rc=0
   domain="$(printf '%s' "${domain}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
   [[ -n "${domain}" ]] || die "Domain kosong."
   [[ -f "${NGINX_CONF}" ]] || die "Nginx conf tidak ditemukan: ${NGINX_CONF}"
   ensure_path_writable "${NGINX_CONF}"
 
-  local backup
   backup="${WORK_DIR}/xray.conf.domain-backup.$(date +%s)"
   cp -a "${NGINX_CONF}" "${backup}" || die "Gagal membuat backup nginx conf."
+  candidate="$(mktemp "${WORK_DIR}/xray.conf.domain-candidate.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${candidate}" ]] || die "Gagal membuat candidate nginx conf."
 
-  if ! sed -E -i "s|^([[:space:]]*server_name[[:space:]]+)[^;]+;|\\1${domain};|g" "${NGINX_CONF}"; then
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Gagal update server_name di nginx conf; restore backup nginx juga gagal."
+  if ! sed -E "s|^([[:space:]]*server_name[[:space:]]+)[^;]+;|\\1${domain};|g" "${NGINX_CONF}" > "${candidate}"; then
+    rm -f "${candidate}" >/dev/null 2>&1 || true
     die "Gagal update server_name di nginx conf."
   fi
 
-  applied_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
+  applied_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${candidate}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
   if [[ -z "${applied_domain}" || "${applied_domain}" != "${domain}" ]]; then
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "server_name nginx tidak sesuai setelah update; restore backup nginx juga gagal."
+    rm -f "${candidate}" >/dev/null 2>&1 || true
     die "server_name nginx tidak sesuai setelah update (expect=${domain}, got=${applied_domain:-<kosong>})."
   fi
+
+  if nginx_conf_test_with_override "${NGINX_CONF}" "${candidate}"; then
+    :
+  else
+    preflight_rc=$?
+    rm -f "${candidate}" >/dev/null 2>&1 || true
+    if (( preflight_rc == 1 )); then
+      die "Konfigurasi nginx candidate invalid sebelum diterapkan ke file live."
+    fi
+    die "Preflight nginx candidate tidak tersedia. Batalkan apply domain agar nginx conf tidak diuji hanya setelah file live diganti."
+  fi
+
+  local nginx_mode nginx_uid nginx_gid nginx_tmp_target=""
+  nginx_mode="$(stat -c '%a' "${NGINX_CONF}" 2>/dev/null || echo '644')"
+  nginx_uid="$(stat -c '%u' "${NGINX_CONF}" 2>/dev/null || echo '0')"
+  nginx_gid="$(stat -c '%g' "${NGINX_CONF}" 2>/dev/null || echo '0')"
+  nginx_tmp_target="$(mktemp "$(dirname "${NGINX_CONF}")/.xray.conf.new.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${nginx_tmp_target}" ]] || ! cp -f -- "${candidate}" "${nginx_tmp_target}" >/dev/null 2>&1; then
+    rm -f "${candidate}" >/dev/null 2>&1 || true
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Gagal memasang candidate nginx conf; restore backup nginx juga gagal."
+    die "Gagal mengganti nginx conf secara atomic."
+  fi
+  chmod "${nginx_mode}" "${nginx_tmp_target}" 2>/dev/null || chmod 644 "${nginx_tmp_target}" 2>/dev/null || true
+  chown "${nginx_uid}:${nginx_gid}" "${nginx_tmp_target}" 2>/dev/null || true
+  if ! mv -f "${nginx_tmp_target}" "${NGINX_CONF}" >/dev/null 2>&1; then
+    rm -f "${nginx_tmp_target}" >/dev/null 2>&1 || true
+    rm -f "${candidate}" >/dev/null 2>&1 || true
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Gagal memasang candidate nginx conf; restore backup nginx juga gagal."
+    die "Gagal mengganti nginx conf secara atomic."
+  fi
+  rm -f "${candidate}" >/dev/null 2>&1 || true
 
   if ! nginx -t >/dev/null 2>&1; then
     warn "nginx -t gagal setelah update domain, rollback ke backup."
@@ -2267,19 +3383,17 @@ domain_control_apply_nginx_domain() {
   fi
 
   if ! sync_xray_domain_file "${applied_domain}"; then
-    warn "Compat domain file gagal disinkronkan, rollback ke backup nginx."
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; restore backup nginx gagal."
-    nginx -t >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; backup nginx tidak valid saat rollback."
-    if ! svc_restart_checked nginx 60; then
-      die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}; rollback nginx juga gagal."
-    fi
-    die "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Perubahan nginx sudah di-rollback."
+    warn "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Domain nginx tetap aktif; sinkronkan manual bila perlu."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"
 }
 
 domain_control_set_domain_now() {
+  if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" != "1" ]]; then
+    domain_control_run_locked domain_control_set_domain_now "$@"
+    return $?
+  fi
   have_cmd curl || die "curl tidak ditemukan."
   have_cmd jq || die "jq tidak ditemukan."
 
@@ -2304,102 +3418,323 @@ domain_control_set_domain_now() {
     return 1
   fi
   rm -f "${spin_log}" >/dev/null 2>&1 || true
-  MAIN_INFO_CACHE_TS=0
   hr
   log "Domain aktif sekarang: ${DOMAIN}"
+  log "Refresh ACCOUNT INFO tidak dijalankan otomatis dari flow Set Domain."
+  log "Gunakan Domain Control > Refresh Account Info bila artefak akun perlu diselaraskan."
   pause
 }
 
 domain_control_set_domain_after_prompt() {
   local cert_backup_dir
   local nginx_conf_backup
-  local previous_domain
+  local compat_snapshot_dir=""
   local rollback_notes=()
-  local metadata_rollback_ok="true"
+  local cf_dns_snapshot=""
   cert_backup_dir="${WORK_DIR}/cert-snapshot.$(date +%s).$$"
   nginx_conf_backup="${WORK_DIR}/xray.conf.pre-domain-change.$(date +%s).$$"
-  previous_domain="$(detect_domain 2>/dev/null | awk '{print $1}' | tr -d ';' || true)"
+  compat_snapshot_dir="${WORK_DIR}/compat-domain-snapshot.$(date +%s).$$"
   domain_control_capture_runtime_snapshot
   if ! cert_snapshot_create "${cert_backup_dir}"; then
     die "Gagal membuat snapshot sertifikat sebelum set domain."
   fi
   cp -a "${NGINX_CONF}" "${nginx_conf_backup}" || die "Gagal membuat backup nginx sebelum set domain."
+  if ! domain_control_optional_file_snapshot_create "${XRAY_DOMAIN_FILE}" "${compat_snapshot_dir}" compat_domain; then
+    rm -rf "${compat_snapshot_dir}" >/dev/null 2>&1 || true
+    die "Gagal membuat snapshot compat domain sebelum set domain."
+  fi
+  domain_control_txn_begin "${cert_backup_dir}" "${nginx_conf_backup}" "${compat_snapshot_dir}" "${DOMAIN}"
 
   if ! install_acme_and_issue_cert; then
-    warn "Issue/install sertifikat gagal. Mengembalikan sertifikat sebelumnya..."
-    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
-    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
-    if ! domain_control_restore_stopped_services; then
-      rollback_notes+=("restore service runtime TLS gagal")
-    else
-      domain_control_clear_stopped_services
-    fi
-    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
-    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    warn "Issue/install sertifikat gagal. Mengembalikan snapshot transaksi domain..."
+    domain_control_txn_restore rollback_notes || true
     if (( ${#rollback_notes[@]} > 0 )); then
       die "Set domain dibatalkan karena issue/install sertifikat gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
     fi
     die "Set domain dibatalkan karena issue/install sertifikat gagal; sertifikat sebelumnya berhasil dipulihkan."
   fi
+
   if ! ( domain_control_apply_nginx_domain "${DOMAIN}" ); then
-    warn "Apply domain ke nginx gagal. Mengembalikan sertifikat sebelumnya..."
-    if ! cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1; then
-      rollback_notes+=("restore sertifikat gagal")
-    fi
-    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
-    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
-    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    warn "Apply domain ke nginx gagal. Mengembalikan snapshot transaksi domain..."
+    domain_control_txn_restore rollback_notes || true
     if (( ${#rollback_notes[@]} > 0 )); then
       die "Set domain dibatalkan karena update nginx gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
     fi
-    die "Set domain dibatalkan karena update nginx gagal; sertifikat dipulihkan."
+    die "Set domain dibatalkan karena update nginx gagal; snapshot transaksi berhasil dipulihkan."
   fi
-  MAIN_INFO_CACHE_TS=0
 
-  if account_refresh_all_info_files "${DOMAIN}" "$(detect_public_ip_ipapi)"; then
-    log "ACCOUNT INFO berhasil disinkronkan ke domain baru."
-    account_info_domain_sync_state_write "${DOMAIN}"
-  else
-    warn "ACCOUNT INFO gagal disinkronkan penuh. Mengembalikan domain sebelumnya..."
-    local rollback_domain_ready="true"
-    if [[ -f "${nginx_conf_backup}" ]]; then
-      if ! cp -a "${nginx_conf_backup}" "${NGINX_CONF}" >/dev/null 2>&1; then
-        rollback_notes+=("restore nginx conf gagal")
-        rollback_domain_ready="false"
-      fi
-    else
-      rollback_notes+=("backup nginx conf tidak tersedia")
-      rollback_domain_ready="false"
+  if [[ "${ACME_CERT_MODE:-standalone}" == "dns_cf_wildcard" ]]; then
+    [[ -n "${CF_ZONE_ID:-}" ]] || die "CF_ZONE_ID kosong untuk flow wildcard dns_cf."
+    [[ -n "${VPS_IPV4:-}" ]] || VPS_IPV4="$(get_public_ipv4)"
+    cf_dns_snapshot="$(mktemp "${WORK_DIR}/cf-domain-snapshot.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${cf_dns_snapshot}" ]] || die "Gagal menyiapkan snapshot DNS Cloudflare sebelum apply domain."
+    if ! cf_snapshot_relevant_a_records "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${cf_dns_snapshot}"; then
+      rm -f "${cf_dns_snapshot}" >/dev/null 2>&1 || true
+      die "Gagal membuat snapshot DNS Cloudflare sebelum apply domain."
     fi
-    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
-    domain_control_restore_cert_runtime_after_rollback rollback_notes || rollback_domain_ready="false"
-    if [[ "${rollback_domain_ready}" == "true" && -n "${previous_domain}" && "${previous_domain}" == *.* ]]; then
-      if ! sync_xray_domain_file "${previous_domain}" >/dev/null 2>&1; then
-        rollback_notes+=("sinkron domain kompatibilitas rollback gagal")
-        metadata_rollback_ok="false"
+    domain_control_txn_register_cf_snapshot "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${cf_dns_snapshot}"
+    if ! cf_prepare_subdomain_a_record "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${CF_PROXIED:-false}"; then
+      warn "Apply DNS Cloudflare gagal. Mengembalikan snapshot transaksi domain..."
+      domain_control_txn_restore rollback_notes || true
+      if (( ${#rollback_notes[@]} > 0 )); then
+        die "Set domain dibatalkan karena apply DNS Cloudflare gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
       fi
-      if ! account_refresh_all_info_files "${previous_domain}" "$(detect_public_ip_ipapi)"; then
-        rollback_notes+=("refresh ACCOUNT INFO rollback gagal")
-        metadata_rollback_ok="false"
-      fi
-      if [[ "${metadata_rollback_ok}" == "true" ]]; then
-        account_info_domain_sync_state_write "${previous_domain}"
-      fi
-    elif [[ "${rollback_domain_ready}" != "true" ]]; then
-      rollback_notes+=("runtime domain rollback tidak siap untuk sinkronisasi metadata lama")
-    else
-      rollback_notes+=("domain sebelumnya tidak valid untuk rollback")
+      die "Set domain dibatalkan karena apply DNS Cloudflare gagal; snapshot transaksi berhasil dipulihkan."
     fi
-    rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
-    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
-    if (( ${#rollback_notes[@]} > 0 )); then
-      die "Set domain dibatalkan karena sinkronisasi ACCOUNT INFO gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
-    fi
-    die "Set domain dibatalkan karena sinkronisasi ACCOUNT INFO gagal; domain sebelumnya berhasil dipulihkan."
+    domain_control_txn_mark_cf_prepared
   fi
+
+  if ! domain_control_activate_cert_runtime_after_install; then
+    warn "Aktivasi runtime cert/domain gagal. Mengembalikan snapshot transaksi domain..."
+    domain_control_txn_restore rollback_notes || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      die "Set domain dibatalkan karena aktivasi runtime cert/domain gagal; rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    fi
+    die "Set domain dibatalkan karena aktivasi runtime cert/domain gagal; snapshot transaksi berhasil dipulihkan."
+  fi
+  main_info_cache_invalidate
+  domain_control_txn_clear
   rm -f "${nginx_conf_backup}" >/dev/null 2>&1 || true
+  rm -rf "${compat_snapshot_dir}" >/dev/null 2>&1 || true
   rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+  rm -f "${cf_dns_snapshot}" >/dev/null 2>&1 || true
   domain_control_clear_runtime_snapshot
+}
+
+domain_control_refresh_account_info_now() {
+  local domain ip summary xray_count ssh_count total_count xray_preview ssh_preview preview_report="" dry_run_report=""
+  local geo="" geo_ip="" target_isp="-" target_country="-"
+  local scope_choice="" scope="all" scope_label="Semua (Xray + SSH)"
+  local spin_log=""
+  local ask_rc=0
+
+  title
+  echo "6) Domain Control > Refresh Account Info"
+  hr
+
+  domain="$(normalize_domain_token "$(detect_domain)")"
+  if [[ -z "${domain}" ]]; then
+    warn "Domain aktif tidak terdeteksi."
+    pause
+    return 1
+  fi
+  ip="$(normalize_ip_token "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)")"
+  if [[ -n "${ip}" ]]; then
+    geo="$(main_info_geo_lookup "${ip}" 2>/dev/null || true)"
+    IFS='|' read -r geo_ip target_isp target_country <<<"${geo}"
+    [[ -n "${geo_ip}" && "${geo_ip}" != "-" ]] && ip="${geo_ip}"
+    [[ -n "${target_isp}" ]] || target_isp="-"
+    [[ -n "${target_country}" ]] || target_country="-"
+  fi
+  echo "Pilih scope refresh:"
+  echo "  1) Semua (Xray + SSH)"
+  echo "  2) Xray only"
+  echo "  3) SSH only"
+  echo "  0) Back"
+  hr
+  while true; do
+    if ! read -r -p "Pilih scope (1-3/0): " scope_choice; then
+      echo
+      return 0
+    fi
+    case "${scope_choice}" in
+      1) scope="all" ; scope_label="Semua (Xray + SSH)" ; break ;;
+      2) scope="xray" ; scope_label="Xray only" ; break ;;
+      3) scope="ssh" ; scope_label="SSH only" ; break ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) echo "Pilihan tidak valid." ;;
+    esac
+  done
+
+  summary="$(account_info_refresh_targets_summary "${scope}" 5)"
+  IFS='|' read -r xray_count ssh_count total_count xray_preview ssh_preview <<<"${summary}"
+
+  echo "Domain aktif : ${domain}"
+  echo "IP aktif     : ${ip:-tidak terdeteksi}"
+  echo "ISP target   : ${target_isp:-"-"}"
+  echo "Country tgt  : ${target_country:-"-"}"
+  echo "Scope        : ${scope_label}"
+  if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
+    echo "Target Xray  : ${xray_count:-0}"
+    echo "Preview Xray : ${xray_preview:--}"
+  fi
+  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+    echo "Target SSH   : ${ssh_count:-0}"
+    echo "Preview SSH  : ${ssh_preview:--}"
+  fi
+  echo "Total target : ${total_count:-0}"
+  preview_report="$(preview_report_path_prepare "account-info-refresh-targets" 2>/dev/null || true)"
+  if [[ -n "${preview_report}" ]] && account_info_refresh_targets_report_write "${scope}" "${preview_report}"; then
+    echo "Daftar target lengkap:"
+    echo "  ${preview_report}"
+  else
+    rm -f "${preview_report}" >/dev/null 2>&1 || true
+    preview_report=""
+  fi
+  dry_run_report="$(preview_report_path_prepare "account-info-refresh-dryrun" 2>/dev/null || true)"
+  if [[ -n "${dry_run_report}" ]] && account_info_refresh_dry_run_report_write "${scope}" "${dry_run_report}" "${domain}" "${ip}" "${target_isp}" "${target_country}"; then
+    echo "Dry-run report : ${dry_run_report}"
+  else
+    rm -f "${dry_run_report}" >/dev/null 2>&1 || true
+    dry_run_report=""
+  fi
+  hr
+
+  if [[ -z "${total_count}" || "${total_count}" == "0" ]]; then
+    warn "Tidak ada ACCOUNT INFO yang perlu direfresh."
+    pause
+    return 0
+  fi
+
+  echo "Aksi:"
+  echo "  1) Preview only"
+  echo "  2) Dry-run rendered diff"
+  echo "  3) Refresh sekarang"
+  echo "  0) Back"
+  hr
+  local refresh_action=""
+  while true; do
+    if ! read -r -p "Pilih aksi (1-3/0): " refresh_action; then
+      echo
+      return 0
+    fi
+    case "${refresh_action}" in
+      1)
+        if [[ -n "${preview_report}" && -f "${preview_report}" ]]; then
+          preview_report_show_file "${preview_report}" || warn "Gagal membuka preview target refresh."
+        else
+          warn "Preview target tidak tersedia."
+        fi
+        hr
+        pause
+        return 0
+        ;;
+      2)
+        if [[ -n "${dry_run_report}" && -f "${dry_run_report}" ]]; then
+          preview_report_show_file "${dry_run_report}" || warn "Gagal membuka dry-run refresh."
+        else
+          warn "Dry-run refresh tidak tersedia."
+        fi
+        hr
+        pause
+        return 0
+        ;;
+      3) break ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) echo "Pilihan tidak valid." ;;
+    esac
+  done
+
+  if ! confirm_yn_or_back "Refresh ACCOUNT INFO untuk scope ${scope_label} ini sekarang?"; then
+    ask_rc=$?
+    if (( ask_rc == 2 )); then
+      warn "Refresh ACCOUNT INFO dibatalkan (kembali)."
+    else
+      warn "Refresh ACCOUNT INFO dibatalkan."
+    fi
+    pause
+    return 0
+  fi
+
+  if ui_run_logged_command_with_spinner spin_log "Refresh ACCOUNT INFO (${scope_label})" account_refresh_all_info_files "${domain}" "${ip}" "${scope}"; then
+    if [[ "${scope}" == "ssh" ]]; then
+      log "ACCOUNT INFO SSH berhasil disinkronkan."
+    elif account_info_domain_sync_state_write "${domain}"; then
+      log "ACCOUNT INFO berhasil disinkronkan."
+    else
+      warn "ACCOUNT INFO berhasil disinkronkan, tetapi state sinkronisasi domain gagal disimpan."
+    fi
+    rm -f "${spin_log}" >/dev/null 2>&1 || true
+    pause
+    return 0
+  fi
+
+  warn "Refresh ACCOUNT INFO gagal."
+  hr
+  tail -n 60 "${spin_log}" 2>/dev/null || true
+  hr
+  rm -f "${spin_log}" >/dev/null 2>&1 || true
+  rm -f "${preview_report}" "${dry_run_report}" >/dev/null 2>&1 || true
+  pause
+  return 1
+}
+
+domain_control_sync_compat_domain_now() {
+  local domain ask_rc=0 current_compat=""
+  local snapshot_dir="" preview_report=""
+  if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" != "1" ]]; then
+    domain_control_run_locked domain_control_sync_compat_domain_now "$@"
+    return $?
+  fi
+
+  title
+  echo "6) Domain Control > Sync Compat Domain File"
+  hr
+
+  domain="$(normalize_domain_token "$(detect_domain)")"
+  if [[ -z "${domain}" ]]; then
+    warn "Domain aktif tidak terdeteksi."
+    pause
+    return 1
+  fi
+
+  echo "Domain aktif    : ${domain}"
+  echo "Compat file     : ${XRAY_DOMAIN_FILE}"
+  current_compat="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  echo "Compat saat ini : ${current_compat:-"(kosong)"}"
+  echo "Catatan         : ini adalah repair artefak kompatibilitas ke domain aktif, bukan set domain baru."
+  preview_report="$(preview_report_path_prepare "compat-domain-sync" 2>/dev/null || true)"
+  if [[ -n "${preview_report}" ]]; then
+    {
+      printf 'Current compat : %s\n' "${current_compat:-"(kosong)"}"
+      printf 'Target domain  : %s\n' "${domain}"
+      printf '\n'
+      printf -- '--- current\n'
+      printf -- '+++ target\n'
+      printf -- '@@ compat-domain @@\n'
+      printf -- '-%s\n' "${current_compat:-"(kosong)"}"
+      printf -- '+%s\n' "${domain}"
+    } > "${preview_report}" 2>/dev/null || true
+    [[ -f "${preview_report}" ]] && echo "Preview repair : ${preview_report}"
+  fi
+  hr
+
+  if [[ -n "${current_compat}" && "${current_compat}" == "${domain}" ]]; then
+    log "Compat domain file sudah sinkron dengan domain aktif."
+    pause
+    return 0
+  fi
+
+  if ! confirm_yn_or_back "Sinkronkan compat domain file ke domain aktif sekarang?"; then
+    ask_rc=$?
+    if (( ask_rc == 2 )); then
+      warn "Sinkronisasi compat domain dibatalkan (kembali)."
+    else
+      warn "Sinkronisasi compat domain dibatalkan."
+    fi
+    pause
+    return 0
+  fi
+
+  snapshot_dir="$(mktemp -d "${WORK_DIR}/.compat-domain-sync.XXXXXX" 2>/dev/null || true)"
+  if [[ -n "${snapshot_dir}" ]]; then
+    domain_control_optional_file_snapshot_create "${XRAY_DOMAIN_FILE}" "${snapshot_dir}" compat_domain >/dev/null 2>&1 || true
+  fi
+
+  if sync_xray_domain_file "${domain}"; then
+    log "Compat domain file berhasil disinkronkan ke ${domain}."
+    [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    pause
+    return 0
+  fi
+
+  if [[ -n "${snapshot_dir}" && -d "${snapshot_dir}" ]]; then
+    domain_control_optional_file_snapshot_restore "${XRAY_DOMAIN_FILE}" "${snapshot_dir}" compat_domain >/dev/null 2>&1 || true
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+  fi
+  warn "Sinkronisasi compat domain file gagal."
+  pause
+  return 1
 }
 
 domain_control_show_info() {
@@ -2459,6 +3794,10 @@ domain_control_guard_check() {
 }
 
 domain_control_guard_renew_if_needed() {
+  if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" != "1" ]]; then
+    domain_control_run_locked domain_control_guard_renew_if_needed "$@"
+    return $?
+  fi
   title
   echo "6) Domain Control > Guard Renew"
   hr
@@ -2470,8 +3809,59 @@ domain_control_guard_renew_if_needed() {
     return 0
   fi
 
-  local ask_rc=0
-  if ! confirm_yn_or_back "Jalankan guard renew-if-needed sekarang?"; then
+  local ask_rc=0 rc=0 spin_log="" check_rc=0 check_log="" status_log=""
+  if ui_run_logged_command_with_spinner check_log "Menjalankan guard preflight" "${XRAY_DOMAIN_GUARD_BIN}" check; then
+    check_rc=0
+  else
+    check_rc=$?
+  fi
+  ui_run_logged_command_with_spinner status_log "Mengambil status guard terakhir" "${XRAY_DOMAIN_GUARD_BIN}" status >/dev/null 2>&1 || true
+
+  hr
+  if [[ -n "${check_log}" && -s "${check_log}" ]]; then
+    cat "${check_log}" 2>/dev/null || true
+    hr
+  fi
+  case "${check_rc}" in
+    0) log "Preflight guard: sehat." ;;
+    1) warn "Preflight guard: warning terdeteksi." ;;
+    2) warn "Preflight guard: masalah critical terdeteksi." ;;
+    *) warn "Preflight guard selesai dengan status ${check_rc}." ;;
+  esac
+  echo "Config path: ${XRAY_DOMAIN_GUARD_CONFIG_FILE}"
+  if [[ -f "${XRAY_DOMAIN_GUARD_LOG_FILE}" ]]; then
+    echo "Log path   : ${XRAY_DOMAIN_GUARD_LOG_FILE}"
+  fi
+  if [[ -n "${status_log}" && -s "${status_log}" ]]; then
+    echo "Status/log terakhir:"
+    cat "${status_log}" 2>/dev/null || true
+    hr
+  fi
+  echo "Perkiraan artefak/runtime yang bisa disentuh:"
+  echo "  - Cert files : ${CERT_FULLCHAIN}, ${CERT_PRIVKEY}"
+  echo "  - Nginx conf : ${NGINX_CONF}"
+  echo "  - Compat file: ${XRAY_DOMAIN_FILE}"
+  echo "  - Service    : nginx, xray, sshws-stunnel, edge runtime (jika aktif)"
+  echo "Command    : ${XRAY_DOMAIN_GUARD_BIN} renew-if-needed"
+  echo "Catatan    : renew-if-needed dijalankan oleh binary eksternal dan dapat memperbarui cert/domain artefak terkait."
+  hr
+  rm -f "${check_log}" >/dev/null 2>&1 || true
+  rm -f "${status_log}" >/dev/null 2>&1 || true
+
+  if (( check_rc >= 1 )); then
+    if ! confirm_yn_or_back "Preflight guard tidak bersih. Tetap lanjut ke renew-if-needed?"; then
+      ask_rc=$?
+      if (( ask_rc == 2 )); then
+        warn "Guard renew dibatalkan (kembali)."
+      else
+        warn "Guard renew dibatalkan."
+      fi
+      pause
+      return 0
+    fi
+  fi
+
+  if ! confirm_yn_or_back "Lanjutkan guard renew-if-needed sekarang setelah melihat preflight di atas?"; then
     ask_rc=$?
     if (( ask_rc == 2 )); then
       warn "Dibatalkan dan kembali ke Domain Control."
@@ -2483,7 +3873,6 @@ domain_control_guard_renew_if_needed() {
     return 0
   fi
 
-  local rc=0 spin_log=""
   if ui_run_logged_command_with_spinner spin_log "Menjalankan guard renew" "${XRAY_DOMAIN_GUARD_BIN}" renew-if-needed; then
     rc=0
   else
@@ -2512,6 +3901,8 @@ domain_control_menu() {
     "2|Current Domain"
     "3|Guard Check"
     "4|Guard Renew"
+    "5|Refresh Account Info"
+    "6|Sync Compat Domain File"
     "0|Back"
   )
   while true; do
@@ -2523,10 +3914,12 @@ domain_control_menu() {
       break
     fi
     case "${c}" in
-      1) domain_control_set_domain_now ;;
+      1) menu_run_isolated_report "Set Domain" domain_control_set_domain_now ;;
       2) domain_control_show_info ;;
-      3) domain_control_guard_check || true ;;
-      4) domain_control_guard_renew_if_needed || true ;;
+      3) menu_run_isolated_report "Domain Guard Check" domain_control_guard_check ;;
+      4) menu_run_isolated_report "Domain Guard Renew" domain_control_guard_renew_if_needed ;;
+      5) menu_run_isolated_report "Refresh Account Info" domain_control_refresh_account_info_now ;;
+      6) menu_run_isolated_report "Sync Compat Domain" domain_control_sync_compat_domain_now ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -2558,23 +3951,65 @@ invalid_choice() {
 }
 
 run_action() {
+  local label="$1"
+  shift || true
+  menu_run_isolated_report "${label}" "$@"
+}
+
+menu_run_isolated_report() {
   # Jalankan aksi dalam subshell supaya error tidak menutup script,
-  # lalu kembali ke Main Menu.
+  # lalu kembalikan status ke caller dengan warning yang konsisten.
   # args: label cmd...
   local label="$1"
   shift || true
-
   local rc=0
+  if _run_in_strict_subshell "$@"; then
+    :
+  else
+    rc=$?
+  fi
+
+  if (( rc != 0 )); then
+    warn "${label} gagal (rc=${rc}). Kembali ke menu sebelumnya."
+  fi
+  return "${rc}"
+}
+
+domain_control_restore_stopped_services_strict() {
+  local attempts="${1:-2}"
+  local attempt svc all_restored
+  [[ "${attempts}" =~ ^[0-9]+$ ]] || attempts=2
+  (( attempts > 0 )) || attempts=1
+
+  for (( attempt=1; attempt<=attempts; attempt++ )); do
+    domain_control_restore_stopped_services || true
+    all_restored="true"
+    for svc in "${DOMAIN_CTRL_STOPPED_SERVICES[@]}"; do
+      if svc_exists "${svc}" && ! svc_is_active "${svc}"; then
+        all_restored="false"
+        break
+      fi
+    done
+    if [[ "${all_restored}" == "true" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+_run_in_strict_subshell() {
+  local restore_opts rc=0
+  restore_opts="$(set +o)"
   set +e
   ( set -euo pipefail; "$@" )
   rc=$?
-  set -euo pipefail
+  eval "${restore_opts}"
+  return "${rc}"
+}
 
-  if (( rc != 0 )); then
-    warn "${label} gagal (rc=${rc}). Kembali ke Main Menu."
-    pause
-  fi
-  return 0
+menu_run_isolated() {
+  _run_in_strict_subshell "$@"
 }
 
 hr() {
@@ -2954,6 +4389,78 @@ xray_restart_checked() {
   return 1
 }
 
+xray_restart_checked_with_preflight() {
+  local ok=1 f
+
+  if have_cmd jq; then
+    for f in \
+      "${XRAY_LOG_CONF}" \
+      "${XRAY_API_CONF}" \
+      "${XRAY_DNS_CONF}" \
+      "${XRAY_INBOUNDS_CONF}" \
+      "${XRAY_OUTBOUNDS_CONF}" \
+      "${XRAY_ROUTING_CONF}" \
+      "${XRAY_POLICY_CONF}" \
+      "${XRAY_STATS_CONF}"; do
+      if [[ ! -f "${f}" ]]; then
+        warn "Konfigurasi Xray tidak ditemukan: ${f}"
+        ok=0
+        continue
+      fi
+      if ! jq -e . "${f}" >/dev/null 2>&1; then
+        warn "JSON Xray tidak valid: ${f}"
+        ok=0
+      fi
+    done
+  else
+    warn "jq tidak tersedia, skip validasi JSON Xray sebelum restart."
+  fi
+
+  if (( ok != 1 )); then
+    warn "Preflight konfigurasi Xray gagal. Restart dibatalkan."
+    return 1
+  fi
+
+  if have_cmd xray && ! xray_confdir_syntax_test; then
+    warn "Syntax confdir Xray tidak valid. Restart dibatalkan."
+    return 1
+  fi
+
+  if ! xray_restart_checked; then
+    warn "Restart xray gagal."
+    return 1
+  fi
+  return 0
+}
+
+nginx_service_listener_health_check() {
+  if ! svc_exists nginx || ! svc_is_active nginx; then
+    warn "nginx tidak aktif setelah operasi."
+    return 1
+  fi
+  if ! have_cmd ss; then
+    return 0
+  fi
+  if ss -lntp 2>/dev/null | grep -F "nginx" >/dev/null 2>&1; then
+    return 0
+  fi
+  warn "Listener nginx tidak terdeteksi setelah operasi."
+  return 1
+}
+
+nginx_restart_checked_with_listener() {
+  if have_cmd nginx && ! nginx -t >/dev/null 2>&1; then
+    warn "nginx -t gagal. Restart nginx dibatalkan."
+    return 1
+  fi
+  if ! svc_restart_checked nginx 60; then
+    warn "Restart nginx gagal."
+    return 1
+  fi
+  nginx_service_listener_health_check || return 1
+  return 0
+}
+
 svc_exists() {
   local svc="$1"
   local load
@@ -3240,6 +4747,58 @@ account_collect_files() {
     done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
   done
 
+  # Tambahkan target dari quota metadata bila file account belum ada,
+  # agar flow refresh/delete/reset masih bisa menemukan akun yang drift.
+  for proto in "${ACCOUNT_PROTO_DIRS[@]}"; do
+    if [[ -n "${proto_filter}" && "${proto}" != "${proto_filter}" ]]; then
+      continue
+    fi
+    dir="${QUOTA_ROOT}/${proto}"
+    [[ -d "${dir}" ]] || continue
+    while IFS= read -r -d '' f; do
+      base="$(basename "${f}")"
+      base="${base%.json}"
+      if [[ "${base}" == *"@"* ]]; then
+        u="${base%%@*}"
+      else
+        u="${base}"
+      fi
+      [[ -n "${u}" ]] || continue
+      key="${proto}:${u}"
+      if [[ -n "${pos[${key}]:-}" ]]; then
+        continue
+      fi
+      pos["${key}"]="${#ACCOUNT_FILES[@]}"
+      has_at["${key}"]=1
+      ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt}")
+      ACCOUNT_FILE_PROTOS+=("${proto}")
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
+  done
+
+  # Tambahkan target dari runtime inbounds agar akun live tanpa file/quota
+  # tetap bisa terlihat dan dipulihkan dari menu.
+  local email
+  while IFS= read -r email; do
+    [[ -n "${email}" && "${email}" == *"@"* ]] || continue
+    u="${email%%@*}"
+    proto="${email##*@}"
+    case "${proto}" in
+      vless|vmess|trojan) ;;
+      *) continue ;;
+    esac
+    if [[ -n "${proto_filter}" && "${proto}" != "${proto_filter}" ]]; then
+      continue
+    fi
+    key="${proto}:${u}"
+    if [[ -n "${pos[${key}]:-}" ]]; then
+      continue
+    fi
+    pos["${key}"]="${#ACCOUNT_FILES[@]}"
+    has_at["${key}"]=1
+    ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt}")
+    ACCOUNT_FILE_PROTOS+=("${proto}")
+  done < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
+
   # Build metadata cache in one Python process to avoid N subprocesses per row.
   quota_cache_rebuild
 }
@@ -3359,7 +4918,7 @@ account_print_table_page() {
   pages="$(account_total_pages)"
 
   if (( total == 0 )); then
-    warn "Tidak ada file account di ${ACCOUNT_ROOT}/{vless,vmess,trojan}"
+    warn "Tidak ada target akun Xray terdeteksi dari account/quota/runtime."
     return 0
   fi
 
@@ -3680,6 +5239,126 @@ xray_confdir_syntax_test() {
   xray run -test -confdir "${XRAY_CONFDIR}" >/dev/null 2>&1
 }
 
+xray_confdir_syntax_test_with_override() {
+  # args: live_target candidate_file
+  # Validasi seluruh confdir dengan satu file dioverride dari candidate.
+  local live_target="${1:-}"
+  local candidate_file="${2:-}"
+  local temp_confdir="" target_rel="" override_target=""
+
+  [[ -n "${live_target}" && -n "${candidate_file}" ]] || return 1
+  if ! have_cmd xray; then
+    return 0
+  fi
+  [[ -d "${XRAY_CONFDIR}" ]] || return 1
+
+  temp_confdir="$(mktemp -d "${WORK_DIR}/.xray-confdir-test.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${temp_confdir}" && -d "${temp_confdir}" ]] || return 1
+  if ! cp -a "${XRAY_CONFDIR}/." "${temp_confdir}/" >/dev/null 2>&1; then
+    rm -rf "${temp_confdir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  target_rel="${live_target#${XRAY_CONFDIR}/}"
+  if [[ "${target_rel}" == "${live_target}" ]]; then
+    rm -rf "${temp_confdir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  override_target="${temp_confdir}/${target_rel}"
+  mkdir -p "$(dirname "${override_target}")" 2>/dev/null || true
+  if ! cp -f -- "${candidate_file}" "${override_target}" >/dev/null 2>&1; then
+    rm -rf "${temp_confdir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  if xray run -test -confdir "${temp_confdir}" >/dev/null 2>&1; then
+    rm -rf "${temp_confdir}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  rm -rf "${temp_confdir}" >/dev/null 2>&1 || true
+  return 1
+}
+
+nginx_conf_test_with_override() {
+  # args: live_target candidate_file
+  # Best-effort preflight untuk nginx conf.d dengan satu file dioverride dari candidate.
+  # Return 0=valid, 1=invalid, 2=preflight tidak tersedia/tidak bisa disiapkan.
+  local live_target="${1:-}"
+  local candidate_file="${2:-}"
+  local temp_root="" temp_confdir="" temp_main="" rc=2
+
+  [[ -n "${live_target}" && -n "${candidate_file}" ]] || return 2
+  [[ -f "${live_target}" && -f "${candidate_file}" && -f "${NGINX_MAIN_CONF}" ]] || return 2
+  have_cmd nginx || return 2
+  have_cmd python3 || return 2
+
+  temp_root="$(mktemp -d "${WORK_DIR}/.nginx-conf-test.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${temp_root}" && -d "${temp_root}" ]] || return 2
+  temp_confdir="${temp_root}/conf.d"
+  mkdir -p "${temp_confdir}" >/dev/null 2>&1 || {
+    rm -rf "${temp_root}" >/dev/null 2>&1 || true
+    return 2
+  }
+
+  if ! cp -a "$(dirname "${live_target}")/." "${temp_confdir}/" >/dev/null 2>&1; then
+    rm -rf "${temp_root}" >/dev/null 2>&1 || true
+    return 2
+  fi
+  if ! cp -f -- "${candidate_file}" "${temp_confdir}/$(basename "${live_target}")" >/dev/null 2>&1; then
+    rm -rf "${temp_root}" >/dev/null 2>&1 || true
+    return 2
+  fi
+
+  temp_main="${temp_root}/nginx.conf"
+  if ! python3 - <<'PY' "${NGINX_MAIN_CONF}" "${temp_main}" "$(dirname "${live_target}")" "${temp_confdir}" >/dev/null 2>&1
+import pathlib
+import re
+import sys
+
+main_src = pathlib.Path(sys.argv[1])
+main_dst = pathlib.Path(sys.argv[2])
+live_dir = sys.argv[3].rstrip("/")
+temp_dir = sys.argv[4].rstrip("/")
+
+try:
+    text = main_src.read_text(encoding="utf-8")
+except Exception:
+    raise SystemExit(2)
+
+pattern = re.compile(
+    rf'(^\s*include\s+){re.escape(live_dir)}/\*\.conf(\s*;\s*$)',
+    re.MULTILINE,
+)
+updated, count = pattern.subn(
+    lambda m: f"{m.group(1)}{temp_dir}/*.conf{m.group(2)}",
+    text,
+)
+if count == 0:
+    raise SystemExit(3)
+
+try:
+    main_dst.write_text(updated, encoding="utf-8")
+except Exception:
+    raise SystemExit(2)
+PY
+  then
+    rc=$?
+    rm -rf "${temp_root}" >/dev/null 2>&1 || true
+    if (( rc == 3 )); then
+      return 2
+    fi
+    return 2
+  fi
+
+  if nginx -t -c "${temp_main}" -g "pid ${temp_root}/nginx.pid;" >/dev/null 2>&1; then
+    rc=0
+  else
+    rc=1
+  fi
+  rm -rf "${temp_root}" >/dev/null 2>&1 || true
+  return "${rc}"
+}
+
 xray_confdir_syntax_test_pretty() {
   # Untuk menu Diagnostics:
   # - tampilkan error penting jika ada
@@ -3963,6 +5642,33 @@ xray_txn_rc_or_die() {
     die "${rollback_fail_msg}"
   fi
   die "${fail_msg}"
+}
+
+xray_txn_rc_or_warn() {
+  # args: rc fail_msg [restart_fail_msg] [syntax_fail_msg] [rollback_fail_msg]
+  local rc="$1"
+  local fail_msg="$2"
+  local restart_fail_msg="${3:-}"
+  local syntax_fail_msg="${4:-}"
+  local rollback_fail_msg="${5:-}"
+
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if (( rc == 87 )) && [[ -n "${syntax_fail_msg}" ]]; then
+    warn "${syntax_fail_msg}"
+    return 1
+  fi
+  if (( rc == 86 )) && [[ -n "${restart_fail_msg}" ]]; then
+    warn "${restart_fail_msg}"
+    return 1
+  fi
+  if (( rc == 88 )) && [[ -n "${rollback_fail_msg}" ]]; then
+    warn "${rollback_fail_msg}"
+    return 1
+  fi
+  warn "${fail_msg}"
+  return 1
 }
 
 
@@ -5045,16 +6751,19 @@ PY
 }
 
 rollback_new_user_after_create_failure() {
-  # args: proto username [reason]
+  # args: proto username [reason] [inbounds_created=true|false]
   local proto="$1"
   local username="$2"
   local reason="${3:-operasi create gagal}"
+  local inbounds_created="${4:-true}"
   local email="${username}@${proto}" failed=0
 
   warn "Rollback akun ${email}: ${reason}."
-  if ! xray_delete_client_try "${proto}" "${username}"; then
-    warn "Rollback inbounds gagal untuk ${email}"
-    failed=1
+  if [[ "${inbounds_created}" == "true" ]]; then
+    if ! xray_delete_client_try "${proto}" "${username}"; then
+      warn "Rollback inbounds gagal untuk ${email}"
+      failed=1
+    fi
   fi
   if ! delete_account_artifacts_checked "${proto}" "${username}"; then
     warn "Rollback artefak lokal gagal untuk ${email}"
@@ -5080,7 +6789,7 @@ rollback_new_user_after_speed_failure() {
 }
 
 write_account_artifacts() {
-  # args: protocol username cred quota_bytes days ip_limit_enabled ip_limit_value speed_enabled speed_down_mbit speed_up_mbit
+  # args: protocol username cred quota_bytes days ip_limit_enabled ip_limit_value speed_enabled speed_down_mbit speed_up_mbit [account_output_override] [quota_output_override]
   local proto="$1"
   local username="$2"
   local cred="$3"
@@ -5091,6 +6800,8 @@ write_account_artifacts() {
   local speed_enabled="$8"
   local speed_down="$9"
   local speed_up="${10}"
+  local account_output_override="${11:-}"
+  local quota_output_override="${12:-}"
 
   ensure_account_quota_dirs
   need_python3
@@ -5109,6 +6820,8 @@ write_account_artifacts() {
   local acc_file quota_file
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+  [[ -n "${account_output_override}" ]] && acc_file="${account_output_override}"
+  [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
   python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
 import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
@@ -5416,11 +7129,13 @@ PY
 }
 
 account_info_refresh_for_user() {
-  # args: protocol username [domain] [ip]
+  # args: protocol username [domain] [ip] [credential_override] [output_file_override]
   local proto="$1"
   local username="$2"
   local domain="${3:-}"
   local ip="${4:-}"
+  local cred_override="${5:-}"
+  local output_file_override="${6:-}"
 
   ensure_account_quota_dirs
   need_python3
@@ -5453,18 +7168,21 @@ account_info_refresh_for_user() {
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
   set +e
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}"
 import base64
 import ipaddress
 import json
 import os
 import re
 import sys
+import tempfile
 import urllib.parse
 from datetime import date, datetime
 
-acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto = sys.argv[1:10]
+acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto, cred_override, output_override = sys.argv[1:12]
 email = f"{username}@{proto}"
+forced_cred = str(cred_override or "").strip()
+out_file = str(output_override or "").strip() or acc_file
 
 
 def to_int(v, default=0):
@@ -5731,8 +7449,8 @@ if not speed_enabled or speed_down_mbit <= 0 or speed_up_mbit <= 0:
   speed_down_mbit = 0.0
   speed_up_mbit = 0.0
 
-cred = ""
-if os.path.isfile(inbounds_file):
+cred = forced_cred
+if not cred and os.path.isfile(inbounds_file):
   try:
     cfg = json.load(open(inbounds_file, "r", encoding="utf-8"))
     def inbound_matches_proto(ib, p):
@@ -5906,9 +7624,20 @@ lines.append("")
 append_link_block(lines, "gRPC", links.get('grpc', '-'))
 lines.append("")
 
-os.makedirs(os.path.dirname(acc_file) or ".", exist_ok=True)
-with open(acc_file, "w", encoding="utf-8") as f:
-  f.write("\n".join(lines))
+os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".txt", dir=os.path.dirname(out_file) or ".")
+try:
+  with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines))
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp, out_file)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
 PY
   rc=$?
   set -e
@@ -5922,7 +7651,7 @@ PY
     return 1
   fi
 
-  chmod 600 "${acc_file}" 2>/dev/null || true
+  chmod 600 "${output_file_override:-${acc_file}}" 2>/dev/null || true
   return 0
 }
 
@@ -5937,41 +7666,180 @@ account_info_refresh_warn() {
   return 0
 }
 
+account_info_refresh_target_file_for_user() {
+  local proto="$1"
+  local username="$2"
+  local acc_file acc_compatfmt
+  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  acc_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  if [[ ! -f "${acc_file}" && -f "${acc_compatfmt}" ]]; then
+    acc_file="${acc_compatfmt}"
+  fi
+  printf '%s\n' "${acc_file}"
+}
+
+account_info_refresh_snapshot_file() {
+  local path="$1"
+  local snap_dir="$2"
+  local manifest_file="$3"
+  local backup_file=""
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    backup_file="$(mktemp "${snap_dir}/snapshot.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${backup_file}" ]] || return 1
+    if ! cp -a "${path}" "${backup_file}" 2>/dev/null; then
+      rm -f "${backup_file}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    printf 'file\t%s\t%s\n' "${path}" "${backup_file}" >> "${manifest_file}"
+  else
+    printf 'absent\t%s\t-\n' "${path}" >> "${manifest_file}"
+  fi
+}
+
+account_info_refresh_restore_snapshot() {
+  local manifest_file="$1"
+  local failed=0 kind path backup_file
+  while IFS=$'\t' read -r kind path backup_file; do
+    case "${kind}" in
+      file)
+        mkdir -p "$(dirname "${path}")" 2>/dev/null || true
+        if ! cp -a "${backup_file}" "${path}" 2>/dev/null; then
+          warn "Rollback ACCOUNT INFO gagal restore: ${path}"
+          failed=1
+          continue
+        fi
+        chmod 600 "${path}" 2>/dev/null || true
+        ;;
+      absent)
+        if [[ -e "${path}" || -L "${path}" ]]; then
+          if ! rm -f "${path}" 2>/dev/null; then
+            warn "Rollback ACCOUNT INFO gagal hapus file baru: ${path}"
+            failed=1
+          fi
+        fi
+        ;;
+    esac
+  done < "${manifest_file}"
+  return "${failed}"
+}
+
 account_refresh_all_info_files() {
-  # args: [domain] [ip]
+  # args: [domain] [ip] [scope]
   local domain="${1:-}"
   local ip="${2:-}"
-  local ssh_stats ssh_updated=0 ssh_failed=0 ssh_rc=0
+  local scope="${3:-all}"
+  local snap_dir="" manifest_file=""
+  local i proto username target_file state_file
+  local updated=0 failed=0 ssh_updated=0 ssh_failed=0
+  local -a xray_refresh_protos=() xray_refresh_users=() xray_refresh_targets=()
+  local -a ssh_refresh_users=() ssh_refresh_targets=()
+  local -A seen_targets=() seen_xray_users=() seen_ssh_users=()
+  local -a ssh_users=()
+
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
+    user_data_mutation_run_locked account_refresh_all_info_files "$@"
+    return $?
+  fi
+
+  if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" != "1" ]]; then
+    account_info_run_locked account_refresh_all_info_files "$@"
+    return $?
+  fi
 
   ensure_account_quota_dirs
+  case "${scope}" in
+    all|xray|ssh) ;;
+    *) scope="all" ;;
+  esac
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip_ipapi)"
 
-  account_collect_files
-  local i proto username updated=0 failed=0
-  if (( ${#ACCOUNT_FILES[@]} > 0 )); then
-    for i in "${!ACCOUNT_FILES[@]}"; do
-      proto="${ACCOUNT_FILE_PROTOS[$i]}"
-      username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+  if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
+    account_collect_files
+    if (( ${#ACCOUNT_FILES[@]} > 0 )); then
+      for i in "${!ACCOUNT_FILES[@]}"; do
+        proto="${ACCOUNT_FILE_PROTOS[$i]}"
+        username="$(account_parse_username_from_file "${ACCOUNT_FILES[$i]}" "${proto}")"
+        [[ -n "${username}" ]] || continue
+        if [[ -n "${seen_xray_users["${proto}|${username}"]+x}" ]]; then
+          continue
+        fi
+        seen_xray_users["${proto}|${username}"]=1
+        target_file="$(account_info_refresh_target_file_for_user "${proto}" "${username}")"
+        xray_refresh_protos+=("${proto}")
+        xray_refresh_users+=("${username}")
+        xray_refresh_targets+=("${target_file}")
+      done
+    fi
+  fi
+  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+    account_info_refresh_collect_ssh_users ssh_users
+    for username in "${ssh_users[@]}"; do
       [[ -n "${username}" ]] || continue
-      if account_info_refresh_for_user "${proto}" "${username}" "${domain}" "${ip}"; then
-        updated=$((updated + 1))
-      else
-        failed=$((failed + 1))
+      if [[ -n "${seen_ssh_users["${username}"]+x}" ]]; then
+        continue
       fi
+      seen_ssh_users["${username}"]=1
+      ssh_refresh_users+=("${username}")
+      ssh_refresh_targets+=("$(ssh_account_info_file "${username}")")
     done
   fi
 
-  ssh_stats="$(ssh_account_info_refresh_all_from_state)"
-  ssh_rc=$?
-  IFS='|' read -r ssh_updated ssh_failed <<<"${ssh_stats}"
-  [[ "${ssh_updated}" =~ ^[0-9]+$ ]] || ssh_updated=0
-  [[ "${ssh_failed}" =~ ^[0-9]+$ ]] || ssh_failed=0
+  snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.account-info-refresh.$$"
+  mkdir -p "${snap_dir}" 2>/dev/null || return 1
+  manifest_file="${snap_dir}/manifest.tsv"
+  : > "${manifest_file}" || {
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 1
+  }
 
-  log "Refresh ACCOUNT INFO: xray_updated=${updated}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_failed=${ssh_failed}"
-  if (( failed > 0 || ssh_failed > 0 || ssh_rc != 0 )); then
+  for target_file in "${xray_refresh_targets[@]}" "${ssh_refresh_targets[@]}"; do
+    [[ -n "${target_file}" ]] || continue
+    if [[ -n "${seen_targets["${target_file}"]+x}" ]]; then
+      continue
+    fi
+    seen_targets["${target_file}"]=1
+    if ! account_info_refresh_snapshot_file "${target_file}" "${snap_dir}" "${manifest_file}"; then
+      warn "Gagal membuat snapshot sebelum refresh ACCOUNT INFO: ${target_file}"
+      if ! account_info_refresh_restore_snapshot "${manifest_file}"; then
+        warn "Rollback snapshot ACCOUNT INFO juga gagal."
+      fi
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done
+
+  for i in "${!xray_refresh_users[@]}"; do
+    if account_info_refresh_for_user "${xray_refresh_protos[$i]}" "${xray_refresh_users[$i]}" "${domain}" "${ip}"; then
+      updated=$((updated + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done
+  for i in "${!ssh_refresh_users[@]}"; do
+    state_file="$(ssh_user_state_resolve_file "${ssh_refresh_users[$i]}")"
+    if [[ ! -f "${state_file}" ]] && ! ssh_qac_metadata_bootstrap_if_missing "${ssh_refresh_users[$i]}" "${state_file}"; then
+      ssh_failed=$((ssh_failed + 1))
+      continue
+    fi
+    if ssh_account_info_refresh_from_state "${ssh_refresh_users[$i]}"; then
+      ssh_updated=$((ssh_updated + 1))
+    else
+      ssh_failed=$((ssh_failed + 1))
+    fi
+  done
+
+  log "Refresh ACCOUNT INFO (scope=${scope}): xray_updated=${updated}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_failed=${ssh_failed}"
+  if (( failed > 0 || ssh_failed > 0 )); then
+    warn "Refresh ACCOUNT INFO gagal parsial. Mengembalikan snapshot sebelumnya..."
+    if ! account_info_refresh_restore_snapshot "${manifest_file}"; then
+      warn "Rollback ACCOUNT INFO belum pulih sepenuhnya. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
+    fi
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   fi
+  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -6062,6 +7930,43 @@ xray_reset_client_credential_try() {
   ( xray_reset_client_credential "$@" ) >/dev/null 2>&1
 }
 
+xray_user_current_credential_get() {
+  local proto="$1"
+  local username="$2"
+  need_python3
+  python3 - <<'PY' "${XRAY_INBOUNDS_CONF}" "${proto}" "${username}"
+import json
+import sys
+
+src, proto, username = sys.argv[1:4]
+email = f"{username}@{proto}"
+try:
+    cfg = json.load(open(src, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+for ib in cfg.get("inbounds") or []:
+    if not isinstance(ib, dict):
+        continue
+    if str(ib.get("protocol") or "").strip().lower() != proto:
+        continue
+    clients = ((ib.get("settings") or {}).get("clients") or [])
+    if not isinstance(clients, list):
+        continue
+    for client in clients:
+        if not isinstance(client, dict):
+            continue
+        if str(client.get("email") or "").strip() != email:
+            continue
+        value = client.get("password") if proto == "trojan" else client.get("id")
+        value = str(value or "").strip()
+        if value:
+            print(value)
+            raise SystemExit(0)
+raise SystemExit(0)
+PY
+}
+
 quota_sync_speed_policy_for_user_try() {
   ( quota_sync_speed_policy_for_user "$@" )
 }
@@ -6078,11 +7983,10 @@ xray_user_expiry_rollback() {
   local readded_now="${8:-false}"
   local -a notes=()
 
-  if ! cp -f -- "${backup}" "${qf}" >/dev/null 2>&1; then
+  if ! quota_restore_file_locked "${backup}" "${qf}" >/dev/null 2>&1; then
     echo "Expiry rollback ke ${current_expiry} gagal: restore quota gagal"
     return 1
   fi
-  chmod 600 "${qf}" 2>/dev/null || true
 
   if [[ "${was_present_in_inbounds}" == "true" ]]; then
     local rollback_apply_msg=""
@@ -6171,19 +8075,18 @@ xray_qac_atomic_apply() {
   local action="$7"
   shift 7 || true
 
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
+    user_data_mutation_run_locked xray_qac_atomic_apply "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}" "${action}" "$@"
+    return $?
+  fi
+
   local backup_file
   backup_file="$(mktemp "${WORK_DIR}/.quota-qac.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
   if [[ -z "${backup_file}" ]]; then
     echo "gagal membuat backup quota"
     return 1
   fi
-  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
-    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
-    echo "gagal backup quota"
-    return 1
-  fi
-
-  if ! quota_atomic_update_file "${qf}" "${action}" "$@"; then
+  if ! QUOTA_ATOMIC_BACKUP_FILE="${backup_file}" quota_atomic_update_file "${qf}" "${action}" "$@"; then
     rm -f -- "${backup_file}" >/dev/null 2>&1 || true
     echo "gagal update metadata quota"
     return 1
@@ -6192,10 +8095,9 @@ xray_qac_atomic_apply() {
   local apply_msg=""
   if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
     local -a rollback_notes=()
-    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+    if ! quota_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
       rollback_notes+=("rollback quota gagal")
     else
-      chmod 600 "${qf}" 2>/dev/null || true
       local rollback_apply_msg=""
       if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
         rollback_notes+=("rollback runtime gagal: ${rollback_apply_msg}")
@@ -6210,31 +8112,608 @@ xray_qac_atomic_apply() {
     return 1
   fi
 
-  if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+  rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+  return 0
+}
+
+xray_qac_unlock_ip_atomic_apply() {
+  # args: quota_file proto username email_for_routing
+  local qf="$1"
+  local proto="$2"
+  local username="$3"
+  local email_for_routing="$4"
+  local backup_file=""
+
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
+    user_data_mutation_run_locked xray_qac_unlock_ip_atomic_apply "${qf}" "${proto}" "${username}" "${email_for_routing}"
+    return $?
+  fi
+
+  backup_file="$(mktemp "${WORK_DIR}/.quota-unlock-ip.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${backup_file}" ]]; then
+    echo "gagal membuat backup quota"
+    return 1
+  fi
+  if ! QUOTA_ATOMIC_BACKUP_FILE="${backup_file}" quota_atomic_update_file "${qf}" clear_ip_limit_locked_recompute; then
+    rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+    echo "gagal update metadata quota"
+    return 1
+  fi
+
+  local apply_msg=""
+  if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" true false)"; then
     local -a rollback_notes=()
-    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+    if ! quota_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
       rollback_notes+=("rollback quota gagal")
     else
-      chmod 600 "${qf}" 2>/dev/null || true
       local rollback_apply_msg=""
-      if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" "${restart_limit_ip}" "${sync_speed}")"; then
+      if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" true false)"; then
         rollback_notes+=("rollback runtime gagal: ${rollback_apply_msg}")
-      fi
-      if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
-        rollback_notes+=("rollback account info gagal")
       fi
     fi
     rm -f -- "${backup_file}" >/dev/null 2>&1 || true
     if (( ${#rollback_notes[@]} > 0 )); then
-      echo "refresh XRAY ACCOUNT INFO gagal. Rollback: ${rollback_notes[*]}"
+      echo "${apply_msg}. Rollback: ${rollback_notes[*]}"
     else
-      echo "refresh XRAY ACCOUNT INFO gagal. State di-rollback."
+      echo "${apply_msg}. State di-rollback."
     fi
     return 1
   fi
 
+  if [[ -x /usr/local/bin/limit-ip ]]; then
+    if ! /usr/local/bin/limit-ip unlock "${email_for_routing}" >/dev/null 2>&1; then
+      local -a rollback_notes=()
+      if ! quota_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
+        rollback_notes+=("rollback quota gagal")
+      else
+        local rollback_apply_msg=""
+        if ! rollback_apply_msg="$(xray_qac_apply_runtime_from_quota "${qf}" "${proto}" "${username}" "${email_for_routing}" true false)"; then
+          rollback_notes+=("rollback runtime gagal: ${rollback_apply_msg}")
+        fi
+      fi
+      rm -f -- "${backup_file}" >/dev/null 2>&1 || true
+      if (( ${#rollback_notes[@]} > 0 )); then
+        echo "service limit-ip unlock gagal. Rollback: ${rollback_notes[*]}"
+      else
+        echo "service limit-ip unlock gagal. State di-rollback."
+      fi
+      return 1
+    fi
+  fi
+
   rm -f -- "${backup_file}" >/dev/null 2>&1 || true
   return 0
+}
+
+user_add_apply_locked() {
+  local proto="$1"
+  local username="$2"
+  local quota_bytes="$3"
+  local days="$4"
+  local ip_enabled="$5"
+  local ip_limit="$6"
+  local speed_enabled="$7"
+  local speed_down_mbit="$8"
+  local speed_up_mbit="$9"
+  local cred
+  local stage_dir="" staged_account_file="" staged_quota_file=""
+  local live_account_file="" live_quota_file=""
+
+  if proto_uses_password "${proto}"; then
+    cred="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+  else
+    cred="$(gen_uuid)"
+  fi
+
+  live_account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  live_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+  stage_dir="$(mktemp -d "${WORK_DIR}/.xray-add.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${stage_dir}" || ! -d "${stage_dir}" ]]; then
+    warn "Akun ${username}@${proto} dibatalkan: gagal menyiapkan staging artefak akun."
+    pause
+    return 1
+  fi
+  staged_account_file="${stage_dir}/account.txt"
+  staged_quota_file="${stage_dir}/quota.json"
+
+  if ! write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}" "${staged_account_file}" "${staged_quota_file}"; then
+    warn "Akun ${username}@${proto} dibatalkan: gagal menulis metadata akun/quota."
+    rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  if ! xray_add_client "${proto}" "${username}" "${cred}"; then
+    warn "Akun ${username}@${proto} dibatalkan: gagal menambah client ke inbounds Xray."
+    if ! rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menambah client ke inbounds Xray" "false"; then
+      warn "Rollback add user tidak bersih sepenuhnya. Cek artefak account/quota/speed policy."
+    fi
+    rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  if [[ "${speed_enabled}" == "true" ]]; then
+    local speed_mark="" speed_err=""
+    if ! speed_mark="$(speed_policy_upsert "${proto}" "${username}" "${speed_down_mbit}" "${speed_up_mbit}")"; then
+      speed_err="gagal menyimpan speed policy"
+    elif ! speed_policy_sync_xray; then
+      speed_err="gagal sinkronisasi speed policy ke routing/outbound xray"
+    elif ! speed_policy_apply_now; then
+      speed_err="policy speed tersimpan, tetapi apply runtime gagal (cek service xray-speed)"
+    fi
+
+    if [[ -n "${speed_err}" ]]; then
+      warn "Akun ${username}@${proto} dibatalkan: ${speed_err}."
+      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "${speed_err}" "true"; then
+        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+      fi
+      rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+      pause
+      return 1
+    fi
+
+    log "Speed policy aktif untuk ${username}@${proto} (mark=${speed_mark}, down=${speed_down_mbit}Mbps, up=${speed_up_mbit}Mbps)"
+  else
+    if speed_policy_exists "${proto}" "${username}"; then
+      if ! speed_policy_remove_checked "${proto}" "${username}"; then
+        warn "Akun ${username}@${proto} dibatalkan: gagal membersihkan speed policy lama."
+        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "cleanup speed policy lama gagal" "true"; then
+          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+        fi
+        rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+        pause
+        return 1
+      fi
+      if ! speed_policy_sync_xray; then
+        warn "Akun ${username}@${proto} dibatalkan: sinkronisasi speed policy lama gagal."
+        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "sinkronisasi speed policy lama gagal" "true"; then
+          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+        fi
+        rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+        pause
+        return 1
+      fi
+    fi
+    if ! speed_policy_apply_now >/dev/null 2>&1; then
+      warn "Akun ${username}@${proto} dibatalkan: apply runtime speed policy gagal."
+      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "apply runtime speed policy gagal" "true"; then
+        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+      fi
+      rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+      pause
+      return 1
+    fi
+  fi
+
+  if ! account_info_restore_file_locked "${staged_account_file}" "${live_account_file}" >/dev/null 2>&1 \
+    || ! quota_restore_file_locked "${staged_quota_file}" "${live_quota_file}" >/dev/null 2>&1; then
+    warn "Akun ${username}@${proto} dibatalkan: gagal commit artefak account/quota dari staging."
+    if ! rollback_new_user_after_create_failure "${proto}" "${username}" "commit artefak account/quota gagal" "true"; then
+      warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+    fi
+    rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+
+  title
+  echo "Add user sukses ✅"
+  local created_account_file created_quota_file
+  created_account_file="${live_account_file}"
+  created_quota_file="${live_quota_file}"
+  hr
+  echo "Account file:"
+  echo "  ${created_account_file}"
+  echo "Quota metadata:"
+  echo "  ${created_quota_file}"
+  hr
+  echo "XRAY ACCOUNT INFO:"
+  if [[ -f "${created_account_file}" ]]; then
+    cat "${created_account_file}"
+  else
+    echo "(XRAY ACCOUNT INFO tidak ditemukan: ${created_account_file})"
+  fi
+  hr
+  pause
+}
+
+user_del_apply_locked() {
+  local proto="$1"
+  local username="$2"
+  local selected_file="$3"
+  local partial_failure="false"
+  local rollback_restored="false"
+  local deleted_from_inbounds="false"
+  local rollback_notes=()
+  local previous_cred="" speed_policy_file="" rollback_tmpdir="" rollback_account_backup="" rollback_quota_backup="" rollback_speed_backup="" rollback_account_compat_backup="" rollback_quota_compat_backup=""
+  local canonical_account_file compat_account_file canonical_quota_file compat_quota_file
+
+  if [[ -f "${selected_file}" ]]; then
+    if proto_uses_password "${proto}"; then
+      previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
+    else
+      previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
+    fi
+  fi
+  if [[ -z "${previous_cred}" ]]; then
+    previous_cred="$(xray_user_current_credential_get "${proto}" "${username}")"
+  fi
+  if [[ -z "${previous_cred}" ]]; then
+    warn "Delete user dibatalkan: credential lama untuk rollback tidak tersedia di file managed maupun runtime Xray."
+    pause
+    return 1
+  fi
+
+  speed_policy_file="$(speed_policy_file_path "${proto}" "${username}")"
+  canonical_account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  compat_account_file="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  canonical_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+  compat_quota_file="${QUOTA_ROOT}/${proto}/${username}.json"
+  rollback_tmpdir="$(mktemp -d 2>/dev/null || true)"
+  if [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]]; then
+    rollback_account_backup="${rollback_tmpdir}/account.txt"
+    rollback_quota_backup="${rollback_tmpdir}/quota.json"
+    rollback_speed_backup="${rollback_tmpdir}/speed.json"
+    rollback_account_compat_backup="${rollback_tmpdir}/account.compat.txt"
+    rollback_quota_compat_backup="${rollback_tmpdir}/quota.compat.json"
+    [[ -f "${canonical_account_file}" ]] && cp -f "${canonical_account_file}" "${rollback_account_backup}" 2>/dev/null || true
+    [[ -f "${compat_account_file}" ]] && cp -f "${compat_account_file}" "${rollback_account_compat_backup}" 2>/dev/null || true
+    [[ -f "${canonical_quota_file}" ]] && cp -f "${canonical_quota_file}" "${rollback_quota_backup}" 2>/dev/null || true
+    [[ -f "${compat_quota_file}" ]] && cp -f "${compat_quota_file}" "${rollback_quota_compat_backup}" 2>/dev/null || true
+    [[ -f "${speed_policy_file}" ]] && cp -f "${speed_policy_file}" "${rollback_speed_backup}" 2>/dev/null || true
+  fi
+
+  if ! xray_delete_client "${proto}" "${username}"; then
+    partial_failure="true"
+    warn "Delete user dibatalkan: gagal menghapus client dari inbounds Xray."
+  else
+    deleted_from_inbounds="true"
+  fi
+
+  if [[ "${partial_failure}" != "true" ]] && ! delete_account_artifacts_checked "${proto}" "${username}"; then
+    partial_failure="true"
+    warn "Delete user dibatalkan: cleanup artefak lokal gagal setelah inbounds Xray dihapus."
+  elif [[ "${partial_failure}" != "true" ]] && ! speed_policy_sync_xray_try; then
+    partial_failure="true"
+    warn "Delete user dibatalkan: sinkronisasi speed policy gagal setelah inbounds Xray dihapus."
+  elif [[ "${partial_failure}" != "true" ]] && ! speed_policy_apply_now >/dev/null 2>&1; then
+    partial_failure="true"
+    warn "Delete user dibatalkan: apply runtime speed policy gagal setelah inbounds Xray dihapus."
+  fi
+
+  if [[ "${partial_failure}" == "true" ]]; then
+    if [[ "${deleted_from_inbounds}" == "true" ]] && ! xray_add_client "${proto}" "${username}" "${previous_cred}" >/dev/null 2>&1; then
+      rollback_notes+=("restore inbounds gagal")
+    fi
+
+    if [[ -n "${rollback_quota_backup}" && -f "${rollback_quota_backup}" ]]; then
+      if ! quota_restore_file_locked "${rollback_quota_backup}" "${canonical_quota_file}" 2>/dev/null; then
+        rollback_notes+=("restore quota gagal")
+      fi
+    fi
+    if [[ -n "${rollback_quota_compat_backup}" && -f "${rollback_quota_compat_backup}" ]]; then
+      if ! quota_restore_file_locked "${rollback_quota_compat_backup}" "${compat_quota_file}" 2>/dev/null; then
+        rollback_notes+=("restore quota compat gagal")
+      fi
+    fi
+    if [[ -n "${rollback_account_backup}" && -f "${rollback_account_backup}" ]]; then
+      if ! account_info_restore_file_locked "${rollback_account_backup}" "${canonical_account_file}" 2>/dev/null; then
+        rollback_notes+=("restore account info gagal")
+      fi
+    fi
+    if [[ -n "${rollback_account_compat_backup}" && -f "${rollback_account_compat_backup}" ]]; then
+      if ! account_info_restore_file_locked "${rollback_account_compat_backup}" "${compat_account_file}" 2>/dev/null; then
+        rollback_notes+=("restore account info compat gagal")
+      fi
+    fi
+    if [[ -n "${rollback_speed_backup}" && -f "${rollback_speed_backup}" ]]; then
+      if ! speed_policy_restore_file_locked "${rollback_speed_backup}" "${speed_policy_file}" 2>/dev/null; then
+        rollback_notes+=("restore speed policy gagal")
+      fi
+    fi
+
+    if [[ -f "${canonical_quota_file}" ]]; then
+      local st_quota st_manual st_iplocked
+      st_quota="$(quota_get_status_bool "${canonical_quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
+      st_manual="$(quota_get_status_bool "${canonical_quota_file}" "manual_block" 2>/dev/null || echo "false")"
+      st_iplocked="$(quota_get_status_bool "${canonical_quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
+      xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" "$( [[ "${st_quota}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing quota gagal")
+      xray_routing_set_user_in_marker "dummy-block-user" "${username}@${proto}" "$( [[ "${st_manual}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing manual gagal")
+      xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" "$( [[ "${st_iplocked}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing ip-limit gagal")
+      if ! quota_sync_speed_policy_for_user "${proto}" "${username}" "${canonical_quota_file}" >/dev/null 2>&1; then
+        rollback_notes+=("restore speed policy runtime gagal")
+      fi
+      if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
+        rollback_notes+=("refresh account info rollback gagal")
+      fi
+    fi
+
+    if (( ${#rollback_notes[@]} == 0 )); then
+      rollback_restored="true"
+      partial_failure="false"
+    fi
+  fi
+
+  [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]] && rm -rf "${rollback_tmpdir}" 2>/dev/null || true
+
+  title
+  if [[ "${rollback_restored}" == "true" ]]; then
+    echo "Delete user dibatalkan ⚠"
+    echo "Cleanup akhir gagal, tetapi rollback berhasil memulihkan akun."
+  elif [[ "${partial_failure}" == "true" ]]; then
+    if [[ "${deleted_from_inbounds}" == "true" ]]; then
+      echo "Delete user selesai parsial ⚠"
+      echo "Perubahan utama sudah diterapkan, tetapi cleanup/sinkronisasi lanjutan belum bersih."
+    else
+      echo "Delete user dibatalkan parsial ⚠"
+      echo "Inbounds Xray belum dihapus, tetapi rollback artefak lokal belum pulih sepenuhnya."
+    fi
+    if (( ${#rollback_notes[@]} > 0 )); then
+      printf 'Rollback gagal: %s\n' "$(IFS=' | '; echo "${rollback_notes[*]}")"
+    fi
+  else
+    echo "Delete user selesai ✅"
+  fi
+  hr
+  pause
+  if [[ "${rollback_restored}" == "true" || "${partial_failure}" == "true" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+user_extend_expiry_apply_locked() {
+  local proto="$1"
+  local username="$2"
+  local quota_file="$3"
+  local acc_file="$4"
+  local current_expiry="$5"
+  local new_expiry="$6"
+  local email_for_routing existing_protos was_present_in_inbounds="false" readded_inbounds="false"
+  local quota_backup_file=""
+  local expired_daemon_paused="false"
+
+  quota_backup_file="$(mktemp "${WORK_DIR}/.quota-expiry.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${quota_backup_file}" ]]; then
+    warn "Gagal membuat backup metadata expiry."
+    pause
+    return 1
+  fi
+
+  if ! xray_expired_pause_if_active expired_daemon_paused; then
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+    warn "Gagal menghentikan xray-expired sementara waktu. Extend expiry dibatalkan agar state tidak race."
+    pause
+    return 1
+  fi
+
+  email_for_routing="${username}@${proto}"
+  existing_protos="$(xray_username_find_protos "${username}" 2>/dev/null || true)"
+  if echo " ${existing_protos} " | grep -q " ${proto} "; then
+    was_present_in_inbounds="true"
+  fi
+
+  if ! QUOTA_ATOMIC_BACKUP_FILE="${quota_backup_file}" quota_atomic_update_file "${quota_file}" set_expired_at "${new_expiry}"; then
+    if ! xray_expired_resume_if_needed "${expired_daemon_paused}"; then
+      warn "xray-expired gagal diaktifkan kembali setelah extend expiry dibatalkan."
+    fi
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+    warn "Gagal update metadata expiry quota."
+    pause
+    return 1
+  fi
+
+  if [[ "${was_present_in_inbounds}" != "true" ]]; then
+    local restore_failed="false"
+    local restore_reason=""
+    if [[ -f "${acc_file}" ]]; then
+      local cred=""
+      if proto_uses_password "${proto}"; then
+        cred="$(grep -E '^Password\s*:' "${acc_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
+      else
+        cred="$(grep -E '^UUID\s*:' "${acc_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
+      fi
+      if [[ -n "${cred}" ]]; then
+        if xray_add_client_try "${proto}" "${username}" "${cred}"; then
+          readded_inbounds="true"
+          log "User ${username}@${proto} di-restore ke inbounds (expired lalu di-extend)."
+        else
+          restore_failed="true"
+          restore_reason="Gagal me-restore ${username}@${proto} ke inbounds. Cek credential di: ${acc_file}"
+        fi
+      else
+        restore_failed="true"
+        restore_reason="Credential tidak ditemukan di ${acc_file}. Re-add user manual jika diperlukan."
+      fi
+    else
+      restore_failed="true"
+      restore_reason="Account file tidak ada: ${acc_file}. User mungkin perlu di-add ulang secara manual."
+    fi
+
+    if [[ "${restore_failed}" == "true" ]]; then
+      local rollback_msg=""
+      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
+      if ! xray_expired_resume_if_needed "${expired_daemon_paused}"; then
+        warn "xray-expired gagal diaktifkan kembali setelah rollback extend expiry."
+      fi
+      warn "${restore_reason}"
+      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+      pause
+      return 1
+    fi
+  fi
+
+  if [[ "$(quota_get_status_bool "${quota_file}" "quota_exhausted" 2>/dev/null || echo "false")" == "true" ]]; then
+    if ! quota_atomic_update_file "${quota_file}" clear_quota_exhausted_recompute; then
+      local rollback_msg=""
+      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
+      if ! xray_expired_resume_if_needed "${expired_daemon_paused}"; then
+        warn "xray-expired gagal diaktifkan kembali setelah rollback extend expiry."
+      fi
+      warn "Gagal reset status quota exhausted setelah extend expiry."
+      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+      pause
+      return 1
+    fi
+    log "Quota exhausted flag di-reset setelah extend expiry."
+  fi
+
+  local apply_msg=""
+  if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${quota_file}" "${proto}" "${username}" "${email_for_routing}" true true)"; then
+    local rollback_msg=""
+    rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
+    if ! xray_expired_resume_if_needed "${expired_daemon_paused}"; then
+      warn "xray-expired gagal diaktifkan kembali setelah rollback extend expiry."
+    fi
+    warn "Extend expiry gagal: ${apply_msg}"
+    [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  if ! xray_expired_resume_if_needed "${expired_daemon_paused}"; then
+    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+    warn "Expiry berhasil diperbarui, tetapi xray-expired gagal diaktifkan kembali."
+    pause
+    return 1
+  fi
+
+  rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
+
+  title
+  echo "Extend/Set Expiry selesai ✅"
+  hr
+  echo "  ${username}@${proto}"
+  echo "  Expiry baru : ${new_expiry}"
+  hr
+  pause
+}
+
+user_reset_credential_apply_locked() {
+  local proto="$1"
+  local username="$2"
+  local selected_file="$3"
+  local previous_cred="" new_cred label
+  local snapshot_dir="" selected_snapshot="" target_file="" snapshot_source="" staged_account_file=""
+
+  target_file="$(account_info_refresh_target_file_for_user "${proto}" "${username}")"
+  snapshot_source="${target_file}"
+  if [[ -f "${selected_file}" ]]; then
+    snapshot_source="${selected_file}"
+    if proto_uses_password "${proto}"; then
+      previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
+    else
+      previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
+    fi
+  fi
+  if [[ -z "${previous_cred}" ]]; then
+    previous_cred="$(xray_user_current_credential_get "${proto}" "${username}")"
+  fi
+  if [[ -z "${previous_cred}" ]]; then
+    warn "Credential lama tidak ditemukan di file managed maupun runtime Xray."
+    pause
+    return 1
+  fi
+
+  if proto_uses_password "${proto}"; then
+    new_cred="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)"
+    label="Password baru"
+  else
+    new_cred="$(gen_uuid)"
+    label="UUID baru"
+  fi
+
+  snapshot_dir="$(mktemp -d "${WORK_DIR}/.reset-cred.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${snapshot_dir}" || ! -d "${snapshot_dir}" ]]; then
+    warn "Gagal menyiapkan staging reset ${label,,} untuk ${username}@${proto}."
+    pause
+    return 1
+  fi
+  if [[ -n "${snapshot_dir}" && -f "${snapshot_source}" ]]; then
+    selected_snapshot="${snapshot_dir}/account.txt"
+    cp -f -- "${snapshot_source}" "${selected_snapshot}" >/dev/null 2>&1 || selected_snapshot=""
+  fi
+  staged_account_file="${snapshot_dir}/account.new.txt"
+
+  if ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${new_cred}" "${staged_account_file}"; then
+    [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Reset ${label,,} dibatalkan: XRAY ACCOUNT INFO baru gagal disiapkan sebelum credential live diubah."
+    pause
+    return 1
+  fi
+
+  if ! xray_reset_client_credential_try "${proto}" "${username}" "${new_cred}"; then
+    [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Gagal mereset ${label,,} untuk ${username}@${proto}."
+    pause
+    return 1
+  fi
+
+  if ! account_info_restore_file_locked "${staged_account_file}" "${target_file}" >/dev/null 2>&1; then
+    if xray_reset_client_credential_try "${proto}" "${username}" "${previous_cred}"; then
+      local rollback_file_failed="false"
+      if [[ -n "${selected_snapshot}" && -f "${selected_snapshot}" ]]; then
+        if ! account_info_restore_file_locked "${selected_snapshot}" "${target_file}" >/dev/null 2>&1; then
+          if ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${previous_cred}" >/dev/null 2>&1; then
+            rollback_file_failed="true"
+          fi
+        fi
+      elif ! account_info_refresh_for_user "${proto}" "${username}" >/dev/null 2>&1; then
+        rollback_file_failed="true"
+      fi
+      if [[ "${rollback_file_failed}" == "true" ]]; then
+        warn "Reset ${label,,} dibatalkan: commit XRAY ACCOUNT INFO baru gagal, credential lama dipulihkan tetapi rollback account info gagal."
+      else
+        warn "Reset ${label,,} dibatalkan: commit XRAY ACCOUNT INFO baru gagal, credential lama dipulihkan."
+      fi
+    else
+      local live_cred=""
+      live_cred="$(xray_user_current_credential_get "${proto}" "${username}" 2>/dev/null || true)"
+      if [[ -n "${live_cred}" ]]; then
+        account_info_refresh_for_user "${proto}" "${username}" "" "" "${live_cred}" >/dev/null 2>&1 || true
+      fi
+      warn "Reset ${label,,} gagal: commit XRAY ACCOUNT INFO baru gagal dan rollback credential juga gagal."
+    fi
+    [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+
+  title
+  echo "Reset UUID/Password selesai ✅"
+  hr
+  echo "User         : ${username}@${proto}"
+  echo "${label} : ${new_cred}"
+  local account_file
+  account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  hr
+  echo "Account file:"
+  echo "  ${account_file}"
+  hr
+  echo "XRAY ACCOUNT INFO:"
+  if [[ -f "${account_file}" ]]; then
+    cat "${account_file}"
+  else
+    echo "(XRAY ACCOUNT INFO tidak ditemukan: ${account_file})"
+  fi
+  hr
+  pause
 }
 
 user_add_menu() {
@@ -6455,96 +8934,22 @@ user_add_menu() {
     echo "  Speed    : false"
   fi
   hr
-
-  local cred
-  if proto_uses_password "${proto}"; then
-    cred="$(python3 - <<'PY'
-import secrets
-print(secrets.token_hex(16))
-PY
-)"
+  local create_confirm_rc=0
+  if confirm_yn_or_back "Buat user ini sekarang?"; then
+    :
   else
-    cred="$(gen_uuid)"
-  fi
-
-  xray_add_client "${proto}" "${username}" "${cred}"
-  if ! write_account_artifacts "${proto}" "${username}" "${cred}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"; then
-    warn "Akun ${username}@${proto} dibatalkan: gagal menulis metadata akun/quota."
-    if ! rollback_new_user_after_create_failure "${proto}" "${username}" "gagal menulis metadata akun/quota"; then
-      warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
+    create_confirm_rc=$?
+    if (( create_confirm_rc == 2 )); then
+      warn "Pembuatan user dibatalkan (kembali)."
+      pause
+      return 0
     fi
+    warn "Pembuatan user dibatalkan."
     pause
     return 0
   fi
 
-  if [[ "${speed_enabled}" == "true" ]]; then
-    local speed_mark="" speed_err=""
-    if ! speed_mark="$(speed_policy_upsert "${proto}" "${username}" "${speed_down_mbit}" "${speed_up_mbit}")"; then
-      speed_err="gagal menyimpan speed policy"
-    elif ! speed_policy_sync_xray; then
-      speed_err="gagal sinkronisasi speed policy ke routing/outbound xray"
-    elif ! speed_policy_apply_now; then
-      speed_err="policy speed tersimpan, tetapi apply runtime gagal (cek service xray-speed)"
-    fi
-
-    if [[ -n "${speed_err}" ]]; then
-      warn "Akun ${username}@${proto} dibatalkan: ${speed_err}."
-      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "${speed_err}"; then
-        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
-      fi
-      pause
-      return 0
-    fi
-
-    log "Speed policy aktif untuk ${username}@${proto} (mark=${speed_mark}, down=${speed_down_mbit}Mbps, up=${speed_up_mbit}Mbps)"
-  else
-    if speed_policy_exists "${proto}" "${username}"; then
-      if ! speed_policy_remove_checked "${proto}" "${username}"; then
-        warn "Akun ${username}@${proto} dibatalkan: gagal membersihkan speed policy lama."
-        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "cleanup speed policy lama gagal"; then
-          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
-        fi
-        pause
-        return 0
-      fi
-      if ! speed_policy_sync_xray; then
-        warn "Akun ${username}@${proto} dibatalkan: sinkronisasi speed policy lama gagal."
-        if ! rollback_new_user_after_create_failure "${proto}" "${username}" "sinkronisasi speed policy lama gagal"; then
-          warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
-        fi
-        pause
-        return 0
-      fi
-    fi
-    if ! speed_policy_apply_now >/dev/null 2>&1; then
-      warn "Akun ${username}@${proto} dibatalkan: apply runtime speed policy gagal."
-      if ! rollback_new_user_after_create_failure "${proto}" "${username}" "apply runtime speed policy gagal"; then
-        warn "Rollback add user tidak bersih sepenuhnya. Cek inbounds/account/quota/speed policy."
-      fi
-      pause
-      return 0
-    fi
-  fi
-
-  title
-  echo "Add user sukses ✅"
-  local created_account_file created_quota_file
-  created_account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  created_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  hr
-  echo "Account file:"
-  echo "  ${created_account_file}"
-  echo "Quota metadata:"
-  echo "  ${created_quota_file}"
-  hr
-  echo "XRAY ACCOUNT INFO:"
-  if [[ -f "${created_account_file}" ]]; then
-    cat "${created_account_file}"
-  else
-    echo "(XRAY ACCOUNT INFO tidak ditemukan: ${created_account_file})"
-  fi
-  hr
-  pause
+  user_data_mutation_run_locked user_add_apply_locked "${proto}" "${username}" "${quota_bytes}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down_mbit}" "${speed_up_mbit}"
 }
 
 
@@ -6672,134 +9077,7 @@ user_del_menu() {
   done
 
   hr
-  local partial_failure="false"
-  local rollback_restored="false"
-  local rollback_notes=()
-  local previous_cred="" speed_policy_file="" rollback_tmpdir="" rollback_account_backup="" rollback_quota_backup="" rollback_speed_backup="" rollback_account_compat_backup="" rollback_quota_compat_backup=""
-  local canonical_account_file compat_account_file canonical_quota_file compat_quota_file
-
-  if proto_uses_password "${proto}"; then
-    previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
-  else
-    previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
-  fi
-  speed_policy_file="$(speed_policy_file_path "${proto}" "${username}")"
-  canonical_account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  compat_account_file="${ACCOUNT_ROOT}/${proto}/${username}.txt"
-  canonical_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  compat_quota_file="${QUOTA_ROOT}/${proto}/${username}.json"
-  rollback_tmpdir="$(mktemp -d 2>/dev/null || true)"
-  if [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]]; then
-    rollback_account_backup="${rollback_tmpdir}/account.txt"
-    rollback_quota_backup="${rollback_tmpdir}/quota.json"
-    rollback_speed_backup="${rollback_tmpdir}/speed.json"
-    rollback_account_compat_backup="${rollback_tmpdir}/account.compat.txt"
-    rollback_quota_compat_backup="${rollback_tmpdir}/quota.compat.json"
-    [[ -f "${canonical_account_file}" ]] && cp -f "${canonical_account_file}" "${rollback_account_backup}" 2>/dev/null || true
-    [[ -f "${compat_account_file}" ]] && cp -f "${compat_account_file}" "${rollback_account_compat_backup}" 2>/dev/null || true
-    [[ -f "${canonical_quota_file}" ]] && cp -f "${canonical_quota_file}" "${rollback_quota_backup}" 2>/dev/null || true
-    [[ -f "${compat_quota_file}" ]] && cp -f "${compat_quota_file}" "${rollback_quota_compat_backup}" 2>/dev/null || true
-    [[ -f "${speed_policy_file}" ]] && cp -f "${speed_policy_file}" "${rollback_speed_backup}" 2>/dev/null || true
-  fi
-
-  xray_delete_client "${proto}" "${username}"
-  if ! delete_account_artifacts_checked "${proto}" "${username}"; then
-    partial_failure="true"
-    warn "Delete user selesai parsial: cleanup artefak lokal gagal."
-  fi
-  if ! speed_policy_sync_xray_try; then
-    partial_failure="true"
-    warn "Delete user selesai parsial: sinkronisasi speed policy gagal."
-  elif ! speed_policy_apply_now >/dev/null 2>&1; then
-    partial_failure="true"
-    warn "Delete user selesai parsial: apply runtime speed policy gagal."
-  fi
-
-  if [[ "${partial_failure}" == "true" ]]; then
-    if [[ -n "${previous_cred}" ]]; then
-      if ! xray_add_client "${proto}" "${username}" "${previous_cred}" >/dev/null 2>&1; then
-        rollback_notes+=("restore inbounds gagal")
-      fi
-    else
-      rollback_notes+=("credential lama tidak tersedia")
-    fi
-
-    if [[ -n "${rollback_quota_backup}" && -f "${rollback_quota_backup}" ]]; then
-      if ! cp -f "${rollback_quota_backup}" "${canonical_quota_file}" 2>/dev/null; then
-        rollback_notes+=("restore quota gagal")
-      else
-        chmod 600 "${canonical_quota_file}" 2>/dev/null || true
-      fi
-    fi
-    if [[ -n "${rollback_quota_compat_backup}" && -f "${rollback_quota_compat_backup}" ]]; then
-      if ! cp -f "${rollback_quota_compat_backup}" "${compat_quota_file}" 2>/dev/null; then
-        rollback_notes+=("restore quota compat gagal")
-      else
-        chmod 600 "${compat_quota_file}" 2>/dev/null || true
-      fi
-    fi
-    if [[ -n "${rollback_account_backup}" && -f "${rollback_account_backup}" ]]; then
-      if ! cp -f "${rollback_account_backup}" "${canonical_account_file}" 2>/dev/null; then
-        rollback_notes+=("restore account info gagal")
-      else
-        chmod 600 "${canonical_account_file}" 2>/dev/null || true
-      fi
-    fi
-    if [[ -n "${rollback_account_compat_backup}" && -f "${rollback_account_compat_backup}" ]]; then
-      if ! cp -f "${rollback_account_compat_backup}" "${compat_account_file}" 2>/dev/null; then
-        rollback_notes+=("restore account info compat gagal")
-      else
-        chmod 600 "${compat_account_file}" 2>/dev/null || true
-      fi
-    fi
-    if [[ -n "${rollback_speed_backup}" && -f "${rollback_speed_backup}" ]]; then
-      mkdir -p "$(dirname "${speed_policy_file}")" 2>/dev/null || true
-      if ! cp -f "${rollback_speed_backup}" "${speed_policy_file}" 2>/dev/null; then
-        rollback_notes+=("restore speed policy gagal")
-      else
-        chmod 600 "${speed_policy_file}" 2>/dev/null || true
-      fi
-    fi
-
-    if [[ -f "${canonical_quota_file}" ]]; then
-      local st_quota st_manual st_iplocked
-      st_quota="$(quota_get_status_bool "${canonical_quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
-      st_manual="$(quota_get_status_bool "${canonical_quota_file}" "manual_block" 2>/dev/null || echo "false")"
-      st_iplocked="$(quota_get_status_bool "${canonical_quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
-      xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" "$( [[ "${st_quota}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing quota gagal")
-      xray_routing_set_user_in_marker "dummy-block-user" "${username}@${proto}" "$( [[ "${st_manual}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing manual gagal")
-      xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" "$( [[ "${st_iplocked}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || rollback_notes+=("restore routing ip-limit gagal")
-      if ! quota_sync_speed_policy_for_user "${proto}" "${username}" "${canonical_quota_file}" >/dev/null 2>&1; then
-        rollback_notes+=("restore speed policy runtime gagal")
-      fi
-      if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
-        rollback_notes+=("refresh account info rollback gagal")
-      fi
-    fi
-
-    if (( ${#rollback_notes[@]} == 0 )); then
-      rollback_restored="true"
-      partial_failure="false"
-    fi
-  fi
-
-  [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]] && rm -rf "${rollback_tmpdir}" 2>/dev/null || true
-
-  title
-  if [[ "${rollback_restored}" == "true" ]]; then
-    echo "Delete user dibatalkan ⚠"
-    echo "Cleanup akhir gagal, tetapi rollback berhasil memulihkan akun."
-  elif [[ "${partial_failure}" == "true" ]]; then
-    echo "Delete user selesai parsial ⚠"
-    echo "Perubahan utama sudah diterapkan, tetapi cleanup/sinkronisasi lanjutan belum bersih."
-    if (( ${#rollback_notes[@]} > 0 )); then
-      printf 'Rollback gagal: %s\n' "$(IFS=' | '; echo "${rollback_notes[*]}")"
-    fi
-  else
-    echo "Delete user selesai ✅"
-  fi
-  hr
-  pause
+  user_data_mutation_run_locked user_del_apply_locked "${proto}" "${username}" "${selected_file}"
 }
 
 
@@ -7007,6 +9285,14 @@ PY
     return 0
   fi
 
+  if date_ymd_is_past "${new_expiry}"; then
+    warn "Tanggal expiry ${new_expiry} sudah lewat dan akan membuat akun segera expired."
+    if ! confirm_menu_apply_now "Tetap terapkan expiry lampau ${new_expiry} untuk ${username}@${proto}?"; then
+      pause
+      return 0
+    fi
+  fi
+
   hr
   echo "Ringkasan perubahan:"
   echo "  Username  : ${username}@${proto}"
@@ -7028,111 +9314,7 @@ PY
     return 0
   fi
 
-  local email_for_routing existing_protos was_present_in_inbounds="false" readded_inbounds="false"
-  local quota_backup_file=""
-  quota_backup_file="$(mktemp "${WORK_DIR}/.quota-expiry.${username}.${proto}.XXXXXX" 2>/dev/null || true)"
-  if [[ -z "${quota_backup_file}" ]]; then
-    warn "Gagal membuat backup metadata expiry."
-    pause
-    return 0
-  fi
-  if ! cp -f -- "${quota_file}" "${quota_backup_file}" >/dev/null 2>&1; then
-    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-    warn "Gagal backup metadata expiry."
-    pause
-    return 0
-  fi
-
-  email_for_routing="${username}@${proto}"
-  existing_protos="$(xray_username_find_protos "${username}" 2>/dev/null || true)"
-  if echo " ${existing_protos} " | grep -q " ${proto} "; then
-    was_present_in_inbounds="true"
-  fi
-
-  if ! quota_atomic_update_file "${quota_file}" set_expired_at "${new_expiry}"; then
-    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-    warn "Gagal update metadata expiry quota."
-    pause
-    return 0
-  fi
-
-  # Re-add user ke xray inbounds jika sudah dihapus oleh xray-expired daemon
-  # BUG-09 fix: fetch existing_protos immediately before attempting re-add to reduce
-  # the race window with xray-expired daemon (which runs every 2 seconds).
-  # We cannot fully eliminate the race without a distributed lock across bash+python,
-  # but minimising the gap between check and add is the best we can do here.
-  if [[ "${was_present_in_inbounds}" != "true" ]]; then
-    local restore_failed="false"
-    local restore_reason=""
-    # User tidak ada di inbounds - baca credential dari account txt lalu re-add
-    if [[ -f "${acc_file}" ]]; then
-      local cred=""
-      if proto_uses_password "${proto}"; then
-        cred="$(grep -E '^Password\s*:' "${acc_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
-      else
-        cred="$(grep -E '^UUID\s*:' "${acc_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
-      fi
-      if [[ -n "${cred}" ]]; then
-        if xray_add_client_try "${proto}" "${username}" "${cred}"; then
-          readded_inbounds="true"
-          log "User ${username}@${proto} di-restore ke inbounds (expired lalu di-extend)."
-        else
-          restore_failed="true"
-          restore_reason="Gagal me-restore ${username}@${proto} ke inbounds. Cek credential di: ${acc_file}"
-        fi
-      else
-        restore_failed="true"
-        restore_reason="Credential tidak ditemukan di ${acc_file}. Re-add user manual jika diperlukan."
-      fi
-    else
-      restore_failed="true"
-      restore_reason="Account file tidak ada: ${acc_file}. User mungkin perlu di-add ulang secara manual."
-    fi
-
-    if [[ "${restore_failed}" == "true" ]]; then
-      local rollback_msg=""
-      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
-      warn "${restore_reason}"
-      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
-      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-      pause
-      return 0
-    fi
-  fi
-
-  if [[ "$(quota_get_status_bool "${quota_file}" "quota_exhausted" 2>/dev/null || echo "false")" == "true" ]]; then
-    if ! quota_atomic_update_file "${quota_file}" clear_quota_exhausted_recompute; then
-      local rollback_msg=""
-      rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
-      warn "Gagal reset status quota exhausted setelah extend expiry."
-      [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
-      rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-      pause
-      return 0
-    fi
-    log "Quota exhausted flag di-reset setelah extend expiry."
-  fi
-
-  local apply_msg=""
-  if ! apply_msg="$(xray_qac_apply_runtime_from_quota "${quota_file}" "${proto}" "${username}" "${email_for_routing}" true true)"; then
-    local rollback_msg=""
-    rollback_msg="$(xray_user_expiry_rollback "${quota_file}" "${quota_backup_file}" "${proto}" "${username}" "${email_for_routing}" "${current_expiry}" "${was_present_in_inbounds}" "${readded_inbounds}" 2>&1 || true)"
-    warn "Extend expiry gagal: ${apply_msg}"
-    [[ -n "${rollback_msg}" ]] && warn "${rollback_msg}"
-    rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-    pause
-    return 0
-  fi
-
-  rm -f -- "${quota_backup_file}" >/dev/null 2>&1 || true
-
-  title
-  echo "Extend/Set Expiry selesai ✅"
-  hr
-  echo "  ${username}@${proto}"
-  echo "  Expiry baru : ${new_expiry}"
-  hr
-  pause
+  user_data_mutation_run_locked user_extend_expiry_apply_locked "${proto}" "${username}" "${quota_file}" "${acc_file}" "${current_expiry}" "${new_expiry}"
 }
 
 user_reset_credential_menu() {
@@ -7255,69 +9437,7 @@ user_reset_credential_menu() {
     fi
   done
 
-  local previous_cred="" new_cred label
-  if proto_uses_password "${proto}"; then
-    previous_cred="$(grep -E '^Password\s*:' "${selected_file}" | head -n1 | sed 's/^Password\s*:\s*//' | tr -d '[:space:]' || true)"
-  else
-    previous_cred="$(grep -E '^UUID\s*:' "${selected_file}" | head -n1 | sed 's/^UUID\s*:\s*//' | tr -d '[:space:]' || true)"
-  fi
-  if [[ -z "${previous_cred}" ]]; then
-    warn "Credential lama tidak ditemukan di ${selected_file}"
-    pause
-    return 0
-  fi
-
-  if proto_uses_password "${proto}"; then
-    new_cred="$(python3 - <<'PY'
-import secrets
-print(secrets.token_hex(16))
-PY
-)"
-    label="Password baru"
-  else
-    new_cred="$(gen_uuid)"
-    label="UUID baru"
-  fi
-
-  if ! xray_reset_client_credential_try "${proto}" "${username}" "${new_cred}"; then
-    warn "Gagal mereset ${label,,} untuk ${username}@${proto}."
-    pause
-    return 0
-  fi
-
-  if ! account_info_refresh_warn "${proto}" "${username}"; then
-    if xray_reset_client_credential_try "${proto}" "${username}" "${previous_cred}"; then
-      if ! account_info_refresh_warn "${proto}" "${username}"; then
-        warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan tetapi rollback account info gagal."
-      else
-        warn "Reset ${label,,} dibatalkan: refresh XRAY ACCOUNT INFO gagal, credential lama dipulihkan."
-      fi
-    else
-      warn "Reset ${label,,} gagal dan rollback credential juga gagal."
-    fi
-    pause
-    return 0
-  fi
-
-  title
-  echo "Reset UUID/Password selesai ✅"
-  hr
-  echo "User         : ${username}@${proto}"
-  echo "${label} : ${new_cred}"
-  local account_file
-  account_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  hr
-  echo "Account file:"
-  echo "  ${account_file}"
-  hr
-  echo "XRAY ACCOUNT INFO:"
-  if [[ -f "${account_file}" ]]; then
-    cat "${account_file}"
-  else
-    echo "(XRAY ACCOUNT INFO tidak ditemukan: ${account_file})"
-  fi
-  hr
-  pause
+  user_data_mutation_run_locked user_reset_credential_apply_locked "${proto}" "${username}" "${selected_file}"
 }
 
 user_list_menu() {
@@ -7385,10 +9505,10 @@ user_menu() {
       break
     fi
     case "${c}" in
-      1) user_add_menu ;;
-      2) user_del_menu ;;
-      3) user_extend_expiry_menu ;;
-      4) user_reset_credential_menu ;;
+      1) menu_run_isolated_report "Add Xray User" user_add_menu ;;
+      2) menu_run_isolated_report "Delete Xray User" user_del_menu ;;
+      3) menu_run_isolated_report "Set Xray Expiry" user_extend_expiry_menu ;;
+      4) menu_run_isolated_report "Reset Xray Credential" user_reset_credential_menu ;;
       5) user_list_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
@@ -7412,7 +9532,7 @@ quota_collect_files() {
   QUOTA_FILES=()
   QUOTA_FILE_PROTOS=()
 
-  local proto dir f base u key
+  local proto dir f base u key email
   declare -A pos=()
   declare -A has_at=()
 
@@ -7451,6 +9571,235 @@ quota_collect_files() {
       QUOTA_FILE_PROTOS+=("${proto}")
     done < <(find "${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
   done
+
+  for proto in "${QUOTA_PROTO_DIRS[@]}"; do
+    dir="${ACCOUNT_ROOT}/${proto}"
+    [[ -d "${dir}" ]] || continue
+    while IFS= read -r -d '' f; do
+      base="$(basename "${f}")"
+      base="${base%.txt}"
+      if [[ "${base}" == *"@"* ]]; then
+        u="${base%%@*}"
+      else
+        u="${base}"
+      fi
+      [[ -n "${u}" ]] || continue
+
+      key="${proto}:${u}"
+      if [[ -n "${pos[${key}]:-}" ]]; then
+        continue
+      fi
+
+      pos["${key}"]="${#QUOTA_FILES[@]}"
+      has_at["${key}"]=1
+      QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json}")
+      QUOTA_FILE_PROTOS+=("${proto}")
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
+  done
+
+  while IFS= read -r email; do
+    [[ -n "${email}" && "${email}" == *"@"* ]] || continue
+    u="${email%%@*}"
+    proto="${email##*@}"
+    case "${proto}" in
+      vless|vmess|trojan) ;;
+      *) continue ;;
+    esac
+
+    key="${proto}:${u}"
+    if [[ -n "${pos[${key}]:-}" ]]; then
+      continue
+    fi
+
+    pos["${key}"]="${#QUOTA_FILES[@]}"
+    has_at["${key}"]=1
+    QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json}")
+    QUOTA_FILE_PROTOS+=("${proto}")
+  done < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
+}
+
+quota_metadata_bootstrap_if_missing() {
+  # args: proto username quota_file
+  local proto="$1"
+  local username="$2"
+  local qf="$3"
+  local acc_file acc_compat
+
+  [[ -n "${proto}" && -n "${username}" && -n "${qf}" ]] || return 1
+  [[ -f "${qf}" ]] && return 0
+
+  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  acc_compat="${ACCOUNT_ROOT}/${proto}/${username}.txt"
+  if [[ ! -f "${acc_file}" && -f "${acc_compat}" ]]; then
+    acc_file="${acc_compat}"
+  fi
+
+  need_python3
+  python3 - <<'PY' "${qf}" "${acc_file}" "${proto}" "${username}"
+import fcntl
+import json
+import os
+import re
+import sys
+import tempfile
+from datetime import datetime
+
+qf, acc_file, proto, username = sys.argv[1:5]
+lock_path = qf + ".lock"
+
+def to_int(value, default=0):
+  try:
+    if value is None:
+      return default
+    if isinstance(value, bool):
+      return int(value)
+    if isinstance(value, (int, float)):
+      return int(value)
+    raw = str(value).strip()
+    if not raw:
+      return default
+    return int(float(raw))
+  except Exception:
+    return default
+
+def to_float(value, default=0.0):
+  try:
+    if value is None:
+      return default
+    if isinstance(value, bool):
+      return float(int(value))
+    if isinstance(value, (int, float)):
+      return float(value)
+    raw = str(value).strip()
+    if not raw:
+      return default
+    return float(raw)
+  except Exception:
+    return default
+
+def parse_text_fields(path):
+  rows = {}
+  if not os.path.isfile(path):
+    return rows
+  try:
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+      for raw in handle:
+        line = raw.strip()
+        if ":" not in line:
+          continue
+        key, value = line.split(":", 1)
+        rows[key.strip()] = value.strip()
+  except Exception:
+    return {}
+  return rows
+
+def quota_bytes_from_text(raw):
+  m = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(raw or ""))
+  if not m:
+    return 0
+  try:
+    gb = float(m.group(1))
+  except Exception:
+    return 0
+  if gb <= 0:
+    return 0
+  return int(round(gb * (1024 ** 3)))
+
+def normalize_date(raw, default="-"):
+  s = str(raw or "").strip()
+  if not s:
+    return default
+  m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+  if m:
+    return m.group(0)
+  return default
+
+def parse_ip_limit(raw):
+  text = str(raw or "").strip().upper()
+  if not text.startswith("ON"):
+    return False, 0
+  m = re.search(r"\(([0-9]+)\)", text)
+  return True, to_int(m.group(1), 0) if m else 0
+
+def parse_speed(raw):
+  text = str(raw or "").strip()
+  if not text.upper().startswith("ON"):
+    return False, 0.0, 0.0
+  m = re.search(
+    r"DOWN\s*([0-9]+(?:\.[0-9]+)?)\s*Mbps\s*\|\s*UP\s*([0-9]+(?:\.[0-9]+)?)\s*Mbps",
+    text,
+    flags=re.IGNORECASE,
+  )
+  if not m:
+    return False, 0.0, 0.0
+  return True, to_float(m.group(1), 0.0), to_float(m.group(2), 0.0)
+
+fields = parse_text_fields(acc_file)
+quota_limit = quota_bytes_from_text(fields.get("Quota Limit"))
+expired_at = normalize_date(fields.get("Valid Until"))
+created_at = normalize_date(fields.get("Created"), default=datetime.now().strftime("%Y-%m-%d"))
+ip_enabled, ip_limit = parse_ip_limit(fields.get("IP Limit"))
+speed_enabled, speed_down, speed_up = parse_speed(fields.get("Speed Limit"))
+if not speed_enabled or speed_down <= 0 or speed_up <= 0:
+  speed_enabled = False
+  speed_down = 0.0
+  speed_up = 0.0
+
+payload = {
+  "username": f"{username}@{proto}",
+  "protocol": proto,
+  "quota_limit": quota_limit,
+  "quota_unit": "binary",
+  "quota_used": 0,
+  "xray_usage_bytes": 0,
+  "xray_api_baseline_bytes": 0,
+  "xray_usage_carry_bytes": 0,
+  "xray_api_last_total_bytes": 0,
+  "xray_usage_reset_pending": False,
+  "created_at": created_at,
+  "expired_at": expired_at,
+  "status": {
+    "manual_block": False,
+    "quota_exhausted": False,
+    "ip_limit_enabled": bool(ip_enabled),
+    "ip_limit": ip_limit if ip_enabled else 0,
+    "speed_limit_enabled": bool(speed_enabled),
+    "speed_down_mbit": speed_down if speed_enabled else 0,
+    "speed_up_mbit": speed_up if speed_enabled else 0,
+    "ip_limit_locked": False,
+    "lock_reason": "",
+    "locked_at": "",
+  },
+}
+
+os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+with open(lock_path, "a+", encoding="utf-8") as lock_handle:
+  fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+  try:
+    if os.path.exists(qf):
+      raise SystemExit(0)
+    os.makedirs(os.path.dirname(qf) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=os.path.dirname(qf) or ".")
+    try:
+      with os.fdopen(fd, "w", encoding="utf-8") as wf:
+        json.dump(payload, wf, ensure_ascii=False, indent=2)
+        wf.write("\n")
+        wf.flush()
+        os.fsync(wf.fileno())
+      os.replace(tmp, qf)
+      try:
+        os.chmod(qf, 0o600)
+      except Exception:
+        pass
+    finally:
+      try:
+        if os.path.exists(tmp):
+          os.remove(tmp)
+      except Exception:
+        pass
+  finally:
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+PY
 }
 
 
@@ -7502,15 +9851,16 @@ quota_read_summary_fields() {
   local qf="$1"
   need_python3
   python3 - <<'PY' "${qf}"
-import json, sys
-p=sys.argv[1]
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1])
+username_fallback = p.stem.split("@", 1)[0] if p.stem else "-"
 try:
   d=json.load(open(p,'r',encoding='utf-8'))
 except Exception:
-  print("-|0 GB|0 B|-|BROKEN")
+  print(f"{username_fallback}|0 GB|0 B|-|OFF|-|OFF")
   raise SystemExit(0)
 if not isinstance(d, dict):
-  print("-|0 GB|0 B|-|BROKEN")
+  print(f"{username_fallback}|0 GB|0 B|-|OFF|-|OFF")
   raise SystemExit(0)
 
 def to_int(v, default=0):
@@ -7538,7 +9888,11 @@ def fmt_gb(v):
   s=f"{n:.3f}".rstrip('0').rstrip('.')
   return s if s else "0"
 
-u=str(d.get("username") or "-")
+u=str(d.get("username") or username_fallback or "-")
+if u.endswith("@ssh"):
+  u=u[:-4]
+if "@" in u:
+  u=u.split("@", 1)[0]
 ql=to_int(d.get("quota_limit"), 0)
 qu=to_int(d.get("quota_used"), 0)
 
@@ -7598,15 +9952,16 @@ quota_read_detail_fields() {
   local qf="$1"
   need_python3
   python3 - <<'PY' "${qf}"
-import json, sys
-p=sys.argv[1]
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1])
+username_fallback = p.stem.split("@", 1)[0] if p.stem else "-"
 try:
   d=json.load(open(p,'r',encoding='utf-8'))
 except Exception:
-  print("-|0 GB|0 B|-|OFF|0|-|OFF|0|0")
+  print(f"{username_fallback}|0 GB|0 B|-|OFF|0|-|OFF|0|0")
   raise SystemExit(0)
 if not isinstance(d, dict):
-  print("-|0 GB|0 B|-|OFF|0|-|OFF|0|0")
+  print(f"{username_fallback}|0 GB|0 B|-|OFF|0|-|OFF|0|0")
   raise SystemExit(0)
 
 def to_int(v, default=0):
@@ -7659,7 +10014,11 @@ def fmt_mbit(v):
   s=f"{n:.3f}".rstrip('0').rstrip('.')
   return s if s else "0"
 
-u=str(d.get("username") or "-")
+u=str(d.get("username") or username_fallback or "-")
+if u.endswith("@ssh"):
+  u=u[:-4]
+if "@" in u:
+  u=u.split("@", 1)[0]
 ql=to_int(d.get("quota_limit"), 0)
 qu=to_int(d.get("quota_used"), 0)
 
@@ -7957,6 +10316,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime
@@ -7965,6 +10325,7 @@ p = sys.argv[1]
 lock_path = sys.argv[2]
 action = sys.argv[3]
 args = sys.argv[4:]
+backup_path = str(os.environ.get("QUOTA_ATOMIC_BACKUP_FILE") or "").strip()
 
 os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
 
@@ -8027,6 +10388,13 @@ def recompute_lock_reason(st):
 with open(lock_path, "a+", encoding="utf-8") as lf:
   fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
   try:
+    if backup_path:
+      os.makedirs(os.path.dirname(backup_path) or ".", exist_ok=True)
+      shutil.copy2(p, backup_path)
+      try:
+        os.chmod(backup_path, 0o600)
+      except Exception:
+        pass
     with open(p, "r", encoding="utf-8") as f:
       d = json.load(f)
     if not isinstance(d, dict):
@@ -8148,6 +10516,13 @@ quota_view_json() {
   title
   echo "Quota metadata: ${qf}"
   hr
+  if [[ ! -f "${qf}" ]]; then
+    warn "Quota metadata belum ada untuk target ini."
+    echo "Hint: target ini kemungkinan terdeteksi dari runtime/account file drift dan belum punya JSON quota."
+    hr
+    pause
+    return 0
+  fi
   need_python3
   if have_cmd less; then
     python3 - <<'PY' "${qf}" | less -R
@@ -8232,6 +10607,28 @@ quota_edit_flow() {
   real_idx="${QUOTA_VIEW_INDEXES[$list_pos]}"
   qf="${QUOTA_FILES[$real_idx]}"
   proto="${QUOTA_FILE_PROTOS[$real_idx]}"
+  local qf_base username_hint=""
+  qf_base="$(basename "${qf}")"
+  qf_base="${qf_base%.json}"
+  username_hint="${qf_base%%@*}"
+
+  if [[ ! -f "${qf}" ]]; then
+    warn "Quota metadata untuk ${username_hint}@${proto} belum ada."
+    echo "Bootstrap akan membuat metadata awal dengan asumsi konservatif:"
+    echo "  - quota used = 0"
+    echo "  - xray usage/baseline = 0"
+    echo "  - created/expired/ip-limit/speed dicoba dibaca dari account info bila tersedia"
+    hr
+    if ! confirm_menu_apply_now "Buat metadata quota awal untuk ${username_hint}@${proto} sekarang?"; then
+      pause
+      return 0
+    fi
+    if ! quota_metadata_bootstrap_if_missing "${proto}" "${username_hint}" "${qf}"; then
+      warn "Gagal membuat metadata quota awal untuk ${username_hint}@${proto}."
+      pause
+      return 1
+    fi
+  fi
 
   while true; do
     title
@@ -8314,6 +10711,10 @@ quota_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
+        if ! confirm_menu_apply_now "Set quota limit ${username} ke ${gb_num} GB sekarang?"; then
+          pause
+          continue
+        fi
         local apply_msg=""
         if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false set_quota_limit_recompute "${qb}")"; then
           warn "Quota limit gagal diterapkan: ${apply_msg}"
@@ -8326,6 +10727,10 @@ quota_edit_flow() {
       3)
         # BUG-06 fix: read mb/il BEFORE resetting qe so lock_reason is computed correctly.
         # BUG-05 fix: correct priority quota > ip_limit.
+        if ! confirm_menu_apply_now "Reset quota used ${username} ke 0 sekarang?"; then
+          pause
+          continue
+        fi
         local apply_msg=""
         if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false reset_quota_used_recompute)"; then
           warn "Reset quota gagal diterapkan: ${apply_msg}"
@@ -8339,6 +10744,10 @@ quota_edit_flow() {
         local st_mb
         st_mb="$(quota_get_status_bool "${qf}" "manual_block")"
         if [[ "${st_mb}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan manual block untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           # BUG-06 fix: evaluate qe/il BEFORE setting manual_block=False.
           # Previously mb was read AFTER being set to False, so it was always False
           # and lock_reason could never be 'manual' in this branch.
@@ -8351,6 +10760,10 @@ quota_edit_flow() {
           fi
           log "Manual block: OFF"
         else
+          if ! confirm_menu_apply_now "Aktifkan manual block untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           local apply_msg=""
           if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false false manual_block_set on)"; then
             warn "Manual block ON gagal diterapkan: ${apply_msg}"
@@ -8365,6 +10778,10 @@ quota_edit_flow() {
         local ip_on
         ip_on="$(quota_get_status_bool "${qf}" "ip_limit_enabled")"
         if [[ "${ip_on}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan IP limit untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           # BUG-06 fix: read il BEFORE resetting ip_limit_locked, then determine lock_reason.
           # BUG-05 fix: correct priority is quota > ip_limit.
           local apply_msg=""
@@ -8375,6 +10792,10 @@ quota_edit_flow() {
           fi
           log "IP limit: OFF"
         else
+          if ! confirm_menu_apply_now "Aktifkan IP limit untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           local apply_msg=""
           if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false ip_limit_enabled_set on)"; then
             warn "IP limit ON gagal diterapkan: ${apply_msg}"
@@ -8398,6 +10819,10 @@ quota_edit_flow() {
           pause
           continue
         fi
+        if ! confirm_menu_apply_now "Set IP limit ${username} ke ${lim} sekarang?"; then
+          pause
+          continue
+        fi
         local apply_msg=""
         if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false set_ip_limit "${lim}")"; then
           warn "Set IP limit gagal diterapkan: ${apply_msg}"
@@ -8408,17 +10833,12 @@ quota_edit_flow() {
         pause
         ;;
       7)
-        if [[ -x /usr/local/bin/limit-ip ]]; then
-          if ! /usr/local/bin/limit-ip unlock "${email_for_routing}" >/dev/null 2>&1; then
-            warn "Gagal menjalankan unlock pada service limit-ip."
-            pause
-            continue
-          fi
+        if ! confirm_menu_apply_now "Unlock IP lock untuk ${username} sekarang?"; then
+          pause
+          continue
         fi
-        # BUG-06 fix: read il BEFORE resetting, evaluate lock_reason correctly after.
-        # BUG-05 fix: correct priority quota > ip_limit.
         local apply_msg=""
-        if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" true false clear_ip_limit_locked_recompute)"; then
+        if ! apply_msg="$(xray_qac_unlock_ip_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}")"; then
           warn "Unlock IP lock gagal diterapkan: ${apply_msg}"
           pause
           continue
@@ -8437,6 +10857,10 @@ quota_edit_flow() {
         speed_down_input="$(normalize_speed_mbit_input "${speed_down_input}")"
         if [[ -z "${speed_down_input}" ]] || ! speed_mbit_is_positive "${speed_down_input}"; then
           warn "Speed download tidak valid. Gunakan angka > 0, contoh: 20 atau 20mbit"
+          pause
+          continue
+        fi
+        if ! confirm_menu_apply_now "Set speed download ${username} ke ${speed_down_input} Mbps sekarang?"; then
           pause
           continue
         fi
@@ -8463,6 +10887,10 @@ quota_edit_flow() {
           pause
           continue
         fi
+        if ! confirm_menu_apply_now "Set speed upload ${username} ke ${speed_up_input} Mbps sekarang?"; then
+          pause
+          continue
+        fi
         local apply_msg=""
         if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true set_speed_up "${speed_up_input}")"; then
           warn "Speed upload gagal diterapkan: ${apply_msg}"
@@ -8476,6 +10904,10 @@ quota_edit_flow() {
         local speed_on speed_down_now speed_up_now
         speed_on="$(quota_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan speed limit untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           local apply_msg=""
           if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true speed_limit_set off)"; then
             warn "Speed limit OFF gagal diterapkan: ${apply_msg}"
@@ -8521,6 +10953,10 @@ quota_edit_flow() {
           fi
         fi
 
+        if ! confirm_menu_apply_now "Aktifkan speed limit ${username} dengan DOWN ${speed_down_now} Mbps dan UP ${speed_up_now} Mbps sekarang?"; then
+          pause
+          continue
+        fi
         local apply_msg=""
         if ! apply_msg="$(xray_qac_atomic_apply "${qf}" "${proto}" "${speed_username}" "${email_for_routing}" false true set_speed_all_enable "${speed_down_now}" "${speed_up_now}")"; then
           warn "Speed limit ON gagal diterapkan: ${apply_msg}"

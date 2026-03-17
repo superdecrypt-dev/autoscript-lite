@@ -517,8 +517,9 @@ acme_sh_path_get() {
 
 cert_runtime_restart_active_tls_consumers() {
   if [[ "${DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID:-0}" == "1" ]]; then
-    domain_control_restore_tls_runtime_consumers_from_snapshot
-    return $?
+    domain_control_restore_tls_runtime_consumers_from_snapshot || return $?
+    cert_runtime_tls_consumers_health_check || return 1
+    return 0
   fi
   local edge_svc=""
   if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
@@ -528,10 +529,80 @@ cert_runtime_restart_active_tls_consumers() {
   if edge_runtime_enabled_for_public_ports; then
     edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
     if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
-      systemctl restart "${edge_svc}" >/dev/null 2>&1 || return 1
-      svc_is_active "${edge_svc}" || return 1
+      edge_runtime_post_restart_health_check || return 1
     fi
   fi
+  cert_runtime_tls_consumers_health_check || return 1
+  return 0
+}
+
+cert_runtime_tls_consumers_health_check() {
+  local -a failed=()
+  local stunnel_port="" stunnel_probe="" edge_svc="" http_port="" tls_port=""
+
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    stunnel_port="$(sshws_detect_stunnel_port 2>/dev/null || true)"
+    if [[ "${stunnel_port}" =~ ^[0-9]+$ ]]; then
+      stunnel_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${stunnel_port}" "tls")"
+      if ! sshws_probe_result_is_healthy "${stunnel_probe}"; then
+        warn "Probe TLS consumer sshws-stunnel gagal: $(sshws_probe_result_disp "${stunnel_probe}")"
+        failed+=("sshws-stunnel")
+      fi
+    fi
+  fi
+
+  if edge_runtime_enabled_for_public_ports; then
+    edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
+    if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
+      http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
+      tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+      if ! edge_runtime_socket_listening "${http_port}"; then
+        warn "Port HTTP publik ${http_port} belum listening setelah refresh consumer TLS."
+        failed+=("edge-http")
+      fi
+      if ! edge_runtime_socket_listening "${tls_port}"; then
+        warn "Port TLS publik ${tls_port} belum listening setelah refresh consumer TLS."
+        failed+=("edge-tls")
+      fi
+    fi
+  fi
+
+  (( ${#failed[@]} == 0 ))
+}
+
+cert_runtime_hostname_tls_handshake_check() {
+  local domain="${1:-}"
+  local probe_output="" rc=0 endpoint="" label=""
+
+  [[ -n "${domain}" ]] || domain="$(detect_domain)"
+  [[ -n "${domain}" ]] || {
+    warn "Domain aktif tidak terdeteksi untuk probe TLS hostname."
+    return 1
+  }
+  if ! have_cmd openssl; then
+    warn "openssl tidak tersedia, skip probe TLS hostname ${domain}."
+    return 0
+  fi
+
+  for endpoint in "${domain}:443" "127.0.0.1:443"; do
+    if [[ "${endpoint}" == "${domain}:443" ]]; then
+      label="public"
+    else
+      label="local"
+    fi
+    if have_cmd timeout; then
+      probe_output="$(timeout 15 openssl s_client -servername "${domain}" -connect "${endpoint}" -verify_hostname "${domain}" -verify_return_error < /dev/null 2>&1)"
+      rc=$?
+    else
+      probe_output="$(openssl s_client -servername "${domain}" -connect "${endpoint}" -verify_hostname "${domain}" -verify_return_error < /dev/null 2>&1)"
+      rc=$?
+    fi
+    if (( rc != 0 )) || ! printf '%s\n' "${probe_output}" | grep -Eq 'Verification: OK|Verify return code: 0 \(ok\)'; then
+      warn "Probe TLS hostname ${label} gagal untuk ${domain} via ${endpoint}."
+      printf '%s\n' "${probe_output}" >&2
+      return 1
+    fi
+  done
   return 0
 }
 
@@ -561,6 +632,11 @@ cert_menu_renew() {
 
   echo "Domain terdeteksi: ${domain}"
   hr
+  if ! confirm_menu_apply_now "Jalankan renew certificate untuk domain ${domain} sekarang?"; then
+    hr
+    pause
+    return 0
+  fi
   echo "Menjalankan acme.sh renew untuk domain aktif..."
   echo
 
@@ -569,6 +645,7 @@ cert_menu_renew() {
   local renew_log
   local cert_backup_dir=""
   local -a rollback_notes=()
+  local -a conflict_services=()
   renew_log="$(mktemp)"
 
   domain_control_clear_stopped_services
@@ -594,76 +671,71 @@ cert_menu_renew() {
 
   if [[ "${renew_ok}" != "true" ]]; then
     if [[ "${port80_conflict}" == "true" ]]; then
-      warn "Terdeteksi konflik port 80. Menghentikan web service sementara untuk retry renew..."
-      local -a stopped_services=()
-      local stop_failed="false"
       local svc edge_svc=""
       for svc in nginx apache2 caddy lighttpd; do
         if svc_exists "${svc}" && svc_is_active "${svc}"; then
-          if systemctl stop "${svc}" >/dev/null 2>&1 && ! svc_is_active "${svc}"; then
-            stopped_services+=("${svc}")
-          else
-            warn "Gagal menghentikan service konflik: ${svc}"
-            stop_failed="true"
-          fi
+          conflict_services+=("${svc}")
         fi
       done
       if edge_runtime_enabled_for_public_ports; then
         edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
         if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
-          if systemctl stop "${edge_svc}" >/dev/null 2>&1 && ! svc_is_active "${edge_svc}"; then
-            stopped_services+=("${edge_svc}")
-          else
-            warn "Gagal menghentikan service konflik: ${edge_svc}"
-            stop_failed="true"
-          fi
+          conflict_services+=("${edge_svc}")
         fi
       fi
 
-      if [[ "${stop_failed}" == "true" ]]; then
-        local restore_failed="false"
-        for svc in "${stopped_services[@]}"; do
-        if svc_exists "${svc}"; then
-          if ! systemctl start "${svc}" >/dev/null 2>&1 || ! svc_is_active "${svc}"; then
-            warn "Gagal restore service: ${svc}"
-            restore_failed="true"
-          fi
+      warn "Terdeteksi konflik port 80. Menghentikan web service sementara untuk retry renew..."
+      if (( ${#conflict_services[@]} > 0 )); then
+        printf 'Service yang akan dihentikan sementara: %s\n' "$(IFS=', '; echo "${conflict_services[*]}")"
+        hr
+        if ! confirm_menu_apply_now "Hentikan sementara service di atas lalu retry renew certificate?"; then
+          rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+          domain_control_clear_stopped_services
+          domain_control_clear_runtime_snapshot
+          hr
+          pause
+          return 0
         fi
-      done
-      warn "Renew dibatalkan karena tidak semua service konflik berhasil dihentikan."
-      if [[ "${restore_failed}" == "true" ]]; then
-        warn "Sebagian service yang sempat dihentikan juga gagal dipulihkan."
-      fi
-      rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
-      domain_control_clear_stopped_services
-      domain_control_clear_runtime_snapshot
-      hr
-      pause
-      return 1
-    fi
-
-      if "${acme}" --renew -d "${domain}" --force 2>&1; then
-        renew_ok="true"
       fi
 
-      local restore_failed="false"
-      for svc in "${stopped_services[@]}"; do
-        if svc_exists "${svc}"; then
-          if ! systemctl start "${svc}" >/dev/null 2>&1 || ! svc_is_active "${svc}"; then
-            warn "Gagal restore service: ${svc}"
-            restore_failed="true"
-          fi
+      if ! stop_conflicting_services; then
+        warn "Renew dibatalkan karena tidak semua service konflik berhasil dihentikan."
+        if ! domain_control_restore_stopped_services_strict 3; then
+          warn "Sebagian service yang sempat dihentikan juga gagal dipulihkan."
         fi
-      done
-      if [[ "${restore_failed}" == "true" ]]; then
-        warn "Renew berhasil, tetapi sebagian service yang dihentikan sementara tidak kembali aktif."
-        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
         domain_control_clear_stopped_services
+        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
         domain_control_clear_runtime_snapshot
         hr
         pause
         return 1
       fi
+
+      if "${acme}" --renew -d "${domain}" --force 2>&1; then
+        renew_ok="true"
+      fi
+
+      if ! domain_control_restore_stopped_services_strict 3; then
+        warn "Renew berhasil, tetapi sebagian service yang dihentikan sementara tidak kembali aktif. Mencoba rollback cert/runtime..."
+        if ! cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1; then
+          rollback_notes+=("restore sertifikat gagal")
+        fi
+        domain_control_restore_cert_runtime_after_rollback rollback_notes || true
+        if ! domain_control_restore_stopped_services_strict 3; then
+          rollback_notes+=("restore service runtime TLS gagal")
+        else
+          domain_control_clear_stopped_services
+        fi
+        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+        domain_control_clear_runtime_snapshot
+        if (( ${#rollback_notes[@]} > 0 )); then
+          warn "Rollback renew cert juga bermasalah: ${rollback_notes[*]}"
+        fi
+        hr
+        pause
+        return 1
+      fi
+      domain_control_clear_stopped_services
     else
       warn "acme.sh renew domain aktif gagal, mencoba ulang..."
       if "${acme}" --renew -d "${domain}" --force 2>&1; then
@@ -697,6 +769,20 @@ cert_menu_renew() {
     pause
     return 1
   fi
+  if ! cert_runtime_hostname_tls_handshake_check "${domain}"; then
+    warn "Cert berhasil diperbarui, tetapi probe TLS hostname gagal. Mencoba rollback cert sebelumnya..."
+    cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
+    domain_control_restore_cert_runtime_after_rollback rollback_notes || true
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback cert juga bermasalah: ${rollback_notes[*]}"
+    fi
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    domain_control_clear_stopped_services
+    domain_control_clear_runtime_snapshot
+    hr
+    pause
+    return 1
+  fi
   rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
   domain_control_clear_stopped_services
   domain_control_clear_runtime_snapshot
@@ -716,11 +802,51 @@ cert_menu_reload_nginx() {
     return 0
   fi
 
-  if systemctl reload nginx 2>/dev/null; then
+  if ! confirm_menu_apply_now "Reload nginx sekarang?"; then
+    hr
+    pause
+    return 0
+  fi
+
+  if have_cmd nginx && ! nginx -t >/dev/null 2>&1; then
+    warn "nginx -t gagal. Reload/restart dibatalkan."
+    hr
+    pause
+    return 1
+  fi
+
+  if systemctl reload nginx 2>/dev/null && svc_is_active nginx && nginx_service_listener_health_check; then
+    local domain=""
+    domain="$(detect_domain 2>/dev/null || true)"
+    if [[ -n "${domain}" ]] && ! cert_runtime_hostname_tls_handshake_check "${domain}"; then
+      warn "nginx reload lolos, tetapi probe TLS hostname gagal."
+      hr
+      pause
+      return 1
+    fi
     log "nginx reload: OK"
   else
-    warn "nginx reload gagal, mencoba restart..."
-    if systemctl restart nginx 2>/dev/null && svc_is_active nginx; then
+    warn "nginx reload gagal."
+    if ! confirm_menu_apply_now "Reload gagal. Lanjutkan dengan restart penuh nginx sekarang?"; then
+      hr
+      pause
+      return 1
+    fi
+    if have_cmd nginx && ! nginx -t >/dev/null 2>&1; then
+      warn "nginx -t gagal sebelum restart fallback."
+      hr
+      pause
+      return 1
+    fi
+    if nginx_restart_checked_with_listener; then
+      local domain=""
+      domain="$(detect_domain 2>/dev/null || true)"
+      if [[ -n "${domain}" ]] && ! cert_runtime_hostname_tls_handshake_check "${domain}"; then
+        warn "nginx restart lolos, tetapi probe TLS hostname gagal."
+        hr
+        pause
+        return 1
+      fi
       log "nginx restart: OK"
     else
       warn "nginx masih tidak aktif"
@@ -956,8 +1082,13 @@ fail2ban_menu_unban_ip() {
   if is_back_choice "${ip}"; then
     return 0
   fi
-  if [[ -z "${ip}" ]]; then
-    warn "IP kosong"
+  ip="$(ip_literal_normalize "${ip}")" || {
+    warn "IP tidak valid. Gunakan IPv4/IPv6 literal."
+    pause
+    return 0
+  }
+
+  if ! confirm_menu_apply_now "Unban IP ${ip} dari jail ${jail} sekarang?"; then
     pause
     return 0
   fi
@@ -971,10 +1102,39 @@ fail2ban_menu_unban_ip() {
   pause
 }
 
+fail2ban_post_restart_health_check() {
+  local jail
+  local -a expected_jails=("$@")
+  local status_out=""
+
+  if ! svc_restart_checked fail2ban 20; then
+    warn "fail2ban gagal direstart (state=$(svc_state fail2ban || echo unknown))"
+    return 1
+  fi
+  if ! fail2ban_client_ready; then
+    warn "fail2ban-client tidak tersedia setelah restart."
+    return 1
+  fi
+  status_out="$(fail2ban-client status 2>/dev/null || true)"
+  if [[ -z "${status_out}" ]]; then
+    warn "fail2ban-client status kosong setelah restart."
+    return 1
+  fi
+  for jail in "${expected_jails[@]}"; do
+    [[ -n "${jail}" ]] || continue
+    if ! fail2ban_jail_active_bool "${jail}"; then
+      warn "Jail fail2ban belum aktif setelah restart: ${jail}"
+      return 1
+    fi
+  done
+  return 0
+}
+
 fail2ban_menu_restart() {
   title
   echo "Fail2ban > Restart"
   hr
+  local jail=""
   if ! svc_exists fail2ban; then
     warn "fail2ban.service tidak terdeteksi"
     hr
@@ -982,10 +1142,20 @@ fail2ban_menu_restart() {
     return 0
   fi
 
-  if svc_restart_checked fail2ban 20; then
+  local jails=()
+  while IFS= read -r jail; do
+    [[ -n "${jail}" ]] && jails+=("${jail}")
+  done < <(fail2ban_jails_list_get)
+
+  if ! confirm_menu_apply_now "Restart fail2ban sekarang?"; then
+    pause
+    return 0
+  fi
+
+  if fail2ban_post_restart_health_check "${jails[@]}"; then
     log "fail2ban: active"
   else
-    warn "fail2ban gagal direstart (state=$(svc_state fail2ban || echo unknown))"
+    warn "fail2ban restart health-check gagal."
   fi
   hr
   pause
@@ -1369,6 +1539,18 @@ wireproxy_restart_menu() {
   echo "9) Maintenance > Restart WARP"
   hr
 
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Restart wireproxy sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Restart wireproxy dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  local restart_failed="false"
   if ! svc_exists wireproxy; then
     warn "wireproxy.service tidak ditemukan."
     hr
@@ -1376,9 +1558,13 @@ wireproxy_restart_menu() {
     return 0
   fi
 
-  svc_restart wireproxy
+  if ! warp_wireproxy_post_restart_health_check; then
+    warn "Restart wireproxy gagal."
+    restart_failed="true"
+  fi
   hr
   pause
+  [[ "${restart_failed}" != "true" ]]
 }
 
 edge_runtime_env_file() {
@@ -1779,11 +1965,79 @@ edge_runtime_status_menu() {
   pause
 }
 
+edge_runtime_socket_listening() {
+  local port="${1:-0}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  have_cmd ss || return 0
+  ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"
+}
+
+edge_runtime_post_restart_health_check() {
+  local svc provider active http_port tls_port http_backend http_tls_backend ssh_backend tls_backend_required
+  local backend_http_port backend_http_tls_port backend_ssh_port
+  svc="$(edge_runtime_service_name)"
+  provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+  active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
+  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
+  http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
+  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
+  if edge_runtime_tls_backend_required "${provider}" "${active}"; then
+    tls_backend_required="true"
+  else
+    tls_backend_required="false"
+  fi
+
+  if ! svc_restart_checked "${svc}" 60; then
+    warn "Restart ${svc} gagal."
+    return 1
+  fi
+
+  backend_http_port="${http_backend##*:}"
+  backend_http_tls_port="${http_tls_backend##*:}"
+  backend_ssh_port="${ssh_backend##*:}"
+
+  if ! edge_runtime_socket_listening "${http_port}"; then
+    warn "Port HTTP publik ${http_port} belum listening setelah restart edge."
+    return 1
+  fi
+  if ! edge_runtime_socket_listening "${tls_port}"; then
+    warn "Port TLS publik ${tls_port} belum listening setelah restart edge."
+    return 1
+  fi
+  if ! edge_runtime_socket_listening "${backend_http_port}"; then
+    warn "Backend HTTP ${http_backend} belum listening setelah restart edge."
+    return 1
+  fi
+  if [[ "${tls_backend_required}" == "true" ]] && ! edge_runtime_socket_listening "${backend_http_tls_port}"; then
+    warn "Backend HTTPS ${http_tls_backend} belum listening setelah restart edge."
+    return 1
+  fi
+  if ! edge_runtime_socket_listening "${backend_ssh_port}"; then
+    warn "Backend SSH ${ssh_backend} belum listening setelah restart edge."
+    return 1
+  fi
+  return 0
+}
+
 edge_runtime_restart_menu() {
   title
   echo "9) Maintenance > Restart Edge Gateway"
   hr
 
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Restart Edge Gateway sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Restart Edge Gateway dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  local restart_failed="false"
   local svc
   svc="$(edge_runtime_service_name)"
   if ! svc_exists "${svc}"; then
@@ -1793,9 +2047,13 @@ edge_runtime_restart_menu() {
     return 0
   fi
 
-  svc_restart "${svc}"
+  if ! edge_runtime_post_restart_health_check; then
+    warn "Restart ${svc} gagal."
+    restart_failed="true"
+  fi
   hr
   pause
+  [[ "${restart_failed}" != "true" ]]
 }
 
 edge_runtime_info_menu() {
@@ -1890,11 +2148,43 @@ badvpn_status_menu() {
   pause
 }
 
+badvpn_post_restart_health_check() {
+  local svc ports_raw port
+  svc="badvpn-udpgw.service"
+  if ! svc_restart_checked "${svc}" 60; then
+    warn "Restart ${svc} gagal."
+    return 1
+  fi
+  if ! have_cmd ss; then
+    return 0
+  fi
+  ports_raw="$(badvpn_runtime_ports)"
+  for port in ${ports_raw}; do
+    if ! ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
+      warn "Port UDPGW 127.0.0.1:${port} belum listening setelah restart."
+      return 1
+    fi
+  done
+  return 0
+}
+
 badvpn_restart_menu() {
   title
   echo "9) Maintenance > Restart BadVPN UDPGW"
   hr
 
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Restart BadVPN UDPGW sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Restart BadVPN UDPGW dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  local restart_failed="false"
   local svc
   svc="badvpn-udpgw.service"
   if ! svc_exists "${svc}"; then
@@ -1904,9 +2194,13 @@ badvpn_restart_menu() {
     return 0
   fi
 
-  svc_restart "${svc}"
+  if ! badvpn_post_restart_health_check; then
+    warn "Restart ${svc} gagal."
+    restart_failed="true"
+  fi
   hr
   pause
+  [[ "${restart_failed}" != "true" ]]
 }
 
 sshws_detect_dropbear_port() {
@@ -1995,17 +2289,63 @@ sshws_status_menu() {
   pause
 }
 
-sshws_restart_menu() {
-  title
-  echo "9) Maintenance > Restart SSH WS"
-  hr
+sshws_post_restart_health_check() {
+  local dropbear_svc="${SSHWS_DROPBEAR_SERVICE}"
+  local stunnel_svc="${SSHWS_STUNNEL_SERVICE}"
+  local proxy_svc="${SSHWS_PROXY_SERVICE}"
+  local -a failed=()
+  local dropbear_port stunnel_port proxy_port dropbear_probe proxy_probe stunnel_probe
 
-  local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
+  dropbear_port="$(sshws_detect_dropbear_port)"
+  stunnel_port="$(sshws_detect_stunnel_port)"
+  proxy_port="$(sshws_detect_proxy_port)"
+  if have_cmd ss; then
+    if (svc_exists "${proxy_svc}" || svc_exists "${stunnel_svc}") && ! ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)'; then
+      warn "Port 80 belum listening setelah restart SSH WS."
+      failed+=("port-80")
+    fi
+    if (svc_exists "${proxy_svc}" || svc_exists "${stunnel_svc}") && ! ss -lntp 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+      warn "Port 443 belum listening setelah restart SSH WS."
+      failed+=("port-443")
+    fi
+  fi
+  if svc_exists "${dropbear_svc}"; then
+    dropbear_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${dropbear_port}" "tcp")"
+    if ! sshws_probe_result_is_healthy "${dropbear_probe}"; then
+      warn "Probe dropbear local gagal setelah restart SSH WS: $(sshws_probe_result_disp "${dropbear_probe}")"
+      failed+=("dropbear")
+    fi
+  fi
+  if svc_exists "${proxy_svc}"; then
+    proxy_probe="$(sshws_probe_ws_endpoint "127.0.0.1" "${proxy_port}" "$(sshws_probe_path_pick)" "127.0.0.1:${proxy_port}" "off" "")"
+    if ! sshws_probe_result_is_healthy "${proxy_probe}"; then
+      warn "Probe ws proxy local gagal setelah restart SSH WS: $(sshws_probe_result_disp "${proxy_probe}")"
+      failed+=("ws-proxy")
+    fi
+  fi
+  if svc_exists "${stunnel_svc}"; then
+    stunnel_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${stunnel_port}" "tls")"
+    if ! sshws_probe_result_is_healthy "${stunnel_probe}"; then
+      warn "Probe stunnel local gagal setelah restart SSH WS: $(sshws_probe_result_disp "${stunnel_probe}")"
+      failed+=("stunnel")
+    fi
+  fi
+  if (( ${#failed[@]} > 0 )); then
+    warn "Verifikasi pasca-restart SSH WS belum sehat: ${failed[*]}"
+    return 1
+  fi
+  return 0
+}
+
+sshws_restart_services_checked() {
+  local services=("$@")
   local svc restarted="false"
   local -a failed=()
+
   for svc in "${services[@]}"; do
+    [[ -n "${svc}" ]] || continue
     if svc_exists "${svc}"; then
-      if svc_restart "${svc}"; then
+      if svc_restart_checked "${svc}" 60; then
         restarted="true"
       else
         failed+=("${svc}")
@@ -2017,9 +2357,34 @@ sshws_restart_menu() {
 
   if [[ "${restarted}" != "true" ]]; then
     warn "Tidak ada service SSH WS yang bisa direstart."
+    return 1
   fi
   if (( ${#failed[@]} > 0 )); then
     warn "Gagal restart service SSH WS: ${failed[*]}"
+    return 1
+  fi
+  sshws_post_restart_health_check || return 1
+  return 0
+}
+
+sshws_restart_menu() {
+  title
+  echo "9) Maintenance > Restart SSH WS"
+  hr
+
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Restart semua service SSH WS sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Restart SSH WS dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  if ! sshws_restart_services_checked "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}"; then
+    warn "Restart SSH WS gagal."
   fi
   hr
   pause
@@ -2166,6 +2531,21 @@ sshws_probe_result_disp() {
       echo "FAIL (unknown)"
       ;;
   esac
+}
+
+sshws_probe_result_is_healthy() {
+  local raw="${1:-}"
+  local kind part1
+  IFS='|' read -r kind part1 _ <<<"${raw}"
+  case "${kind}" in
+    ok) return 0 ;;
+    http)
+      case "${part1:-0}" in
+        101|301|302|307|308|401|403) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
 }
 
 sshws_combined_logs_menu() {
@@ -2352,6 +2732,29 @@ ssh_qac_lock_prepare() {
   lock_dir="$(dirname "${lock_file}")"
   mkdir -p "${lock_dir}" 2>/dev/null || true
   chmod 700 "${lock_dir}" 2>/dev/null || true
+}
+
+ssh_qac_run_locked() {
+  local lock_file rc=0
+  if [[ "${SSH_QAC_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  ssh_qac_lock_prepare
+  lock_file="$(ssh_qac_lock_file)"
+  if have_cmd flock; then
+    if (
+      flock -x 200 || exit 1
+      SSH_QAC_LOCK_HELD=1 "$@"
+    ) 200>"${lock_file}"; then
+      return 0
+    fi
+    return $?
+  fi
+
+  SSH_QAC_LOCK_HELD=1 "$@"
+  rc=$?
+  return "${rc}"
 }
 
 ssh_account_info_password_mode() {
@@ -2543,6 +2946,33 @@ ssh_user_state_resolve_file() {
 ssh_account_info_file() {
   local username="${1:-}"
   printf '%s/%s@ssh.txt\n' "${SSH_ACCOUNT_DIR}" "${username}"
+}
+
+ssh_user_artifacts_cleanup_unlocked() {
+  local username="${1:-}"
+  local f=""
+  local -a failed=()
+  for f in \
+    "$(ssh_user_state_file "${username}")" \
+    "${SSH_USERS_STATE_DIR}/${username}.json" \
+    "$(ssh_account_info_file "${username}")" \
+    "${SSH_ACCOUNT_DIR}/${username}.txt"; do
+    [[ -e "${f}" || -L "${f}" ]] || continue
+    rm -f "${f}" >/dev/null 2>&1 || true
+    if [[ -e "${f}" || -L "${f}" ]]; then
+      failed+=("${f}")
+    fi
+  done
+  if (( ${#failed[@]} > 0 )); then
+    printf '%s\n' "${failed[*]}"
+    return 1
+  fi
+  return 0
+}
+
+ssh_user_artifacts_cleanup_locked() {
+  local username="${1:-}"
+  ssh_qac_run_locked ssh_user_artifacts_cleanup_unlocked "${username}"
 }
 
 sshws_path_prefix() {
@@ -3289,7 +3719,7 @@ ssh_direct_public_ports_label() {
 }
 
 ssh_account_info_write() {
-  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token
+  # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token [output_file_override]
   local username="${1:-}"
   local password_raw="${2:-}"
   local password_mode password_out
@@ -3302,6 +3732,7 @@ ssh_account_info_write() {
   local speed_down="${9:-0}"
   local speed_up="${10:-0}"
   local sshws_token="${11:-}"
+  local output_file_override="${12:-}"
 
   ssh_state_dirs_prepare
   password_mode="$(ssh_account_info_password_mode)"
@@ -3315,6 +3746,7 @@ ssh_account_info_write() {
   local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
+  [[ -n "${output_file_override}" ]] && acc_file="${output_file_override}"
   domain="$(detect_domain)"
   ip="$(main_info_ip_quiet_get)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip)"
@@ -3434,7 +3866,11 @@ PY
     fi
     zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"
   fi
-  if ! cat > "${acc_file}" <<EOF
+  local tmp_acc_file=""
+  mkdir -p "$(dirname "${acc_file}")" 2>/dev/null || return 1
+  tmp_acc_file="$(mktemp "${acc_file}.tmp.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp_acc_file}" ]] || tmp_acc_file="${acc_file}.tmp.$$"
+  if ! cat > "${tmp_acc_file}" <<EOF
 === SSH ACCOUNT INFO ===
 Domain      : ${domain}
 IP          : ${ip}
@@ -3466,16 +3902,22 @@ Payload WSS:
     GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 EOF
   then
+    rm -f "${tmp_acc_file}" >/dev/null 2>&1 || true
     return 1
   fi
-  chmod 600 "${acc_file}" >/dev/null 2>&1 || true
+  chmod 600 "${tmp_acc_file}" >/dev/null 2>&1 || true
+  if ! mv -f "${tmp_acc_file}" "${acc_file}" >/dev/null 2>&1; then
+    rm -f "${tmp_acc_file}" >/dev/null 2>&1 || true
+    return 1
+  fi
   return 0
 }
 
 ssh_account_info_refresh_from_state() {
-  # args: username [password_override]
+  # args: username [password_override] [output_file_override]
   local username="${1:-}"
   local password_override="${2:-}"
+  local output_file_override="${3:-}"
   local qf
   qf="$(ssh_user_state_resolve_file "${username}")"
   [[ -f "${qf}" ]] || return 1
@@ -3556,7 +3998,7 @@ PY
     sshws_token="$(ssh_user_state_ensure_token "${username}" 2>/dev/null || true)"
   fi
 
-  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "${sshws_token}"
+  ssh_account_info_write "${username}" "${password}" "${quota_bytes}" "${expired_at}" "${created_at}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "${sshws_token}" "${output_file_override}"
 }
 
 ssh_account_info_refresh_warn() {
@@ -3570,6 +4012,72 @@ ssh_account_info_refresh_warn() {
   return 0
 }
 
+ssh_linux_candidate_users_get() {
+  need_python3
+  python3 - <<'PY'
+import pwd
+
+SKIP_SHELL_SUFFIXES = ("nologin", "false")
+for entry in pwd.getpwall():
+  name = str(entry.pw_name or "").strip()
+  shell = str(entry.pw_shell or "").strip()
+  home = str(entry.pw_dir or "").strip()
+  if not name or name == "root":
+    continue
+  if entry.pw_uid < 1000:
+    continue
+  if not shell or shell.endswith(SKIP_SHELL_SUFFIXES):
+    continue
+  if home and not home.startswith("/home/"):
+    continue
+  print(name)
+PY
+}
+
+ssh_linux_account_expiry_get() {
+  local username="${1:-}"
+  local raw normalized
+  [[ -n "${username}" ]] || return 1
+  raw="$(chage -l "${username}" 2>/dev/null | awk -F': ' '/Account expires/{print $2; exit}' || true)"
+  raw="$(printf '%s' "${raw}" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' || true)"
+  case "${raw,,}" in
+    ""|never|never\ expires)
+      printf '%s\n' "-"
+      return 0
+      ;;
+  esac
+  normalized="$(date -d "${raw}" '+%Y-%m-%d' 2>/dev/null || true)"
+  if [[ -n "${normalized}" ]]; then
+    printf '%s\n' "${normalized}"
+  else
+    printf '%s\n' "-"
+  fi
+}
+
+ssh_qac_metadata_bootstrap_if_missing() {
+  local username="${1:-}"
+  local qf="${2:-}"
+  local created_at expired_at password
+  [[ -n "${username}" && -n "${qf}" ]] || return 1
+  [[ -f "${qf}" ]] && return 0
+
+  created_at="$(date '+%Y-%m-%d')"
+  expired_at="$(ssh_linux_account_expiry_get "${username}" 2>/dev/null || true)"
+  [[ -n "${expired_at}" ]] || expired_at="-"
+
+  if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+    return 1
+  fi
+
+  password="$(ssh_previous_password_get "${username}" 2>/dev/null || true)"
+  if [[ -n "${password}" && "${password}" != "-" ]]; then
+    ssh_account_info_refresh_from_state "${username}" "${password}" >/dev/null 2>&1 || true
+  else
+    ssh_account_info_refresh_from_state "${username}" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 ssh_pick_managed_user() {
   local -n _out_ref="$1"
   _out_ref=""
@@ -3577,10 +4085,47 @@ ssh_pick_managed_user() {
   ssh_state_dirs_prepare
 
   local -a users=()
+  local -A seen_users=()
+  local u="" name=""
   while IFS= read -r u; do
     [[ -n "${u}" ]] || continue
+    if [[ -n "${seen_users["${u}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${u}"]=1
     users+=("${u}")
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    name="${name%@ssh}"
+    if [[ -n "${seen_users["${name}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${name}"]=1
+    users+=("${name}")
+  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.txt$//' | sed -E 's/\.txt$//' | sort -u)
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    name="${name%.pass}"
+    if [[ -n "${seen_users["${name}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${name}"]=1
+    users+=("${name}")
+  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' -printf '%f\n' 2>/dev/null | sort -u)
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    if [[ -n "${seen_users["${name}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${name}"]=1
+    users+=("${name}")
+  done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
+
+  if (( ${#users[@]} > 1 )); then
+    IFS=$'\n' users=($(printf '%s\n' "${users[@]}" | sort -u))
+    unset IFS
+  fi
 
   if (( ${#users[@]} == 0 )); then
     warn "Belum ada akun SSH terkelola."
@@ -3658,6 +4203,22 @@ ssh_apply_expiry() {
   esac
 }
 
+ssh_strict_date_ymd_normalize() {
+  local raw="${1:-}"
+  need_python3
+  python3 - <<'PY' "${raw}"
+import sys
+from datetime import datetime
+
+value = str(sys.argv[1] or "").strip()
+try:
+    dt = datetime.strptime(value, "%Y-%m-%d")
+except Exception:
+    raise SystemExit(1)
+print(dt.strftime("%Y-%m-%d"))
+PY
+}
+
 ssh_user_state_expired_at_get() {
   local username="${1:-}"
   local qf
@@ -3686,9 +4247,66 @@ else:
 PY
 }
 
+ssh_optional_file_snapshot_create() {
+  # args: path snap_dir out_mode_var out_backup_var
+  local path="${1:-}"
+  local snap_dir="${2:-}"
+  local __mode_var="${3:-}"
+  local __backup_var="${4:-}"
+  local mode="absent"
+  local backup=""
+
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    backup="$(mktemp "${snap_dir}/snapshot.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${backup}" ]] || return 1
+    if ! cp -a "${path}" "${backup}" 2>/dev/null; then
+      rm -f -- "${backup}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    mode="file"
+  fi
+
+  [[ -n "${__mode_var}" ]] && printf -v "${__mode_var}" '%s' "${mode}"
+  [[ -n "${__backup_var}" ]] && printf -v "${__backup_var}" '%s' "${backup}"
+  return 0
+}
+
+ssh_optional_file_snapshot_restore() {
+  # args: mode backup_file target_file [chmod_mode]
+  local mode="${1:-absent}"
+  local backup="${2:-}"
+  local target="${3:-}"
+  local chmod_mode="${4:-600}"
+  [[ -n "${target}" ]] || return 1
+
+  case "${mode}" in
+    file)
+      [[ -n "${backup}" && -e "${backup}" ]] || return 1
+      mkdir -p "$(dirname "${target}")" 2>/dev/null || true
+      cp -a "${backup}" "${target}" || return 1
+      chmod "${chmod_mode}" "${target}" 2>/dev/null || true
+      ;;
+    absent)
+      if [[ -e "${target}" || -L "${target}" ]]; then
+        rm -f "${target}" || return 1
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 ssh_password_reset_rollback() {
   local username="${1:-}"
   local previous_password="${2:-}"
+  local account_mode="${3:-absent}"
+  local account_backup="${4:-}"
+  local account_file="${5:-}"
+  local zivpn_mode="${6:-absent}"
+  local zivpn_backup="${7:-}"
+  local zivpn_file="${8:-}"
   [[ -n "${username}" ]] || {
     echo "username rollback kosong"
     return 1
@@ -3702,10 +4320,29 @@ ssh_password_reset_rollback() {
     return 1
   fi
   local rollback_notes=""
-  if ! ssh_account_info_refresh_from_state "${username}" "${previous_password}"; then
+  if [[ -n "${account_file}" ]]; then
+    if ! ssh_optional_file_snapshot_restore "${account_mode}" "${account_backup}" "${account_file}" 600; then
+      rollback_notes="account info rollback gagal"
+    fi
+  elif ! ssh_account_info_refresh_from_state "${username}" "${previous_password}"; then
     rollback_notes="account info rollback gagal"
   fi
-  if ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
+
+  if [[ -n "${zivpn_file}" ]]; then
+    if ! ssh_optional_file_snapshot_restore "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 600; then
+      if [[ -n "${rollback_notes}" ]]; then
+        rollback_notes="${rollback_notes} | restore file ZIVPN gagal"
+      else
+        rollback_notes="restore file ZIVPN gagal"
+      fi
+    elif zivpn_runtime_available && ! zivpn_sync_runtime_now; then
+      if [[ -n "${rollback_notes}" ]]; then
+        rollback_notes="${rollback_notes} | rollback ZIVPN gagal"
+      else
+        rollback_notes="rollback ZIVPN gagal"
+      fi
+    fi
+  elif ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
     if [[ -n "${rollback_notes}" ]]; then
       rollback_notes="${rollback_notes} | rollback ZIVPN gagal"
     else
@@ -3750,26 +4387,28 @@ ssh_expiry_update_rollback() {
 }
 
 ssh_add_user_rollback() {
-  # args: username qf acc_file reason raw_password cleanup_zivpn
+  # args: username qf acc_file reason raw_password cleanup_zivpn linux_created
   local username="${1:-}"
   local qf="${2:-}"
   local acc_file="${3:-}"
   local reason="${4:-Gagal membuat akun SSH.}"
   local raw_password="${5:-}"
   local cleanup_zivpn="${6:-false}"
+  local linux_created="${7:-false}"
   local deleted="false"
+  local -a rollback_notes=()
 
   if [[ "${cleanup_zivpn}" == "true" ]]; then
     if ! zivpn_remove_user_password_warn "${username}"; then
-      warn "${reason}"
-      warn "Rollback parsial: cleanup ZIVPN gagal untuk '${username}'. Akun dipertahankan agar bisa dipulihkan/manual cleanup."
-      return 1
+      rollback_notes+=("cleanup ZIVPN gagal")
     fi
   fi
 
-  if id "${username}" >/dev/null 2>&1; then
-    if userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1; then
-      deleted="true"
+  if [[ "${linux_created}" == "true" ]]; then
+    if id "${username}" >/dev/null 2>&1; then
+      if userdel "${username}" >/dev/null 2>&1; then
+        deleted="true"
+      fi
     fi
   else
     deleted="true"
@@ -3777,29 +4416,20 @@ ssh_add_user_rollback() {
 
   if [[ "${deleted}" == "true" ]]; then
     local -a cleanup_notes=()
-    if [[ -n "${qf}" ]]; then
-      local f=""
-      for f in "${qf}" "${SSH_USERS_STATE_DIR}/${username}.json"; do
-        [[ -e "${f}" || -L "${f}" ]] || continue
-        rm -f "${f}" >/dev/null 2>&1 || true
-        if [[ -e "${f}" || -L "${f}" ]]; then
-          cleanup_notes+=("${f}")
-        fi
-      done
-    fi
-    if [[ -n "${acc_file}" ]]; then
-      local f=""
-      for f in "${acc_file}" "${SSH_ACCOUNT_DIR}/${username}.txt"; do
-        [[ -e "${f}" || -L "${f}" ]] || continue
-        rm -f "${f}" >/dev/null 2>&1 || true
-        if [[ -e "${f}" || -L "${f}" ]]; then
-          cleanup_notes+=("${f}")
-        fi
-      done
+    local cleanup_failed=""
+    cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
+    if [[ -n "${cleanup_failed}" ]]; then
+      cleanup_notes+=("${cleanup_failed}")
     fi
     warn "${reason}"
+    if (( ${#rollback_notes[@]} > 0 )); then
+      warn "Rollback tambahan: $(IFS=' | '; echo "${rollback_notes[*]}")"
+    fi
     if (( ${#cleanup_notes[@]} > 0 )); then
       warn "Cleanup artefak lokal gagal: ${cleanup_notes[*]}"
+      return 1
+    fi
+    if (( ${#rollback_notes[@]} > 0 )); then
       return 1
     fi
     return 0
@@ -3815,7 +4445,10 @@ ssh_add_user_rollback() {
       warn "Rollback parsial tambahan: rollback ZIVPN berhasil untuk '${username}'."
     fi
   fi
-  warn "Metadata dipertahankan. Jalankan manual: userdel -r '${username}'"
+  if (( ${#rollback_notes[@]} > 0 )); then
+    warn "Rollback tambahan: $(IFS=' | '; echo "${rollback_notes[*]}")"
+  fi
+  warn "Artefak managed yang sudah ada dipertahankan. Jalankan manual: userdel '${username}'"
   return 1
 }
 
@@ -3825,6 +4458,7 @@ ssh_managed_users_lines() {
   python3 - <<'PY' "${SSH_USERS_STATE_DIR}" 2>/dev/null || true
 import json
 import os
+import pwd
 import re
 import sys
 from datetime import datetime
@@ -3865,6 +4499,7 @@ def norm_expired(v):
   return m.group(0) if m else "-"
 
 rows = []
+seen = set()
 if os.path.isdir(root):
   for name in os.listdir(root):
     if not name.endswith(".json"):
@@ -3891,6 +4526,23 @@ if os.path.isdir(root):
     except Exception:
       pass
     rows.append((username.lower(), username, created, expired))
+    seen.add(username)
+
+for entry in pwd.getpwall():
+  username = str(entry.pw_name or "").strip()
+  shell = str(entry.pw_shell or "").strip()
+  home = str(entry.pw_dir or "").strip()
+  if not username or username == "root":
+    continue
+  if entry.pw_uid < 1000:
+    continue
+  if not shell or shell.endswith(("nologin", "false")):
+    continue
+  if home and not home.startswith("/home/"):
+    continue
+  if username in seen:
+    continue
+  rows.append((username.lower(), username, "linux-only", "-"))
 
 rows.sort(key=lambda x: x[0])
 for _, username, created, expired in rows:
@@ -3945,6 +4597,417 @@ ssh_add_user_header_render() {
   if (( pages > 1 )); then
     echo "Navigasi: ketik next/previous sebelum input username."
   fi
+}
+
+ssh_add_user_apply_locked() {
+  local username="$1"
+  local qf="$2"
+  local acc_file="$3"
+  local password="$4"
+  local expired_at="$5"
+  local created_at="$6"
+  local quota_bytes="$7"
+  local ip_enabled="$8"
+  local ip_limit="$9"
+  local speed_enabled="${10}"
+  local speed_down="${11}"
+  local speed_up="${12}"
+
+  if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "false" "false"
+    pause
+    return 1
+  fi
+
+  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set password user '${username}'." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set expiry user '${username}'." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis metadata akun SSH." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  local add_fail_msg=""
+  if [[ "${ip_enabled}" == "true" ]]; then
+    if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}"; then
+      add_fail_msg="Gagal set IP limit metadata SSH."
+    elif ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+      add_fail_msg="Gagal mengaktifkan IP limit metadata SSH."
+    fi
+  else
+    if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+      add_fail_msg="Gagal menonaktifkan IP limit metadata SSH."
+    fi
+  fi
+
+  if [[ -z "${add_fail_msg}" ]]; then
+    if [[ "${speed_enabled}" == "true" ]]; then
+      if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}"; then
+        add_fail_msg="Gagal set speed limit metadata SSH."
+      fi
+    else
+      if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
+        add_fail_msg="Gagal menonaktifkan speed limit metadata SSH."
+      fi
+    fi
+  fi
+
+  if [[ -n "${add_fail_msg}" ]]; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}" "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan SSH account info." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+
+  if ! ssh_qac_enforce_now_warn "${username}"; then
+    if [[ "${ip_enabled}" == "true" ]]; then
+      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false" "true"
+    else
+      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false" "true"
+    fi
+    pause
+    return 1
+  fi
+  if ! ssh_dns_adblock_runtime_refresh_if_available; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info." "${password}" "false" "true"
+    pause
+    return 1
+  fi
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true" "true"
+    pause
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true" "true"
+    pause
+    return 1
+  fi
+
+  log "Akun SSH berhasil dibuat: ${username}"
+  title
+  echo "Add SSH user sukses ✅"
+  hr
+  echo "Account file:"
+  echo "  ${acc_file}"
+  echo "Metadata file:"
+  echo "  ${qf}"
+  hr
+  echo "SSH ACCOUNT INFO:"
+  if [[ -f "${acc_file}" ]]; then
+    cat "${acc_file}"
+  else
+    echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
+  fi
+  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
+    hr
+    echo "One-time Password : ${password}"
+    echo "Note             : password tidak disimpan plaintext di file account info."
+  fi
+  hr
+  pause
+}
+
+ssh_delete_user_snapshot_restore() {
+  local username="$1"
+  local state_mode="$2"
+  local state_backup="$3"
+  local state_file="$4"
+  local state_compat_mode="$5"
+  local state_compat_backup="$6"
+  local state_compat_file="$7"
+  local account_mode="$8"
+  local account_backup="$9"
+  local account_file="${10}"
+  local account_compat_mode="${11}"
+  local account_compat_backup="${12}"
+  local account_compat_file="${13}"
+  local zivpn_mode="${14}"
+  local zivpn_backup="${15}"
+  local zivpn_file="${16}"
+  local -a notes=()
+
+  if ! ssh_optional_file_snapshot_restore "${state_mode}" "${state_backup}" "${state_file}" 600; then
+    notes+=("restore state SSH gagal")
+  fi
+  if ! ssh_optional_file_snapshot_restore "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" 600; then
+    notes+=("restore state SSH compat gagal")
+  fi
+  if ! ssh_optional_file_snapshot_restore "${account_mode}" "${account_backup}" "${account_file}" 600; then
+    notes+=("restore SSH ACCOUNT INFO gagal")
+  fi
+  if ! ssh_optional_file_snapshot_restore "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" 600; then
+    notes+=("restore SSH ACCOUNT INFO compat gagal")
+  fi
+  if [[ -n "${zivpn_file}" ]]; then
+    if ! ssh_optional_file_snapshot_restore "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 600; then
+      notes+=("restore password ZIVPN gagal")
+    elif zivpn_runtime_available && ! zivpn_sync_runtime_now; then
+      notes+=("sync runtime ZIVPN rollback gagal")
+    fi
+  fi
+  if ! ssh_dns_adblock_runtime_refresh_if_available; then
+    notes+=("refresh runtime DNS adblock rollback gagal")
+  fi
+
+  if (( ${#notes[@]} > 0 )); then
+    printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
+    return 1
+  fi
+  return 0
+}
+
+ssh_delete_user_apply_locked() {
+  local username="$1"
+  local previous_password="$2"
+  local linux_exists="$3"
+  local zivpn_file=""
+  local cleanup_failed="" dns_failed="false" zivpn_failed="false"
+  local snapshot_dir="" state_mode="absent" state_backup="" state_file=""
+  local state_compat_mode="absent" state_compat_backup="" state_compat_file=""
+  local account_mode="absent" account_backup="" account_file=""
+  local account_compat_mode="absent" account_compat_backup="" account_compat_file=""
+  local zivpn_mode="absent" zivpn_backup=""
+  local -a notes=()
+
+  if zivpn_runtime_available; then
+    zivpn_file="$(zivpn_password_file "${username}")"
+  fi
+  state_file="$(ssh_user_state_file "${username}")"
+  state_compat_file="$(ssh_user_state_compat_file "${username}")"
+  account_file="$(ssh_account_info_file "${username}")"
+  account_compat_file="${SSH_ACCOUNT_DIR}/${username}.txt"
+  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/ssh-delete.${username}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${snapshot_dir}" || ! -d "${snapshot_dir}" ]]; then
+    warn "Gagal menyiapkan snapshot rollback hapus user SSH."
+    pause
+    return 1
+  fi
+  if ! ssh_optional_file_snapshot_create "${state_file}" "${snapshot_dir}" state_mode state_backup \
+    || ! ssh_optional_file_snapshot_create "${state_compat_file}" "${snapshot_dir}" state_compat_mode state_compat_backup \
+    || ! ssh_optional_file_snapshot_create "${account_file}" "${snapshot_dir}" account_mode account_backup \
+    || ! ssh_optional_file_snapshot_create "${account_compat_file}" "${snapshot_dir}" account_compat_mode account_compat_backup; then
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Gagal membuat snapshot artefak SSH sebelum delete."
+    pause
+    return 1
+  fi
+  if [[ -n "${zivpn_file}" ]] && ! ssh_optional_file_snapshot_create "${zivpn_file}" "${snapshot_dir}" zivpn_mode zivpn_backup; then
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Gagal membuat snapshot password ZIVPN sebelum delete."
+    pause
+    return 1
+  fi
+
+  if [[ "${linux_exists}" == "true" ]] && ! userdel "${username}" >/dev/null 2>&1; then
+    local restore_msg=""
+    restore_msg="$(ssh_delete_user_snapshot_restore \
+      "${username}" \
+      "${state_mode}" "${state_backup}" "${state_file}" \
+      "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" \
+      "${account_mode}" "${account_backup}" "${account_file}" \
+      "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
+      "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
+    warn "Gagal menghapus user Linux '${username}'."
+    [[ -n "${restore_msg}" ]] && warn "Rollback snapshot belum sepenuhnya bersih: ${restore_msg}"
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+
+  if [[ -n "${zivpn_file}" ]] && ! zivpn_remove_user_password_warn "${username}"; then
+    zivpn_failed="true"
+    notes+=("cleanup ZIVPN gagal")
+  fi
+
+  if [[ "${zivpn_failed}" != "true" ]]; then
+    cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
+    if [[ -n "${cleanup_failed}" ]]; then
+      notes+=("cleanup artefak lokal gagal: ${cleanup_failed}")
+    fi
+  fi
+
+  if [[ "${zivpn_failed}" != "true" && -z "${cleanup_failed}" ]] && ! ssh_dns_adblock_runtime_refresh_if_available; then
+    dns_failed="true"
+    notes+=("refresh runtime DNS adblock gagal")
+  fi
+
+  rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+
+  title
+  if [[ -n "${cleanup_failed}" || "${dns_failed}" == "true" || "${zivpn_failed}" == "true" ]]; then
+    echo "Delete SSH user selesai parsial ⚠"
+    echo "Akun Linux sudah terhapus, tetapi cleanup lanjutan belum sepenuhnya bersih."
+    if (( ${#notes[@]} > 0 )); then
+      printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
+    fi
+    hr
+    pause
+    return 1
+  fi
+
+  echo "Delete SSH user selesai ✅"
+  hr
+  echo "Akun Linux dan artefak managed untuk '${username}' berhasil dihapus."
+  hr
+  pause
+  return 0
+}
+
+ssh_extend_expiry_apply_locked() {
+  local username="$1"
+  local new_expiry="$2"
+  local previous_expiry="$3"
+
+  if ! ssh_apply_expiry "${username}" "${new_expiry}"; then
+    warn "Gagal update expiry untuk '${username}'."
+    pause
+    return 1
+  fi
+
+  local created_at
+  created_at="$(ssh_user_state_created_at_get "${username}")"
+  if [[ -z "${created_at}" ]]; then
+    created_at="$(date '+%Y-%m-%d')"
+  fi
+  if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Metadata SSH gagal diperbarui untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Metadata SSH gagal diperbarui untuk '${username}'."
+    fi
+    pause
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 1
+  fi
+
+  log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
+  pause
+}
+
+ssh_reset_password_apply_locked() {
+  local username="$1"
+  local previous_password="$2"
+  local password="$3"
+  local snapshot_dir="" account_snapshot_mode="absent" account_snapshot_backup="" account_file=""
+  local zivpn_snapshot_mode="absent" zivpn_snapshot_backup="" zivpn_file=""
+
+  account_file="$(ssh_account_info_file "${username}")"
+  if zivpn_runtime_available; then
+    zivpn_file="$(zivpn_password_file "${username}")"
+  fi
+  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/ssh-reset.${username}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${snapshot_dir}" || ! -d "${snapshot_dir}" ]]; then
+    warn "Gagal menyiapkan snapshot rollback password SSH."
+    pause
+    return 1
+  fi
+  if ! ssh_optional_file_snapshot_create "${account_file}" "${snapshot_dir}" account_snapshot_mode account_snapshot_backup; then
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Gagal membuat snapshot SSH ACCOUNT INFO sebelum reset password."
+    pause
+    return 1
+  fi
+  if [[ -n "${zivpn_file}" ]]; then
+    if ! ssh_optional_file_snapshot_create "${zivpn_file}" "${snapshot_dir}" zivpn_snapshot_mode zivpn_snapshot_backup; then
+      rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+      warn "Gagal membuat snapshot password ZIVPN sebelum reset password."
+      pause
+      return 1
+    fi
+  fi
+
+  if ! ssh_apply_password "${username}" "${password}"; then
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    warn "Gagal reset password user '${username}'."
+    pause
+    return 1
+  fi
+
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" "${account_snapshot_mode}" "${account_snapshot_backup}" "${account_file}" "${zivpn_snapshot_mode}" "${zivpn_snapshot_backup}" "${zivpn_file}" 2>/dev/null || true)"
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 1
+  fi
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" "${account_snapshot_mode}" "${account_snapshot_backup}" "${account_file}" "${zivpn_snapshot_mode}" "${zivpn_snapshot_backup}" "${zivpn_file}" 2>/dev/null || true)"
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'."
+    fi
+    pause
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" "${account_snapshot_mode}" "${account_snapshot_backup}" "${account_file}" "${zivpn_snapshot_mode}" "${zivpn_snapshot_backup}" "${zivpn_file}" 2>/dev/null || true)"
+    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    if [[ -n "${rollback_msg}" ]]; then
+      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'. Rollback: ${rollback_msg}"
+    else
+      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'."
+    fi
+    pause
+    return 1
+  fi
+  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
+    hr
+    echo "One-time Password : ${password}"
+    echo "Note             : password tidak disimpan plaintext di file account info."
+    hr
+  fi
+  rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+
+  log "Password akun '${username}' berhasil direset."
+  pause
 }
 
 ssh_add_user_menu() {
@@ -4114,128 +5177,43 @@ ssh_add_user_menu() {
   if [[ -z "${expired_at}" ]]; then
     warn "Gagal menghitung tanggal expiry SSH."
     pause
-    return 0
+    return 1
   fi
   created_at="$(date '+%Y-%m-%d')"
 
-  if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
-    warn "Gagal membuat user Linux '${username}'."
-    pause
-    return 0
-  fi
-
-  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "" "" "Gagal set password user '${username}'." "${password}" "false"
-    pause
-    return 0
-  fi
-
-  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "" "" "Gagal set expiry user '${username}'." "${password}" "false"
-    pause
-    return 0
-  fi
-
-  if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "" "Gagal menulis metadata akun SSH." "${password}" "false"
-    pause
-    return 0
-  fi
-
-  if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH." "${password}" "false"
-    pause
-    return 0
-  fi
-
-  local add_fail_msg=""
-  if [[ "${ip_enabled}" == "true" ]]; then
-    if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}"; then
-      add_fail_msg="Gagal set IP limit metadata SSH."
-    elif ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
-      add_fail_msg="Gagal mengaktifkan IP limit metadata SSH."
-    fi
+  hr
+  echo "Ringkasan:"
+  echo "  Username : ${username}"
+  echo "  Expired  : ${active_days} hari (sampai ${expired_at})"
+  echo "  Quota    : ${quota_gb} GB"
+  echo "  IP Limit : ${ip_enabled} $( [[ "${ip_enabled}" == "true" ]] && echo "(${ip_limit})" )"
+  if [[ "${speed_enabled}" == "true" ]]; then
+    echo "  Speed    : true (DOWN ${speed_down} Mbps | UP ${speed_up} Mbps)"
   else
-    if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
-      add_fail_msg="Gagal menonaktifkan IP limit metadata SSH."
-    fi
+    echo "  Speed    : false"
   fi
-
-  if [[ -z "${add_fail_msg}" ]]; then
-    if [[ "${speed_enabled}" == "true" ]]; then
-      if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}"; then
-        add_fail_msg="Gagal set speed limit metadata SSH."
-      fi
-    else
-      if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
-        add_fail_msg="Gagal menonaktifkan speed limit metadata SSH."
-      fi
-    fi
-  fi
-
-  if [[ -n "${add_fail_msg}" ]]; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}" "${password}" "false"
-    pause
-    return 0
-  fi
-
-  if [[ "${ip_enabled}" == "true" ]]; then
-    if ! ssh_qac_enforce_now_warn "${username}"; then
-      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false"
+  hr
+  local create_confirm_rc=0
+  if confirm_yn_or_back "Buat akun SSH ini sekarang?"; then
+    :
+  else
+    create_confirm_rc=$?
+    if (( create_confirm_rc == 2 )); then
+      warn "Pembuatan akun SSH dibatalkan (kembali)."
       pause
       return 0
     fi
-  else
-    if ! ssh_qac_enforce_now_warn "${username}"; then
-      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false"
-      pause
-      return 0
-    fi
-  fi
-  if ! ssh_dns_adblock_runtime_refresh_if_available; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false"
-    pause
-    return 0
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info." "${password}" "false"
-    pause
-    return 0
-  fi
-  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true"
-    pause
-    return 0
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true"
+    warn "Pembuatan akun SSH dibatalkan."
     pause
     return 0
   fi
 
-  log "Akun SSH berhasil dibuat: ${username}"
-  title
-  echo "Add SSH user sukses ✅"
-  hr
-  echo "Account file:"
-  echo "  ${acc_file}"
-  echo "Metadata file:"
-  echo "  ${qf}"
-  hr
-  echo "SSH ACCOUNT INFO:"
-  if [[ -f "${acc_file}" ]]; then
-    cat "${acc_file}"
-  else
-    echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
+  if user_data_mutation_run_locked ssh_add_user_apply_locked "${username}" "${qf}" "${acc_file}" "${password}" "${expired_at}" "${created_at}" "${quota_bytes}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"; then
+    password=""
+    return 0
   fi
-  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
-    hr
-    echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
-  fi
-  hr
   password=""
-  pause
+  return 1
 }
 
 ssh_delete_user_menu() {
@@ -4266,58 +5244,7 @@ ssh_delete_user_menu() {
   if id "${username}" >/dev/null 2>&1; then
     linux_exists="true"
   fi
-  if [[ "${linux_exists}" == "true" ]] && zivpn_runtime_available && [[ -z "${previous_password}" || "${previous_password}" == "-" ]]; then
-    warn "Delete akun dibatalkan: password rollback ZIVPN untuk '${username}' tidak tersedia. Akun belum dihapus agar rollback aman tetap memungkinkan."
-    pause
-    return 1
-  fi
-  if ! zivpn_remove_user_password_warn "${username}"; then
-    warn "Delete akun dibatalkan: cleanup ZIVPN gagal untuk '${username}'. Akun belum dihapus agar bisa dicoba ulang."
-    pause
-    return 1
-  fi
-
-  if id "${username}" >/dev/null 2>&1; then
-    userdel -r "${username}" >/dev/null 2>&1 || userdel "${username}" >/dev/null 2>&1 || {
-      if [[ -n "${previous_password}" && "${previous_password}" != "-" ]]; then
-        if ! zivpn_sync_user_password_warn "${username}" "${previous_password}"; then
-          warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN juga gagal."
-        else
-          warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN berhasil."
-        fi
-      else
-        warn "Gagal menghapus user Linux '${username}'. Rollback ZIVPN tidak bisa dilakukan karena password lama tidak tersedia."
-      fi
-      pause
-      return 0
-    }
-  fi
-
-  local -a cleanup_notes=()
-  local f=""
-  for f in \
-    "$(ssh_user_state_file "${username}")" \
-    "${SSH_USERS_STATE_DIR}/${username}.json" \
-    "$(ssh_account_info_file "${username}")" \
-    "${SSH_ACCOUNT_DIR}/${username}.txt"; do
-    [[ -e "${f}" || -L "${f}" ]] || continue
-    rm -f "${f}" >/dev/null 2>&1 || true
-    if [[ -e "${f}" || -L "${f}" ]]; then
-      cleanup_notes+=("${f}")
-    fi
-  done
-  if ! ssh_dns_adblock_runtime_refresh_if_available; then
-    warn "User Linux '${username}' sudah dihapus, tetapi refresh runtime DNS adblock gagal."
-    pause
-    return 1
-  fi
-  if (( ${#cleanup_notes[@]} > 0 )); then
-    warn "User Linux '${username}' sudah dihapus, tetapi cleanup artefak lokal gagal: ${cleanup_notes[*]}"
-    pause
-    return 1
-  fi
-  log "Akun SSH '${username}' dihapus."
-  pause
+  user_data_mutation_run_locked ssh_delete_user_apply_locked "${username}" "${previous_password}" "${linux_exists}"
 }
 
 ssh_extend_expiry_menu() {
@@ -4381,12 +5308,11 @@ ssh_extend_expiry_menu() {
       if is_back_choice "${new_expiry}"; then
         return 0
       fi
-      if ! date -d "${new_expiry}" '+%Y-%m-%d' >/dev/null 2>&1; then
+      if ! new_expiry="$(ssh_strict_date_ymd_normalize "${new_expiry}" 2>/dev/null)"; then
         warn "Format tanggal tidak valid."
         pause
         return 0
       fi
-      new_expiry="$(date -d "${new_expiry}" '+%Y-%m-%d' 2>/dev/null || true)"
       ;;
     *)
       invalid_choice
@@ -4400,46 +5326,38 @@ ssh_extend_expiry_menu() {
     return 0
   fi
 
+  if date_ymd_is_past "${new_expiry}"; then
+    warn "Tanggal expiry ${new_expiry} sudah lewat dan akan membuat akun segera expired."
+    if ! confirm_menu_apply_now "Tetap terapkan expiry lampau ${new_expiry} untuk akun SSH ${username}?"; then
+      pause
+      return 0
+    fi
+  fi
+
+  hr
+  echo "Ringkasan perubahan:"
+  echo "  Username : ${username}"
+  echo "  Expiry baru : ${new_expiry}"
+  hr
+  local confirm_rc=0
+  if confirm_yn_or_back "Update expiry akun SSH ini sekarang?"; then
+    :
+  else
+    confirm_rc=$?
+    if (( confirm_rc == 2 )); then
+      warn "Update expiry SSH dibatalkan (kembali)."
+      pause
+      return 0
+    fi
+    warn "Update expiry SSH dibatalkan."
+    pause
+    return 0
+  fi
+
   local previous_expiry
   previous_expiry="$(ssh_user_state_expired_at_get "${username}" 2>/dev/null || true)"
   [[ -n "${previous_expiry}" ]] || previous_expiry="-"
-
-  if ! ssh_apply_expiry "${username}" "${new_expiry}"; then
-    warn "Gagal update expiry untuk '${username}'."
-    pause
-    return 0
-  fi
-
-  local created_at
-  created_at="$(ssh_user_state_created_at_get "${username}")"
-  if [[ -z "${created_at}" ]]; then
-    created_at="$(date '+%Y-%m-%d')"
-  fi
-  if ! ssh_user_state_write "${username}" "${created_at}" "${new_expiry}"; then
-    local rollback_msg=""
-    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
-    if [[ -n "${rollback_msg}" ]]; then
-      warn "Metadata SSH gagal diperbarui untuk '${username}'. Rollback: ${rollback_msg}"
-    else
-      warn "Metadata SSH gagal diperbarui untuk '${username}'."
-    fi
-    pause
-    return 0
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}"; then
-    local rollback_msg=""
-    rollback_msg="$(ssh_expiry_update_rollback "${username}" "${previous_expiry}" 2>/dev/null || true)"
-    if [[ -n "${rollback_msg}" ]]; then
-      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
-    else
-      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
-    fi
-    pause
-    return 0
-  fi
-
-  log "Expiry akun '${username}' diperbarui ke ${new_expiry}."
-  pause
+  user_data_mutation_run_locked ssh_extend_expiry_apply_locked "${username}" "${new_expiry}" "${previous_expiry}"
 }
 
 ssh_reset_password_menu() {
@@ -4472,55 +5390,27 @@ ssh_reset_password_menu() {
     return 0
   fi
 
-  if ! ssh_apply_password "${username}" "${password}"; then
-    warn "Gagal reset password user '${username}'."
+  local reset_confirm_rc=0
+  if confirm_yn_or_back "Reset password akun SSH ini sekarang?"; then
+    :
+  else
+    reset_confirm_rc=$?
+    if (( reset_confirm_rc == 2 )); then
+      warn "Reset password SSH dibatalkan (kembali)."
+      pause
+      return 0
+    fi
+    warn "Reset password SSH dibatalkan."
     pause
     return 0
   fi
 
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    local rollback_msg=""
-    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
-    if [[ -n "${rollback_msg}" ]]; then
-      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
-    else
-      warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'."
-    fi
-    pause
+  if user_data_mutation_run_locked ssh_reset_password_apply_locked "${username}" "${previous_password}" "${password}"; then
+    password=""
     return 0
-  fi
-  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    local rollback_msg=""
-    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
-    if [[ -n "${rollback_msg}" ]]; then
-      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'. Rollback: ${rollback_msg}"
-    else
-      warn "Runtime ZIVPN gagal disinkronkan untuk '${username}'."
-    fi
-    pause
-    return 0
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    local rollback_msg=""
-    rollback_msg="$(ssh_password_reset_rollback "${username}" "${previous_password}" 2>/dev/null || true)"
-    if [[ -n "${rollback_msg}" ]]; then
-      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'. Rollback: ${rollback_msg}"
-    else
-      warn "Refresh final SSH ACCOUNT INFO gagal untuk '${username}'."
-    fi
-    pause
-    return 0
-  fi
-  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
-    hr
-    echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
-    hr
   fi
   password=""
-
-  log "Password akun '${username}' berhasil direset."
-  pause
+  return 1
 }
 
 ssh_list_users_menu() {
@@ -5256,10 +6146,10 @@ ssh_menu() {
       break
     fi
     case "${c}" in
-      1) ssh_add_user_menu ;;
-      2) ssh_delete_user_menu ;;
-      3) ssh_extend_expiry_menu ;;
-      4) ssh_reset_password_menu ;;
+      1) menu_run_isolated_report "Add SSH User" ssh_add_user_menu ;;
+      2) menu_run_isolated_report "Delete SSH User" ssh_delete_user_menu ;;
+      3) menu_run_isolated_report "Set SSH Expiry" ssh_extend_expiry_menu ;;
+      4) menu_run_isolated_report "Reset SSH Password" ssh_reset_password_menu ;;
       5) ssh_list_users_menu ;;
       6) sshws_status_menu ;;
       7) sshws_restart_menu ;;
@@ -5589,11 +6479,56 @@ ssh_qac_enforce_now_warn() {
 ssh_qac_collect_files() {
   SSH_QAC_FILES=()
   ssh_state_dirs_prepare
+  local -A seen=()
+  local f base username qf
 
-  local f
   while IFS= read -r -d '' f; do
-    SSH_QAC_FILES+=("${f}")
+    base="$(basename "${f}")"
+    base="${base%.json}"
+    username="$(ssh_username_from_key "${base}")"
+    [[ -n "${username}" ]] || continue
+    if [[ -n "${seen["${username}"]+x}" ]]; then
+      continue
+    fi
+    seen["${username}"]=1
+    qf="$(ssh_user_state_resolve_file "${username}")"
+    SSH_QAC_FILES+=("${qf}")
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r -d '' f; do
+    base="$(basename "${f}")"
+    base="${base%.txt}"
+    username="$(ssh_username_from_key "${base}")"
+    [[ -n "${username}" ]] || continue
+    if [[ -n "${seen["${username}"]+x}" ]]; then
+      continue
+    fi
+    seen["${username}"]=1
+    qf="$(ssh_user_state_resolve_file "${username}")"
+    SSH_QAC_FILES+=("${qf}")
+  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r -d '' f; do
+    base="$(basename "${f}")"
+    username="${base%.pass}"
+    [[ -n "${username}" ]] || continue
+    if [[ -n "${seen["${username}"]+x}" ]]; then
+      continue
+    fi
+    seen["${username}"]=1
+    qf="$(ssh_user_state_resolve_file "${username}")"
+    SSH_QAC_FILES+=("${qf}")
+  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' -print0 2>/dev/null | sort -z)
+
+  while IFS= read -r username; do
+    [[ -n "${username}" ]] || continue
+    if [[ -n "${seen["${username}"]+x}" ]]; then
+      continue
+    fi
+    seen["${username}"]=1
+    qf="$(ssh_user_state_resolve_file "${username}")"
+    SSH_QAC_FILES+=("${qf}")
+  done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
 }
 
 ssh_qac_total_pages_for_indexes() {
@@ -6008,11 +6943,13 @@ import re
 import secrets
 import sys
 import tempfile
+import shutil
 
 qf = sys.argv[1]
 action = sys.argv[2]
 lock_file = pathlib.Path(sys.argv[3] or "/run/autoscript/locks/sshws-qac.lock")
 args = sys.argv[4:]
+backup_file = str(os.environ.get("SSH_QAC_ATOMIC_BACKUP_FILE") or "").strip()
 
 def to_int(v, default=0):
   try:
@@ -6144,6 +7081,14 @@ atexit.register(release_lock)
 
 payload = {}
 if os.path.isfile(qf):
+  if backup_file:
+    backup_path = pathlib.Path(backup_file)
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(qf, backup_path)
+    try:
+      os.chmod(backup_path, 0o600)
+    except Exception:
+      pass
   try:
     loaded = json.load(open(qf, "r", encoding="utf-8"))
     if isinstance(loaded, dict):
@@ -6286,6 +7231,21 @@ ssh_qac_atomic_update_file() {
   ssh_qac_atomic_update_file_unlocked "${qf}" "${action}" "$@"
 }
 
+ssh_qac_restore_file_unlocked() {
+  local src="${1:-}"
+  local dst="${2:-}"
+  [[ -n "${src}" && -n "${dst}" ]] || return 1
+  mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
+  cp -f -- "${src}" "${dst}" || return 1
+  chmod 600 "${dst}" 2>/dev/null || true
+}
+
+ssh_qac_restore_file_locked() {
+  local src="${1:-}"
+  local dst="${2:-}"
+  ssh_qac_run_locked ssh_qac_restore_file_unlocked "${src}" "${dst}"
+}
+
 ssh_qac_apply_with_required_enforcer() {
   # args: username json_file action [args...]
   local username="${1:-}"
@@ -6298,18 +7258,18 @@ ssh_qac_apply_with_required_enforcer() {
     return 1
   fi
 
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
+    user_data_mutation_run_locked ssh_qac_apply_with_required_enforcer "${username}" "${qf}" "${action}" "$@"
+    return $?
+  fi
+
   local backup_file=""
   backup_file="$(mktemp "/tmp/ssh-qac.${username}.XXXXXX")" || {
     warn "Gagal menyiapkan backup state SSH."
     return 1
   }
-  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
-    rm -f -- "${backup_file}"
-    warn "Gagal membuat backup state SSH."
-    return 1
-  fi
 
-  if ! ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
+  if ! SSH_QAC_ATOMIC_BACKUP_FILE="${backup_file}" ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
     rm -f -- "${backup_file}"
     return 1
   fi
@@ -6317,10 +7277,9 @@ ssh_qac_apply_with_required_enforcer() {
   if ! ssh_qac_enforce_now "${username}"; then
     warn "Enforcer SSH QAC gagal untuk '${username}'. State di-rollback."
     local -a rollback_notes=()
-    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+    if ! ssh_qac_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
       rollback_notes+=("rollback state gagal")
     else
-      chmod 600 "${qf}" 2>/dev/null || true
       if ! ssh_qac_enforce_now "${username}"; then
         rollback_notes+=("rollback enforcer gagal")
       fi
@@ -6338,10 +7297,9 @@ ssh_qac_apply_with_required_enforcer() {
   if ! ssh_account_info_refresh_warn "${username}"; then
     warn "Refresh SSH ACCOUNT INFO gagal untuk '${username}'. State di-rollback."
     local -a rollback_notes=()
-    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+    if ! ssh_qac_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
       rollback_notes+=("rollback state gagal")
     else
-      chmod 600 "${qf}" 2>/dev/null || true
       if ! ssh_qac_enforce_now "${username}"; then
         rollback_notes+=("rollback enforcer gagal")
       fi
@@ -6371,18 +7329,18 @@ ssh_qac_apply_with_required_refresh() {
     return 1
   fi
 
+  if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
+    user_data_mutation_run_locked ssh_qac_apply_with_required_refresh "${username}" "${qf}" "${action}" "$@"
+    return $?
+  fi
+
   local backup_file=""
   backup_file="$(mktemp "/tmp/ssh-qac.${username}.XXXXXX")" || {
     warn "Gagal menyiapkan backup state SSH."
     return 1
   }
-  if ! cp -f -- "${qf}" "${backup_file}" >/dev/null 2>&1; then
-    rm -f -- "${backup_file}"
-    warn "Gagal membuat backup state SSH."
-    return 1
-  fi
 
-  if ! ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
+  if ! SSH_QAC_ATOMIC_BACKUP_FILE="${backup_file}" ssh_qac_atomic_update_file "${qf}" "${action}" "$@"; then
     rm -f -- "${backup_file}"
     return 1
   fi
@@ -6390,10 +7348,9 @@ ssh_qac_apply_with_required_refresh() {
   if ! ssh_account_info_refresh_from_state "${username}"; then
     warn "SSH ACCOUNT INFO gagal disinkronkan untuk '${username}'. State di-rollback."
     local -a rollback_notes=()
-    if ! cp -f -- "${backup_file}" "${qf}" >/dev/null 2>&1; then
+    if ! ssh_qac_restore_file_locked "${backup_file}" "${qf}" >/dev/null 2>&1; then
       rollback_notes+=("rollback state gagal")
     else
-      chmod 600 "${qf}" 2>/dev/null || true
       if ! ssh_account_info_refresh_from_state "${username}"; then
         rollback_notes+=("rollback account info gagal")
       fi
@@ -6532,6 +7489,28 @@ ssh_qac_edit_flow() {
   list_pos=$((start + view_no - 1))
   real_idx="${SSH_QAC_VIEW_INDEXES[$list_pos]}"
   qf="${SSH_QAC_FILES[$real_idx]}"
+  local qf_base username_hint=""
+  qf_base="$(basename "${qf}")"
+  qf_base="${qf_base%.json}"
+  username_hint="$(ssh_username_from_key "${qf_base}")"
+
+  if [[ ! -f "${qf}" ]]; then
+    warn "Metadata SSH QAC untuk '${username_hint}' belum ada."
+    echo "Bootstrap akan membuat state awal dengan nilai konservatif:"
+    echo "  - quota used = 0"
+    echo "  - created_at = hari ini"
+    echo "  - expired_at = hasil baca akun Linux bila tersedia, selain itu '-'"
+    hr
+    if ! confirm_menu_apply_now "Buat metadata SSH QAC awal untuk '${username_hint}' sekarang?"; then
+      pause
+      return 0
+    fi
+    if ! ssh_qac_metadata_bootstrap_if_missing "${username_hint}" "${qf}"; then
+      warn "Gagal membuat metadata SSH QAC awal untuk '${username_hint}'."
+      pause
+      return 1
+    fi
+  fi
 
   while true; do
     local label_w=18
@@ -6632,6 +7611,10 @@ ssh_qac_edit_flow() {
           continue
         fi
         qb="$(bytes_from_gb "${gb_num}")"
+        if ! confirm_menu_apply_now "Set quota limit SSH ${username} ke ${gb_num} GB sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" set_quota_limit "${qb}"; then
           warn "Gagal update quota limit SSH."
           pause
@@ -6641,6 +7624,10 @@ ssh_qac_edit_flow() {
         pause
         ;;
       3)
+        if ! confirm_menu_apply_now "Reset quota used SSH ${username} ke 0 sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" reset_quota_used; then
           warn "Gagal reset quota used SSH."
           pause
@@ -6653,6 +7640,10 @@ ssh_qac_edit_flow() {
         local st_mb
         st_mb="$(ssh_qac_get_status_bool "${qf}" "manual_block")"
         if [[ "${st_mb}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan manual block SSH untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" manual_block_set off; then
             warn "Gagal menonaktifkan manual block SSH."
             pause
@@ -6660,6 +7651,10 @@ ssh_qac_edit_flow() {
           fi
           log "Manual block SSH: OFF"
         else
+          if ! confirm_menu_apply_now "Aktifkan manual block SSH untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" manual_block_set on; then
             warn "Gagal mengaktifkan manual block SSH."
             pause
@@ -6673,6 +7668,10 @@ ssh_qac_edit_flow() {
         local ip_on
         ip_on="$(ssh_qac_get_status_bool "${qf}" "ip_limit_enabled")"
         if [[ "${ip_on}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan IP/Login limit SSH untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" ip_limit_enabled_set off; then
             warn "Gagal menonaktifkan IP limit SSH."
             pause
@@ -6680,6 +7679,10 @@ ssh_qac_edit_flow() {
           fi
           log "IP limit SSH: OFF"
         else
+          if ! confirm_menu_apply_now "Aktifkan IP/Login limit SSH untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" ip_limit_enabled_set on; then
             warn "Gagal mengaktifkan IP limit SSH."
             pause
@@ -6702,6 +7705,10 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
+        if ! confirm_menu_apply_now "Set IP/Login limit SSH ${username} ke ${lim} sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" set_ip_limit "${lim}"; then
           warn "Gagal set IP limit SSH."
           pause
@@ -6711,6 +7718,10 @@ ssh_qac_edit_flow() {
         pause
         ;;
       7)
+        if ! confirm_menu_apply_now "Unlock IP/Login lock SSH untuk ${username} sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_enforcer "${username}" "${qf}" clear_ip_limit_locked; then
           warn "Gagal unlock IP lock SSH."
           pause
@@ -6730,6 +7741,10 @@ ssh_qac_edit_flow() {
         speed_down_input="$(normalize_speed_mbit_input "${speed_down_input}")"
         if [[ -z "${speed_down_input}" ]] || ! speed_mbit_is_positive "${speed_down_input}"; then
           warn "Speed download tidak valid. Gunakan angka > 0."
+          pause
+          continue
+        fi
+        if ! confirm_menu_apply_now "Set speed download SSH ${username} ke ${speed_down_input} Mbps sekarang?"; then
           pause
           continue
         fi
@@ -6755,6 +7770,10 @@ ssh_qac_edit_flow() {
           pause
           continue
         fi
+        if ! confirm_menu_apply_now "Set speed upload SSH ${username} ke ${speed_up_input} Mbps sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" set_speed_up "${speed_up_input}"; then
           warn "Gagal set speed upload SSH."
           pause
@@ -6767,6 +7786,10 @@ ssh_qac_edit_flow() {
         local speed_on speed_down_now speed_up_now
         speed_on="$(ssh_qac_get_status_bool "${qf}" "speed_limit_enabled")"
         if [[ "${speed_on}" == "true" ]]; then
+          if ! confirm_menu_apply_now "Nonaktifkan speed limit SSH untuk ${username} sekarang?"; then
+            pause
+            continue
+          fi
           if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" speed_limit_set off; then
             warn "Gagal menonaktifkan speed limit SSH."
             pause
@@ -6811,6 +7834,10 @@ ssh_qac_edit_flow() {
           fi
         fi
 
+        if ! confirm_menu_apply_now "Aktifkan speed limit SSH ${username} dengan DOWN ${speed_down_now} Mbps dan UP ${speed_up_now} Mbps sekarang?"; then
+          pause
+          continue
+        fi
         if ! ssh_qac_apply_with_required_refresh "${username}" "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
           warn "Gagal mengaktifkan speed limit SSH."
           pause
@@ -6836,14 +7863,13 @@ ssh_quota_menu() {
 
   while true; do
     ui_menu_screen_begin "4) SSH QAC"
-
-    ssh_qac_enforce_now_warn || true
     ssh_qac_collect_files
     ssh_qac_build_view_indexes
     ssh_qac_print_table_page "${SSH_QAC_PAGE}"
     hr
 
     echo "Masukkan NO untuk view/edit, atau ketik:"
+    echo "  sync) jalankan enforcement SSH QAC sekarang"
     echo "  search) filter username"
     echo "  clear) hapus filter"
     echo "  next / previous"
@@ -6858,6 +7884,14 @@ ssh_quota_menu() {
     fi
 
     case "${c}" in
+      sync)
+        if ! ssh_qac_enforce_now_warn; then
+          warn "Sinkronisasi enforcement SSH QAC gagal."
+        else
+          log "Enforcement SSH QAC selesai."
+        fi
+        pause
+        ;;
       next|n)
         local pages
         pages="$(ssh_qac_total_pages_for_indexes)"
@@ -6915,27 +7949,22 @@ daemon_log_tail_show() {
 
 sshws_restart_after_dropbear() {
   local dropbear_svc="$1"
-  local stunnel_svc="$2"
-  local proxy_svc="$3"
-  local rc=0
-
+  local dropbear_port="" dropbear_probe=""
   if ! svc_exists "${dropbear_svc}"; then
-    warn "${dropbear_svc} tidak terpasang"
+    warn "${dropbear_svc}.service tidak terpasang"
     return 1
   fi
-
-  svc_restart "${dropbear_svc}" || return 1
-
-  local d
-  for d in "${stunnel_svc}" "${proxy_svc}"; do
-    if svc_exists "${d}"; then
-      if ! svc_restart "${d}"; then
-        warn "Gagal restart ${d} setelah ${dropbear_svc}."
-        rc=1
-      fi
-    fi
-  done
-  return "${rc}"
+  if ! svc_restart_checked "${dropbear_svc}" 60; then
+    warn "Restart ${dropbear_svc} gagal."
+    return 1
+  fi
+  dropbear_port="$(sshws_detect_dropbear_port)"
+  dropbear_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${dropbear_port}" "tcp")"
+  if ! sshws_probe_result_is_healthy "${dropbear_probe}"; then
+    warn "Probe ${dropbear_svc} gagal setelah restart: $(sshws_probe_result_disp "${dropbear_probe}")"
+    return 1
+  fi
+  return 0
 }
 
 install_discord_bot_menu() {
@@ -6954,7 +7983,14 @@ install_discord_bot_menu() {
 
   echo "Menjalankan installer:"
   echo "  ${installer_cmd} menu"
+  echo "Boundary:"
+  echo "  - kontrol akan diserahkan ke installer eksternal"
+  echo "  - installer dapat mengubah file/env/service bot di luar menu manage ini"
   hr
+  if ! confirm_menu_apply_now "Serahkan kontrol ke installer bot Discord eksternal sekarang?"; then
+    pause
+    return 0
+  fi
   if ! "${installer_cmd}" menu; then
     warn "Installer bot Discord keluar dengan status error."
     hr
@@ -6979,12 +8015,106 @@ install_telegram_bot_menu() {
 
   echo "Menjalankan installer:"
   echo "  ${installer_cmd} menu"
+  echo "Boundary:"
+  echo "  - kontrol akan diserahkan ke installer eksternal"
+  echo "  - installer dapat mengubah file/env/service bot di luar menu manage ini"
   hr
+  if ! confirm_menu_apply_now "Serahkan kontrol ke installer bot Telegram eksternal sekarang?"; then
+    pause
+    return 0
+  fi
   if ! "${installer_cmd}" menu; then
     warn "Installer bot Telegram keluar dengan status error."
     hr
     pause
   fi
+  return 0
+}
+
+daemon_restart_confirm_one() {
+  local svc="${1:-}"
+  local label="${2:-${svc}}"
+  [[ -n "${svc}" ]] || return 1
+  if ! svc_exists "${svc}"; then
+    warn "${label} tidak terpasang"
+    return 1
+  fi
+  if ! confirm_menu_apply_now "Restart ${label} sekarang?"; then
+    return 2
+  fi
+  if ! svc_restart "${svc}"; then
+    warn "Restart ${label} gagal."
+    return 1
+  fi
+  return 0
+}
+
+daemon_restart_confirm_many() {
+  local prompt="${1:-}"
+  local warn_msg="${2:-Sebagian service gagal direstart.}"
+  shift 2 || true
+  local svc restart_failed="false"
+
+  if ! confirm_menu_apply_now "${prompt}"; then
+    return 2
+  fi
+
+  for svc in "$@"; do
+    if svc_exists "${svc}"; then
+      if ! svc_restart "${svc}"; then
+        restart_failed="true"
+      fi
+    else
+      warn "${svc} tidak terpasang, skip"
+    fi
+  done
+  if [[ "${restart_failed}" == "true" ]]; then
+    warn "${warn_msg}"
+    return 1
+  fi
+  return 0
+}
+
+xray_daemon_post_restart_health_check() {
+  local svc
+  if ! svc_exists xray || ! svc_is_active xray; then
+    warn "xray belum active setelah restart daemon terkait."
+    return 1
+  fi
+  for svc in "$@"; do
+    [[ -n "${svc}" ]] || continue
+    if svc_exists "${svc}" && ! svc_is_active "${svc}"; then
+      warn "Daemon ${svc} belum active setelah restart."
+      return 1
+    fi
+  done
+  return 0
+}
+
+xray_daemon_restart_checked() {
+  local svc restarted="false"
+  local -a failed=()
+  for svc in "$@"; do
+    [[ -n "${svc}" ]] || continue
+    if svc_exists "${svc}"; then
+      if svc_restart_checked "${svc}" 60; then
+        restarted="true"
+      else
+        failed+=("${svc}")
+      fi
+    else
+      warn "${svc} tidak terpasang, skip"
+    fi
+  done
+  if [[ "${restarted}" != "true" ]]; then
+    warn "Tidak ada daemon Xray yang bisa direstart."
+    return 1
+  fi
+  if (( ${#failed[@]} > 0 )); then
+    warn "Gagal restart daemon Xray: ${failed[*]}"
+    return 1
+  fi
+  xray_daemon_post_restart_health_check "$@" || return 1
   return 0
 }
 
@@ -7024,7 +8154,7 @@ daemon_status_menu() {
   echo "  7) xray-quota Logs"
   echo "  8) xray-limit-ip Logs"
   echo "  9) xray-speed Logs"
-  echo " 10) Restart ${sshws_dropbear_svc}"
+  echo " 10) Restart ${sshws_dropbear_svc} only"
   echo " 11) Restart ${sshws_stunnel_svc}"
   echo " 12) Restart ${sshws_proxy_svc}"
   echo " 13) Restart All SSH WS"
@@ -7039,58 +8169,35 @@ daemon_status_menu() {
   fi
   case "${c}" in
     1)
-      if svc_exists xray-expired; then
-        if ! svc_restart xray-expired; then
-          warn "Restart xray-expired gagal."
-        fi
-      else
-        warn "xray-expired tidak terpasang"
+      if confirm_menu_apply_now "Restart xray-expired sekarang?"; then
+        xray_daemon_restart_checked xray-expired || true
       fi
       pause
       ;;
     2)
-      if svc_exists xray-quota; then
-        if ! svc_restart xray-quota; then
-          warn "Restart xray-quota gagal."
-        fi
-      else
-        warn "xray-quota tidak terpasang"
+      if confirm_menu_apply_now "Restart xray-quota sekarang?"; then
+        xray_daemon_restart_checked xray-quota || true
       fi
       pause
       ;;
     3)
-      if svc_exists xray-limit-ip; then
-        if ! svc_restart xray-limit-ip; then
-          warn "Restart xray-limit-ip gagal."
-        fi
-      else
-        warn "xray-limit-ip tidak terpasang"
+      if confirm_menu_apply_now "Restart xray-limit-ip sekarang?"; then
+        xray_daemon_restart_checked xray-limit-ip || true
       fi
       pause
       ;;
     4)
-      if svc_exists xray-speed; then
-        if ! svc_restart xray-speed; then
-          warn "Restart xray-speed gagal."
-        fi
-      else
-        warn "xray-speed tidak terpasang"
+      if confirm_menu_apply_now "Restart xray-speed sekarang?"; then
+        xray_daemon_restart_checked xray-speed || true
       fi
       pause
       ;;
     5)
-      local restart_failed="false"
-      for d in xray-expired xray-quota xray-limit-ip xray-speed; do
-        if svc_exists "${d}"; then
-          if ! svc_restart "${d}"; then
-            restart_failed="true"
-          fi
-        else
-          warn "${d} tidak terpasang, skip"
+      if confirm_menu_apply_now "Restart semua daemon Xray sekarang?"; then
+        if ! xray_daemon_restart_checked xray-expired xray-quota xray-limit-ip xray-speed; then
+          pause
+          return 1
         fi
-      done
-      if [[ "${restart_failed}" == "true" ]]; then
-        warn "Sebagian daemon Xray gagal direstart."
       fi
       pause
       ;;
@@ -7099,44 +8206,35 @@ daemon_status_menu() {
     8) daemon_log_tail_show xray-limit-ip 20 ;;
     9) daemon_log_tail_show xray-speed 20 ;;
     10)
-      if ! sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
-        warn "Restart SSH WS gagal."
+      if confirm_menu_apply_now "Restart ${sshws_dropbear_svc} saja sekarang?"; then
+        if ! sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
+          warn "Restart SSH WS gagal."
+        fi
       fi
       pause
       ;;
     11)
-      if svc_exists "${sshws_stunnel_svc}"; then
-        if ! svc_restart "${sshws_stunnel_svc}"; then
+      if confirm_menu_apply_now "Restart ${sshws_stunnel_svc} sekarang?"; then
+        if ! sshws_restart_services_checked "${sshws_stunnel_svc}"; then
           warn "Restart ${sshws_stunnel_svc} gagal."
         fi
-      else
-        warn "${sshws_stunnel_svc} tidak terpasang"
       fi
       pause
       ;;
     12)
-      if svc_exists "${sshws_proxy_svc}"; then
-        if ! svc_restart "${sshws_proxy_svc}"; then
+      if confirm_menu_apply_now "Restart ${sshws_proxy_svc} sekarang?"; then
+        if ! sshws_restart_services_checked "${sshws_proxy_svc}"; then
           warn "Restart ${sshws_proxy_svc} gagal."
         fi
-      else
-        warn "${sshws_proxy_svc} tidak terpasang"
       fi
       pause
       ;;
     13)
-      local restart_failed="false"
-      for d in "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; do
-        if svc_exists "${d}"; then
-          if ! svc_restart "${d}"; then
-            restart_failed="true"
-          fi
-        else
-          warn "${d} tidak terpasang, skip"
+      if confirm_menu_apply_now "Restart semua service SSH WS sekarang?"; then
+        if ! sshws_restart_services_checked "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
+          pause
+          return 1
         fi
-      done
-      if [[ "${restart_failed}" == "true" ]]; then
-        warn "Sebagian service SSH WS gagal direstart."
       fi
       pause
       ;;

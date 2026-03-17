@@ -27,7 +27,6 @@ main_menu_render_options() {
 main_menu() {
   while true; do
     title
-    account_info_sync_after_domain_change_if_needed
     main_menu_info_header_print
     main_menu_center_line "Main Menu"
     hr

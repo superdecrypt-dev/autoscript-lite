@@ -1,4 +1,5 @@
 import logging
+import os
 
 from fastapi import Depends, FastAPI
 
@@ -14,6 +15,10 @@ logger = logging.getLogger("bot-telegram-backend")
 
 @app.on_event("startup")
 def startup_account_info_compat_refresh() -> None:
+    enabled = str(os.getenv("BOT_TELEGRAM_STARTUP_COMPAT_REFRESH", "0")).strip().lower()
+    if enabled not in {"1", "true", "yes", "on", "y"}:
+        logger.info("Startup compat refresh disabled.")
+        return
     try:
         ok, title, msg = system_mutations.op_account_info_compat_refresh_if_needed()
         if ok:

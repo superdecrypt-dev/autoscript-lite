@@ -12,13 +12,16 @@ import shutil
 import string
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.error
 import urllib.request
 import uuid
 import zlib
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -43,6 +46,7 @@ BOT_STATE_DIR = Path(os.getenv("BOT_STATE_DIR", "/var/lib/bot-discord"))
 WORK_DIR = BOT_STATE_DIR / "tmp"
 ROUTING_LOCK_FILE = "/run/autoscript/locks/xray-routing.lock"
 SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
+USER_DATA_MUTATION_LOCK_FILE = "/run/autoscript/locks/user-data-mutation.lock"
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 SSH_PROTOCOL = "ssh"
 USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
@@ -84,6 +88,36 @@ ZIVPN_CERT_FILE = Path("/etc/zivpn/zivpn.crt")
 ZIVPN_KEY_FILE = Path("/etc/zivpn/zivpn.key")
 ZIVPN_DEFAULT_LISTEN = ":5667"
 ZIVPN_DEFAULT_OBFS = "zivpn"
+
+_USER_DATA_MUTATION_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def _user_data_mutation_lock():
+    depth = int(getattr(_USER_DATA_MUTATION_LOCK_STATE, "depth", 0) or 0)
+    if depth > 0:
+        _USER_DATA_MUTATION_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _USER_DATA_MUTATION_LOCK_STATE.depth = depth
+        return
+
+    with file_lock(USER_DATA_MUTATION_LOCK_FILE):
+        _USER_DATA_MUTATION_LOCK_STATE.depth = 1
+        try:
+            yield
+        finally:
+            _USER_DATA_MUTATION_LOCK_STATE.depth = 0
+
+
+def _user_data_mutation_locked(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with _user_data_mutation_lock():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _run_cmd(
@@ -2231,6 +2265,16 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
     return True, "ok"
 
 
+def _restore_account_info_snapshots(snapshots: dict[Path, dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    for path, snapshot in snapshots.items():
+        ok_restore, restore_msg = _restore_optional_file(path, snapshot)
+        if not ok_restore:
+            notes.append(restore_msg)
+    return notes
+
+
+@_user_data_mutation_locked
 def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) -> tuple[int, int]:
     _ensure_runtime_dirs()
     domain_eff = str(domain or "").strip() or _detect_domain()
@@ -2238,6 +2282,7 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
 
     updated = 0
     failed = 0
+    snapshots: dict[Path, dict[str, Any]] = {}
 
     for proto in USER_PROTOCOLS:
         d = ACCOUNT_ROOT / proto
@@ -2260,12 +2305,20 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
             selected_has_at[username] = has_at
 
         for username in sorted(selected.keys()):
+            target = selected[username]
+            if target not in snapshots:
+                snapshots[target] = _snapshot_optional_file(target)
             ok, _ = _refresh_account_info_for_user(proto, username, domain=domain_eff, ip=ip_eff)
             if ok:
                 updated += 1
             else:
                 failed += 1
 
+    if failed > 0:
+        restore_notes = _restore_account_info_snapshots(snapshots)
+        updated = 0
+        if restore_notes:
+            failed += len(restore_notes)
     return updated, failed
 
 
@@ -2931,6 +2984,7 @@ def _xray_restore_deleted_user(
     return True, "ok"
 
 
+@_user_data_mutation_locked
 def op_user_add(
     proto: str,
     username: str,
@@ -3199,6 +3253,7 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
     }
 
 
+@_user_data_mutation_locked
 def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
     if proto not in USER_PROTOCOLS:
         return False, "User Management - Delete User", f"Proto tidak valid: {proto}"
@@ -3341,6 +3396,7 @@ def _user_exists_in_inbounds(proto: str, username: str) -> bool:
     return False
 
 
+@_user_data_mutation_locked
 def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> tuple[bool, str, str]:
     if proto not in USER_PROTOCOLS:
         return False, "User Management - Extend Expiry", f"Proto tidak valid: {proto}"
@@ -3484,6 +3540,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
     )
 
 
+@_user_data_mutation_locked
 def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]:
     title = "User Management - Reset Password"
     if not _is_valid_ssh_username(username):
@@ -4871,6 +4928,7 @@ def list_provided_root_domains() -> list[str]:
     return [str(root).strip() for root in PROVIDED_ROOT_DOMAINS if str(root).strip()]
 
 
+@_user_data_mutation_locked
 def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     title = "Domain Control - Set Domain (Custom)"
     domain_n = _normalize_domain(domain)
@@ -4935,32 +4993,19 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed = _refresh_all_account_info(domain=domain_n, ip=ip_override)
+    lines = [
+        f"Domain aktif sekarang: {domain_n}",
+        "- Certificate mode : standalone",
+        f"- ACCOUNT INFO updated: {updated}",
+    ]
     if failed > 0:
-        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
-        if ok_rb and previous_domain:
-            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=ip_override)
-            if rb_failed > 0:
-                return False, title, (
-                    "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui.\n"
-                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
-                )
-            return False, title, (
-                "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui. "
-                "Perubahan sudah di-rollback ke state sebelumnya."
-            )
-        return False, title, (
-            "Refresh ACCOUNT INFO gagal setelah domain/certificate diperbarui.\n"
-            f"Rollback domain gagal:\n{msg_rb}"
+        lines.append(
+            f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
-    return True, title, "\n".join(
-        [
-            f"Domain aktif sekarang: {domain_n}",
-            "- Certificate mode : standalone",
-            f"- ACCOUNT INFO updated: {updated}",
-        ]
-    )
+    return True, title, "\n".join(lines)
 
 
+@_user_data_mutation_locked
 def op_domain_setup_cloudflare(
     root_domain_input: str,
     subdomain_mode: str = "auto",
@@ -5089,26 +5134,14 @@ def op_domain_setup_cloudflare(
     if not ok_acc:
         lines.append(f"- Catatan: CF_ACCOUNT_ID tidak ditemukan ({acc_or_err})")
     if failed > 0:
-        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
-        if ok_rb and previous_domain:
-            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=vps_ipv4)
-            if rb_failed > 0:
-                return False, title, (
-                    "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui.\n"
-                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
-                )
-            return False, title, (
-                "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui. "
-                "Perubahan sudah di-rollback ke state sebelumnya."
-            )
-        return False, title, (
-            "Refresh ACCOUNT INFO gagal setelah domain, DNS, dan certificate diperbarui.\n"
-            f"Rollback domain gagal:\n{msg_rb}"
+        lines.append(
+            f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain/DNS/certificate aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
     lines.append(f"- ACCOUNT INFO updated: {updated}")
     return True, title, "\n".join(lines)
 
 
+@_user_data_mutation_locked
 def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str]:
     title = "Domain Control - Set Domain"
     domain_n = _normalize_domain(domain)
@@ -5121,33 +5154,21 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
             return False, title, msg_setup
         return True, title, msg_setup
 
-    snapshot = _capture_domain_runtime_snapshot()
-    previous_domain = _domain_snapshot_active_domain(snapshot)
     ok_ng, ng_msg = _apply_nginx_domain(domain_n)
     if not ok_ng:
         return False, title, ng_msg
 
     updated, failed = _refresh_all_account_info(domain=domain_n)
     if failed > 0:
-        ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
-        if ok_rb and previous_domain:
-            _, rb_failed = _refresh_all_account_info(domain=previous_domain)
-            if rb_failed > 0:
-                return False, title, (
-                    "Refresh ACCOUNT INFO gagal setelah domain diubah.\n"
-                    f"Rollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama gagal direfresh."
-                )
-            return False, title, (
-                "Refresh ACCOUNT INFO gagal setelah domain diubah. "
-                "Perubahan sudah di-rollback ke domain sebelumnya."
-            )
-        return False, title, (
-            "Refresh ACCOUNT INFO gagal setelah domain diubah.\n"
-            f"Rollback domain gagal:\n{msg_rb}"
+        return True, title, (
+            f"Domain berhasil diubah ke: {domain_n}\n"
+            f"- ACCOUNT INFO updated: {updated}\n"
+            f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
     return True, title, f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
 
 
+@_user_data_mutation_locked
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     updated, failed = _refresh_all_account_info()
     return _account_refresh_outcome(
