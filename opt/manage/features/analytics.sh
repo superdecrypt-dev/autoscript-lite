@@ -629,10 +629,36 @@ cert_menu_renew() {
     pause
     return 0
   fi
+  if ! cert_renew_service_recover_if_needed; then
+    hr
+    pause
+    return 1
+  fi
+  if [[ -s "${CERT_RENEW_CERT_JOURNAL_FILE}" ]]; then
+    warn "Terdapat recovery rollback cert renew yang tertunda. Gunakan menu 'Recover Pending Renew' sebelum renew ulang."
+    hr
+    pause
+    return 1
+  fi
 
   echo "Domain terdeteksi: ${domain}"
+  echo "Catatan       : bila port 80 bentrok, renew sekarang fail-closed dan tidak menghentikan service publik otomatis."
   hr
   if ! confirm_menu_apply_now "Jalankan renew certificate untuk domain ${domain} sekarang?"; then
+    hr
+    pause
+    return 0
+  fi
+  local renew_ack=""
+  read -r -p "Ketik persis 'RENEW CERT ${domain}' untuk lanjut renew certificate (atau kembali): " renew_ack
+  if is_back_choice "${renew_ack}"; then
+    warn "Renew certificate dibatalkan pada checkpoint final."
+    hr
+    pause
+    return 0
+  fi
+  if [[ "${renew_ack}" != "RENEW CERT ${domain}" ]]; then
+    warn "Konfirmasi renew certificate tidak cocok. Dibatalkan."
     hr
     pause
     return 0
@@ -651,6 +677,15 @@ cert_menu_renew() {
   domain_control_clear_stopped_services
   domain_control_capture_runtime_snapshot
   cert_backup_dir="${WORK_DIR}/cert-renew-snapshot.$(date +%s).$$"
+  if ! acme_install_targets_pin_live "${domain}" "${CERT_FULLCHAIN}" "${CERT_PRIVKEY}"; then
+    warn "Gagal menyelaraskan target install acme.sh ke path cert live sebelum renew."
+    rm -f "${renew_log}" >/dev/null 2>&1 || true
+    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    domain_control_clear_runtime_snapshot
+    hr
+    pause
+    return 1
+  fi
   if ! cert_snapshot_create "${cert_backup_dir}"; then
     warn "Gagal membuat snapshot sertifikat sebelum renew."
     rm -f "${renew_log}" >/dev/null 2>&1 || true
@@ -683,64 +718,20 @@ cert_menu_renew() {
           conflict_services+=("${edge_svc}")
         fi
       fi
-
-      warn "Terdeteksi konflik port 80. Menghentikan web service sementara untuk retry renew..."
+      warn "Terdeteksi konflik port 80. Renew certificate sekarang fail-closed dan tidak lagi menghentikan service publik otomatis."
       if (( ${#conflict_services[@]} > 0 )); then
-        printf 'Service yang akan dihentikan sementara: %s\n' "$(IFS=', '; echo "${conflict_services[*]}")"
-        hr
-        if ! confirm_menu_apply_now "Hentikan sementara service di atas lalu retry renew certificate?"; then
-          rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
-          domain_control_clear_stopped_services
-          domain_control_clear_runtime_snapshot
-          hr
-          pause
-          return 0
-        fi
+        printf 'Service aktif yang memakai port 80: %s\n' "$(IFS=', '; echo "${conflict_services[*]}")"
       fi
-
-      if ! stop_conflicting_services; then
-        warn "Renew dibatalkan karena tidak semua service konflik berhasil dihentikan."
-        if ! domain_control_restore_stopped_services_strict 3; then
-          warn "Sebagian service yang sempat dihentikan juga gagal dipulihkan."
-        fi
-        domain_control_clear_stopped_services
-        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
-        domain_control_clear_runtime_snapshot
-        hr
-        pause
-        return 1
-      fi
-
-      if "${acme}" --renew -d "${domain}" --force 2>&1; then
-        renew_ok="true"
-      fi
-
-      if ! domain_control_restore_stopped_services_strict 3; then
-        warn "Renew berhasil, tetapi sebagian service yang dihentikan sementara tidak kembali aktif. Mencoba rollback cert/runtime..."
-        if ! cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1; then
-          rollback_notes+=("restore sertifikat gagal")
-        fi
-        domain_control_restore_cert_runtime_after_rollback rollback_notes || true
-        if ! domain_control_restore_stopped_services_strict 3; then
-          rollback_notes+=("restore service runtime TLS gagal")
-        else
-          domain_control_clear_stopped_services
-        fi
-        rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
-        domain_control_clear_runtime_snapshot
-        if (( ${#rollback_notes[@]} > 0 )); then
-          warn "Rollback renew cert juga bermasalah: ${rollback_notes[*]}"
-        fi
-        hr
-        pause
-        return 1
-      fi
+      warn "Bebaskan port 80 secara manual lalu jalankan renew lagi."
+      rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
       domain_control_clear_stopped_services
+      cert_renew_service_journal_clear
+      domain_control_clear_runtime_snapshot
+      hr
+      pause
+      return 1
     else
-      warn "acme.sh renew domain aktif gagal, mencoba ulang..."
-      if "${acme}" --renew -d "${domain}" --force 2>&1; then
-        renew_ok="true"
-      fi
+      warn "acme.sh renew domain aktif gagal."
     fi
   fi
 
@@ -748,6 +739,7 @@ cert_menu_renew() {
     warn "Renew gagal. Cek output di atas."
     rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     domain_control_clear_stopped_services
+    cert_renew_service_journal_clear
     domain_control_clear_runtime_snapshot
     hr
     pause
@@ -756,13 +748,25 @@ cert_menu_renew() {
 
   echo
   if ! cert_runtime_restart_active_tls_consumers; then
+    warn "Restart consumer TLS tambahan gagal. Mencoba retry sekali lagi sebelum rollback cert..."
+    sleep 2
+  fi
+  if ! cert_runtime_restart_active_tls_consumers; then
     warn "Cert berhasil diperbarui, tetapi restart consumer TLS tambahan gagal. Mencoba rollback cert sebelumnya..."
     cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
     domain_control_restore_cert_runtime_after_rollback rollback_notes || true
     if (( ${#rollback_notes[@]} > 0 )); then
       warn "Rollback cert juga bermasalah: ${rollback_notes[*]}"
+      if cert_renew_cert_journal_write "${domain}" "${cert_backup_dir}"; then
+        warn "Journal recovery rollback cert disimpan. Gunakan menu 'Recover Pending Renew' untuk melanjutkan."
+        cert_backup_dir=""
+      else
+        warn "Gagal menyimpan journal recovery rollback cert. Snapshot cert dipertahankan di ${cert_backup_dir}."
+      fi
+    else
+      cert_renew_cert_journal_clear
     fi
-    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    [[ -n "${cert_backup_dir}" ]] && rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     domain_control_clear_stopped_services
     domain_control_clear_runtime_snapshot
     hr
@@ -770,13 +774,25 @@ cert_menu_renew() {
     return 1
   fi
   if ! cert_runtime_hostname_tls_handshake_check "${domain}"; then
+    warn "Probe TLS hostname gagal. Mencoba retry sekali lagi sebelum rollback cert..."
+    sleep 2
+  fi
+  if ! cert_runtime_hostname_tls_handshake_check "${domain}"; then
     warn "Cert berhasil diperbarui, tetapi probe TLS hostname gagal. Mencoba rollback cert sebelumnya..."
     cert_snapshot_restore "${cert_backup_dir}" >/dev/null 2>&1 || rollback_notes+=("restore sertifikat gagal")
     domain_control_restore_cert_runtime_after_rollback rollback_notes || true
     if (( ${#rollback_notes[@]} > 0 )); then
       warn "Rollback cert juga bermasalah: ${rollback_notes[*]}"
+      if cert_renew_cert_journal_write "${domain}" "${cert_backup_dir}"; then
+        warn "Journal recovery rollback cert disimpan. Gunakan menu 'Recover Pending Renew' untuk melanjutkan."
+        cert_backup_dir=""
+      else
+        warn "Gagal menyimpan journal recovery rollback cert. Snapshot cert dipertahankan di ${cert_backup_dir}."
+      fi
+    else
+      cert_renew_cert_journal_clear
     fi
-    rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
+    [[ -n "${cert_backup_dir}" ]] && rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     domain_control_clear_stopped_services
     domain_control_clear_runtime_snapshot
     hr
@@ -785,6 +801,8 @@ cert_menu_renew() {
   fi
   rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
   domain_control_clear_stopped_services
+  cert_renew_service_journal_clear
+  cert_renew_cert_journal_clear
   domain_control_clear_runtime_snapshot
   log "Renew certificate selesai (cek expiry untuk memastikan)."
   hr
@@ -860,14 +878,23 @@ cert_menu_reload_nginx() {
 }
 
 security_tls_menu() {
+  local pending_recovery="false"
   while true; do
+    pending_recovery="false"
+    [[ -s "${CERT_RENEW_SERVICE_JOURNAL_FILE}" ]] && pending_recovery="true"
+    [[ -s "${CERT_RENEW_CERT_JOURNAL_FILE}" ]] && pending_recovery="true"
     title
     echo "TLS & Cert"
+    if [[ "${pending_recovery}" == "true" ]]; then
+      hr
+      warn "Terdapat recovery renew yang tertunda. Gunakan menu 'Recover Pending Renew'."
+    fi
     hr
     echo "  1) Cert Info"
     echo "  2) Check Expiry"
     echo "  3) Renew Cert"
     echo "  4) Reload Nginx"
+    echo "  5) Recover Pending Renew"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -879,6 +906,24 @@ security_tls_menu() {
       2) cert_menu_check_expiry ;;
       3) cert_menu_renew ;;
       4) cert_menu_reload_nginx ;;
+      5)
+        local recover_failed="false"
+        if ! cert_renew_service_recover_if_needed; then
+          recover_failed="true"
+        fi
+        if ! cert_renew_cert_recover_if_needed; then
+          recover_failed="true"
+        fi
+        if [[ "${recover_failed}" != "true" ]]; then
+          log "Recovery renew selesai atau tidak ada journal tertunda."
+        else
+          warn "Recovery renew belum bersih."
+        fi
+        pending_recovery="false"
+        [[ -s "${CERT_RENEW_SERVICE_JOURNAL_FILE}" ]] && pending_recovery="true"
+        [[ -s "${CERT_RENEW_CERT_JOURNAL_FILE}" ]] && pending_recovery="true"
+        pause
+        ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
@@ -3438,6 +3483,8 @@ payload["status"] = {
   "lock_owner": str(status.get("lock_owner") or "").strip(),
   "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
+payload["bootstrap_review_needed"] = to_bool(payload.get("bootstrap_review_needed"))
+payload["bootstrap_source"] = str(payload.get("bootstrap_source") or "").strip()
 
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
@@ -3615,6 +3662,8 @@ payload["status"] = {
   "lock_owner": str(status.get("lock_owner") or "").strip(),
   "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
+payload["bootstrap_review_needed"] = to_bool(payload.get("bootstrap_review_needed"))
+payload["bootstrap_source"] = str(payload.get("bootstrap_source") or "").strip()
 
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
@@ -4057,25 +4106,137 @@ ssh_linux_account_expiry_get() {
 ssh_qac_metadata_bootstrap_if_missing() {
   local username="${1:-}"
   local qf="${2:-}"
-  local created_at expired_at password
+  local created_at
   [[ -n "${username}" && -n "${qf}" ]] || return 1
   [[ -f "${qf}" ]] && return 0
 
   created_at="$(date '+%Y-%m-%d')"
-  expired_at="$(ssh_linux_account_expiry_get "${username}" 2>/dev/null || true)"
-  [[ -n "${expired_at}" ]] || expired_at="-"
-
-  if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+  if ! ssh_user_state_write "${username}" "${created_at}" "-"; then
     return 1
   fi
-
-  password="$(ssh_previous_password_get "${username}" 2>/dev/null || true)"
-  if [[ -n "${password}" && "${password}" != "-" ]]; then
-    ssh_account_info_refresh_from_state "${username}" "${password}" >/dev/null 2>&1 || true
-  else
-    ssh_account_info_refresh_from_state "${username}" >/dev/null 2>&1 || true
+  if ! ssh_qac_atomic_update_file "${qf}" bootstrap_marker_set "minimal-placeholder" >/dev/null 2>&1; then
+    return 1
   fi
   return 0
+}
+
+ssh_qac_bootstrap_status_get() {
+  local qf="${1:-}"
+  [[ -n "${qf}" && -f "${qf}" ]] || {
+    printf 'false|\n'
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${qf}"
+import json
+import sys
+
+try:
+  data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+  print("false|")
+  raise SystemExit(0)
+
+flag = data.get("bootstrap_review_needed")
+source = str(data.get("bootstrap_source") or "").strip()
+if isinstance(flag, bool):
+  needed = flag
+elif isinstance(flag, (int, float)):
+  needed = bool(flag)
+else:
+  needed = str(flag or "").strip().lower() in ("1", "true", "yes", "on", "y")
+print(("true" if needed else "false") + "|" + source)
+PY
+}
+
+ssh_pending_login_shell_get() {
+  local shell="/usr/sbin/nologin"
+  if have_cmd nologin; then
+    shell="$(command -v nologin 2>/dev/null || printf '/usr/sbin/nologin')"
+  fi
+  printf '%s\n' "${shell}"
+}
+
+ssh_add_txn_linux_pending_contains() {
+  local username="${1:-}"
+  local txn_dir="" linux_created=""
+  [[ -n "${username}" ]] || return 1
+  mutation_txn_prepare || return 1
+  while IFS= read -r -d '' txn_dir; do
+    [[ -n "${txn_dir}" ]] || continue
+    linux_created="$(mutation_txn_field_read "${txn_dir}" linux_created 2>/dev/null || true)"
+    if [[ "${linux_created}" != "true" ]]; then
+      return 0
+    fi
+  done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name "ssh-add.${username}*" -print0 2>/dev/null | sort -z)
+  return 1
+}
+
+ssh_collect_candidate_users() {
+  # args: [include_linux=true|false]
+  local include_linux="${1:-true}"
+  ssh_state_dirs_prepare
+
+  local -A seen_users=()
+  local username="" name=""
+
+  while IFS= read -r username; do
+    [[ -n "${username}" ]] || continue
+    username="${username%@ssh}"
+    username="${username%.json}"
+    [[ -n "${username}" ]] || continue
+    if ssh_add_txn_linux_pending_contains "${username}"; then
+      continue
+    fi
+    if [[ -n "${seen_users["${username}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${username}"]=1
+    printf '%s\n' "${username}"
+  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sort -u)
+
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    name="${name%@ssh}"
+    name="${name%.txt}"
+    [[ -n "${name}" ]] || continue
+    if ssh_add_txn_linux_pending_contains "${name}"; then
+      continue
+    fi
+    if [[ -n "${seen_users["${name}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${name}"]=1
+    printf '%s\n' "${name}"
+  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null | sort -u)
+
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    name="${name%.pass}"
+    [[ -n "${name}" ]] || continue
+    if ssh_add_txn_linux_pending_contains "${name}"; then
+      continue
+    fi
+    if [[ -n "${seen_users["${name}"]+x}" ]]; then
+      continue
+    fi
+    seen_users["${name}"]=1
+    printf '%s\n' "${name}"
+  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' -printf '%f\n' 2>/dev/null | sort -u)
+
+  if [[ "${include_linux}" == "true" ]]; then
+    while IFS= read -r name; do
+      [[ -n "${name}" ]] || continue
+      if ssh_add_txn_linux_pending_contains "${name}"; then
+        continue
+      fi
+      if [[ -n "${seen_users["${name}"]+x}" ]]; then
+        continue
+      fi
+      seen_users["${name}"]=1
+      printf '%s\n' "${name}"
+    done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
+  fi
 }
 
 ssh_pick_managed_user() {
@@ -4085,42 +4246,11 @@ ssh_pick_managed_user() {
   ssh_state_dirs_prepare
 
   local -a users=()
-  local -A seen_users=()
-  local u="" name=""
-  while IFS= read -r u; do
-    [[ -n "${u}" ]] || continue
-    if [[ -n "${seen_users["${u}"]+x}" ]]; then
-      continue
-    fi
-    seen_users["${u}"]=1
-    users+=("${u}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
+  local name=""
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
-    name="${name%@ssh}"
-    if [[ -n "${seen_users["${name}"]+x}" ]]; then
-      continue
-    fi
-    seen_users["${name}"]=1
     users+=("${name}")
-  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.txt$//' | sed -E 's/\.txt$//' | sort -u)
-  while IFS= read -r name; do
-    [[ -n "${name}" ]] || continue
-    name="${name%.pass}"
-    if [[ -n "${seen_users["${name}"]+x}" ]]; then
-      continue
-    fi
-    seen_users["${name}"]=1
-    users+=("${name}")
-  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' -printf '%f\n' 2>/dev/null | sort -u)
-  while IFS= read -r name; do
-    [[ -n "${name}" ]] || continue
-    if [[ -n "${seen_users["${name}"]+x}" ]]; then
-      continue
-    fi
-    seen_users["${name}"]=1
-    users+=("${name}")
-  done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
+  done < <(ssh_collect_candidate_users false)
 
   if (( ${#users[@]} > 1 )); then
     IFS=$'\n' users=($(printf '%s\n' "${users[@]}" | sort -u))
@@ -4128,7 +4258,7 @@ ssh_pick_managed_user() {
   fi
 
   if (( ${#users[@]} == 0 )); then
-    warn "Belum ada akun SSH terkelola."
+    warn "Belum ada akun SSH managed yang bisa dipilih dari menu ini."
     return 1
   fi
 
@@ -4406,7 +4536,7 @@ ssh_add_user_rollback() {
 
   if [[ "${linux_created}" == "true" ]]; then
     if id "${username}" >/dev/null 2>&1; then
-      if userdel "${username}" >/dev/null 2>&1; then
+      if ssh_userdel_purge "${username}" >/dev/null 2>&1; then
         deleted="true"
       fi
     fi
@@ -4452,11 +4582,597 @@ ssh_add_user_rollback() {
   return 1
 }
 
+ssh_add_user_fail_with_rollback() {
+  # args: username qf acc_file reason raw_password cleanup_zivpn linux_created txn_dir
+  local username="${1:-}"
+  local qf="${2:-}"
+  local acc_file="${3:-}"
+  local reason="${4:-Gagal membuat akun SSH.}"
+  local raw_password="${5:-}"
+  local cleanup_zivpn="${6:-false}"
+  local linux_created="${7:-false}"
+  local txn_dir="${8:-}"
+  if ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${reason}" "${raw_password}" "${cleanup_zivpn}" "${linux_created}"; then
+    ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
+    mutation_txn_dir_remove "${txn_dir}"
+  else
+    [[ -n "${txn_dir}" ]] && warn "Journal recovery add SSH dipertahankan di ${txn_dir}."
+  fi
+  return 1
+}
+
+ssh_add_txn_marker_file() {
+  local username="${1:-}"
+  printf '%s/ssh-add-markers/%s.txn\n' "${WORK_DIR}" "${username}"
+}
+
+ssh_add_txn_marker_write() {
+  local username="${1:-}"
+  local txn_id="${2:-}"
+  local marker_file=""
+  [[ -n "${username}" && -n "${txn_id}" ]] || return 1
+  marker_file="$(ssh_add_txn_marker_file "${username}")"
+  mkdir -p "$(dirname "${marker_file}")" 2>/dev/null || return 1
+  if ! printf '%s' "${txn_id}" > "${marker_file}"; then
+    return 1
+  fi
+  chmod 600 "${marker_file}" 2>/dev/null || true
+  return 0
+}
+
+ssh_add_txn_marker_read() {
+  local username="${1:-}"
+  local marker_file=""
+  [[ -n "${username}" ]] || return 1
+  marker_file="$(ssh_add_txn_marker_file "${username}")"
+  [[ -f "${marker_file}" ]] || return 1
+  cat "${marker_file}" 2>/dev/null || return 1
+}
+
+ssh_add_txn_marker_clear() {
+  local username="${1:-}"
+  local marker_file=""
+  [[ -n "${username}" ]] || return 0
+  marker_file="$(ssh_add_txn_marker_file "${username}")"
+  rm -f "${marker_file}" >/dev/null 2>&1 || true
+}
+
+ssh_user_home_dir_default() {
+  local username="${1:-}"
+  printf '/home/%s\n' "${username}"
+}
+
+ssh_user_home_dir_get() {
+  local username="${1:-}"
+  local home=""
+  [[ -n "${username}" ]] || return 1
+  home="$(getent passwd "${username}" 2>/dev/null | awk -F: '{print $6; exit}' || true)"
+  [[ -n "${home}" ]] || home="$(ssh_user_home_dir_default "${username}")"
+  printf '%s\n' "${home}"
+}
+
+ssh_user_home_dir_prepare() {
+  local username="${1:-}"
+  local home=""
+  [[ -n "${username}" ]] || return 1
+  home="$(ssh_user_home_dir_get "${username}")"
+  [[ -n "${home}" ]] || return 1
+  mkdir -p "${home}" 2>/dev/null || return 1
+  chown "${username}:${username}" "${home}" 2>/dev/null || return 1
+  chmod 700 "${home}" 2>/dev/null || true
+}
+
+ssh_home_snapshot_create() {
+  local username="${1:-}"
+  local snapshot_dir="${2:-}"
+  local mode_var="${3:-}"
+  local backup_var="${4:-}"
+  local home_dir="" archive="" mode="absent" backup=""
+  [[ -n "${mode_var}" && -n "${backup_var}" ]] || return 1
+  home_dir="$(ssh_user_home_dir_get "${username}")"
+  if [[ -n "${home_dir}" && -d "${home_dir}" ]]; then
+    archive="${snapshot_dir}/home.tar"
+    if tar -cpf "${archive}" -C "${home_dir}" . >/dev/null 2>&1; then
+      mode="file"
+      backup="${archive}"
+    else
+      return 1
+    fi
+  fi
+  printf -v "${mode_var}" '%s' "${mode}"
+  printf -v "${backup_var}" '%s' "${backup}"
+}
+
+ssh_home_snapshot_restore() {
+  local username="${1:-}"
+  local mode="${2:-absent}"
+  local backup_file="${3:-}"
+  local home_dir=""
+  [[ -n "${username}" ]] || return 1
+  home_dir="$(ssh_user_home_dir_get "${username}")"
+  [[ -n "${home_dir}" ]] || return 1
+  if [[ "${mode}" != "file" || -z "${backup_file}" || ! -f "${backup_file}" ]]; then
+    ssh_user_home_dir_prepare "${username}"
+    return $?
+  fi
+  mkdir -p "${home_dir}" 2>/dev/null || return 1
+  if ! tar -xpf "${backup_file}" -C "${home_dir}" >/dev/null 2>&1; then
+    return 1
+  fi
+  chown -R "${username}:${username}" "${home_dir}" 2>/dev/null || true
+  chmod 700 "${home_dir}" 2>/dev/null || true
+}
+
+ssh_linux_account_snapshot_create() {
+  local username="${1:-}"
+  local snapshot_dir="${2:-}"
+  local meta_var="${3:-}"
+  local meta_file="" passwd_line="" uid="" gid="" home="" shell="" primary_group="" groups="" password_hash="" gecos=""
+  [[ -n "${username}" && -n "${snapshot_dir}" && -n "${meta_var}" ]] || return 1
+  passwd_line="$(getent passwd "${username}" 2>/dev/null || true)"
+  [[ -n "${passwd_line}" ]] || {
+    printf -v "${meta_var}" '%s' ""
+    return 0
+  }
+  uid="$(printf '%s' "${passwd_line}" | awk -F: '{print $3}')"
+  gid="$(printf '%s' "${passwd_line}" | awk -F: '{print $4}')"
+  home="$(printf '%s' "${passwd_line}" | awk -F: '{print $6}')"
+  shell="$(printf '%s' "${passwd_line}" | awk -F: '{print $7}')"
+  gecos="$(printf '%s' "${passwd_line}" | awk -F: '{print $5}')"
+  primary_group="$(id -gn "${username}" 2>/dev/null || true)"
+  password_hash="$(getent shadow "${username}" 2>/dev/null | awk -F: '{print $2}' || true)"
+  groups="$(id -Gn "${username}" 2>/dev/null | awk -v pg="${primary_group}" '
+    {
+      out=""
+      for (i=1; i<=NF; i++) {
+        if ($i == pg || $i == "") continue
+        out = out (out=="" ? "" : ",") $i
+      }
+      print out
+    }' || true)"
+  meta_file="${snapshot_dir}/linux-account.meta"
+  {
+    printf 'uid=%s\n' "${uid}"
+    printf 'gid=%s\n' "${gid}"
+    printf 'home=%s\n' "${home}"
+    printf 'shell=%s\n' "${shell}"
+    printf 'gecos=%s\n' "${gecos}"
+    printf 'primary_group=%s\n' "${primary_group}"
+    printf 'supp_groups=%s\n' "${groups}"
+    printf 'password_hash=%s\n' "${password_hash}"
+  } > "${meta_file}" || return 1
+  chmod 600 "${meta_file}" 2>/dev/null || true
+  printf -v "${meta_var}" '%s' "${meta_file}"
+}
+
+ssh_linux_account_snapshot_field_get() {
+  local meta_file="${1:-}"
+  local key="${2:-}"
+  [[ -n "${meta_file}" && -f "${meta_file}" && -n "${key}" ]] || return 1
+  awk -F= -v want="${key}" '$1==want {print substr($0, index($0, "=")+1); exit}' "${meta_file}" 2>/dev/null
+}
+
+ssh_add_txn_recover_dir() {
+  local txn_dir="${1:-}"
+  local username qf acc_file password expired_at created_at quota_bytes ip_enabled ip_limit speed_enabled speed_down speed_up linux_created txn_id marker_id
+  local password_file="" cleanup_failed=""
+  local -a notes=()
+  [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 0
+
+  username="$(mutation_txn_field_read "${txn_dir}" username 2>/dev/null || true)"
+  qf="$(mutation_txn_field_read "${txn_dir}" qf 2>/dev/null || true)"
+  acc_file="$(mutation_txn_field_read "${txn_dir}" acc_file 2>/dev/null || true)"
+  expired_at="$(mutation_txn_field_read "${txn_dir}" expired_at 2>/dev/null || true)"
+  created_at="$(mutation_txn_field_read "${txn_dir}" created_at 2>/dev/null || true)"
+  quota_bytes="$(mutation_txn_field_read "${txn_dir}" quota_bytes 2>/dev/null || true)"
+  ip_enabled="$(mutation_txn_field_read "${txn_dir}" ip_enabled 2>/dev/null || true)"
+  ip_limit="$(mutation_txn_field_read "${txn_dir}" ip_limit 2>/dev/null || true)"
+  speed_enabled="$(mutation_txn_field_read "${txn_dir}" speed_enabled 2>/dev/null || true)"
+  speed_down="$(mutation_txn_field_read "${txn_dir}" speed_down 2>/dev/null || true)"
+  speed_up="$(mutation_txn_field_read "${txn_dir}" speed_up 2>/dev/null || true)"
+  linux_created="$(mutation_txn_field_read "${txn_dir}" linux_created 2>/dev/null || true)"
+  txn_id="$(mutation_txn_field_read "${txn_dir}" txn_id 2>/dev/null || true)"
+  password_file="${txn_dir}/password.secret"
+  password="$(cat "${password_file}" 2>/dev/null || true)"
+
+  if [[ -z "${username}" || -z "${qf}" || -z "${acc_file}" ]]; then
+    mutation_txn_dir_remove "${txn_dir}"
+    return 0
+  fi
+  if [[ "${linux_created}" != "true" ]]; then
+    cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
+    if [[ -n "${cleanup_failed}" ]]; then
+      warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak pre-Linux gagal (${cleanup_failed})."
+      return 1
+    fi
+    mutation_txn_dir_remove "${txn_dir}"
+    log "Recovery add SSH membersihkan metadata pre-Linux untuk '${username}'."
+    return 0
+  fi
+
+  if ! id "${username}" >/dev/null 2>&1; then
+    local orphan_zivpn_file=""
+    orphan_zivpn_file="$(zivpn_password_file "${username}")"
+    if [[ -e "${orphan_zivpn_file}" || -L "${orphan_zivpn_file}" ]]; then
+      zivpn_remove_user_password_warn "${username}" >/dev/null 2>&1 || true
+    fi
+    cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
+    if [[ -n "${cleanup_failed}" ]]; then
+      warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak gagal (${cleanup_failed})."
+      return 1
+    fi
+    mutation_txn_dir_remove "${txn_dir}"
+    log "Recovery add SSH membuang journal yatim untuk '${username}' karena user Linux tidak ada."
+    return 0
+  fi
+
+  marker_id="$(ssh_add_txn_marker_read "${username}" 2>/dev/null || true)"
+  if [[ -z "${txn_id}" || -z "${marker_id}" || "${marker_id}" != "${txn_id}" ]]; then
+    warn "Recovery add SSH untuk '${username}' ditahan: marker transaksi tidak cocok. Akun Linux mungkin sudah dipakai ulang."
+    return 1
+  fi
+
+  if [[ -z "${password}" ]]; then
+    warn "Recovery add SSH untuk '${username}' belum bisa dilanjutkan: password journal tidak tersedia."
+    return 1
+  fi
+
+  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+    notes+=("set expiry Linux gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
+    notes+=("tulis metadata akun SSH gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
+    notes+=("set quota metadata SSH gagal")
+  fi
+  if (( ${#notes[@]} == 0 )); then
+    if [[ "${ip_enabled}" == "true" ]]; then
+      if ! ssh_qac_atomic_update_file "${qf}" set_ip_limit "${ip_limit}"; then
+        notes+=("set IP limit metadata SSH gagal")
+      elif ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set on; then
+        notes+=("aktifkan IP limit metadata SSH gagal")
+      fi
+    else
+      if ! ssh_qac_atomic_update_file "${qf}" ip_limit_enabled_set off; then
+        notes+=("nonaktifkan IP limit metadata SSH gagal")
+      fi
+    fi
+  fi
+  if (( ${#notes[@]} == 0 )); then
+    if [[ "${speed_enabled}" == "true" ]]; then
+      if ! ssh_qac_atomic_update_file "${qf}" set_speed_all_enable "${speed_down}" "${speed_up}"; then
+        notes+=("set speed limit metadata SSH gagal")
+      fi
+    else
+      if ! ssh_qac_atomic_update_file "${qf}" speed_limit_set off; then
+        notes+=("nonaktifkan speed limit metadata SSH gagal")
+      fi
+    fi
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
+    notes+=("refresh SSH account info gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_qac_enforce_now_warn "${username}"; then
+    notes+=("enforcement awal SSH gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_dns_adblock_runtime_refresh_if_available; then
+    notes+=("refresh runtime DNS Adblock SSH gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_user_home_dir_prepare "${username}"; then
+    notes+=("menyiapkan home dir Linux gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+    notes+=("set password Linux gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
+    notes+=("aktifkan shell login gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    notes+=("sinkronisasi password ZIVPN gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
+    notes+=("refresh final SSH account info gagal")
+  fi
+
+  if (( ${#notes[@]} > 0 )); then
+    warn "Recovery add SSH untuk '${username}' belum bersih: $(IFS=' | '; echo "${notes[*]}")."
+    return 1
+  fi
+
+  ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
+  mutation_txn_dir_remove "${txn_dir}"
+  log "Recovery add SSH selesai untuk '${username}'."
+  return 0
+}
+
+ssh_add_txn_recover_pending_all() {
+  local txn_dir=""
+  mutation_txn_prepare || return 0
+  while IFS= read -r -d '' txn_dir; do
+    [[ -n "${txn_dir}" ]] || continue
+    ssh_add_txn_recover_dir "${txn_dir}" || true
+  done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'ssh-add.*' -print0 2>/dev/null | sort -z)
+}
+
+ssh_userdel_purge() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 1
+  if ! id "${username}" >/dev/null 2>&1; then
+    return 0
+  fi
+  userdel -r "${username}" >/dev/null 2>&1
+}
+
+ssh_delete_user_cleanup_after_linux_delete() {
+  local username="${1:-}"
+  local zivpn_file="${2:-}"
+  local cleanup_failed=""
+  local -a notes=()
+
+  [[ -n "${username}" ]] || return 1
+
+  if [[ -n "${zivpn_file}" ]] && ! zivpn_remove_user_password_warn "${username}"; then
+    notes+=("cleanup ZIVPN gagal")
+  fi
+
+  cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
+  if [[ -n "${cleanup_failed}" ]]; then
+    notes+=("cleanup artefak lokal gagal: ${cleanup_failed}")
+  elif ! ssh_dns_adblock_runtime_refresh_if_available; then
+    notes+=("refresh runtime DNS adblock gagal")
+  fi
+
+  if (( ${#notes[@]} > 0 )); then
+    printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
+    return 1
+  fi
+  return 0
+}
+
+ssh_delete_txn_recover_dir() {
+  local txn_dir="${1:-}"
+  local username linux_deleted zivpn_file cleanup_failed=""
+  local state_mode="absent" state_backup="" state_file=""
+  local state_compat_mode="absent" state_compat_backup="" state_compat_file=""
+  local account_mode="absent" account_backup="" account_file=""
+  local account_compat_mode="absent" account_compat_backup="" account_compat_file=""
+  local zivpn_mode="absent" zivpn_backup="" linux_meta_file=""
+  local restore_msg=""
+  [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 0
+
+  username="$(mutation_txn_field_read "${txn_dir}" username 2>/dev/null || true)"
+  linux_deleted="$(mutation_txn_field_read "${txn_dir}" linux_deleted 2>/dev/null || true)"
+  zivpn_file="$(mutation_txn_field_read "${txn_dir}" zivpn_file 2>/dev/null || true)"
+  if [[ -z "${username}" ]]; then
+    mutation_txn_dir_remove "${txn_dir}"
+    return 0
+  fi
+  state_file="$(ssh_user_state_file "${username}")"
+  state_compat_file="$(ssh_user_state_compat_file "${username}")"
+  account_file="$(ssh_account_info_file "${username}")"
+  account_compat_file="${SSH_ACCOUNT_DIR}/${username}.txt"
+  [[ -f "${txn_dir}/state.path" ]] && state_mode="file" && state_backup="${txn_dir}/state.path"
+  [[ -f "${txn_dir}/state_compat.path" ]] && state_compat_mode="file" && state_compat_backup="${txn_dir}/state_compat.path"
+  [[ -f "${txn_dir}/account.path" ]] && account_mode="file" && account_backup="${txn_dir}/account.path"
+  [[ -f "${txn_dir}/account_compat.path" ]] && account_compat_mode="file" && account_compat_backup="${txn_dir}/account_compat.path"
+  if [[ -n "${zivpn_file}" && -f "${txn_dir}/zivpn.path" ]]; then
+    zivpn_mode="file"
+    zivpn_backup="${txn_dir}/zivpn.path"
+  fi
+  linux_meta_file="${txn_dir}/linux-account.meta"
+  if [[ "${linux_deleted}" != "1" ]]; then
+    if id "${username}" >/dev/null 2>&1; then
+      if ! ssh_delete_user_predelete_restore "${username}" "${linux_meta_file}" "${state_mode}" "${state_backup}"; then
+        warn "Recovery delete SSH untuk '${username}' belum bersih: gagal memulihkan status akun Linux pra-delete."
+        return 1
+      fi
+      restore_msg="$(ssh_delete_user_snapshot_restore \
+        "${username}" \
+        "${state_mode}" "${state_backup}" "${state_file}" \
+        "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" \
+        "${account_mode}" "${account_backup}" "${account_file}" \
+        "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
+        "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
+      if [[ -n "${restore_msg}" ]]; then
+        warn "Recovery delete SSH untuk '${username}' belum bersih: ${restore_msg}"
+        return 1
+      fi
+      mutation_txn_dir_remove "${txn_dir}"
+      log "Recovery delete SSH memulihkan state pra-delete untuk '${username}'."
+      return 0
+    fi
+    cleanup_failed="$(ssh_delete_user_cleanup_after_linux_delete "${username}" "${zivpn_file}" 2>/dev/null || true)"
+    if [[ -n "${cleanup_failed}" ]]; then
+      warn "Recovery delete SSH untuk '${username}' belum bersih: ${cleanup_failed}"
+      return 1
+    fi
+    mutation_txn_dir_remove "${txn_dir}"
+    log "Recovery delete SSH menyelesaikan cleanup pasca-delete untuk '${username}'."
+    return 0
+  fi
+  if id "${username}" >/dev/null 2>&1; then
+    warn "Recovery delete SSH untuk '${username}' tertahan: akun Linux masih ada."
+    return 1
+  fi
+
+  mutation_txn_dir_remove "${txn_dir}"
+  log "Recovery delete SSH selesai untuk '${username}'."
+  return 0
+}
+
+ssh_delete_txn_recover_pending_all() {
+  local txn_dir=""
+  mutation_txn_prepare || return 0
+  while IFS= read -r -d '' txn_dir; do
+    [[ -n "${txn_dir}" ]] || continue
+    ssh_delete_txn_recover_dir "${txn_dir}" || true
+  done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'ssh-delete.*' -print0 2>/dev/null | sort -z)
+}
+
+ssh_pending_recovery_count() {
+  local count=0
+  mutation_txn_prepare || {
+    printf '0\n'
+    return 0
+  }
+  count="$(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d \( -name 'ssh-add.*' -o -name 'ssh-delete.*' \) 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
+  printf '%s\n' "${count}"
+}
+
+ssh_pending_txn_dirs_by_kind() {
+  local kind="${1:-all}"
+  case "${kind}" in
+    add) mutation_txn_list_dirs 'ssh-add.*' ;;
+    delete) mutation_txn_list_dirs 'ssh-delete.*' ;;
+    all)
+      mutation_txn_list_dirs 'ssh-add.*'
+      mutation_txn_list_dirs 'ssh-delete.*'
+      ;;
+    *) return 0 ;;
+  esac
+}
+
+ssh_pending_txn_label() {
+  local txn_dir="${1:-}"
+  local base="" username="" created=""
+  [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 1
+  base="$(basename "${txn_dir}")"
+  username="$(mutation_txn_field_read "${txn_dir}" username 2>/dev/null || true)"
+  created="$(date -r "${txn_dir}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)"
+  case "${base}" in
+    ssh-add.*) printf 'ADD    | %s | %s\n' "${username:-?}" "${created:-unknown}" ;;
+    ssh-delete.*) printf 'DELETE | %s | %s\n' "${username:-?}" "${created:-unknown}" ;;
+    *) printf '%s | %s\n' "${base}" "${created:-unknown}" ;;
+  esac
+}
+
+ssh_recover_pending_txn_now() {
+  local kind="${1:-all}"
+  local txn_dir="${2:-}"
+  if [[ -n "${txn_dir}" ]]; then
+    case "${kind}" in
+      add) ssh_add_txn_recover_dir "${txn_dir}" || true ;;
+      delete) ssh_delete_txn_recover_dir "${txn_dir}" || true ;;
+    esac
+    return 0
+  fi
+  case "${kind}" in
+    add) ssh_add_txn_recover_pending_all || true ;;
+    delete) ssh_delete_txn_recover_pending_all || true ;;
+    all|*)
+      ssh_add_txn_recover_pending_all || true
+      ssh_delete_txn_recover_pending_all || true
+      ;;
+  esac
+}
+
+ssh_recover_pending_txn_pick_dir() {
+  local kind="${1:-}"
+  local -n _out_ref="${2}"
+  local -a dirs=()
+  local txn_dir="" choice="" i
+  _out_ref=""
+  [[ "${kind}" == "add" || "${kind}" == "delete" ]] || return 1
+  while IFS= read -r txn_dir; do
+    [[ -n "${txn_dir}" ]] || continue
+    dirs+=("${txn_dir}")
+  done < <(ssh_pending_txn_dirs_by_kind "${kind}")
+  if (( ${#dirs[@]} == 0 )); then
+    return 1
+  fi
+  if (( ${#dirs[@]} == 1 )); then
+    _out_ref="${dirs[0]}"
+    return 0
+  fi
+  echo "Pilih journal recovery ${kind} SSH:"
+  for i in "${!dirs[@]}"; do
+    printf '  %d) %s\n' "$((i + 1))" "$(ssh_pending_txn_label "${dirs[$i]}")"
+  done
+  while true; do
+    if ! read -r -p "Pilih journal (1-${#dirs[@]}/kembali): " choice; then
+      echo
+      return 1
+    fi
+    if is_back_choice "${choice}"; then
+      return 1
+    fi
+    [[ "${choice}" =~ ^[0-9]+$ ]] || { warn "Pilihan tidak valid."; continue; }
+    if (( choice < 1 || choice > ${#dirs[@]} )); then
+      warn "Nomor di luar range."
+      continue
+    fi
+    _out_ref="${dirs[$((choice - 1))]}"
+    return 0
+  done
+}
+
+ssh_recover_pending_txn_menu() {
+  local pending_count=0
+  local add_count=0
+  local delete_count=0
+  local choice=""
+  local selected_dir=""
+  local selected_label=""
+  pending_count="$(ssh_pending_recovery_count)"
+  add_count="$(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'ssh-add.*' 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+  delete_count="$(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'ssh-delete.*' 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+  [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
+  [[ "${add_count}" =~ ^[0-9]+$ ]] || add_count=0
+  [[ "${delete_count}" =~ ^[0-9]+$ ]] || delete_count=0
+
+  title
+  echo "SSH Users > Recover Pending Txn"
+  hr
+  echo "Pending journal : ${pending_count}"
+  echo "  Add    : ${add_count}"
+  echo "  Delete : ${delete_count}"
+  if (( pending_count == 0 )); then
+    log "Tidak ada journal recovery SSH yang tertunda."
+    pause
+    return 0
+  fi
+  echo "Catatan        : aksi ini bisa memodifikasi akun Linux, metadata SSH, dan sinkronisasi ZIVPN untuk menyelesaikan transaksi lama."
+  hr
+  echo "  1) Recover journal Add"
+  echo "  2) Recover journal Delete"
+  echo "  0) Back"
+  hr
+  read -r -p "Pilih aksi: " choice
+  case "${choice}" in
+    1)
+      (( add_count > 0 )) || { warn "Tidak ada journal add SSH."; pause; return 0; }
+      ssh_recover_pending_txn_pick_dir add selected_dir || { pause; return 0; }
+      selected_label="$(ssh_pending_txn_label "${selected_dir}")"
+      echo "Journal terpilih : ${selected_label}"
+      confirm_menu_apply_now "Lanjutkan recovery journal add SSH ini sekarang?" || { pause; return 0; }
+      user_data_mutation_run_locked ssh_recover_pending_txn_now add "${selected_dir}"
+      ;;
+    2)
+      (( delete_count > 0 )) || { warn "Tidak ada journal delete SSH."; pause; return 0; }
+      ssh_recover_pending_txn_pick_dir delete selected_dir || { pause; return 0; }
+      selected_label="$(ssh_pending_txn_label "${selected_dir}")"
+      echo "Journal terpilih : ${selected_label}"
+      confirm_menu_apply_now "Lanjutkan recovery journal delete SSH ini sekarang?" || { pause; return 0; }
+      user_data_mutation_run_locked ssh_recover_pending_txn_now delete "${selected_dir}"
+      ;;
+    0|kembali|k|back|b)
+      return 0
+      ;;
+    *)
+      warn "Pilihan tidak valid."
+      ;;
+  esac
+  pause
+}
+
 ssh_managed_users_lines() {
   ssh_state_dirs_prepare
   need_python3
-  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" 2>/dev/null || true
+  python3 - <<'PY' "${SSH_USERS_STATE_DIR}" "${MUTATION_TXN_DIR}" 2>/dev/null || true
 import json
+import glob
 import os
 import pwd
 import re
@@ -4464,6 +5180,7 @@ import sys
 from datetime import datetime
 
 root = sys.argv[1]
+txn_root = sys.argv[2] if len(sys.argv) > 2 else ""
 
 def norm_created(v):
   s = str(v or "").strip()
@@ -4540,6 +5257,18 @@ for entry in pwd.getpwall():
     continue
   if home and not home.startswith("/home/"):
     continue
+  if os.path.isdir(txn_root):
+    for pending_path in glob.glob(os.path.join(txn_root, f"ssh-add.{username}*")):
+      try:
+        with open(os.path.join(pending_path, "linux_created"), "r", encoding="utf-8") as f:
+          if f.read().strip() != "true":
+            username = ""
+            break
+      except Exception:
+        username = ""
+        break
+  if not username:
+    continue
   if username in seen:
     continue
   rows.append((username.lower(), username, "linux-only", "-"))
@@ -4600,6 +5329,37 @@ ssh_add_user_header_render() {
 }
 
 ssh_add_user_apply_locked() {
+  local rc=0
+  (
+    SSH_ADD_ABORT_ACTIVE="1"
+    SSH_ADD_ABORT_USERNAME="$1"
+    SSH_ADD_ABORT_QF="$2"
+    SSH_ADD_ABORT_ACC="$3"
+    SSH_ADD_ABORT_PASSWORD="$4"
+    SSH_ADD_ABORT_LINUX_CREATED="false"
+    SSH_ADD_ABORT_ZIVPN_SYNCED="false"
+    trap '
+      if [[ "${SSH_ADD_ABORT_ACTIVE:-0}" == "1" ]]; then
+        ssh_add_user_rollback \
+          "${SSH_ADD_ABORT_USERNAME}" \
+          "${SSH_ADD_ABORT_QF}" \
+          "${SSH_ADD_ABORT_ACC}" \
+          "transaksi add user SSH terputus sebelum commit final" \
+          "${SSH_ADD_ABORT_PASSWORD}" \
+          "${SSH_ADD_ABORT_ZIVPN_SYNCED:-false}" \
+          "${SSH_ADD_ABORT_LINUX_CREATED:-false}" >/dev/null 2>&1 || true
+      fi
+    ' EXIT INT TERM HUP QUIT
+    ssh_add_user_apply_locked_inner "$@"
+    rc=$?
+    trap - EXIT INT TERM HUP QUIT
+    exit "${rc}"
+  )
+  rc=$?
+  return "${rc}"
+}
+
+ssh_add_user_apply_locked_inner() {
   local username="$1"
   local qf="$2"
   local acc_file="$3"
@@ -4612,33 +5372,45 @@ ssh_add_user_apply_locked() {
   local speed_enabled="${10}"
   local speed_down="${11}"
   local speed_up="${12}"
+  local add_txn_dir="" add_txn_id="" pending_shell="/usr/sbin/nologin"
 
-  if ! useradd -m -s /bin/bash "${username}" >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "false" "false"
+  add_txn_dir="$(mutation_txn_dir_new "ssh-add.${username}" 2>/dev/null || true)"
+  if [[ -z "${add_txn_dir}" || ! -d "${add_txn_dir}" ]]; then
+    warn "Gagal menyiapkan journal recovery add user SSH."
     pause
     return 1
   fi
-
-  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set password user '${username}'." "${password}" "false" "true"
+  add_txn_id="$(basename "${add_txn_dir}")"
+  pending_shell="$(ssh_pending_login_shell_get)"
+  mutation_txn_field_write "${add_txn_dir}" username "${username}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" qf "${qf}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" acc_file "${acc_file}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" txn_id "${add_txn_id}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" expired_at "${expired_at}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" created_at "${created_at}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" quota_bytes "${quota_bytes}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" ip_enabled "${ip_enabled}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" ip_limit "${ip_limit}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" speed_enabled "${speed_enabled}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" speed_down "${speed_down}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" speed_up "${speed_up}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${add_txn_dir}" linux_created "false" >/dev/null 2>&1 || true
+  if ! printf '%s' "${password}" > "${add_txn_dir}/password.secret"; then
+    mutation_txn_dir_remove "${add_txn_dir}"
+    warn "Gagal menulis journal password recovery add user SSH."
     pause
     return 1
   fi
-
-  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set expiry user '${username}'." "${password}" "false" "true"
-    pause
-    return 1
-  fi
+  chmod 600 "${add_txn_dir}/password.secret" 2>/dev/null || true
 
   if ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis metadata akun SSH." "${password}" "false" "true"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis metadata akun SSH." "${password}" "false" "false" "${add_txn_dir}"
     pause
     return 1
   fi
 
   if ! ssh_qac_atomic_update_file "${qf}" set_quota_limit "${quota_bytes}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH." "${password}" "false" "true"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal set quota metadata SSH." "${password}" "false" "false" "${add_txn_dir}"
     pause
     return 1
   fi
@@ -4669,47 +5441,96 @@ ssh_add_user_apply_locked() {
   fi
 
   if [[ -n "${add_fail_msg}" ]]; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}" "${password}" "false" "true"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "${add_fail_msg}" "${password}" "false" "false" "${add_txn_dir}"
     pause
     return 1
   fi
 
   if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan SSH account info." "${password}" "false" "true"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan SSH account info." "${password}" "false" "false" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+
+  if ! useradd -M -d "$(ssh_user_home_dir_default "${username}")" -s "${pending_shell}" "${username}" >/dev/null 2>&1; then
+    mutation_txn_dir_remove "${add_txn_dir}"
+    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "false" "false"
+    pause
+    return 1
+  fi
+  SSH_ADD_ABORT_LINUX_CREATED="true"
+  mutation_txn_field_write "${add_txn_dir}" linux_created "true" >/dev/null 2>&1 || true
+  if ! usermod -L "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengunci akun Linux '${username}' saat status masih pending." "${password}" "false" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! chage -E 0 "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menandai akun Linux '${username}' sebagai pending/disabled sementara." "${password}" "false" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! ssh_add_txn_marker_write "${username}" "${add_txn_id}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis marker transaksi add SSH." "${password}" "false" "true" "${add_txn_dir}"
     pause
     return 1
   fi
 
   if ! ssh_qac_enforce_now_warn "${username}"; then
     if [[ "${ip_enabled}" == "true" ]]; then
-      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false" "true"
+      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false" "true" "${add_txn_dir}"
     else
-      ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false" "true"
+      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false" "true" "${add_txn_dir}"
     fi
     pause
     return 1
   fi
   if ! ssh_dns_adblock_runtime_refresh_if_available; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false" "true"
-    pause
-    return 1
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis SSH account info." "${password}" "false" "true"
-    pause
-    return 1
-  fi
-  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true" "true"
-    pause
-    return 1
-  fi
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true" "true"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false" "true" "${add_txn_dir}"
     pause
     return 1
   fi
 
+  if ! ssh_user_home_dir_prepare "${username}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan home dir user '${username}'." "${password}" "false" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal set password user '${username}'." "${password}" "false" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  SSH_ADD_ABORT_ZIVPN_SYNCED="true"
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal set expiry user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! usermod -U "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuka lock akun Linux '${username}' pada commit final." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengaktifkan shell login user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+
+  SSH_ADD_ABORT_ACTIVE="0"
+  ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
+  mutation_txn_dir_remove "${add_txn_dir}"
   log "Akun SSH berhasil dibuat: ${username}"
   title
   echo "Add SSH user sukses ✅"
@@ -4783,19 +5604,198 @@ ssh_delete_user_snapshot_restore() {
   return 0
 }
 
+ssh_delete_user_quarantine_for_delete() {
+  local username="${1:-}"
+  local pending_shell=""
+  [[ -n "${username}" ]] || return 1
+  pending_shell="$(ssh_pending_login_shell_get)"
+  if ! usermod -s "${pending_shell}" "${username}" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! chage -E 0 "${username}" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+ssh_delete_user_predelete_restore() {
+  local username="${1:-}"
+  local linux_meta_file="${2:-}"
+  local state_mode="${3:-absent}"
+  local state_backup="${4:-}"
+  local shell="" expired_at="-"
+  [[ -n "${username}" ]] || return 1
+  if ! id "${username}" >/dev/null 2>&1; then
+    return 1
+  fi
+  shell="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" shell 2>/dev/null || true)"
+  [[ -n "${shell}" ]] || shell="/bin/bash"
+  if ! usermod -s "${shell}" "${username}" >/dev/null 2>&1; then
+    return 1
+  fi
+  expired_at="$(ssh_snapshot_expired_at_read "${state_mode}" "${state_backup}")"
+  if ! ssh_apply_expiry "${username}" "${expired_at}"; then
+    return 1
+  fi
+  return 0
+}
+
+ssh_snapshot_expired_at_read() {
+  local mode="${1:-absent}"
+  local backup_file="${2:-}"
+  if [[ "${mode}" != "file" || -z "${backup_file}" || ! -f "${backup_file}" ]]; then
+    printf '%s\n' "-"
+    return 0
+  fi
+  need_python3
+  python3 - <<'PY' "${backup_file}" 2>/dev/null || printf '%s\n' "-"
+import json
+import re
+import sys
+
+try:
+  data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+  print("-")
+  raise SystemExit(0)
+
+value = str((data or {}).get("expired_at") or "").strip()
+match = re.search(r"\d{4}-\d{2}-\d{2}", value)
+print(match.group(0) if match else "-")
+PY
+}
+
+ssh_delete_user_os_rollback() {
+  local username="${1:-}"
+  local previous_password="${2:-}"
+  local state_mode="${3:-absent}"
+  local state_backup="${4:-}"
+  local state_file="${5:-}"
+  local state_compat_mode="${6:-absent}"
+  local state_compat_backup="${7:-}"
+  local state_compat_file="${8:-}"
+  local account_mode="${9:-absent}"
+  local account_backup="${10:-}"
+  local account_file="${11}"
+  local account_compat_mode="${12:-absent}"
+  local account_compat_backup="${13:-}"
+  local account_compat_file="${14}"
+  local zivpn_mode="${15:-absent}"
+  local zivpn_backup="${16:-}"
+  local zivpn_file="${17:-}"
+  local linux_meta_file="${18:-}"
+  local home_mode="${19:-absent}"
+  local home_backup="${20:-}"
+  local expired_at="-"
+  local restore_msg=""
+  local home_dir="" shell="/bin/bash" primary_group="" supp_groups="" uid="" password_hash="" gecos=""
+  local -a useradd_args=()
+
+  [[ -n "${username}" ]] || {
+    echo "username rollback kosong"
+    return 1
+  }
+  if [[ -z "${previous_password}" || "${previous_password}" == "-" ]]; then
+    echo "password lama tidak tersedia untuk rollback OS"
+    return 1
+  fi
+  if id "${username}" >/dev/null 2>&1; then
+    echo "akun Linux '${username}' sudah ada; rollback OS dibatalkan"
+    return 1
+  fi
+
+  home_dir="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" home 2>/dev/null || true)"
+  shell="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" shell 2>/dev/null || true)"
+  gecos="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" gecos 2>/dev/null || true)"
+  primary_group="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" primary_group 2>/dev/null || true)"
+  supp_groups="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" supp_groups 2>/dev/null || true)"
+  uid="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" uid 2>/dev/null || true)"
+  password_hash="$(ssh_linux_account_snapshot_field_get "${linux_meta_file}" password_hash 2>/dev/null || true)"
+  [[ -n "${home_dir}" ]] || home_dir="$(ssh_user_home_dir_default "${username}")"
+  [[ -n "${shell}" ]] || shell="/bin/bash"
+  useradd_args=(-M -d "${home_dir}" -s "${shell}")
+  if [[ -n "${gecos}" ]]; then
+    useradd_args+=(-c "${gecos}")
+  fi
+  if [[ -n "${uid}" && "${uid}" =~ ^[0-9]+$ ]] && ! getent passwd "${uid}" >/dev/null 2>&1; then
+    useradd_args+=(-u "${uid}")
+  fi
+  if [[ -n "${primary_group}" ]] && getent group "${primary_group}" >/dev/null 2>&1; then
+    useradd_args+=(-g "${primary_group}")
+  fi
+  if ! useradd "${useradd_args[@]}" "${username}" >/dev/null 2>&1; then
+    echo "gagal membuat ulang user Linux"
+    return 1
+  fi
+  if [[ -n "${password_hash}" && "${password_hash}" != "!" && "${password_hash}" != "*" ]]; then
+    if ! usermod -p "${password_hash}" "${username}" >/dev/null 2>&1; then
+      userdel -r "${username}" >/dev/null 2>&1 || true
+      echo "gagal memulihkan hash password Linux"
+      return 1
+    fi
+  else
+    if ! printf '%s:%s\n' "${username}" "${previous_password}" | chpasswd >/dev/null 2>&1; then
+      userdel -r "${username}" >/dev/null 2>&1 || true
+      echo "gagal memulihkan password Linux"
+      return 1
+    fi
+  fi
+  expired_at="$(ssh_snapshot_expired_at_read "${state_mode}" "${state_backup}")"
+  if ! ssh_apply_expiry "${username}" "${expired_at}"; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    echo "gagal memulihkan expiry Linux"
+    return 1
+  fi
+  if ! ssh_home_snapshot_restore "${username}" "${home_mode}" "${home_backup}"; then
+    userdel -r "${username}" >/dev/null 2>&1 || true
+    echo "gagal memulihkan home user Linux"
+    return 1
+  fi
+  if [[ -n "${supp_groups}" ]]; then
+    usermod -a -G "${supp_groups}" "${username}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${primary_group}" ]]; then
+    chown -R "${username}:${primary_group}" "${home_dir}" >/dev/null 2>&1 || true
+  fi
+
+  restore_msg="$(ssh_delete_user_snapshot_restore \
+    "${username}" \
+    "${state_mode}" "${state_backup}" "${state_file}" \
+    "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" \
+    "${account_mode}" "${account_backup}" "${account_file}" \
+    "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
+    "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
+  if [[ -n "${restore_msg}" ]]; then
+    echo "${restore_msg}"
+    return 1
+  fi
+  echo "ok"
+  return 0
+}
+
 ssh_delete_user_apply_locked() {
   local username="$1"
   local previous_password="$2"
   local linux_exists="$3"
   local zivpn_file=""
-  local cleanup_failed="" dns_failed="false" zivpn_failed="false"
+  local cleanup_failed=""
+  local delete_txn_dir=""
   local snapshot_dir="" state_mode="absent" state_backup="" state_file=""
   local state_compat_mode="absent" state_compat_backup="" state_compat_file=""
   local account_mode="absent" account_backup="" account_file=""
   local account_compat_mode="absent" account_compat_backup="" account_compat_file=""
   local zivpn_mode="absent" zivpn_backup=""
+  local linux_meta_file=""
+  local home_mode="absent" home_backup=""
+  local rollback_restored="false"
   local -a notes=()
 
+  delete_txn_dir="$(mutation_txn_dir_new "ssh-delete.${username}" 2>/dev/null || true)"
+  if [[ -z "${delete_txn_dir}" || ! -d "${delete_txn_dir}" ]]; then
+    warn "Gagal menyiapkan journal recovery delete user SSH."
+    pause
+    return 1
+  fi
   if zivpn_runtime_available; then
     zivpn_file="$(zivpn_password_file "${username}")"
   fi
@@ -4803,29 +5803,39 @@ ssh_delete_user_apply_locked() {
   state_compat_file="$(ssh_user_state_compat_file "${username}")"
   account_file="$(ssh_account_info_file "${username}")"
   account_compat_file="${SSH_ACCOUNT_DIR}/${username}.txt"
-  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/ssh-delete.${username}.XXXXXX" 2>/dev/null || true)"
-  if [[ -z "${snapshot_dir}" || ! -d "${snapshot_dir}" ]]; then
-    warn "Gagal menyiapkan snapshot rollback hapus user SSH."
-    pause
-    return 1
-  fi
+  snapshot_dir="${delete_txn_dir}"
   if ! ssh_optional_file_snapshot_create "${state_file}" "${snapshot_dir}" state_mode state_backup \
     || ! ssh_optional_file_snapshot_create "${state_compat_file}" "${snapshot_dir}" state_compat_mode state_compat_backup \
     || ! ssh_optional_file_snapshot_create "${account_file}" "${snapshot_dir}" account_mode account_backup \
     || ! ssh_optional_file_snapshot_create "${account_compat_file}" "${snapshot_dir}" account_compat_mode account_compat_backup; then
-    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    mutation_txn_dir_remove "${delete_txn_dir}"
     warn "Gagal membuat snapshot artefak SSH sebelum delete."
     pause
     return 1
   fi
   if [[ -n "${zivpn_file}" ]] && ! ssh_optional_file_snapshot_create "${zivpn_file}" "${snapshot_dir}" zivpn_mode zivpn_backup; then
-    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
+    mutation_txn_dir_remove "${delete_txn_dir}"
     warn "Gagal membuat snapshot password ZIVPN sebelum delete."
     pause
     return 1
   fi
+  if ! ssh_home_snapshot_create "${username}" "${snapshot_dir}" home_mode home_backup; then
+    mutation_txn_dir_remove "${delete_txn_dir}"
+    warn "Gagal membuat snapshot home user Linux sebelum delete."
+    pause
+    return 1
+  fi
+  if [[ "${linux_exists}" == "true" ]] && ! ssh_linux_account_snapshot_create "${username}" "${snapshot_dir}" linux_meta_file; then
+    mutation_txn_dir_remove "${delete_txn_dir}"
+    warn "Gagal membuat snapshot metadata akun Linux sebelum delete."
+    pause
+    return 1
+  fi
+  mutation_txn_field_write "${delete_txn_dir}" username "${username}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${delete_txn_dir}" linux_deleted "0" >/dev/null 2>&1 || true
+  [[ -n "${zivpn_file}" ]] && mutation_txn_field_write "${delete_txn_dir}" zivpn_file "${zivpn_file}" >/dev/null 2>&1 || true
 
-  if [[ "${linux_exists}" == "true" ]] && ! userdel "${username}" >/dev/null 2>&1; then
+  if [[ "${linux_exists}" == "true" ]] && ! ssh_delete_user_quarantine_for_delete "${username}"; then
     local restore_msg=""
     restore_msg="$(ssh_delete_user_snapshot_restore \
       "${username}" \
@@ -4834,44 +5844,76 @@ ssh_delete_user_apply_locked() {
       "${account_mode}" "${account_backup}" "${account_file}" \
       "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
       "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
-    warn "Gagal menghapus user Linux '${username}'."
+    mutation_txn_dir_remove "${delete_txn_dir}"
+    warn "Gagal mengarantina akun Linux '${username}' sebelum delete."
     [[ -n "${restore_msg}" ]] && warn "Rollback snapshot belum sepenuhnya bersih: ${restore_msg}"
-    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
     pause
     return 1
   fi
 
-  if [[ -n "${zivpn_file}" ]] && ! zivpn_remove_user_password_warn "${username}"; then
-    zivpn_failed="true"
-    notes+=("cleanup ZIVPN gagal")
-  fi
-
-  if [[ "${zivpn_failed}" != "true" ]]; then
-    cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
-    if [[ -n "${cleanup_failed}" ]]; then
-      notes+=("cleanup artefak lokal gagal: ${cleanup_failed}")
+  cleanup_failed="$(ssh_delete_user_cleanup_after_linux_delete "${username}" "${zivpn_file}" 2>/dev/null || true)"
+  if [[ -n "${cleanup_failed}" ]]; then
+    local rollback_msg=""
+    rollback_msg="$(ssh_delete_user_predelete_restore "${username}" "${linux_meta_file}" "${state_mode}" "${state_backup}" 2>/dev/null || true)"
+    if [[ -n "${rollback_msg}" ]]; then
+      notes+=("${cleanup_failed}")
+      notes+=("rollback status akun Linux gagal: ${rollback_msg}")
+    else
+      rollback_msg="$(ssh_delete_user_snapshot_restore \
+        "${username}" \
+        "${state_mode}" "${state_backup}" "${state_file}" \
+        "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" \
+        "${account_mode}" "${account_backup}" "${account_file}" \
+        "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
+        "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
+      if [[ -z "${rollback_msg}" ]]; then
+        rollback_restored="true"
+        cleanup_failed=""
+        mutation_txn_dir_remove "${delete_txn_dir}"
+      else
+        notes+=("${cleanup_failed}")
+        notes+=("rollback snapshot gagal: ${rollback_msg}")
+      fi
     fi
   fi
-
-  if [[ "${zivpn_failed}" != "true" && -z "${cleanup_failed}" ]] && ! ssh_dns_adblock_runtime_refresh_if_available; then
-    dns_failed="true"
-    notes+=("refresh runtime DNS adblock gagal")
+  if [[ -z "${cleanup_failed}" && "${linux_exists}" == "true" ]] && ! ssh_userdel_purge "${username}" >/dev/null 2>&1; then
+    local restore_msg=""
+    restore_msg="$(ssh_delete_user_predelete_restore "${username}" "${linux_meta_file}" "${state_mode}" "${state_backup}" 2>/dev/null || true)"
+    [[ -n "${restore_msg}" ]] && notes+=("rollback status akun Linux gagal: ${restore_msg}")
+    restore_msg="$(ssh_delete_user_snapshot_restore \
+      "${username}" \
+      "${state_mode}" "${state_backup}" "${state_file}" \
+      "${state_compat_mode}" "${state_compat_backup}" "${state_compat_file}" \
+      "${account_mode}" "${account_backup}" "${account_file}" \
+      "${account_compat_mode}" "${account_compat_backup}" "${account_compat_file}" \
+      "${zivpn_mode}" "${zivpn_backup}" "${zivpn_file}" 2>/dev/null || true)"
+    [[ -n "${restore_msg}" ]] && notes+=("rollback snapshot gagal: ${restore_msg}")
+    cleanup_failed="Gagal menghapus user Linux '${username}' setelah cleanup artefak selesai."
+  elif [[ -z "${cleanup_failed}" ]]; then
+    mutation_txn_field_write "${delete_txn_dir}" linux_deleted "1" >/dev/null 2>&1 || true
   fi
 
-  rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
-
   title
-  if [[ -n "${cleanup_failed}" || "${dns_failed}" == "true" || "${zivpn_failed}" == "true" ]]; then
+  if [[ "${rollback_restored}" == "true" ]]; then
+    echo "Delete SSH user dibatalkan ⚠"
+    echo "Cleanup akhir gagal, tetapi akun Linux dan artefak managed berhasil dipulihkan."
+    hr
+    pause
+    return 1
+  fi
+  if [[ -n "${cleanup_failed}" ]]; then
     echo "Delete SSH user selesai parsial ⚠"
     echo "Akun Linux sudah terhapus, tetapi cleanup lanjutan belum sepenuhnya bersih."
     if (( ${#notes[@]} > 0 )); then
       printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
     fi
+    warn "Journal recovery delete SSH dipertahankan di ${delete_txn_dir}."
     hr
     pause
     return 1
   fi
 
+  mutation_txn_dir_remove "${delete_txn_dir}"
   echo "Delete SSH user selesai ✅"
   hr
   echo "Akun Linux dan artefak managed untuk '${username}' berhasil dihapus."
@@ -5422,6 +6464,9 @@ ssh_list_users_menu() {
 
   while IFS= read -r u; do
     [[ -n "${u}" ]] || continue
+    if ssh_add_txn_linux_pending_contains "${u}"; then
+      continue
+    fi
     users+=("${u}")
   done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//' | sort -u)
 
@@ -6126,6 +7171,7 @@ sshws_active_sessions_menu() {
 }
 
 ssh_menu() {
+  local pending_count=0
   local -a items=(
     "1|Add User"
     "2|Delete User"
@@ -6135,10 +7181,17 @@ ssh_menu() {
     "6|SSH WS Status"
     "7|Restart SSH WS"
     "8|Active Sessions"
+    "9|Recover Pending Txn"
     "0|Back"
   )
   while true; do
+    pending_count="$(ssh_pending_recovery_count)"
+    [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
     ui_menu_screen_begin "2) SSH Users"
+    if (( pending_count > 0 )); then
+      warn "Ada ${pending_count} journal recovery SSH tertunda. Gunakan 'Recover Pending Txn' bila ingin melanjutkannya."
+      hr
+    fi
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -6146,14 +7199,43 @@ ssh_menu() {
       break
     fi
     case "${c}" in
-      1) menu_run_isolated_report "Add SSH User" ssh_add_user_menu ;;
-      2) menu_run_isolated_report "Delete SSH User" ssh_delete_user_menu ;;
-      3) menu_run_isolated_report "Set SSH Expiry" ssh_extend_expiry_menu ;;
-      4) menu_run_isolated_report "Reset SSH Password" ssh_reset_password_menu ;;
+      1)
+        if (( pending_count > 0 )); then
+          warn "Mutasi SSH baru ditahan sampai journal recovery tertunda diselesaikan."
+          pause
+        else
+          menu_run_isolated_report "Add SSH User" ssh_add_user_menu
+        fi
+        ;;
+      2)
+        if (( pending_count > 0 )); then
+          warn "Mutasi SSH baru ditahan sampai journal recovery tertunda diselesaikan."
+          pause
+        else
+          menu_run_isolated_report "Delete SSH User" ssh_delete_user_menu
+        fi
+        ;;
+      3)
+        if (( pending_count > 0 )); then
+          warn "Mutasi SSH baru ditahan sampai journal recovery tertunda diselesaikan."
+          pause
+        else
+          menu_run_isolated_report "Set SSH Expiry" ssh_extend_expiry_menu
+        fi
+        ;;
+      4)
+        if (( pending_count > 0 )); then
+          warn "Mutasi SSH baru ditahan sampai journal recovery tertunda diselesaikan."
+          pause
+        else
+          menu_run_isolated_report "Reset SSH Password" ssh_reset_password_menu
+        fi
+        ;;
       5) ssh_list_users_menu ;;
       6) sshws_status_menu ;;
       7) sshws_restart_menu ;;
       8) sshws_active_sessions_menu ;;
+      9) menu_run_isolated_report "Recover Pending SSH Txn" ssh_recover_pending_txn_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -6479,56 +7561,12 @@ ssh_qac_enforce_now_warn() {
 ssh_qac_collect_files() {
   SSH_QAC_FILES=()
   ssh_state_dirs_prepare
-  local -A seen=()
-  local f base username qf
-
-  while IFS= read -r -d '' f; do
-    base="$(basename "${f}")"
-    base="${base%.json}"
-    username="$(ssh_username_from_key "${base}")"
-    [[ -n "${username}" ]] || continue
-    if [[ -n "${seen["${username}"]+x}" ]]; then
-      continue
-    fi
-    seen["${username}"]=1
-    qf="$(ssh_user_state_resolve_file "${username}")"
-    SSH_QAC_FILES+=("${qf}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
-
-  while IFS= read -r -d '' f; do
-    base="$(basename "${f}")"
-    base="${base%.txt}"
-    username="$(ssh_username_from_key "${base}")"
-    [[ -n "${username}" ]] || continue
-    if [[ -n "${seen["${username}"]+x}" ]]; then
-      continue
-    fi
-    seen["${username}"]=1
-    qf="$(ssh_user_state_resolve_file "${username}")"
-    SSH_QAC_FILES+=("${qf}")
-  done < <(find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
-
-  while IFS= read -r -d '' f; do
-    base="$(basename "${f}")"
-    username="${base%.pass}"
-    [[ -n "${username}" ]] || continue
-    if [[ -n "${seen["${username}"]+x}" ]]; then
-      continue
-    fi
-    seen["${username}"]=1
-    qf="$(ssh_user_state_resolve_file "${username}")"
-    SSH_QAC_FILES+=("${qf}")
-  done < <(find "${ZIVPN_PASSWORDS_DIR}" -maxdepth 1 -type f -name '*.pass' -print0 2>/dev/null | sort -z)
-
+  local username qf
   while IFS= read -r username; do
     [[ -n "${username}" ]] || continue
-    if [[ -n "${seen["${username}"]+x}" ]]; then
-      continue
-    fi
-    seen["${username}"]=1
     qf="$(ssh_user_state_resolve_file "${username}")"
     SSH_QAC_FILES+=("${qf}")
-  done < <(ssh_linux_candidate_users_get 2>/dev/null || true)
+  done < <(ssh_collect_candidate_users false)
 }
 
 ssh_qac_total_pages_for_indexes() {
@@ -7136,6 +8174,8 @@ payload["sshws_token"] = token
 payload["quota_limit"] = quota_limit
 payload["quota_unit"] = unit
 payload["quota_used"] = quota_used
+payload["bootstrap_review_needed"] = to_bool(payload.get("bootstrap_review_needed"))
+payload["bootstrap_source"] = str(payload.get("bootstrap_source") or "").strip()
 payload["status"] = {
   "manual_block": to_bool(status.get("manual_block")),
   "quota_exhausted": to_bool(status.get("quota_exhausted")),
@@ -7153,7 +8193,12 @@ payload["status"] = {
 
 st = payload["status"]
 
-if action == "set_quota_limit":
+if action == "bootstrap_marker_set":
+  if len(args) != 1:
+    raise SystemExit("bootstrap_marker_set butuh 1 argumen (source)")
+  payload["bootstrap_review_needed"] = True
+  payload["bootstrap_source"] = str(args[0] or "").strip()
+elif action == "set_quota_limit":
   if len(args) != 1:
     raise SystemExit("set_quota_limit butuh 1 argumen (bytes)")
   payload["quota_limit"] = parse_int(args[0], "quota_limit", 0)
@@ -7197,6 +8242,10 @@ elif action == "set_speed_all_enable":
   st["speed_limit_enabled"] = True
 else:
   raise SystemExit(f"aksi ssh_qac_atomic_update_file tidak dikenali: {action}")
+
+if action != "bootstrap_marker_set":
+  payload["bootstrap_review_needed"] = False
+  payload["bootstrap_source"] = ""
 
 payload["status"] = st
 text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -7496,18 +8545,33 @@ ssh_qac_edit_flow() {
 
   if [[ ! -f "${qf}" ]]; then
     warn "Metadata SSH QAC untuk '${username_hint}' belum ada."
-    echo "Bootstrap akan membuat state awal dengan nilai konservatif:"
-    echo "  - quota used = 0"
-    echo "  - created_at = hari ini"
-    echo "  - expired_at = hasil baca akun Linux bila tersedia, selain itu '-'"
-    hr
-    if ! confirm_menu_apply_now "Buat metadata SSH QAC awal untuk '${username_hint}' sekarang?"; then
-      pause
-      return 0
-    fi
-    if ! ssh_qac_metadata_bootstrap_if_missing "${username_hint}" "${qf}"; then
-      warn "Gagal membuat metadata SSH QAC awal untuk '${username_hint}'."
-      pause
+    echo "Bootstrap akan membuat state placeholder minimal:"
+	    echo "  - quota used = 0"
+	    echo "  - created_at = hari ini"
+	    echo "  - expired_at = -"
+	    hr
+	    if ! confirm_menu_apply_now "Buat metadata SSH QAC awal untuk '${username_hint}' sekarang?"; then
+	      pause
+	      return 0
+	    fi
+	    if ! confirm_menu_apply_now "Konfirmasi final: buat placeholder metadata SSH QAC baru untuk '${username_hint}'?"; then
+	      pause
+	      return 0
+	    fi
+	    local bootstrap_ack=""
+	    read -r -p "Ketik persis 'BOOTSTRAP SSH QAC ${username_hint}' untuk lanjut bootstrap placeholder SSH QAC (atau kembali): " bootstrap_ack
+	    if is_back_choice "${bootstrap_ack}"; then
+	      pause
+	      return 0
+	    fi
+	    if [[ "${bootstrap_ack}" != "BOOTSTRAP SSH QAC ${username_hint}" ]]; then
+	      warn "Konfirmasi bootstrap placeholder SSH QAC tidak cocok. Dibatalkan."
+	      pause
+	      return 0
+	    fi
+	    if ! ssh_qac_metadata_bootstrap_if_missing "${username_hint}" "${qf}"; then
+	      warn "Gagal membuat metadata SSH QAC awal untuk '${username_hint}'."
+	      pause
       return 1
     fi
   fi
@@ -7564,6 +8628,12 @@ ssh_qac_edit_flow() {
     printf "%-${label_w}s : %s Mbps\n" "Speed Download" "${speed_down}"
     printf "%-${label_w}s : %s Mbps\n" "Speed Upload" "${speed_up}"
     printf "%-${label_w}s : %s\n" "Speed Limit" "${speed_state}"
+    local ssh_bootstrap_needed ssh_bootstrap_source
+    IFS='|' read -r ssh_bootstrap_needed ssh_bootstrap_source <<<"$(ssh_qac_bootstrap_status_get "${qf}")"
+    if [[ "${ssh_bootstrap_needed}" == "true" ]]; then
+      printf "%-${label_w}s : %s\n" "Bootstrap" "PERLU REVIEW"
+      [[ -n "${ssh_bootstrap_source}" ]] && printf "%-${label_w}s : %s\n" "Source" "${ssh_bootstrap_source}"
+    fi
     hr
 
     echo "  1) View JSON"

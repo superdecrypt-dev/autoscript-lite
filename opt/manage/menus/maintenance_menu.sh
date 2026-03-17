@@ -34,11 +34,25 @@ maintenance_restore_service_state_exact() {
 maintenance_restart_core_now() {
   local xray_was_active="false"
   local nginx_was_active="false"
+  local restart_ack=""
   if svc_exists xray && svc_is_active xray; then
     xray_was_active="true"
   fi
   if svc_exists nginx && svc_is_active nginx; then
     nginx_was_active="true"
+  fi
+  if ! confirm_menu_apply_now "Restart Core akan me-restart Xray dan Nginx. Lanjutkan sekarang?"; then
+    warn "Restart core dibatalkan."
+    return 0
+  fi
+  read -r -p "Ketik persis 'RESTART CORE' untuk lanjut restart core (atau kembali): " restart_ack
+  if is_back_choice "${restart_ack}"; then
+    warn "Restart core dibatalkan."
+    return 0
+  fi
+  if [[ "${restart_ack}" != "RESTART CORE" ]]; then
+    warn "Konfirmasi restart core tidak cocok. Dibatalkan."
+    return 0
   fi
   if have_cmd xray && ! xray_confdir_syntax_test; then
     warn "Syntax confdir Xray gagal. Restart core dibatalkan sebelum service disentuh."
@@ -51,6 +65,10 @@ maintenance_restart_core_now() {
   if ! xray_restart_checked_with_preflight; then
     warn "Restart core dibatalkan: restart xray gagal."
     return 1
+  fi
+  if ! nginx_restart_checked_with_listener; then
+    warn "Restart nginx pertama gagal setelah xray berhasil direstart. Mencoba retry sekali lagi sebelum restore state..."
+    sleep 2
   fi
   if ! nginx_restart_checked_with_listener; then
     warn "Restart core gagal setelah xray berhasil direstart: restart nginx gagal. Mencoba restore state service sebelumnya..."
@@ -232,6 +250,25 @@ maintenance_normalize_quota_dates_menu() {
     fi
     pause
     return 0
+  fi
+  local bulk_ack=""
+  read -r -p "Ketik persis 'NORMALIZE ${scope_choice}' untuk lanjut normalisasi quota (atau kembali): " bulk_ack
+  if is_back_choice "${bulk_ack}"; then
+    warn "Normalisasi quota dates dibatalkan pada checkpoint typed confirmation."
+    pause
+    return 0
+  fi
+  if [[ "${bulk_ack}" != "NORMALIZE ${scope_choice}" ]]; then
+    warn "Konfirmasi typed normalisasi quota tidak cocok. Dibatalkan."
+    pause
+    return 0
+  fi
+  if [[ "${file_count:-0}" =~ ^[0-9]+$ ]] && (( file_count >= 20 )); then
+    if ! confirm_menu_apply_now "Target normalisasi mencapai ${file_count} file quota. Tetap lanjut bulk write sekarang?"; then
+      warn "Normalisasi quota dates dibatalkan pada checkpoint bulk-write."
+      pause
+      return 0
+    fi
   fi
 
   if ui_run_logged_command_with_spinner spin_log "Menormalisasi quota dates (${scope_label})" quota_migrate_dates_to_dateonly "${quota_targets[@]}"; then

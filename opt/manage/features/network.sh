@@ -409,12 +409,13 @@ PY
 
 xray_routing_default_rule_get() {
   # prints: mode=<direct|warp|unknown> tag=<tag-or-empty>
-  if [[ ! -f "${XRAY_ROUTING_CONF}" ]]; then
+  local src_file="${1:-${XRAY_ROUTING_CONF}}"
+  if [[ ! -f "${src_file}" ]]; then
     printf 'mode=unknown\ntag=\n'
     return 0
   fi
   need_python3
-  python3 - <<'PY' "${XRAY_ROUTING_CONF}"
+  python3 - <<'PY' "${src_file}"
 import json, sys
 src=sys.argv[1]
 with open(src,'r',encoding='utf-8') as f:
@@ -1139,12 +1140,13 @@ network_show_summary() {
 }
 
 warp_global_mode_get() {
-  xray_routing_default_rule_get | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true
+  local src_file="${1:-${XRAY_ROUTING_CONF}}"
+  xray_routing_default_rule_get "${src_file}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true
 }
 
 warp_global_mode_pretty_get() {
   local mode
-  mode="$(warp_global_mode_get)"
+  mode="$(warp_global_mode_get "${1:-${XRAY_ROUTING_CONF}}")"
   case "${mode}" in
     warp) echo "warp" ;;
     direct) echo "direct" ;;
@@ -1153,12 +1155,13 @@ warp_global_mode_pretty_get() {
 }
 
 xray_routing_rule_user_list_get() {
-  # args: marker outboundTag
+  # args: marker outboundTag [routing_conf]
   local marker="$1"
   local outbound="$2"
+  local src_file="${3:-${XRAY_ROUTING_CONF}}"
   need_python3
-  [[ -f "${XRAY_ROUTING_CONF}" ]] || return 0
-  python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${marker}" "${outbound}" 2>/dev/null || true
+  [[ -f "${src_file}" ]] || return 0
+  python3 - <<'PY' "${src_file}" "${marker}" "${outbound}" 2>/dev/null || true
 import json, sys
 src, marker, outbound = sys.argv[1:4]
 try:
@@ -1189,12 +1192,13 @@ PY
 }
 
 xray_routing_rule_inbound_list_get() {
-  # args: marker outboundTag
+  # args: marker outboundTag [routing_conf]
   local marker="$1"
   local outbound="$2"
+  local src_file="${3:-${XRAY_ROUTING_CONF}}"
   need_python3
-  [[ -f "${XRAY_ROUTING_CONF}" ]] || return 0
-  python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${marker}" "${outbound}" 2>/dev/null || true
+  [[ -f "${src_file}" ]] || return 0
+  python3 - <<'PY' "${src_file}" "${marker}" "${outbound}" 2>/dev/null || true
 import json, sys
 src, marker, outbound = sys.argv[1:4]
 try:
@@ -1273,6 +1277,256 @@ xray_routing_candidate_prepare() {
   }
   chmod 600 "${_out_ref}" >/dev/null 2>&1 || true
   return 0
+}
+
+xray_routing_default_rule_set_in_file() {
+  # args: src_conf dst_conf mode direct|warp
+  local src_conf="$1"
+  local dst_conf="$2"
+  local mode="$3"
+  need_python3
+  [[ -f "${src_conf}" ]] || return 1
+  python3 - <<'PY' "${src_conf}" "${dst_conf}" "${mode}" || return 1
+import json, os, sys, tempfile
+src, dst, mode = sys.argv[1:4]
+with open(src,'r',encoding='utf-8') as f:
+  cfg=json.load(f)
+routing=(cfg.get('routing') or {})
+rules=routing.get('rules') or []
+if not isinstance(rules, list):
+  raise SystemExit("Invalid routing config: routing.rules bukan list")
+def is_default_rule(r):
+  if not isinstance(r, dict): return False
+  if r.get('type') != 'field': return False
+  port=str(r.get('port','')).strip()
+  if port not in ('1-65535','0-65535'): return False
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
+  return True
+idx=None
+for i,r in enumerate(rules):
+  if is_default_rule(r):
+    idx=i
+if idx is None:
+  raise SystemExit("Default rule (port 1-65535) tidak ditemukan")
+r=rules[idx]
+if mode == 'direct':
+  r['outboundTag']='direct'
+elif mode == 'warp':
+  r['outboundTag']='warp'
+else:
+  raise SystemExit("Mode tidak dikenal: " + mode)
+rules[idx]=r
+routing['rules']=rules
+cfg['routing']=routing
+dirn=os.path.dirname(dst) or "."
+fd,tmp=tempfile.mkstemp(prefix=".tmp.",suffix=".json",dir=dirn)
+try:
+  with os.fdopen(fd,'w',encoding='utf-8') as f:
+    json.dump(cfg,f,ensure_ascii=False,indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp,dst)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
+}
+
+xray_routing_rule_set_user_outbound_mode_in_file() {
+  # args: src_conf dst_conf email mode(direct|warp|off)
+  local src_conf="$1"
+  local dst_conf="$2"
+  local email="$3"
+  local mode="$4"
+  need_python3
+  [[ -f "${src_conf}" ]] || return 1
+  python3 - <<'PY' "${src_conf}" "${dst_conf}" "${email}" "${mode}" || return 1
+import json, os, sys, tempfile
+src, dst, email, mode = sys.argv[1:5]
+mode = (mode or "").strip().lower()
+if mode not in {"direct", "warp", "off"}:
+  raise SystemExit("Mode user harus direct|warp|off.")
+with open(src,'r',encoding='utf-8') as f:
+  cfg=json.load(f)
+routing = cfg.get('routing') or {}
+rules = routing.get('rules')
+if not isinstance(rules, list):
+  raise SystemExit("Invalid routing config: routing.rules bukan list")
+def is_default_rule(r):
+  if not isinstance(r, dict): return False
+  if r.get('type') != 'field': return False
+  port = str(r.get('port', '')).strip()
+  if port not in ('1-65535', '0-65535'): return False
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
+  return True
+def find_rule_idx(marker, outbound):
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    users = r.get('user') or []
+    if not isinstance(users, list) or 'inboundTag' in r:
+      continue
+    if marker in users:
+      return i
+  return -1
+default_idx = -1
+for i, r in enumerate(rules):
+  if is_default_rule(r):
+    default_idx = i
+if default_idx < 0:
+  raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
+def toggle_user_marker(marker, outbound, enable):
+  global default_idx
+  idx = find_rule_idx(marker, outbound)
+  if idx < 0 and not enable:
+    return
+  if idx < 0 and enable:
+    rules.insert(default_idx, {"type": "field", "user": [marker], "outboundTag": outbound})
+    idx = default_idx
+    default_idx += 1
+  rule = rules[idx]
+  if not isinstance(rule, dict):
+    rule = {"type": "field", "user": [marker], "outboundTag": outbound}
+  users = rule.get('user')
+  if not isinstance(users, list):
+    users = []
+  users = [u for u in users if u != marker and u != email]
+  users.insert(0, marker)
+  if enable and email not in users:
+    users.append(email)
+  rule['type'] = 'field'
+  rule['outboundTag'] = outbound
+  rule['user'] = users
+  rules[idx] = rule
+if mode == 'direct':
+  toggle_user_marker("dummy-warp-user", "warp", False)
+  toggle_user_marker("dummy-direct-user", "direct", True)
+elif mode == 'warp':
+  toggle_user_marker("dummy-direct-user", "direct", False)
+  toggle_user_marker("dummy-warp-user", "warp", True)
+else:
+  toggle_user_marker("dummy-direct-user", "direct", False)
+  toggle_user_marker("dummy-warp-user", "warp", False)
+routing['rules'] = rules
+cfg['routing'] = routing
+dirn=os.path.dirname(dst) or "."
+fd,tmp=tempfile.mkstemp(prefix=".tmp.",suffix=".json",dir=dirn)
+try:
+  with os.fdopen(fd,'w',encoding='utf-8') as f:
+    json.dump(cfg,f,ensure_ascii=False,indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp,dst)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
+}
+
+xray_routing_rule_set_inbound_outbound_mode_in_file() {
+  # args: src_conf dst_conf inbound_tag mode(direct|warp|off)
+  local src_conf="$1"
+  local dst_conf="$2"
+  local tag="$3"
+  local mode="$4"
+  need_python3
+  [[ -f "${src_conf}" ]] || return 1
+  python3 - <<'PY' "${src_conf}" "${dst_conf}" "${tag}" "${mode}" || return 1
+import json, os, sys, tempfile
+src, dst, inbound_tag, mode = sys.argv[1:5]
+mode = (mode or "").strip().lower()
+if mode not in {"direct", "warp", "off"}:
+  raise SystemExit("Mode inbound harus direct|warp|off.")
+with open(src, 'r', encoding='utf-8') as f:
+  cfg = json.load(f)
+routing = cfg.get('routing') or {}
+rules = routing.get('rules')
+if not isinstance(rules, list):
+  raise SystemExit("Invalid routing config: routing.rules bukan list")
+def is_default_rule(r):
+  if not isinstance(r, dict): return False
+  if r.get('type') != 'field': return False
+  port = str(r.get('port', '')).strip()
+  if port not in ('1-65535', '0-65535'): return False
+  if r.get('user') or r.get('domain') or r.get('ip') or r.get('protocol'):
+    return False
+  return True
+def find_rule_idx(marker, outbound):
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    tags = r.get('inboundTag') or []
+    if isinstance(tags, list) and marker in tags:
+      return i
+  return -1
+default_idx = -1
+for i, r in enumerate(rules):
+  if is_default_rule(r):
+    default_idx = i
+if default_idx < 0:
+  raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
+def toggle_inbound_marker(marker, outbound, enable):
+  global default_idx
+  idx = find_rule_idx(marker, outbound)
+  if idx < 0 and not enable:
+    return
+  if idx < 0 and enable:
+    rules.insert(default_idx, {"type": "field", "inboundTag": [marker], "outboundTag": outbound})
+    idx = default_idx
+    default_idx += 1
+  rule = rules[idx]
+  if not isinstance(rule, dict):
+    rule = {"type": "field", "inboundTag": [marker], "outboundTag": outbound}
+  tags = rule.get('inboundTag')
+  if not isinstance(tags, list):
+    tags = []
+  tags = [t for t in tags if t != marker and t != inbound_tag]
+  tags.insert(0, marker)
+  if enable and inbound_tag not in tags:
+    tags.append(inbound_tag)
+  rule['type'] = 'field'
+  rule['outboundTag'] = outbound
+  rule['inboundTag'] = tags
+  rules[idx] = rule
+if mode == 'direct':
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", False)
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", True)
+elif mode == 'warp':
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", False)
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", True)
+else:
+  toggle_inbound_marker("dummy-direct-inbounds", "direct", False)
+  toggle_inbound_marker("dummy-warp-inbounds", "warp", False)
+routing['rules'] = rules
+cfg['routing'] = routing
+dirn=os.path.dirname(dst) or "."
+fd,tmp=tempfile.mkstemp(prefix=".tmp.",suffix=".json",dir=dirn)
+try:
+  with os.fdopen(fd,'w',encoding='utf-8') as f:
+    json.dump(cfg,f,ensure_ascii=False,indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp,dst)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
 }
 
 xray_routing_custom_domain_entry_set_mode_in_file() {
@@ -2650,6 +2904,11 @@ adblock_manual_domain_add_menu() {
       fi
     fi
     if adblock_run_locked adblock_manual_domain_add_commit "${normalized}"; then
+      if ! adblock_run_locked adblock_prompt_update_after_source_change "Domain manual Adblock berhasil ditambahkan."; then
+        warn "Domain manual tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
+        pause
+        continue
+      fi
       pause
       return 0
     fi
@@ -2764,6 +3023,11 @@ adblock_manual_domain_delete_menu() {
       fi
     fi
     if adblock_run_locked adblock_manual_domain_delete_commit "${selected_domain}"; then
+      if ! adblock_run_locked adblock_prompt_update_after_source_change "Domain manual Adblock berhasil dihapus."; then
+        warn "Delete domain source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
+        pause
+        continue
+      fi
       pause
       return 0
     fi
@@ -2794,6 +3058,79 @@ adblock_restore_runtime_state_checked() {
     return 1
   fi
   return 0
+}
+
+adblock_prompt_update_after_source_change() {
+  local change_label="${1:-Perubahan source Adblock tersimpan.}"
+  local update_mode=""
+  local xray_enabled=""
+
+  log "${change_label}"
+  xray_enabled="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
+  if [[ "${xray_enabled}" == "1" ]]; then
+    update_mode="reload-xray"
+  fi
+
+  log "Menjalankan Update Adblock otomatis agar artifact dan runtime langsung sinkron..."
+  if adblock_update_now "${update_mode}"; then
+    log "Update Adblock selesai setelah perubahan source."
+    return 0
+  fi
+
+  warn "Update Adblock setelah perubahan source gagal. Status dirty dipertahankan untuk retry."
+  return 1
+}
+
+adblock_action_preview_print() {
+  local action="${1:-update}"
+  local status dirty manual_domains merged_domains source_urls rendered_status custom_dat
+  local xray_enabled ssh_enabled xray_outbound update_mode="none"
+
+  status="$(ssh_dns_adblock_status_get)"
+  dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
+  manual_domains="$(printf '%s\n' "${status}" | awk -F'=' '/^manual_domains=/{print $2; exit}')"
+  merged_domains="$(printf '%s\n' "${status}" | awk -F'=' '/^merged_domains=/{print $2; exit}')"
+  source_urls="$(printf '%s\n' "${status}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
+  rendered_status="$(printf '%s\n' "${status}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
+  custom_dat="$(printf '%s\n' "${status}" | awk -F'=' '/^custom_dat=/{print $2; exit}')"
+  xray_enabled="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
+  xray_outbound="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^outbound=/{print $2; exit}')"
+  ssh_enabled="$(printf '%s\n' "${status}" | awk -F'=' '/^enabled=/{print $2; exit}')"
+  [[ -n "${manual_domains}" ]] || manual_domains="0"
+  [[ -n "${merged_domains}" ]] || merged_domains="0"
+  [[ -n "${source_urls}" ]] || source_urls="0"
+  [[ -n "${dirty}" ]] || dirty="0"
+  [[ -n "${rendered_status}" ]] || rendered_status="-"
+  [[ -n "${custom_dat}" ]] || custom_dat="-"
+  [[ -n "${xray_enabled}" ]] || xray_enabled="0"
+  [[ -n "${ssh_enabled}" ]] || ssh_enabled="0"
+
+  if [[ "${xray_enabled}" == "1" ]]; then
+    update_mode="reload-xray"
+  fi
+
+  echo "Preview aksi : ${action}"
+  echo "Manual list  : ${manual_domains} domain"
+  echo "URL source   : ${source_urls}"
+  echo "Merged list  : ${merged_domains} domain"
+  echo "Dirty        : $([[ "${dirty}" == "1" ]] && echo "YES" || echo "NO")"
+  echo "custom.dat   : ${custom_dat}"
+  echo "Rendered DNS : ${rendered_status}"
+  echo "Xray rule    : $([[ "${xray_enabled}" == "1" ]] && echo "ON" || echo "OFF") (${xray_outbound:--})"
+  echo "SSH rule     : $([[ "${ssh_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+  case "${action}" in
+    enable)
+      echo "Efek         : build/update artifact bila perlu, aktifkan routing Xray, apply DNS Adblock SSH."
+      echo "Mode update  : ${update_mode}"
+      ;;
+    disable)
+      echo "Efek         : nonaktifkan routing Xray dan DNS Adblock SSH sekarang."
+      ;;
+    update)
+      echo "Efek         : rebuild artifact shared source dan apply ke runtime yang relevan."
+      echo "Mode update  : ${update_mode}"
+      ;;
+  esac
 }
 
 adblock_enable_all() {
@@ -3139,6 +3476,11 @@ ssh_dns_adblock_url_add_menu() {
       fi
     fi
     if adblock_run_locked ssh_dns_adblock_url_add_commit "${normalized}"; then
+      if ! adblock_run_locked adblock_prompt_update_after_source_change "URL source Adblock berhasil ditambahkan."; then
+        warn "URL source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
+        pause
+        continue
+      fi
       pause
       return 0
     fi
@@ -3255,6 +3597,11 @@ ssh_dns_adblock_url_delete_menu() {
       fi
     fi
     if adblock_run_locked ssh_dns_adblock_url_delete_commit "${selected_url}"; then
+      if ! adblock_run_locked adblock_prompt_update_after_source_change "URL source Adblock berhasil dihapus."; then
+        warn "Delete URL source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
+        pause
+        continue
+      fi
       pause
       return 0
     fi
@@ -3354,6 +3701,9 @@ adblock_menu() {
     fi
     case "${c}" in
       1)
+        hr
+        adblock_action_preview_print enable
+        hr
         if confirm_yn_or_back "Enable Adblock sekarang?"; then
           menu_run_isolated_report "Enable Adblock" adblock_enable_all
         else
@@ -3362,6 +3712,9 @@ adblock_menu() {
         pause
         ;;
       2)
+        hr
+        adblock_action_preview_print disable
+        hr
         if confirm_yn_or_back "Disable Adblock sekarang?"; then
           menu_run_isolated_report "Disable Adblock" adblock_disable_all
         else
@@ -3374,6 +3727,9 @@ adblock_menu() {
       5) menu_run_isolated_report "Add Adblock Source URL" ssh_dns_adblock_url_add_menu ;;
       6) menu_run_isolated_report "Delete Adblock Source URL" ssh_dns_adblock_url_delete_menu ;;
       7)
+        hr
+        adblock_action_preview_print update
+        hr
         if confirm_yn_or_back "Update artifact Adblock sekarang?"; then
           if [[ "${xray_enabled}" == "1" ]]; then
             if adblock_update_now reload-xray; then
@@ -3416,49 +3772,123 @@ adblock_menu() {
 }
 
 warp_global_menu() {
+  local routing_candidate=""
+  local pending_changes="false"
+  local source_file="" c="" desired=""
   while true; do
+    source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
     title
     echo "WARP Controls > WARP Global"
     hr
-    printf "Status WARP Global: %s\n" "$(warp_global_mode_pretty_get)"
+    printf "Status WARP Global: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
+    if [[ "${pending_changes}" == "true" ]]; then
+      echo "Staging           : pending apply"
+    fi
     hr
     echo "  1) direct"
     echo "  2) warp"
+    if [[ "${pending_changes}" == "true" ]]; then
+      echo "  3) apply staged changes"
+      echo "  4) discard staged changes"
+    fi
     echo "  0) kembali"
     hr
     read -r -p "Pilih: " c
     case "${c}" in
       1)
-        if ! confirm_yn_or_back "Set WARP Global ke DIRECT sekarang?"; then
-          warn "Perubahan WARP Global dibatalkan."
+        desired="direct"
+        if ! confirm_yn_or_back "Stage WARP Global ke DIRECT sekarang?"; then
+          warn "Stage WARP Global dibatalkan."
           pause
           continue
         fi
-        if ! menu_run_isolated xray_routing_default_rule_set direct; then
-          warn "Gagal mengubah WARP Global ke DIRECT."
+        if ! xray_routing_candidate_prepare routing_candidate; then
+          warn "Gagal menyiapkan staging routing."
           pause
           continue
         fi
-        log "WARP Global di-set ke DIRECT"
+        if ! xray_routing_default_rule_set_in_file "${routing_candidate}" "${routing_candidate}" "${desired}"; then
+          warn "Gagal men-stage WARP Global ke ${desired^^}."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "WARP Global di-stage ke ${desired^^}"
         pause
-        return 0
         ;;
       2)
-        if ! confirm_yn_or_back "Set WARP Global ke WARP sekarang?"; then
-          warn "Perubahan WARP Global dibatalkan."
+        desired="warp"
+        if ! confirm_yn_or_back "Stage WARP Global ke WARP sekarang?"; then
+          warn "Stage WARP Global dibatalkan."
           pause
           continue
         fi
-        if ! menu_run_isolated xray_routing_default_rule_set warp; then
-          warn "Gagal mengubah WARP Global ke WARP."
+        if ! xray_routing_candidate_prepare routing_candidate; then
+          warn "Gagal menyiapkan staging routing."
           pause
           continue
         fi
-        log "WARP Global di-set ke WARP"
+        if ! xray_routing_default_rule_set_in_file "${routing_candidate}" "${routing_candidate}" "${desired}"; then
+          warn "Gagal men-stage WARP Global ke ${desired^^}."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "WARP Global di-stage ke ${desired^^}"
         pause
+        ;;
+      3)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Pilihan tidak valid"
+          sleep 1
+          continue
+        fi
+        if ! confirm_menu_apply_now "Apply staged WARP Global changes sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+          pause
+          continue
+        fi
+        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        routing_candidate=""
+        pending_changes="false"
+        log "Staged WARP Global changes diterapkan."
+        pause
+        ;;
+      4)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Pilihan tidak valid"
+          sleep 1
+          continue
+        fi
+        if confirm_menu_apply_now "Buang staged WARP Global changes?"; then
+          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          routing_candidate=""
+          pending_changes="false"
+          log "Staged WARP Global changes dibuang."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b)
+        if [[ "${pending_changes}" == "true" ]]; then
+          local back_rc=0
+          if confirm_yn_or_back "Apply staged WARP Global changes sebelum keluar? Pilih no untuk membuang staging."; then
+            if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+              pause
+              continue
+            fi
+          else
+            back_rc=$?
+            if (( back_rc == 2 )); then
+              continue
+            fi
+          fi
+        fi
+        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
         return 0
         ;;
-      0|kembali|k|back|b) return 0 ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
   done
@@ -3467,6 +3897,7 @@ warp_global_menu() {
 warp_user_set_effective_mode() {
   local email="$1"
   local desired="$2" # direct|warp
+  local candidate_file="${3:-}"
 
   if is_default_xray_email_or_tag "${email}"; then
     warn "User default Xray bersifat readonly: ${email}"
@@ -3475,9 +3906,16 @@ warp_user_set_effective_mode() {
 
   case "${desired}" in
     direct|warp)
-      if ! menu_run_isolated xray_routing_rule_set_user_outbound_mode "${email}" "${desired}"; then
-        warn "Gagal mengubah mode WARP per-user untuk ${email}."
-        return 1
+      if [[ -n "${candidate_file}" ]]; then
+        if ! xray_routing_rule_set_user_outbound_mode_in_file "${candidate_file}" "${candidate_file}" "${email}" "${desired}"; then
+          warn "Gagal men-stage mode WARP per-user untuk ${email}."
+          return 1
+        fi
+      else
+        if ! menu_run_isolated xray_routing_rule_set_user_outbound_mode "${email}" "${desired}"; then
+          warn "Gagal mengubah mode WARP per-user untuk ${email}."
+          return 1
+        fi
       fi
       ;;
     *) warn "Mode user harus direct|warp" ;;
@@ -3490,8 +3928,12 @@ warp_per_user_menu() {
 
   local page=0
   local page_size=10
+  local routing_candidate=""
+  local pending_changes="false"
+  local source_file=""
 
   while true; do
+    source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
     mapfile -t all_users_raw < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
 
     local all_users=()
@@ -3513,8 +3955,8 @@ warp_per_user_menu() {
       return 0
     fi
 
-    mapfile -t warp_override < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null || true)
-    mapfile -t direct_override < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null || true)
+    mapfile -t warp_override < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" "${source_file}" 2>/dev/null || true)
+    mapfile -t direct_override < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" "${source_file}" 2>/dev/null || true)
 
     declare -A warp_set=()
     declare -A direct_set=()
@@ -3527,7 +3969,7 @@ warp_per_user_menu() {
     done
 
     local global_mode default_mode
-    global_mode="$(warp_global_mode_get || true)"
+    global_mode="$(warp_global_mode_get "${source_file}" || true)"
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
@@ -3546,13 +3988,13 @@ warp_per_user_menu() {
     title
     echo "WARP Controls > WARP per-user"
     hr
-    printf "WARP Global: %s
-" "$(warp_global_mode_pretty_get)"
+    printf "WARP Global: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
+    if [[ "${pending_changes}" == "true" ]]; then
+      echo "Staging   : pending apply"
+    fi
     hr
-    printf "%-4s %-32s %-7s
-" "No" "User" "Status"
-    printf "%-4s %-32s %-7s
-" "----" "--------------------------------" "-------"
+    printf "%-4s %-32s %-7s\n" "No" "User" "Status"
+    printf "%-4s %-32s %-7s\n" "----" "--------------------------------" "-------"
 
     for (( i=start; i<end; i++ )); do
       row=$((i - start + 1))
@@ -3566,21 +4008,31 @@ warp_per_user_menu() {
         status="${default_mode}"
       fi
 
-      printf "%-4s %-32s %-7s
-" "${row}" "${email}" "${status}"
+      printf "%-4s %-32s %-7s\n" "${row}" "${email}" "${status}"
     done
 
     echo
     echo "Halaman: $((page + 1))/${pages} | Total user: ${total}"
-    if (( pages > 1 )); then
-      echo "Toggle: next / previous / 0 kembali"
-    else
-      echo "Toggle: 0 kembali"
-    fi
+    echo "Toggle: next / previous / apply / discard / 0 kembali"
     hr
-    read -r -p "Pilih No untuk ubah (atau next/previous/kembali): " c
+    read -r -p "Pilih No untuk stage (atau next/previous/apply/discard/kembali): " c
 
     if is_back_choice "${c}"; then
+      if [[ "${pending_changes}" == "true" ]]; then
+        local back_rc=0
+        if confirm_yn_or_back "Apply staged WARP per-user changes sebelum keluar? Pilih no untuk membuang staging."; then
+          if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+            pause
+            continue
+          fi
+        else
+          back_rc=$?
+          if (( back_rc == 2 )); then
+            continue
+          fi
+        fi
+      fi
+      rm -f "${routing_candidate}" >/dev/null 2>&1 || true
       return 0
     fi
 
@@ -3595,6 +4047,42 @@ warp_per_user_menu() {
         if (( page > 0 )); then
           page=$((page - 1))
         fi
+        continue
+        ;;
+      apply)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Belum ada staged changes."
+          pause
+          continue
+        fi
+        if ! confirm_menu_apply_now "Apply staged WARP per-user changes sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+          pause
+          continue
+        fi
+        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        routing_candidate=""
+        pending_changes="false"
+        log "Staged WARP per-user changes diterapkan."
+        pause
+        continue
+        ;;
+      discard)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Belum ada staged changes."
+          pause
+          continue
+        fi
+        if confirm_menu_apply_now "Buang staged WARP per-user changes?"; then
+          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          routing_candidate=""
+          pending_changes="false"
+          log "Staged WARP per-user changes dibuang."
+        fi
+        pause
         continue
         ;;
     esac
@@ -3641,26 +4129,38 @@ warp_per_user_menu() {
 
       case "${s}" in
         1)
-          if ! confirm_yn_or_back "Set user ${email} ke DIRECT sekarang?"; then
-            warn "Perubahan WARP per-user dibatalkan."
+          if ! confirm_yn_or_back "Stage user ${email} ke DIRECT sekarang?"; then
+            warn "Stage WARP per-user dibatalkan."
             pause
             continue
           fi
-          if warp_user_set_effective_mode "${email}" direct; then
-            log "Per-user di-set DIRECT: ${email}"
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_user_set_effective_mode "${email}" direct "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-user di-stage DIRECT: ${email}"
             pause
             break
           fi
           pause
           ;;
         2)
-          if ! confirm_yn_or_back "Set user ${email} ke WARP sekarang?"; then
-            warn "Perubahan WARP per-user dibatalkan."
+          if ! confirm_yn_or_back "Stage user ${email} ke WARP sekarang?"; then
+            warn "Stage WARP per-user dibatalkan."
             pause
             continue
           fi
-          if warp_user_set_effective_mode "${email}" warp; then
-            log "Per-user di-set WARP: ${email}"
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_user_set_effective_mode "${email}" warp "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-user di-stage WARP: ${email}"
             pause
             break
           fi
@@ -3676,6 +4176,7 @@ warp_per_user_menu() {
 warp_inbound_set_effective_mode() {
   local tag="$1"
   local desired="$2" # direct|warp
+  local candidate_file="${3:-}"
 
   if [[ "${tag}" == "api" ]]; then
     warn "Inbound internal (api) bersifat readonly: ${tag}"
@@ -3684,9 +4185,16 @@ warp_inbound_set_effective_mode() {
 
   case "${desired}" in
     direct|warp)
-      if ! menu_run_isolated xray_routing_rule_set_inbound_outbound_mode "${tag}" "${desired}"; then
-        warn "Gagal mengubah mode WARP per-inbound untuk ${tag}."
-        return 1
+      if [[ -n "${candidate_file}" ]]; then
+        if ! xray_routing_rule_set_inbound_outbound_mode_in_file "${candidate_file}" "${candidate_file}" "${tag}" "${desired}"; then
+          warn "Gagal men-stage mode WARP per-inbound untuk ${tag}."
+          return 1
+        fi
+      else
+        if ! menu_run_isolated xray_routing_rule_set_inbound_outbound_mode "${tag}" "${desired}"; then
+          warn "Gagal mengubah mode WARP per-inbound untuk ${tag}."
+          return 1
+        fi
       fi
       ;;
     *) warn "Mode inbound harus direct|warp" ;;
@@ -3696,8 +4204,12 @@ warp_inbound_set_effective_mode() {
 
 warp_per_inbounds_menu() {
   need_python3
+  local routing_candidate=""
+  local pending_changes="false"
+  local source_file=""
 
   while true; do
+    source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
     mapfile -t all_tags_raw < <(xray_inbounds_all_tags_get 2>/dev/null || true)
 
     local tags=()
@@ -3719,8 +4231,8 @@ warp_per_inbounds_menu() {
       return 0
     fi
 
-    mapfile -t warp_override < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null || true)
-    mapfile -t direct_override < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null || true)
+    mapfile -t warp_override < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" "${source_file}" 2>/dev/null || true)
+    mapfile -t direct_override < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" "${source_file}" 2>/dev/null || true)
 
     declare -A warp_set=()
     declare -A direct_set=()
@@ -3733,7 +4245,7 @@ warp_per_inbounds_menu() {
     done
 
     local global_mode default_mode
-    global_mode="$(warp_global_mode_get || true)"
+    global_mode="$(warp_global_mode_get "${source_file}" || true)"
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
@@ -3743,13 +4255,13 @@ warp_per_inbounds_menu() {
     title
     echo "WARP Controls > WARP per-protocol inbounds"
     hr
-    printf "WARP Global: %s
-" "$(warp_global_mode_pretty_get)"
+    printf "WARP Global: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
+    if [[ "${pending_changes}" == "true" ]]; then
+      echo "Staging   : pending apply"
+    fi
     hr
-    printf "%-4s %-28s %-7s
-" "No" "Protocol (Inbound Tag)" "Status"
-    printf "%-4s %-28s %-7s
-" "----" "----------------------------" "-------"
+    printf "%-4s %-28s %-7s\n" "No" "Protocol (Inbound Tag)" "Status"
+    printf "%-4s %-28s %-7s\n" "----" "----------------------------" "-------"
 
     local i status
     for (( i=0; i<${#tags[@]}; i++ )); do
@@ -3763,17 +4275,70 @@ warp_per_inbounds_menu() {
         status="${default_mode}"
       fi
 
-      printf "%-4s %-28s %-7s
-" "$((i + 1))" "${t}" "${status}"
+      printf "%-4s %-28s %-7s\n" "$((i + 1))" "${t}" "${status}"
     done
 
     hr
-    echo "Pilih No untuk ubah (direct/warp), atau 0 kembali"
+    echo "Pilih No untuk stage (direct/warp), atau apply/discard/0 kembali"
     read -r -p "Pilih: " c
 
     if is_back_choice "${c}"; then
+      if [[ "${pending_changes}" == "true" ]]; then
+        local back_rc=0
+        if confirm_yn_or_back "Apply staged WARP per-inbound changes sebelum keluar? Pilih no untuk membuang staging."; then
+          if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+            pause
+            continue
+          fi
+        else
+          back_rc=$?
+          if (( back_rc == 2 )); then
+            continue
+          fi
+        fi
+      fi
+      rm -f "${routing_candidate}" >/dev/null 2>&1 || true
       return 0
     fi
+
+    case "${c}" in
+      apply)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Belum ada staged changes."
+          pause
+          continue
+        fi
+        if ! confirm_menu_apply_now "Apply staged WARP per-inbound changes sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+          pause
+          continue
+        fi
+        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        routing_candidate=""
+        pending_changes="false"
+        log "Staged WARP per-inbound changes diterapkan."
+        pause
+        continue
+        ;;
+      discard)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Belum ada staged changes."
+          pause
+          continue
+        fi
+        if confirm_menu_apply_now "Buang staged WARP per-inbound changes?"; then
+          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          routing_candidate=""
+          pending_changes="false"
+          log "Staged WARP per-inbound changes dibuang."
+        fi
+        pause
+        continue
+        ;;
+    esac
 
     if [[ ! "${c}" =~ ^[0-9]+$ ]]; then
       warn "Input tidak valid"
@@ -3815,30 +4380,42 @@ warp_per_inbounds_menu() {
       fi
 
 	      case "${s}" in
-	        1)
-	          if ! confirm_yn_or_back "Set inbound ${t} ke DIRECT sekarang?"; then
-	            warn "Perubahan WARP per-inbound dibatalkan."
-	            pause
-	            continue
-	          fi
-	          if warp_inbound_set_effective_mode "${t}" direct; then
-	            log "Per-inbounds di-set DIRECT: ${t}"
-	            pause
-	            break
-	          fi
+        1)
+          if ! confirm_yn_or_back "Stage inbound ${t} ke DIRECT sekarang?"; then
+            warn "Stage WARP per-inbound dibatalkan."
+            pause
+            continue
+          fi
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_inbound_set_effective_mode "${t}" direct "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-inbounds di-stage DIRECT: ${t}"
+            pause
+            break
+          fi
 	          pause
 	          ;;
-	        2)
-	          if ! confirm_yn_or_back "Set inbound ${t} ke WARP sekarang?"; then
-	            warn "Perubahan WARP per-inbound dibatalkan."
-	            pause
-	            continue
-	          fi
-	          if warp_inbound_set_effective_mode "${t}" warp; then
-	            log "Per-inbounds di-set WARP: ${t}"
-	            pause
-	            break
-	          fi
+        2)
+          if ! confirm_yn_or_back "Stage inbound ${t} ke WARP sekarang?"; then
+            warn "Stage WARP per-inbound dibatalkan."
+            pause
+            continue
+          fi
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_inbound_set_effective_mode "${t}" warp "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-inbounds di-stage WARP: ${t}"
+            pause
+            break
+          fi
 	          pause
 	          ;;
 	        *) warn "Pilihan tidak valid" ; sleep 1 ;;
@@ -4098,7 +4675,13 @@ warp_plus_license_mask() {
 warp_trace_field_get() {
   # args: field_name
   local field="${1:-}"
-  local bind_addr trace
+  local bind_addr trace trace_url
+  local -a trace_urls=(
+    "https://www.cloudflare.com/cdn-cgi/trace"
+    "https://cloudflare.com/cdn-cgi/trace"
+    "https://1.1.1.1/cdn-cgi/trace"
+    "https://1.0.0.1/cdn-cgi/trace"
+  )
   [[ -n "${field}" ]] || return 0
   [[ -f "${WIREPROXY_CONF}" ]] || return 0
   if ! have_cmd curl; then
@@ -4114,7 +4697,11 @@ warp_trace_field_get() {
   ' "${WIREPROXY_CONF}" 2>/dev/null || true)"
   [[ -n "${bind_addr}" ]] || bind_addr="127.0.0.1:40000"
 
-  trace="$(curl -fsS --max-time 8 --socks5 "${bind_addr}" "https://www.cloudflare.com/cdn-cgi/trace" 2>/dev/null || true)"
+  trace=""
+  for trace_url in "${trace_urls[@]}"; do
+    trace="$(curl -fsS --retry 1 --retry-delay 1 --max-time 8 --socks5 "${bind_addr}" "${trace_url}" 2>/dev/null || true)"
+    [[ -n "${trace}" ]] && break
+  done
   [[ -n "${trace}" ]] || return 0
   echo "${trace}" | awk -F= -v k="${field}" '$1==k {print $2; exit}'
 }
@@ -4133,13 +4720,16 @@ warp_live_tier_get() {
 warp_live_tier_wait_for() {
   local expected="${1:-}"
   local timeout="${2:-20}"
-  local checks i live saw_probe="false"
+  local checks i live saw_probe="false" socks_ready="false"
   [[ "${expected}" == "free" || "${expected}" == "plus" ]] || return 1
   if [[ ! "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
     timeout=20
   fi
   checks=$(( timeout < 1 ? 1 : timeout ))
   for (( i=0; i<checks; i++ )); do
+    if have_cmd ss && ss -lnt 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:40000([[:space:]]|$)'; then
+      socks_ready="true"
+    fi
     live="$(warp_live_tier_get)"
     case "${live}" in
       free|plus|off) saw_probe="true" ;;
@@ -4148,6 +4738,9 @@ warp_live_tier_wait_for() {
     sleep 1
   done
   if [[ "${saw_probe}" != "true" ]]; then
+    if [[ "${socks_ready}" != "true" ]]; then
+      return 1
+    fi
     return 2
   fi
   return 1
@@ -4299,32 +4892,61 @@ warp_wireproxy_apply_profile() {
     return 1
   }
 
-  mkdir -p "$(dirname "${WIREPROXY_CONF}")"
-  tmp="$(mktemp)"
-  socks_block="$(warp_wireproxy_socks_block_get)"
+  (
+    local restore_mode="absent"
+    local restore_backup=""
+    local apply_success="false"
+    mkdir -p "$(dirname "${WIREPROXY_CONF}")"
+    tmp="$(mktemp "${TMPDIR:-/tmp}/wireproxy-conf.XXXXXX")" || exit 1
+    socks_block="$(warp_wireproxy_socks_block_get)"
 
-  awk '
-    BEGIN { drop=0 }
-    /^[[:space:]]*\[(Socks|Socks5)\][[:space:]]*$/ { drop=1; next }
-    /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { drop=0 }
-    drop { next }
-    { print }
-  ' "${profile}" > "${tmp}"
-  printf "\n%s\n" "${socks_block}" >> "${tmp}"
+    trap '
+      if [[ "${apply_success}" != "true" ]]; then
+        case "${restore_mode}" in
+          file)
+            [[ -n "${restore_backup}" && -f "${restore_backup}" ]] && install -m 600 "${restore_backup}" "'"${WIREPROXY_CONF}"'" >/dev/null 2>&1 || true
+            ;;
+          absent)
+            rm -f "'"${WIREPROXY_CONF}"'" >/dev/null 2>&1 || true
+            ;;
+        esac
+      fi
+      rm -f "${tmp}" "${restore_backup}" >/dev/null 2>&1 || true
+    ' EXIT INT TERM HUP QUIT
 
-  if [[ -f "${WIREPROXY_CONF}" ]]; then
-    ts="$(date +%Y%m%d-%H%M%S)"
-    backup="${WIREPROXY_CONF}.bak.${ts}"
-    cp -f "${WIREPROXY_CONF}" "${backup}" 2>/dev/null || true
-  fi
+    awk '
+      BEGIN { drop=0 }
+      /^[[:space:]]*\[(Socks|Socks5)\][[:space:]]*$/ { drop=1; next }
+      /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { drop=0 }
+      drop { next }
+      { print }
+    ' "${profile}" > "${tmp}"
+    printf "\n%s\n" "${socks_block}" >> "${tmp}"
 
-  if ! install -m 600 "${tmp}" "${WIREPROXY_CONF}"; then
-    rm -f "${tmp}" 2>/dev/null || true
-    warn "Gagal menulis wireproxy config: ${WIREPROXY_CONF}"
-    return 1
-  fi
-  rm -f "${tmp}" 2>/dev/null || true
-  return 0
+    if [[ -f "${WIREPROXY_CONF}" ]]; then
+      ts="$(date +%Y%m%d-%H%M%S)"
+      backup="${WIREPROXY_CONF}.bak.${ts}"
+      cp -f "${WIREPROXY_CONF}" "${backup}" 2>/dev/null || true
+      restore_backup="$(mktemp "${TMPDIR:-/tmp}/wireproxy-restore.XXXXXX" 2>/dev/null || true)"
+      if [[ -n "${restore_backup}" ]] && cp -f "${WIREPROXY_CONF}" "${restore_backup}" 2>/dev/null; then
+        restore_mode="file"
+      else
+        rm -f "${restore_backup}" >/dev/null 2>&1 || true
+        restore_backup=""
+        restore_mode="file"
+      fi
+    fi
+
+    if ! install -m 600 "${tmp}" "${WIREPROXY_CONF}"; then
+      warn "Gagal menulis wireproxy config: ${WIREPROXY_CONF}"
+      exit 1
+    fi
+    apply_success="true"
+    trap - EXIT INT TERM HUP QUIT
+    rm -f "${tmp}" "${restore_backup}" >/dev/null 2>&1 || true
+    exit 0
+  )
+  return $?
 }
 
 warp_wgcf_register_noninteractive_in_dir() {
@@ -4450,32 +5072,62 @@ warp_wgcf_install_live_files_from_dir() {
   local source_dir="${1:-}"
   local tmp_account="" tmp_profile=""
   [[ -n "${source_dir}" ]] || return 1
-  mkdir -p "${WGCF_DIR}" || return 1
-  [[ -s "${source_dir}/wgcf-account.toml" ]] || return 1
-  [[ -s "${source_dir}/wgcf-profile.conf" ]] || return 1
-  tmp_account="$(mktemp "${WGCF_DIR}/.wgcf-account.XXXXXX" 2>/dev/null || true)"
-  tmp_profile="$(mktemp "${WGCF_DIR}/.wgcf-profile.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp_account}" && -n "${tmp_profile}" ]] || {
-    rm -f "${tmp_account}" "${tmp_profile}" >/dev/null 2>&1 || true
-    return 1
-  }
-  if ! install -m 600 "${source_dir}/wgcf-account.toml" "${tmp_account}"; then
-    rm -f "${tmp_account}" "${tmp_profile}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  if ! install -m 600 "${source_dir}/wgcf-profile.conf" "${tmp_profile}"; then
-    rm -f "${tmp_account}" "${tmp_profile}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  if ! mv -f "${tmp_account}" "${WGCF_DIR}/wgcf-account.toml"; then
-    rm -f "${tmp_account}" "${tmp_profile}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  if ! mv -f "${tmp_profile}" "${WGCF_DIR}/wgcf-profile.conf"; then
-    rm -f "${tmp_profile}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  return 0
+  (
+    local backup_account="" backup_profile=""
+    local restore_account_mode="absent" restore_profile_mode="absent"
+    local install_success="false"
+
+    mkdir -p "${WGCF_DIR}" || exit 1
+    [[ -s "${source_dir}/wgcf-account.toml" ]] || exit 1
+    [[ -s "${source_dir}/wgcf-profile.conf" ]] || exit 1
+    tmp_account="$(mktemp "${WGCF_DIR}/.wgcf-account.XXXXXX" 2>/dev/null || true)"
+    tmp_profile="$(mktemp "${WGCF_DIR}/.wgcf-profile.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${tmp_account}" && -n "${tmp_profile}" ]] || exit 1
+
+    trap '
+      if [[ "${install_success}" != "true" ]]; then
+        case "${restore_account_mode}" in
+          file)
+            [[ -n "${backup_account}" && -f "${backup_account}" ]] && install -m 600 "${backup_account}" "'"${WGCF_DIR}/wgcf-account.toml"'" >/dev/null 2>&1 || true
+            ;;
+          absent)
+            rm -f "'"${WGCF_DIR}/wgcf-account.toml"'" >/dev/null 2>&1 || true
+            ;;
+        esac
+        case "${restore_profile_mode}" in
+          file)
+            [[ -n "${backup_profile}" && -f "${backup_profile}" ]] && install -m 600 "${backup_profile}" "'"${WGCF_DIR}/wgcf-profile.conf"'" >/dev/null 2>&1 || true
+            ;;
+          absent)
+            rm -f "'"${WGCF_DIR}/wgcf-profile.conf"'" >/dev/null 2>&1 || true
+            ;;
+        esac
+      fi
+      rm -f "${tmp_account}" "${tmp_profile}" "${backup_account}" "${backup_profile}" >/dev/null 2>&1 || true
+    ' EXIT INT TERM HUP QUIT
+
+    if [[ -f "${WGCF_DIR}/wgcf-account.toml" ]]; then
+      backup_account="$(mktemp "${WGCF_DIR}/.wgcf-account.restore.XXXXXX" 2>/dev/null || true)"
+      [[ -n "${backup_account}" ]] && cp -f "${WGCF_DIR}/wgcf-account.toml" "${backup_account}" 2>/dev/null || true
+      restore_account_mode="file"
+    fi
+    if [[ -f "${WGCF_DIR}/wgcf-profile.conf" ]]; then
+      backup_profile="$(mktemp "${WGCF_DIR}/.wgcf-profile.restore.XXXXXX" 2>/dev/null || true)"
+      [[ -n "${backup_profile}" ]] && cp -f "${WGCF_DIR}/wgcf-profile.conf" "${backup_profile}" 2>/dev/null || true
+      restore_profile_mode="file"
+    fi
+
+    install -m 600 "${source_dir}/wgcf-account.toml" "${tmp_account}" || exit 1
+    install -m 600 "${source_dir}/wgcf-profile.conf" "${tmp_profile}" || exit 1
+    mv -f "${tmp_account}" "${WGCF_DIR}/wgcf-account.toml" || exit 1
+    mv -f "${tmp_profile}" "${WGCF_DIR}/wgcf-profile.conf" || exit 1
+
+    install_success="true"
+    trap - EXIT INT TERM HUP QUIT
+    rm -f "${backup_account}" "${backup_profile}" >/dev/null 2>&1 || true
+    exit 0
+  )
+  return $?
 }
 
 warp_tier_show_status() {
@@ -4577,7 +5229,7 @@ warp_tier_switch_free() {
     if (( tier_wait_rc == 1 )); then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target free setelah switch."
     elif (( tier_wait_rc == 2 )); then
-      warn "Probe tier WARP free belum memberi jawaban pasti; menyimpan state target tanpa rollback keras."
+      warn "Probe tier WARP free belum memberi jawaban pasti; mempertahankan hasil switch tanpa rollback keras."
     fi
     if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
@@ -4696,7 +5348,7 @@ warp_tier_switch_plus() {
     if (( tier_wait_rc == 1 )); then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target plus setelah switch."
     elif (( tier_wait_rc == 2 )); then
-      warn "Probe tier WARP plus belum memberi jawaban pasti; menyimpan state target tanpa rollback keras."
+      warn "Probe tier WARP plus belum memberi jawaban pasti; mempertahankan hasil switch tanpa rollback keras."
     fi
     if ! network_state_set_many \
       "${WARP_TIER_STATE_KEY}" "plus" \
@@ -4814,7 +5466,7 @@ warp_tier_reconnect_regenerate() {
     if (( tier_wait_rc == 1 )); then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Live WARP tier tidak sesuai target setelah reconnect/regenerate."
     elif (( tier_wait_rc == 2 )); then
-      warn "Probe tier WARP belum memberi jawaban pasti setelah reconnect/regenerate; menyimpan state target tanpa rollback keras."
+      warn "Probe tier WARP belum memberi jawaban pasti setelah reconnect/regenerate; mempertahankan hasil reconnect tanpa rollback keras."
     fi
 
     if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1; then
@@ -6074,18 +6726,40 @@ dns_addons_edit_with_nano() {
       rm -f "${diff_report}" >/dev/null 2>&1 || true
       diff_report=""
     fi
-    if ! confirm_yn_or_back "Terapkan hasil edit DNS ke file live sekarang?"; then
-      apply_rc=$?
-      if (( apply_rc == 1 || apply_rc == 2 )); then
-        warn "Perubahan editor DNS dibatalkan sebelum diterapkan ke file live."
-        rm -f "${diff_report}" >/dev/null 2>&1 || true
-        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-        return 0
-      fi
-    elif ! xray_write_file_atomic "${XRAY_DNS_CONF}" "${edit_target}"; then
-      dns_edit_failed="true"
-      warn "Gagal mengganti DNS config secara atomic."
-    elif ! xray_routing_restart_checked; then
+	    warn "Editor ini akan mengganti keseluruhan DNS config live, bukan patch per-field."
+	    if ! confirm_yn_or_back "Terapkan hasil edit DNS ke file live sekarang?"; then
+	      apply_rc=$?
+	      if (( apply_rc == 1 || apply_rc == 2 )); then
+	        warn "Perubahan editor DNS dibatalkan sebelum diterapkan ke file live."
+	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	        return 0
+	      fi
+	    elif ! confirm_menu_apply_now "Konfirmasi final: ganti seluruh DNS config live dengan hasil editor ini?"; then
+	      warn "Perubahan editor DNS dibatalkan pada checkpoint full-replace."
+	      rm -f "${diff_report}" >/dev/null 2>&1 || true
+	      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	      return 0
+	    else
+	      local replace_ack=""
+	      read -r -p "Ketik persis 'REPLACE DNS' untuk lanjut full-replace DNS config (atau kembali): " replace_ack
+	      if is_back_choice "${replace_ack}"; then
+	        warn "Perubahan editor DNS dibatalkan pada checkpoint full-replace."
+	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	        return 0
+	      fi
+	      if [[ "${replace_ack}" != "REPLACE DNS" ]]; then
+	        warn "Konfirmasi full-replace DNS tidak cocok. Dibatalkan."
+	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	        return 0
+	      fi
+	    fi
+	    if ! xray_write_file_atomic "${XRAY_DNS_CONF}" "${edit_target}"; then
+	      dns_edit_failed="true"
+	      warn "Gagal mengganti DNS config secara atomic."
+	    elif ! xray_routing_restart_checked; then
       dns_edit_failed="true"
       if ! snapshot_file_restore "${XRAY_DNS_CONF}" "${snap_dir}" "dns_conf" >/dev/null 2>&1; then
         warn "Rollback file DNS dari snapshot gagal setelah restart xray gagal."
