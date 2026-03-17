@@ -31,17 +31,45 @@ maintenance_restore_service_state_exact() {
   esac
 }
 
+maintenance_core_runtime_health_check() {
+  local domain=""
+  if svc_exists xray && ! svc_is_active xray; then
+    warn "Post-check restart core: xray belum active."
+    return 1
+  fi
+  if svc_exists nginx && ! svc_is_active nginx; then
+    warn "Post-check restart core: nginx belum active."
+    return 1
+  fi
+  domain="$(normalize_domain_token "$(detect_domain 2>/dev/null || true)")"
+  if [[ -n "${domain}" ]] && declare -F cert_runtime_hostname_tls_handshake_check >/dev/null 2>&1; then
+    if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
+      warn "Post-check restart core: probe TLS hostname untuk ${domain} gagal."
+      return 1
+    fi
+  fi
+  return 0
+}
+
 maintenance_restart_core_now() {
   local xray_was_active="false"
   local nginx_was_active="false"
   local restart_ack=""
+  local pre_runtime_healthy="unknown"
   if svc_exists xray && svc_is_active xray; then
     xray_was_active="true"
   fi
   if svc_exists nginx && svc_is_active nginx; then
     nginx_was_active="true"
   fi
-  if ! confirm_menu_apply_now "Restart Core akan me-restart Xray dan Nginx. Lanjutkan sekarang?"; then
+  if declare -F maintenance_core_runtime_health_check >/dev/null 2>&1; then
+    if maintenance_core_runtime_health_check >/dev/null 2>&1; then
+      pre_runtime_healthy="true"
+    else
+      pre_runtime_healthy="false"
+    fi
+  fi
+  if ! confirm_menu_apply_now "Restart Core akan me-restart Xray dan Nginx. Recovery yang tersedia bersifat best-effort, bukan snapshot runtime penuh. Lanjutkan sekarang?"; then
     warn "Restart core dibatalkan."
     return 0
   fi
@@ -89,6 +117,20 @@ maintenance_restart_core_now() {
     if [[ "${nginx_was_active}" != "true" ]] && svc_exists nginx && svc_is_active nginx; then
       warn "Restore state nginx ke kondisi inactive semula gagal."
       return 1
+    fi
+    if [[ "${pre_runtime_healthy}" == "true" ]] && ! maintenance_core_runtime_health_check >/dev/null 2>&1; then
+      warn "Runtime belum kembali ke kondisi sehat seperti sebelum restart core."
+    fi
+    return 1
+  fi
+  if ! maintenance_core_runtime_health_check; then
+    warn "Restart core selesai, tetapi post-check runtime belum sehat. Mencoba restore state service sebelumnya..."
+    maintenance_restore_service_state_exact xray "${xray_was_active}" || true
+    maintenance_restore_service_state_exact nginx "${nginx_was_active}" || true
+    if [[ "${pre_runtime_healthy}" == "true" ]] && maintenance_core_runtime_health_check >/dev/null 2>&1; then
+      warn "Runtime berhasil dipulihkan lagi ke kondisi sehat semula setelah restore state service."
+    elif [[ "${pre_runtime_healthy}" == "true" ]]; then
+      warn "Runtime belum kembali ke kondisi sehat seperti sebelum restart core."
     fi
     return 1
   fi
@@ -157,6 +199,7 @@ maintenance_normalize_quota_dates_menu() {
   local -a quota_targets=()
   local file_count ask_rc=0 spin_log="" rc=0 preview_report="" dry_run_report=""
   local scope_choice="" scope_label="Semua proto Xray"
+  local max_files_per_run="10"
   title
   echo "9) Maintenance > Normalize Quota Dates"
   hr
@@ -185,6 +228,7 @@ maintenance_normalize_quota_dates_menu() {
   echo "Operasi ini menormalisasi field quota created_at/expired_at ke format YYYY-MM-DD."
   echo "Scope       : ${scope_label}"
   echo "Target file : ${file_count:-0}"
+  echo "Default run : 10 file pertama per eksekusi."
   echo "Catatan     : jika ada warning, perubahan yang sempat ditulis akan di-rollback."
   preview_report="$(preview_report_path_prepare "quota-normalize-targets" 2>/dev/null || true)"
   if [[ -n "${preview_report}" ]] && maintenance_quota_targets_preview_write "${preview_report}" "${quota_targets[@]}"; then
@@ -251,6 +295,23 @@ maintenance_normalize_quota_dates_menu() {
     pause
     return 0
   fi
+  read -r -p "Batas file per run (Enter=10, 1-10, atau kembali): " max_files_per_run
+  if is_back_choice "${max_files_per_run}"; then
+    warn "Normalisasi quota dates dibatalkan pada pemilihan limit file."
+    pause
+    return 0
+  fi
+  [[ -n "${max_files_per_run}" ]] || max_files_per_run="10"
+  if [[ ! "${max_files_per_run}" =~ ^[0-9]+$ ]]; then
+    warn "Limit file per run tidak valid. Dibatalkan."
+    pause
+    return 0
+  fi
+  if (( max_files_per_run < 1 || max_files_per_run > 10 )); then
+    warn "Limit file per run harus berada di rentang 1-10."
+    pause
+    return 0
+  fi
   local bulk_ack=""
   read -r -p "Ketik persis 'NORMALIZE ${scope_choice}' untuk lanjut normalisasi quota (atau kembali): " bulk_ack
   if is_back_choice "${bulk_ack}"; then
@@ -271,7 +332,7 @@ maintenance_normalize_quota_dates_menu() {
     fi
   fi
 
-  if ui_run_logged_command_with_spinner spin_log "Menormalisasi quota dates (${scope_label})" quota_migrate_dates_to_dateonly "${quota_targets[@]}"; then
+  if ui_run_logged_command_with_spinner spin_log "Menormalisasi quota dates (${scope_label})" quota_migrate_dates_to_dateonly "--max-files=${max_files_per_run}" "${quota_targets[@]}"; then
     rc=0
   else
     rc=$?
@@ -287,6 +348,9 @@ maintenance_normalize_quota_dates_menu() {
   case "${rc}" in
     0)
       log "Normalisasi quota dates selesai."
+      if [[ "${file_count:-0}" =~ ^[0-9]+$ ]] && (( file_count > max_files_per_run )); then
+        warn "Eksekusi ini hanya memproses ${max_files_per_run} file pertama. Jalankan ulang menu ini untuk batch berikutnya."
+      fi
       pause
       return 0
       ;;
@@ -308,7 +372,7 @@ maintenance_menu() {
     "1|Core Check"
     "2|Restart Xray"
     "3|Restart Nginx"
-    "4|Restart Core"
+    "4|Restart Core (best-effort restore)"
     "5|Xray Logs"
     "6|Nginx Logs"
     "7|WARP Status"

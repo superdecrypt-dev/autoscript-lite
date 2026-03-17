@@ -2503,6 +2503,87 @@ adblock_mark_dirty() {
   adblock_config_set_values AUTOSCRIPT_ADBLOCK_DIRTY 1
 }
 
+adblock_dirty_flag_get() {
+  local status dirty
+  status="$(ssh_dns_adblock_status_get)"
+  dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
+  case "${dirty}" in
+    1|true|TRUE|yes|on) printf '1\n' ;;
+    *) printf '0\n' ;;
+  esac
+}
+
+adblock_dirty_flag_restore() {
+  local previous="${1:-0}"
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked adblock_dirty_flag_restore "${previous}"
+    return $?
+  fi
+  if [[ "${previous}" == "1" ]]; then
+    adblock_mark_dirty
+  else
+    adblock_config_set_values AUTOSCRIPT_ADBLOCK_DIRTY 0
+  fi
+}
+
+adblock_source_change_commit_and_sync() {
+  local source_file="${1:-}"
+  local snapshot_label="${2:-source}"
+  local success_label="${3:-Perubahan source Adblock tersimpan.}"
+  local prev_dirty="0" snap_dir="" restore_ok="true"
+  local restore_mode="" xray_enabled=""
+  shift 3 || true
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked adblock_source_change_commit_and_sync "${source_file}" "${snapshot_label}" "${success_label}" "$@"
+    return $?
+  fi
+  [[ -n "${source_file}" ]] || return 1
+  prev_dirty="$(adblock_dirty_flag_get)"
+  snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-source-sync.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-source-sync.$$"
+  mkdir -p "${snap_dir}" 2>/dev/null || true
+  if ! snapshot_file_capture "${source_file}" "${snap_dir}" "${snapshot_label}"; then
+    warn "Gagal membuat snapshot source Adblock sebelum apply."
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! "$@"; then
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if adblock_prompt_update_after_source_change "${success_label}"; then
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if ! snapshot_file_restore "${source_file}" "${snap_dir}" "${snapshot_label}" >/dev/null 2>&1; then
+    restore_ok="false"
+    warn "Rollback source Adblock gagal setelah auto-update gagal."
+  fi
+  if ! adblock_dirty_flag_restore "${prev_dirty}" >/dev/null 2>&1; then
+    restore_ok="false"
+    warn "Restore dirty flag Adblock gagal setelah auto-update gagal."
+  fi
+  if [[ "${restore_ok}" == "true" && "${prev_dirty}" == "0" ]]; then
+    xray_enabled="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
+    if [[ "${xray_enabled}" == "1" ]]; then
+      restore_mode="reload-xray"
+    fi
+    if ! adblock_update_now "${restore_mode}"; then
+      restore_ok="false"
+      adblock_mark_dirty >/dev/null 2>&1 || adblock_dirty_flag_restore "1" >/dev/null 2>&1 || true
+      warn "Rollback runtime Adblock ke source sebelumnya gagal setelah auto-update source baru gagal."
+    fi
+  fi
+  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+  if [[ "${restore_ok}" == "true" ]]; then
+    warn "Update Adblock otomatis gagal. Perubahan source dibatalkan agar source dan runtime tetap sinkron."
+  else
+    adblock_mark_dirty >/dev/null 2>&1 || adblock_dirty_flag_restore "1" >/dev/null 2>&1 || true
+    warn "Update Adblock otomatis gagal dan rollback source tidak sepenuhnya bersih. Periksa source/runtime Adblock sebelum lanjut."
+  fi
+  return 1
+}
+
 adblock_auto_update_timer_state_matches() {
   local expect_enabled="${1:-}"
   [[ "${expect_enabled}" == "0" || "${expect_enabled}" == "1" ]] || return 1
@@ -2903,12 +2984,7 @@ adblock_manual_domain_add_menu() {
         continue
       fi
     fi
-    if adblock_run_locked adblock_manual_domain_add_commit "${normalized}"; then
-      if ! adblock_run_locked adblock_prompt_update_after_source_change "Domain manual Adblock berhasil ditambahkan."; then
-        warn "Domain manual tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
-        pause
-        continue
-      fi
+    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil ditambahkan." adblock_manual_domain_add_commit "${normalized}"; then
       pause
       return 0
     fi
@@ -3022,12 +3098,7 @@ adblock_manual_domain_delete_menu() {
         continue
       fi
     fi
-    if adblock_run_locked adblock_manual_domain_delete_commit "${selected_domain}"; then
-      if ! adblock_run_locked adblock_prompt_update_after_source_change "Domain manual Adblock berhasil dihapus."; then
-        warn "Delete domain source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
-        pause
-        continue
-      fi
+    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil dihapus." adblock_manual_domain_delete_commit "${selected_domain}"; then
       pause
       return 0
     fi
@@ -3475,12 +3546,7 @@ ssh_dns_adblock_url_add_menu() {
         continue
       fi
     fi
-    if adblock_run_locked ssh_dns_adblock_url_add_commit "${normalized}"; then
-      if ! adblock_run_locked adblock_prompt_update_after_source_change "URL source Adblock berhasil ditambahkan."; then
-        warn "URL source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
-        pause
-        continue
-      fi
+    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil ditambahkan." ssh_dns_adblock_url_add_commit "${normalized}"; then
       pause
       return 0
     fi
@@ -3596,12 +3662,7 @@ ssh_dns_adblock_url_delete_menu() {
         continue
       fi
     fi
-    if adblock_run_locked ssh_dns_adblock_url_delete_commit "${selected_url}"; then
-      if ! adblock_run_locked adblock_prompt_update_after_source_change "URL source Adblock berhasil dihapus."; then
-        warn "Delete URL source tersimpan, tetapi Update Adblock otomatis gagal. Jalankan Update Adblock manual agar runtime kembali sinkron."
-        pause
-        continue
-      fi
+    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil dihapus." ssh_dns_adblock_url_delete_commit "${selected_url}"; then
       pause
       return 0
     fi
@@ -4681,6 +4742,8 @@ warp_trace_field_get() {
     "https://cloudflare.com/cdn-cgi/trace"
     "https://1.1.1.1/cdn-cgi/trace"
     "https://1.0.0.1/cdn-cgi/trace"
+    "http://1.1.1.1/cdn-cgi/trace"
+    "http://1.0.0.1/cdn-cgi/trace"
   )
   [[ -n "${field}" ]] || return 0
   [[ -f "${WIREPROXY_CONF}" ]] || return 0
@@ -4715,6 +4778,39 @@ warp_live_tier_get() {
     off) echo "off" ;;
     *) echo "unknown" ;;
   esac
+}
+
+warp_live_tier_display_get() {
+  local live target svc_state last_verified=""
+  live="$(warp_live_tier_get)"
+  if [[ "${live}" != "unknown" ]]; then
+    printf '%s\n' "${live}"
+    return 0
+  fi
+  last_verified="$(network_state_get "warp_tier_last_verified" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+  case "${last_verified}" in
+    free|plus) ;;
+    *) last_verified="" ;;
+  esac
+  target="$(warp_tier_state_target_get)"
+  if svc_exists wireproxy; then
+    svc_state="$(svc_state wireproxy)"
+  else
+    svc_state="not-installed"
+  fi
+  if [[ "${svc_state}" == "active" && ( "${target}" == "free" || "${target}" == "plus" ) ]]; then
+    if [[ -n "${last_verified}" ]]; then
+      printf 'unknown (estimasi %s; terakhir terverifikasi %s)\n' "${target}" "${last_verified}"
+    else
+      printf 'unknown (estimasi %s; probe trace belum konklusif)\n' "${target}"
+    fi
+    return 0
+  fi
+  if [[ -n "${last_verified}" ]]; then
+    printf 'unknown (terakhir terverifikasi %s)\n' "${last_verified}"
+  else
+    printf 'unknown\n'
+  fi
 }
 
 warp_live_tier_wait_for() {
@@ -5131,9 +5227,11 @@ warp_wgcf_install_live_files_from_dir() {
 }
 
 warp_tier_show_status() {
-  local target live svc_state license_raw license_masked
+  local target live live_display svc_state license_raw license_masked socks_state="unknown"
+  local last_verified_at=""
   target="$(warp_tier_target_effective_get)"
   live="$(warp_live_tier_get)"
+  live_display="$(warp_live_tier_display_get)"
   license_raw="$(warp_plus_license_state_get)"
   license_masked="$(warp_plus_license_mask "${license_raw}")"
   warp_tier_state_seed_from_live
@@ -5142,10 +5240,28 @@ warp_tier_show_status() {
   else
     svc_state="not-installed"
   fi
+  if have_cmd ss && ss -lnt 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:40000([[:space:]]|$)'; then
+    socks_state="listening"
+  elif [[ "${svc_state}" == "active" ]]; then
+    socks_state="not-listening"
+  fi
 
   printf "Target Tier   : %s\n" "${target}"
-  printf "Live Tier     : %s\n" "${live}"
+  printf "Live Tier     : %s\n" "${live_display}"
   printf "wireproxy     : %s\n" "${svc_state}"
+  printf "SOCKS5        : %s\n" "${socks_state}"
+  if [[ "${live}" == "unknown" ]]; then
+    printf "Probe Status  : trace Cloudflare via SOCKS belum konklusif; gunakan target + status wireproxy sebagai petunjuk sementara.\n"
+    local last_verified=""
+    last_verified="$(network_state_get "warp_tier_last_verified" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+    last_verified_at="$(network_state_get "warp_tier_last_verified_at" 2>/dev/null | tr -d '\r' || true)"
+    case "${last_verified}" in
+      free|plus) printf "Last Verified : %s\n" "${last_verified}" ;;
+    esac
+    if [[ -n "${last_verified_at}" ]]; then
+      printf "Verified At   : %s\n" "${last_verified_at}"
+    fi
+  fi
   if [[ -n "${license_raw}" ]]; then
     printf "WARP+ License : %s\n" "${license_masked}"
   else
@@ -5231,7 +5347,7 @@ warp_tier_switch_free() {
     elif (( tier_wait_rc == 2 )); then
       warn "Probe tier WARP free belum memberi jawaban pasti; mempertahankan hasil switch tanpa rollback keras."
     fi
-    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free"; then
+    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free" "warp_tier_last_verified" "free" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
     log "WARP tier target di-set: free"
@@ -5352,7 +5468,9 @@ warp_tier_switch_plus() {
     fi
     if ! network_state_set_many \
       "${WARP_TIER_STATE_KEY}" "plus" \
-      "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}"; then
+      "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}" \
+      "warp_tier_last_verified" "plus" \
+      "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP plus."
     fi
     log "WARP tier target di-set: plus"
@@ -5469,7 +5587,7 @@ warp_tier_reconnect_regenerate() {
       warn "Probe tier WARP belum memberi jawaban pasti setelah reconnect/regenerate; mempertahankan hasil reconnect tanpa rollback keras."
     fi
 
-    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" >/dev/null 2>&1; then
+    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" "warp_tier_last_verified" "${target}" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')" >/dev/null 2>&1; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
     warp_txn_success="true"
@@ -6648,7 +6766,7 @@ dns_addons_menu() {
       warn "DNS conf tidak ditemukan: ${XRAY_DNS_CONF}"
       hr
     fi
-    echo "  1) Open DNS config with nano"
+    echo "  1) Open DNS config with nano (full replace)"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
@@ -6675,6 +6793,7 @@ dns_addons_edit_with_nano() {
   local fatal_dns_error="false"
   local dns_edit_failed="false"
   local snap_dir edit_target apply_rc=0 diff_report=""
+  local added_lines=0 removed_lines=0 live_backup=""
   snap_dir="$(mktemp -d "${WORK_DIR}/.dns-editor.XXXXXX" 2>/dev/null || true)"
   [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.dns-editor.$$"
   mkdir -p "${snap_dir}" "$(dirname "${XRAY_DNS_CONF}")" 2>/dev/null || true
@@ -6718,13 +6837,29 @@ dns_addons_edit_with_nano() {
   else
     diff_report="$(preview_report_path_prepare "dns-edit-diff" 2>/dev/null || true)"
     if [[ -n "${diff_report}" ]] && dns_addons_diff_report_write "${XRAY_DNS_CONF}" "${edit_target}" "${diff_report}"; then
+      added_lines="$(grep -Ec '^[+][^+]' "${diff_report}" 2>/dev/null || true)"
+      removed_lines="$(grep -Ec '^[-][^-]' "${diff_report}" 2>/dev/null || true)"
+      [[ "${added_lines}" =~ ^[0-9]+$ ]] || added_lines=0
+      [[ "${removed_lines}" =~ ^[0-9]+$ ]] || removed_lines=0
       echo "Preview diff DNS:"
       echo "  ${diff_report}"
+      echo "Ringkasan    : +${added_lines} / -${removed_lines} baris"
       preview_report_show_file "${diff_report}" || warn "Gagal membuka preview diff DNS."
       hr
     else
       rm -f "${diff_report}" >/dev/null 2>&1 || true
       diff_report=""
+    fi
+    if [[ -f "${XRAY_DNS_CONF}" ]]; then
+      live_backup="$(mktemp "${WORK_DIR}/dns-live.backup.XXXXXX.json" 2>/dev/null || true)"
+      if [[ -n "${live_backup}" ]]; then
+        if ! cp -a "${XRAY_DNS_CONF}" "${live_backup}" 2>/dev/null; then
+          rm -f "${live_backup}" >/dev/null 2>&1 || true
+          live_backup=""
+        else
+          echo "Backup live   : ${live_backup}"
+        fi
+      fi
     fi
 	    warn "Editor ini akan mengganti keseluruhan DNS config live, bukan patch per-field."
 	    if ! confirm_yn_or_back "Terapkan hasil edit DNS ke file live sekarang?"; then
@@ -6732,12 +6867,14 @@ dns_addons_edit_with_nano() {
 	      if (( apply_rc == 1 || apply_rc == 2 )); then
 	        warn "Perubahan editor DNS dibatalkan sebelum diterapkan ke file live."
 	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
 	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	        return 0
 	      fi
 	    elif ! confirm_menu_apply_now "Konfirmasi final: ganti seluruh DNS config live dengan hasil editor ini?"; then
 	      warn "Perubahan editor DNS dibatalkan pada checkpoint full-replace."
 	      rm -f "${diff_report}" >/dev/null 2>&1 || true
+	      [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
 	      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	      return 0
 	    else
@@ -6746,14 +6883,34 @@ dns_addons_edit_with_nano() {
 	      if is_back_choice "${replace_ack}"; then
 	        warn "Perubahan editor DNS dibatalkan pada checkpoint full-replace."
 	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
 	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	        return 0
 	      fi
 	      if [[ "${replace_ack}" != "REPLACE DNS" ]]; then
 	        warn "Konfirmasi full-replace DNS tidak cocok. Dibatalkan."
 	        rm -f "${diff_report}" >/dev/null 2>&1 || true
+	        [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
 	        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
 	        return 0
+	      fi
+	      if (( added_lines + removed_lines >= 40 )); then
+	        local replace_full_ack=""
+	        read -r -p "Diff DNS cukup besar (+${added_lines}/-${removed_lines}). Ketik persis 'REPLACE DNS FULL' untuk lanjut (atau kembali): " replace_full_ack
+	        if is_back_choice "${replace_full_ack}"; then
+	          warn "Perubahan editor DNS dibatalkan pada checkpoint diff besar."
+	          rm -f "${diff_report}" >/dev/null 2>&1 || true
+	          [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
+	          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	          return 0
+	        fi
+	        if [[ "${replace_full_ack}" != "REPLACE DNS FULL" ]]; then
+	          warn "Konfirmasi tambahan full-replace DNS tidak cocok. Dibatalkan."
+	          rm -f "${diff_report}" >/dev/null 2>&1 || true
+	          [[ -n "${live_backup}" ]] && rm -f "${live_backup}" >/dev/null 2>&1 || true
+	          rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+	          return 0
+	        fi
 	      fi
 	    fi
 	    if ! xray_write_file_atomic "${XRAY_DNS_CONF}" "${edit_target}"; then
@@ -6772,6 +6929,9 @@ dns_addons_edit_with_nano() {
       systemctl status xray --no-pager 2>/dev/null || true
     else
       log "DNS config berhasil diperbarui lewat editor manual."
+      if [[ -n "${live_backup}" && -f "${live_backup}" ]]; then
+        echo "Backup pre-apply: ${live_backup}"
+      fi
     fi
   fi
   rm -f "${diff_report}" >/dev/null 2>&1 || true

@@ -461,15 +461,43 @@ account_info_restore_file_locked() {
   # args: backup_file target_file
   local src="${1:-}"
   local dst="${2:-}"
+  local dir="" tmp=""
   [[ -n "${src}" && -n "${dst}" ]] || return 1
   if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" != "1" ]]; then
     account_info_run_locked account_info_restore_file_locked "${src}" "${dst}"
     return $?
   fi
 
-  mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
-  cp -f -- "${src}" "${dst}" || return 1
+  dir="$(dirname "${dst}")"
+  mkdir -p "${dir}" 2>/dev/null || true
+  tmp="$(mktemp "${dir}/.account-restore.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || return 1
+  if ! cp -f -- "${src}" "${tmp}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! mv -f "${tmp}" "${dst}"; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
   chmod 600 "${dst}" 2>/dev/null || true
+  return 0
+}
+
+account_info_target_write_preflight() {
+  # args: target_file
+  local dst="${1:-}"
+  local dir="" tmp=""
+  [[ -n "${dst}" ]] || return 1
+  if [[ "${ACCOUNT_INFO_LOCK_HELD:-0}" != "1" ]]; then
+    account_info_run_locked account_info_target_write_preflight "${dst}"
+    return $?
+  fi
+  dir="$(dirname "${dst}")"
+  mkdir -p "${dir}" 2>/dev/null || return 1
+  tmp="$(mktemp "${dir}/.account-write-preflight.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || return 1
+  rm -f "${tmp}" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -614,12 +642,17 @@ quota_migrate_dates_to_dateonly() {
   # - created_at -> YYYY-MM-DD
   # - expired_at -> YYYY-MM-DD
   # Idempotent untuk nilai yang sudah sesuai.
+  local max_files="0"
+  if (( $# > 0 )) && [[ "${1:-}" == --max-files=* ]]; then
+    max_files="${1#--max-files=}"
+    shift
+  fi
   local -a quota_targets=("$@")
   if (( ${#quota_targets[@]} == 0 )); then
     quota_targets=("${QUOTA_PROTO_DIRS[@]}")
   fi
   need_python3
-  python3 - <<'PY' "${QUOTA_ROOT}" "${quota_targets[@]}"
+  python3 - <<'PY' "${QUOTA_ROOT}" "${max_files}" "${quota_targets[@]}"
 import json
 import fcntl
 import os
@@ -629,9 +662,15 @@ import tempfile
 from datetime import datetime
 
 quota_root = sys.argv[1]
-protos = tuple(sys.argv[2:])
+try:
+  max_files = int(sys.argv[2])
+except Exception:
+  max_files = 0
+protos = tuple(sys.argv[3:])
 had_warnings = False
 snapshots = {}
+processed = 0
+stop_processing = False
 
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DATETIME_MIN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
@@ -676,13 +715,19 @@ def normalize_date(value):
   return None
 
 for proto in protos:
+  if stop_processing:
+    break
   d = os.path.join(quota_root, proto)
   if not os.path.isdir(d):
     continue
   for name in os.listdir(d):
+    if max_files > 0 and processed >= max_files:
+      stop_processing = True
+      break
     if not name.endswith(".json"):
       continue
     p = os.path.join(d, name)
+    processed += 1
     lock_path = p + ".lock"
     try:
       os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
@@ -3864,8 +3909,6 @@ domain_control_set_domain_now() {
   fi
   rm -f "${spin_log}" >/dev/null 2>&1 || true
   log "Domain aktif sekarang: ${DOMAIN}"
-  log "Refresh ACCOUNT INFO tidak dijalankan otomatis dari flow Set Domain."
-  log "Gunakan Domain Control > Refresh Account Info bila artefak akun perlu diselaraskan."
   if domain_control_cf_sync_pending_exists "${DOMAIN}"; then
     warn "Target DNS Cloudflare untuk ${DOMAIN} masih pending repair."
     if confirm_yn_or_back "Coba sinkronkan target DNS Cloudflare sekarang juga?"; then
@@ -3873,7 +3916,7 @@ domain_control_set_domain_now() {
         pending_dns_incomplete="true"
       fi
     else
-      warn "Repair target DNS Cloudflare ditunda. Gunakan menu 'Sync Target DNS Record' bila ingin menyelesaikannya."
+      warn "Repair target DNS Cloudflare ditunda. Gunakan menu 'Repair Target DNS Record' bila ingin menyelesaikannya."
       pending_dns_incomplete="true"
     fi
     if [[ "${pending_dns_incomplete}" == "true" ]] && domain_control_cf_sync_pending_exists "${DOMAIN}"; then
@@ -3881,6 +3924,28 @@ domain_control_set_domain_now() {
       pause
       return 1
     fi
+  fi
+  local refresh_log="" refresh_warn_lines="" refresh_ip=""
+  refresh_ip="$(normalize_ip_token "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)")"
+  if ! ui_run_logged_command_with_spinner refresh_log "Refresh ACCOUNT INFO ke domain baru" domain_control_refresh_account_info_batches_run "${DOMAIN}" "${refresh_ip}" "all" "10"; then
+    warn "Set Domain selesai, tetapi refresh otomatis ACCOUNT INFO gagal."
+    hr
+    tail -n 60 "${refresh_log}" 2>/dev/null || true
+    hr
+    rm -f "${refresh_log}" >/dev/null 2>&1 || true
+    pause
+    return 1
+  fi
+  refresh_warn_lines="$(grep '\[manage\]\[WARN\]' "${refresh_log}" 2>/dev/null | tail -n 12 || true)"
+  if [[ -n "${refresh_warn_lines}" ]]; then
+    hr
+    printf '%s\n' "${refresh_warn_lines}"
+  fi
+  rm -f "${refresh_log}" >/dev/null 2>&1 || true
+  if account_info_domain_sync_state_write "${DOMAIN}" >/dev/null 2>&1; then
+    log "ACCOUNT INFO berhasil diselaraskan otomatis ke domain baru."
+  else
+    warn "ACCOUNT INFO berhasil direfresh ke domain baru, tetapi state sinkronisasi domain gagal disimpan."
   fi
   pause
 }
@@ -3990,6 +4055,8 @@ domain_control_refresh_account_info_now() {
   local scope_choice="" scope="all" scope_label="Semua (Xray + SSH)"
   local spin_log=""
   local ask_rc=0
+  local max_targets_per_run="10"
+  local run_all_batches="false"
 
   title
   echo "6) Domain Control > Refresh Account Info"
@@ -4037,6 +4104,7 @@ domain_control_refresh_account_info_now() {
   echo "ISP target   : ${target_isp:-"-"}"
   echo "Country tgt  : ${target_country:-"-"}"
   echo "Scope        : ${scope_label}"
+  echo "Mode apply   : chunked (maks 10 target per batch atomic, maks 10 target per eksekusi)"
   if [[ "${scope}" == "all" || "${scope}" == "xray" ]]; then
     echo "Target Xray  : ${xray_count:-0}"
     echo "Preview Xray : ${xray_preview:--}"
@@ -4046,6 +4114,7 @@ domain_control_refresh_account_info_now() {
     echo "Preview SSH  : ${ssh_preview:--}"
   fi
   echo "Total target : ${total_count:-0}"
+  echo "Default run  : 10 target pertama per eksekusi."
   preview_report="$(preview_report_path_prepare "account-info-refresh-targets" 2>/dev/null || true)"
   if [[ -n "${preview_report}" ]] && account_info_refresh_targets_report_write "${scope}" "${preview_report}"; then
     echo "Daftar target lengkap:"
@@ -4123,6 +4192,23 @@ domain_control_refresh_account_info_now() {
     pause
     return 0
   fi
+  read -r -p "Batas target per run (Enter=10, 1-10, atau kembali): " max_targets_per_run
+  if is_back_choice "${max_targets_per_run}"; then
+    warn "Refresh ACCOUNT INFO dibatalkan pada pemilihan limit target."
+    pause
+    return 0
+  fi
+  [[ -n "${max_targets_per_run}" ]] || max_targets_per_run="10"
+  if [[ ! "${max_targets_per_run}" =~ ^[0-9]+$ ]]; then
+    warn "Limit target per run tidak valid. Dibatalkan."
+    pause
+    return 0
+  fi
+  if (( max_targets_per_run < 1 || max_targets_per_run > 10 )); then
+    warn "Limit target per run harus berada di rentang 1-10."
+    pause
+    return 0
+  fi
   local bulk_ack=""
   read -r -p "Ketik persis 'REFRESH ${scope}' untuk lanjut bulk rewrite ACCOUNT INFO (atau kembali): " bulk_ack
   if is_back_choice "${bulk_ack}"; then
@@ -4135,6 +4221,11 @@ domain_control_refresh_account_info_now() {
     pause
     return 0
   fi
+  if [[ "${total_count:-0}" =~ ^[0-9]+$ ]] && (( total_count > max_targets_per_run )); then
+    if confirm_menu_apply_now "Target melebihi satu batch. Jalankan seluruh batch refresh ACCOUNT INFO sekarang sampai selesai?"; then
+      run_all_batches="true"
+    fi
+  fi
   if [[ "${total_count:-0}" =~ ^[0-9]+$ ]] && (( total_count >= 20 )); then
     if ! confirm_menu_apply_now "Target refresh mencapai ${total_count} file/account info. Tetap lanjut bulk rewrite sekarang?"; then
       warn "Refresh ACCOUNT INFO dibatalkan pada checkpoint bulk-write."
@@ -4143,11 +4234,30 @@ domain_control_refresh_account_info_now() {
     fi
   fi
 
-  if ui_run_logged_command_with_spinner spin_log "Refresh ACCOUNT INFO (${scope_label})" account_refresh_all_info_files "${domain}" "${ip}" "${scope}"; then
-    if account_info_domain_sync_state_write "${domain}"; then
-      log "ACCOUNT INFO berhasil disinkronkan."
+  if [[ "${run_all_batches}" == "true" ]]; then
+    if ui_run_logged_command_with_spinner spin_log "Refresh ACCOUNT INFO (${scope_label}, semua batch)" domain_control_refresh_account_info_batches_run "${domain}" "${ip}" "${scope}" "${max_targets_per_run}"; then
+      if account_info_domain_sync_state_write "${domain}"; then
+        log "ACCOUNT INFO berhasil disinkronkan untuk seluruh batch."
+      else
+        warn "ACCOUNT INFO berhasil direfresh untuk seluruh batch, tetapi state sinkronisasi domain gagal disimpan."
+      fi
+      rm -f "${spin_log}" >/dev/null 2>&1 || true
+      pause
+      return 0
+    fi
+  elif ui_run_logged_command_with_spinner spin_log "Refresh ACCOUNT INFO (${scope_label})" account_refresh_all_info_files "${domain}" "${ip}" "${scope}" "${max_targets_per_run}"; then
+    if [[ "${total_count:-0}" =~ ^[0-9]+$ ]] && (( total_count > max_targets_per_run )); then
+      log "Batch ACCOUNT INFO berhasil diproses."
+      warn "State sinkronisasi domain belum diupdate karena target masih tersisa di batch berikutnya."
     else
-      warn "ACCOUNT INFO berhasil disinkronkan, tetapi state sinkronisasi domain gagal disimpan."
+      if account_info_domain_sync_state_write "${domain}"; then
+        log "ACCOUNT INFO berhasil disinkronkan."
+      else
+        warn "ACCOUNT INFO berhasil disinkronkan, tetapi state sinkronisasi domain gagal disimpan."
+      fi
+    fi
+    if [[ "${total_count:-0}" =~ ^[0-9]+$ ]] && (( total_count > max_targets_per_run )); then
+      warn "Eksekusi ini hanya memproses ${max_targets_per_run} target pertama. Jalankan ulang menu ini untuk batch berikutnya."
     fi
     rm -f "${spin_log}" >/dev/null 2>&1 || true
     pause
@@ -4166,14 +4276,14 @@ domain_control_refresh_account_info_now() {
 
 domain_control_sync_compat_domain_now() {
   local domain ask_rc=0 current_compat=""
-  local snapshot_dir="" preview_report="" nginx_domain=""
+  local snapshot_dir="" preview_report="" nginx_domain="" sync_state_domain=""
   if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" != "1" ]]; then
     domain_control_run_locked domain_control_sync_compat_domain_now "$@"
     return $?
   fi
 
   title
-  echo "6) Domain Control > Sync Compat Domain File"
+  echo "6) Domain Control > Repair Compat Domain Drift (Repair-Only)"
   hr
 
   domain="$(normalize_domain_token "$(detect_domain)")"
@@ -4190,6 +4300,8 @@ domain_control_sync_compat_domain_now() {
   echo "Compat saat ini : ${current_compat:-"(kosong)"}"
   echo "Nginx server_name : ${nginx_domain:-"(tidak terdeteksi)"}"
   echo "Catatan         : ini adalah repair artefak kompatibilitas ke domain aktif, bukan set domain baru."
+  sync_state_domain="$(normalize_domain_token "$(account_info_domain_sync_state_read)")"
+  echo "Sync state dom : ${sync_state_domain:-"(tidak tercatat)"}"
   preview_report="$(preview_report_path_prepare "compat-domain-sync" 2>/dev/null || true)"
   if [[ -n "${preview_report}" ]]; then
     {
@@ -4211,11 +4323,36 @@ domain_control_sync_compat_domain_now() {
     pause
     return 0
   fi
+  if [[ -n "${sync_state_domain}" && "${sync_state_domain}" != "-" && "${sync_state_domain}" != "${domain}" ]]; then
+    warn "Repair compat domain dibatalkan: state sinkronisasi domain terakhir (${sync_state_domain}) tidak cocok dengan domain aktif (${domain})."
+    warn "Selesaikan refresh batch domain saat ini atau jalankan set domain/guard renew hingga state benar-benar final."
+    pause
+    return 1
+  fi
+  if domain_control_cf_sync_pending_exists; then
+    warn "Repair compat domain dibatalkan: masih ada pending repair target DNS Cloudflare."
+    warn "Selesaikan 'Repair Target DNS Record' dulu agar compat repair tetap mengikuti runtime utama yang benar-benar final."
+    pause
+    return 1
+  fi
   if [[ -n "${nginx_domain}" && "${nginx_domain}" != "${domain}" ]]; then
     warn "Repair compat domain dibatalkan: domain aktif (${domain}) tidak cocok dengan server_name nginx (${nginx_domain})."
     warn "Gunakan Set Domain agar compat repair tetap terikat ke runtime utama."
     pause
     return 1
+  fi
+  if [[ ! -s "${CERT_FULLCHAIN}" || ! -s "${CERT_PRIVKEY}" ]]; then
+    warn "Repair compat domain dibatalkan: file cert live belum siap."
+    pause
+    return 1
+  fi
+  if declare -F cert_runtime_hostname_tls_handshake_check >/dev/null 2>&1; then
+    if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
+      warn "Repair compat domain dibatalkan: probe TLS hostname untuk domain aktif belum sehat."
+      warn "Gunakan Set Domain atau perbaiki runtime TLS dulu sebelum mensinkronkan compat domain."
+      pause
+      return 1
+    fi
   fi
 
   if ! confirm_yn_or_back "Sinkronkan compat domain file ke domain aktif sekarang?"; then
@@ -4283,7 +4420,7 @@ domain_control_sync_target_dns_now() {
   fi
 
   title
-  echo "6) Domain Control > Sync Target DNS Record"
+  echo "6) Domain Control > Repair Target DNS Record (Manual Repair)"
   hr
 
   while IFS= read -r pending_file; do
@@ -4426,6 +4563,12 @@ domain_control_sync_target_dns_now() {
   rm -f "${cf_dns_snapshot}" >/dev/null 2>&1 || true
   rm -f "${pending_file}" >/dev/null 2>&1 || true
   log "Target DNS Cloudflare berhasil disinkronkan ke ${domain}."
+  local remaining_pending=0
+  remaining_pending="$(domain_control_cf_sync_pending_list_files | wc -l | tr -d '[:space:]' || true)"
+  [[ "${remaining_pending}" =~ ^[0-9]+$ ]] || remaining_pending=0
+  if (( remaining_pending > 0 )); then
+    warn "Masih ada ${remaining_pending} pending repair DNS lain yang belum dibereskan."
+  fi
   pause
   return 0
 }
@@ -4492,7 +4635,7 @@ domain_control_guard_renew_if_needed() {
     return $?
   fi
   title
-  echo "6) Domain Control > Guard Renew"
+  echo "6) Domain Control > Guard Renew (External Binary)"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -4502,7 +4645,11 @@ domain_control_guard_renew_if_needed() {
     return 0
   fi
 
-  local ask_rc=0 rc=0 spin_log="" check_rc=0 check_log="" status_log=""
+  local ask_rc=0 rc=0 spin_log="" check_rc=0 check_log="" status_log="" post_check_log="" post_check_rc=0
+  local domain="" nginx_domain="" compat_domain=""
+  local -a post_notes=()
+  local compat_prompt_rc=0
+  local dns_prompt_rc=0
   if ui_run_logged_command_with_spinner check_log "Menjalankan guard preflight" "${XRAY_DOMAIN_GUARD_BIN}" check; then
     check_rc=0
   else
@@ -4542,16 +4689,10 @@ domain_control_guard_renew_if_needed() {
   rm -f "${status_log}" >/dev/null 2>&1 || true
 
   if (( check_rc >= 1 )); then
-    if ! confirm_yn_or_back "Preflight guard tidak bersih. Tetap lanjut ke renew-if-needed?"; then
-      ask_rc=$?
-      if (( ask_rc == 2 )); then
-        warn "Guard renew dibatalkan (kembali)."
-      else
-        warn "Guard renew dibatalkan."
-      fi
-      pause
-      return 0
-    fi
+    warn "Guard renew dibatalkan: preflight guard belum bersih."
+    warn "Perbaiki dulu warning/critical pada guard check sebelum menjalankan renew-if-needed."
+    pause
+    return 0
   fi
 
   if ! confirm_yn_or_back "Lanjutkan guard renew-if-needed sekarang setelah melihat preflight di atas?"; then
@@ -4588,46 +4729,128 @@ domain_control_guard_renew_if_needed() {
   else
     rc=$?
   fi
+  if ui_run_logged_command_with_spinner post_check_log "Verifikasi postflight guard" "${XRAY_DOMAIN_GUARD_BIN}" check; then
+    post_check_rc=0
+  else
+    post_check_rc=$?
+  fi
+  domain="$(normalize_domain_token "$(detect_domain)")"
+  nginx_domain="$(normalize_domain_token "$(domain_control_current_nginx_domain_get)")"
+  compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  compat_domain="$(normalize_domain_token "${compat_domain}")"
+  if [[ -z "${domain}" ]]; then
+    post_notes+=("domain aktif tidak terdeteksi")
+  fi
+  if [[ -n "${domain}" && -n "${nginx_domain}" && "${nginx_domain}" != "${domain}" ]]; then
+    post_notes+=("server_name nginx tidak sinkron (${nginx_domain})")
+  fi
+  if [[ -n "${domain}" && -n "${compat_domain}" && "${compat_domain}" != "${domain}" ]]; then
+    post_notes+=("compat domain tidak sinkron (${compat_domain})")
+  fi
+  if [[ -n "${domain}" ]] && declare -F cert_runtime_hostname_tls_handshake_check >/dev/null 2>&1; then
+    if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
+      post_notes+=("probe TLS hostname gagal")
+    fi
+  fi
 
   hr
   if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
     cat "${spin_log}" 2>/dev/null || true
     hr
   fi
+  if [[ -n "${post_check_log}" && -s "${post_check_log}" ]]; then
+    echo "Postflight guard check:"
+    cat "${post_check_log}" 2>/dev/null || true
+    hr
+  fi
   case "${rc}" in
-    0) log "Renew-if-needed selesai, status sehat." ;;
+    0) log "Renew-if-needed selesai." ;;
     1) warn "Renew-if-needed selesai dengan warning." ;;
     2) warn "Renew-if-needed selesai, namun masih ada kondisi critical." ;;
     *) warn "Renew-if-needed selesai dengan status ${rc}." ;;
   esac
+  if (( post_check_rc != 0 )); then
+    warn "Postflight guard check belum bersih (status ${post_check_rc})."
+  fi
+  if (( ${#post_notes[@]} > 0 )); then
+    warn "Verifikasi shell-side setelah guard renew mendeteksi: $(IFS=' | '; echo "${post_notes[*]}")."
+  fi
+  if (( rc == 0 )); then
+    if (( post_check_rc == 0 && ${#post_notes[@]} == 0 )); then
+      log "Postflight guard sehat: domain/nginx/compat/cert tetap sinkron."
+      account_info_domain_sync_state_write "${domain}" >/dev/null 2>&1 || true
+      if [[ -n "${domain}" ]] && domain_control_cf_sync_pending_exists; then
+        if confirm_yn_or_back "Terdapat pending repair target DNS Cloudflare setelah guard renew. Repair sekarang?"; then
+          domain_control_sync_target_dns_now "${domain}" || rc=1
+        else
+          dns_prompt_rc=$?
+          if (( dns_prompt_rc == 1 || dns_prompt_rc == 2 )); then
+            warn "Repair target DNS Cloudflare ditunda. Pending task tetap dipertahankan."
+          fi
+        fi
+      fi
+      compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+      compat_domain="$(normalize_domain_token "${compat_domain}")"
+      if [[ "${rc}" == "0" && -n "${domain}" && "${compat_domain}" != "${domain}" && ! domain_control_cf_sync_pending_exists ]]; then
+        if confirm_yn_or_back "Compat domain file belum sinkron setelah guard renew. Sinkronkan sekarang?"; then
+          domain_control_sync_compat_domain_now || rc=1
+        else
+          compat_prompt_rc=$?
+          if (( compat_prompt_rc == 1 || compat_prompt_rc == 2 )); then
+            warn "Repair compat domain ditunda. Anda masih bisa menjalankannya manual dari Domain Control."
+          fi
+        fi
+      fi
+    else
+      rc=1
+    fi
+  fi
   rm -f "${spin_log}" >/dev/null 2>&1 || true
+  rm -f "${post_check_log}" >/dev/null 2>&1 || true
   pause
   return "${rc}"
 }
 
 domain_control_menu() {
-  local -a items=(
-    "1|Set Domain"
-    "2|Current Domain"
-    "3|Guard Check"
-    "4|Guard Renew"
-    "5|Refresh Account Info"
-    "6|Sync Compat Domain File"
-    "7|Sync Target DNS Record"
-    "0|Back"
-  )
+  local pending_prompted="false"
   while true; do
+    local -a items=()
     local cf_pending="false"
     local cf_pending_count=0
+    local pending_prompt_rc=0
     domain_control_cf_sync_pending_exists && cf_pending="true"
     if [[ "${cf_pending}" == "true" ]]; then
       cf_pending_count="$(domain_control_cf_sync_pending_list_files | wc -l | tr -d '[:space:]' || true)"
       [[ "${cf_pending_count}" =~ ^[0-9]+$ ]] || cf_pending_count=0
+    else
+      pending_prompted="false"
     fi
+    items=(
+      "1|Set Domain"
+      "2|Current Domain"
+      "3|Guard Check"
+      "4|Guard Renew (external binary)"
+      "5|Refresh Account Info"
+      "6|Repair Compat Domain Drift (repair-only)"
+      "7|Repair Target DNS Record (manual repair)$([[ "${cf_pending}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
+      "0|Back"
+    )
     ui_menu_screen_begin "6) Domain Control"
     if [[ "${cf_pending}" == "true" ]]; then
-      warn "Ada ${cf_pending_count} pending repair target DNS Cloudflare. Gunakan 'Sync Target DNS Record' bila ingin menyelesaikannya."
+      warn "Ada ${cf_pending_count} pending repair target DNS Cloudflare. Gunakan 'Repair Target DNS Record' bila ingin menyelesaikannya."
       hr
+      if [[ "${pending_prompted}" != "true" ]]; then
+        pending_prompted="true"
+        if confirm_yn_or_back "Buka repair 'Repair Target DNS Record' sekarang?"; then
+          menu_run_isolated_report "Repair Target DNS" domain_control_sync_target_dns_now
+          continue
+        fi
+        pending_prompt_rc=$?
+        if (( pending_prompt_rc == 1 || pending_prompt_rc == 2 )); then
+          warn "Repair target DNS tidak dibuka otomatis. Anda masih bisa memilih menu 7 kapan saja."
+          hr
+        fi
+      fi
     fi
     ui_menu_render_options items 76
     hr
@@ -4636,13 +4859,45 @@ domain_control_menu() {
       break
     fi
     case "${c}" in
-      1) menu_run_isolated_report "Set Domain" domain_control_set_domain_now ;;
+      1)
+        if [[ "${cf_pending}" == "true" ]]; then
+          warn "Set Domain ditahan: masih ada pending repair target DNS Cloudflare untuk domain aktif."
+          warn "Selesaikan 'Repair Target DNS Record' dulu agar perubahan domain baru tidak menumpuk di atas pending repair lama."
+          pause
+          continue
+        fi
+        menu_run_isolated_report "Set Domain" domain_control_set_domain_now
+        ;;
       2) domain_control_show_info ;;
       3) menu_run_isolated_report "Domain Guard Check" domain_control_guard_check ;;
-      4) menu_run_isolated_report "Domain Guard Renew" domain_control_guard_renew_if_needed ;;
-      5) menu_run_isolated_report "Refresh Account Info" domain_control_refresh_account_info_now ;;
-      6) menu_run_isolated_report "Sync Compat Domain" domain_control_sync_compat_domain_now ;;
-      7) menu_run_isolated_report "Sync Target DNS" domain_control_sync_target_dns_now ;;
+      4)
+        if [[ "${cf_pending}" == "true" ]]; then
+          warn "Guard Renew ditahan: masih ada pending repair target DNS Cloudflare."
+          warn "Selesaikan repair target DNS dulu agar postflight guard tidak berjalan di atas state Cloudflare yang belum sinkron."
+          pause
+          continue
+        fi
+        menu_run_isolated_report "Domain Guard Renew (External)" domain_control_guard_renew_if_needed
+        ;;
+      5)
+        if [[ "${cf_pending}" == "true" ]]; then
+          warn "Refresh Account Info ditahan: masih ada pending repair target DNS Cloudflare."
+          warn "Selesaikan repair target DNS dulu agar refresh berjalan di atas state domain yang benar-benar final."
+          pause
+          continue
+        fi
+        menu_run_isolated_report "Refresh Account Info" domain_control_refresh_account_info_now
+        ;;
+      6)
+        if [[ "${cf_pending}" == "true" ]]; then
+          warn "Repair Compat Domain ditahan: masih ada pending repair target DNS Cloudflare."
+          warn "Selesaikan repair target DNS dulu agar artefak compat tidak disinkronkan ke state yang belum final."
+          pause
+          continue
+        fi
+        menu_run_isolated_report "Repair Compat Domain" domain_control_sync_compat_domain_now
+        ;;
+      7) menu_run_isolated_report "Repair Target DNS" domain_control_sync_target_dns_now ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -8555,19 +8810,172 @@ account_info_refresh_restore_snapshot() {
   return "${failed}"
 }
 
+account_refresh_xray_batch_apply() {
+  # args: domain ip start_idx end_idx protos_ref users_ref targets_ref updated_ref failed_ref skipped_ref
+  local domain="${1:-}"
+  local ip="${2:-}"
+  local start_idx="${3:-0}"
+  local end_idx="${4:-0}"
+  local -n _protos_ref="${5}"
+  local -n _users_ref="${6}"
+  local -n _targets_ref="${7}"
+  local -n _updated_ref="${8}"
+  local -n _failed_ref="${9}"
+  local -n _skipped_ref="${10}"
+  local snap_dir="" manifest_file="" i proto username target_file candidate_file=""
+
+  snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh-xray.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.account-info-refresh-xray.$$"
+  mkdir -p "${snap_dir}" 2>/dev/null || return 1
+  manifest_file="${snap_dir}/manifest.tsv"
+  : > "${manifest_file}" || {
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  for (( i=start_idx; i<end_idx; i++ )); do
+    target_file="${_targets_ref[$i]}"
+    [[ -n "${target_file}" ]] || continue
+    if ! account_info_refresh_snapshot_file "${target_file}" "${snap_dir}" "${manifest_file}"; then
+      warn "Gagal membuat snapshot batch ACCOUNT INFO Xray: ${target_file}"
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done
+
+  for (( i=start_idx; i<end_idx; i++ )); do
+    proto="${_protos_ref[$i]}"
+    username="${_users_ref[$i]}"
+    target_file="${_targets_ref[$i]}"
+    candidate_file="${snap_dir}/xray.${i}.candidate.txt"
+    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+    if ! account_info_refresh_for_user "${proto}" "${username}" "${domain}" "${ip}" "" "${candidate_file}"; then
+      _failed_ref=$((_failed_ref + 1))
+      warn "Refresh ACCOUNT INFO Xray gagal untuk ${username}@${proto}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    if [[ -f "${target_file}" ]] && cmp -s -- "${target_file}" "${candidate_file}"; then
+      _skipped_ref=$((_skipped_ref + 1))
+      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+      continue
+    fi
+    if account_info_restore_file_locked "${candidate_file}" "${target_file}" >/dev/null 2>&1; then
+      _updated_ref=$((_updated_ref + 1))
+    else
+      _failed_ref=$((_failed_ref + 1))
+      warn "Commit ACCOUNT INFO Xray gagal untuk ${username}@${proto}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+  done
+
+  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+  return 0
+}
+
+account_refresh_ssh_batch_apply() {
+  # args: start_idx end_idx users_ref targets_ref updated_ref failed_ref skipped_ref
+  local start_idx="${1:-0}"
+  local end_idx="${2:-0}"
+  local -n _users_ref="${3}"
+  local -n _targets_ref="${4}"
+  local -n _updated_ref="${5}"
+  local -n _failed_ref="${6}"
+  local -n _skipped_ref="${7}"
+  local snap_dir="" manifest_file="" i username target_file state_file candidate_file=""
+
+  snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh-ssh.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.account-info-refresh-ssh.$$"
+  mkdir -p "${snap_dir}" 2>/dev/null || return 1
+  manifest_file="${snap_dir}/manifest.tsv"
+  : > "${manifest_file}" || {
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  for (( i=start_idx; i<end_idx; i++ )); do
+    username="${_users_ref[$i]}"
+    target_file="${_targets_ref[$i]}"
+    state_file="$(ssh_user_state_resolve_file "${username}")"
+    if [[ -n "${target_file}" ]]; then
+      if ! account_info_refresh_snapshot_file "${target_file}" "${snap_dir}" "${manifest_file}"; then
+        warn "Gagal membuat snapshot batch ACCOUNT INFO SSH: ${target_file}"
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+        return 1
+      fi
+    fi
+    if [[ -n "${state_file}" ]]; then
+      if ! account_info_refresh_snapshot_file "${state_file}" "${snap_dir}" "${manifest_file}"; then
+        warn "Gagal membuat snapshot state SSH sebelum refresh batch: ${state_file}"
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+        return 1
+      fi
+    fi
+  done
+
+  for (( i=start_idx; i<end_idx; i++ )); do
+    username="${_users_ref[$i]}"
+    state_file="$(ssh_user_state_resolve_file "${username}")"
+    if [[ ! -f "${state_file}" ]]; then
+      warn "Refresh ACCOUNT INFO SSH skip '${username}': metadata state SSH tidak ditemukan."
+      _skipped_ref=$((_skipped_ref + 1))
+      continue
+    fi
+    target_file="${_targets_ref[$i]}"
+    candidate_file="${snap_dir}/ssh.${i}.candidate.txt"
+    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+    if ! ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}"; then
+      _failed_ref=$((_failed_ref + 1))
+      warn "Refresh ACCOUNT INFO SSH gagal untuk ${username}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    if [[ -f "${target_file}" ]] && cmp -s -- "${target_file}" "${candidate_file}"; then
+      _skipped_ref=$((_skipped_ref + 1))
+      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+      continue
+    fi
+    if account_info_restore_file_locked "${candidate_file}" "${target_file}" >/dev/null 2>&1; then
+      _updated_ref=$((_updated_ref + 1))
+    else
+      _failed_ref=$((_failed_ref + 1))
+      warn "Commit ACCOUNT INFO SSH gagal untuk ${username}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
+      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+  done
+
+  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+  return 0
+}
+
 account_refresh_all_info_files() {
   # args: [domain] [ip] [scope]
   local domain="${1:-}"
   local ip="${2:-}"
   local scope="${3:-all}"
-  local snap_dir="" manifest_file=""
-  local i proto username target_file state_file
+  local max_targets="${4:-0}"
+  local start_offset="${5:-0}"
+  local i proto username
   local updated=0 failed=0 ssh_updated=0 ssh_failed=0 xray_skipped=0 ssh_skipped=0
   local -a xray_refresh_protos=() xray_refresh_users=() xray_refresh_targets=()
   local -a ssh_refresh_users=() ssh_refresh_targets=()
-  local -A seen_targets=() seen_xray_users=() seen_ssh_users=()
+  local -A seen_xray_users=() seen_ssh_users=()
   local -a ssh_users=()
-  local candidate_file=""
+  local batch_size=10 batch_start=0 batch_end=0 total_batches=0 current_batch=0
+  local total_selected=0 selected_offset=0
 
   if [[ "${USER_DATA_MUTATION_LOCK_HELD:-0}" != "1" ]]; then
     user_data_mutation_run_locked account_refresh_all_info_files "$@"
@@ -8584,6 +8992,8 @@ account_refresh_all_info_files() {
     all|xray|ssh) ;;
     *) scope="all" ;;
   esac
+  [[ "${max_targets}" =~ ^[0-9]+$ ]] || max_targets=0
+  [[ "${start_offset}" =~ ^[0-9]+$ ]] || start_offset=0
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   [[ -n "${ip}" ]] || ip="$(detect_public_ip_ipapi)"
 
@@ -8597,11 +9007,20 @@ account_refresh_all_info_files() {
         if [[ -n "${seen_xray_users["${proto}|${username}"]+x}" ]]; then
           continue
         fi
+        if (( start_offset > 0 && selected_offset < start_offset )); then
+          seen_xray_users["${proto}|${username}"]=1
+          selected_offset=$((selected_offset + 1))
+          continue
+        fi
+        if (( max_targets > 0 && total_selected >= max_targets )); then
+          break
+        fi
         seen_xray_users["${proto}|${username}"]=1
         target_file="$(account_info_refresh_target_file_for_user "${proto}" "${username}")"
         xray_refresh_protos+=("${proto}")
         xray_refresh_users+=("${username}")
         xray_refresh_targets+=("${target_file}")
+        total_selected=$((total_selected + 1))
       done
     fi
   fi
@@ -8612,110 +9031,84 @@ account_refresh_all_info_files() {
       if [[ -n "${seen_ssh_users["${username}"]+x}" ]]; then
         continue
       fi
+      if (( start_offset > 0 && selected_offset < start_offset )); then
+        seen_ssh_users["${username}"]=1
+        selected_offset=$((selected_offset + 1))
+        continue
+      fi
+      if (( max_targets > 0 && total_selected >= max_targets )); then
+        break
+      fi
       seen_ssh_users["${username}"]=1
       ssh_refresh_users+=("${username}")
       ssh_refresh_targets+=("$(ssh_account_info_file "${username}")")
+      total_selected=$((total_selected + 1))
     done
   fi
 
-  snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.account-info-refresh.$$"
-  mkdir -p "${snap_dir}" 2>/dev/null || return 1
-  manifest_file="${snap_dir}/manifest.tsv"
-  : > "${manifest_file}" || {
-    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-    return 1
-  }
-
-  for target_file in "${xray_refresh_targets[@]}" "${ssh_refresh_targets[@]}"; do
-    [[ -n "${target_file}" ]] || continue
-    if [[ -n "${seen_targets["${target_file}"]+x}" ]]; then
-      continue
-    fi
-    seen_targets["${target_file}"]=1
-    if ! account_info_refresh_snapshot_file "${target_file}" "${snap_dir}" "${manifest_file}"; then
-      warn "Gagal membuat snapshot sebelum refresh ACCOUNT INFO: ${target_file}"
-      if ! account_info_refresh_restore_snapshot "${manifest_file}"; then
-        warn "Rollback snapshot ACCOUNT INFO juga gagal."
+  if (( ${#xray_refresh_users[@]} > 0 )); then
+    total_batches=$(( (${#xray_refresh_users[@]} + batch_size - 1) / batch_size ))
+    for (( batch_start=0; batch_start<${#xray_refresh_users[@]}; batch_start+=batch_size )); do
+      batch_end=$((batch_start + batch_size))
+      (( batch_end > ${#xray_refresh_users[@]} )) && batch_end="${#xray_refresh_users[@]}"
+      current_batch=$((batch_start / batch_size + 1))
+      log "Refresh ACCOUNT INFO Xray batch ${current_batch}/${total_batches}."
+      if ! account_refresh_xray_batch_apply "${domain}" "${ip}" "${batch_start}" "${batch_end}" xray_refresh_protos xray_refresh_users xray_refresh_targets updated failed xray_skipped; then
+        log "Refresh ACCOUNT INFO (scope=${scope}) berhenti pada batch Xray ${current_batch}/${total_batches}: xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
+        return 1
       fi
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      return 1
-    fi
-  done
-  for username in "${ssh_refresh_users[@]}"; do
-    state_file="$(ssh_user_state_resolve_file "${username}")"
-    [[ -n "${state_file}" ]] || continue
-    if [[ -n "${seen_targets["${state_file}"]+x}" ]]; then
-      continue
-    fi
-    seen_targets["${state_file}"]=1
-    if ! account_info_refresh_snapshot_file "${state_file}" "${snap_dir}" "${manifest_file}"; then
-      warn "Gagal membuat snapshot state SSH sebelum refresh ACCOUNT INFO: ${state_file}"
-      if ! account_info_refresh_restore_snapshot "${manifest_file}"; then
-        warn "Rollback snapshot ACCOUNT INFO juga gagal."
+    done
+  fi
+
+  if (( ${#ssh_refresh_users[@]} > 0 )); then
+    total_batches=$(( (${#ssh_refresh_users[@]} + batch_size - 1) / batch_size ))
+    for (( batch_start=0; batch_start<${#ssh_refresh_users[@]}; batch_start+=batch_size )); do
+      batch_end=$((batch_start + batch_size))
+      (( batch_end > ${#ssh_refresh_users[@]} )) && batch_end="${#ssh_refresh_users[@]}"
+      current_batch=$((batch_start / batch_size + 1))
+      log "Refresh ACCOUNT INFO SSH batch ${current_batch}/${total_batches}."
+      if ! account_refresh_ssh_batch_apply "${batch_start}" "${batch_end}" ssh_refresh_users ssh_refresh_targets ssh_updated ssh_failed ssh_skipped; then
+        log "Refresh ACCOUNT INFO (scope=${scope}) berhenti pada batch SSH ${current_batch}/${total_batches}: xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
+        return 1
       fi
-      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
-      return 1
-    fi
-  done
+    done
+  fi
 
-  for i in "${!xray_refresh_users[@]}"; do
-    candidate_file="${snap_dir}/xray.${i}.candidate.txt"
-    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-    if ! account_info_refresh_for_user "${xray_refresh_protos[$i]}" "${xray_refresh_users[$i]}" "${domain}" "${ip}" "" "${candidate_file}"; then
-      failed=$((failed + 1))
-      continue
-    fi
-    target_file="${xray_refresh_targets[$i]}"
-    if [[ -f "${target_file}" ]] && cmp -s -- "${target_file}" "${candidate_file}"; then
-      xray_skipped=$((xray_skipped + 1))
-      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-      continue
-    fi
-    if account_info_restore_file_locked "${candidate_file}" "${target_file}" >/dev/null 2>&1; then
-      updated=$((updated + 1))
-    else
-      failed=$((failed + 1))
-    fi
-    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-  done
-  for i in "${!ssh_refresh_users[@]}"; do
-    state_file="$(ssh_user_state_resolve_file "${ssh_refresh_users[$i]}")"
-    if [[ ! -f "${state_file}" ]]; then
-      warn "Refresh ACCOUNT INFO SSH skip '${ssh_refresh_users[$i]}': metadata state SSH tidak ditemukan."
-      ssh_skipped=$((ssh_skipped + 1))
-      continue
-    fi
-    candidate_file="${snap_dir}/ssh.${i}.candidate.txt"
-    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-    if ! ssh_account_info_refresh_from_state "${ssh_refresh_users[$i]}" "" "${candidate_file}"; then
-      ssh_failed=$((ssh_failed + 1))
-      continue
-    fi
-    target_file="${ssh_refresh_targets[$i]}"
-    if [[ -f "${target_file}" ]] && cmp -s -- "${target_file}" "${candidate_file}"; then
-      ssh_skipped=$((ssh_skipped + 1))
-      rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-      continue
-    fi
-    if account_info_restore_file_locked "${candidate_file}" "${target_file}" >/dev/null 2>&1; then
-      ssh_updated=$((ssh_updated + 1))
-    else
-      ssh_failed=$((ssh_failed + 1))
-    fi
-    rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
-  done
-
-  log "Refresh ACCOUNT INFO (scope=${scope}): xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
+  log "Refresh ACCOUNT INFO (scope=${scope}, batch_size=${batch_size}, max_targets=${max_targets}, start_offset=${start_offset}): xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
   if (( failed > 0 || ssh_failed > 0 )); then
-    warn "Refresh ACCOUNT INFO gagal parsial. Mengembalikan snapshot sebelumnya..."
-    if ! account_info_refresh_restore_snapshot "${manifest_file}"; then
-      warn "Rollback ACCOUNT INFO belum pulih sepenuhnya. Cek file di ${ACCOUNT_ROOT} dan ${SSH_ACCOUNT_DIR}."
-    fi
-    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   fi
-  rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+  return 0
+}
+
+domain_control_refresh_account_info_batches_run() {
+  # args: domain ip scope [batch_limit]
+  local domain="${1:-}"
+  local ip="${2:-}"
+  local scope="${3:-all}"
+  local batch_limit="${4:-10}"
+  local summary="" xray_count=0 ssh_count=0 total_count=0
+  local xray_preview="" ssh_preview=""
+  local offset=0
+
+  [[ "${batch_limit}" =~ ^[0-9]+$ ]] || batch_limit=10
+  if (( batch_limit < 1 )); then
+    batch_limit=10
+  fi
+
+  summary="$(account_info_refresh_targets_summary "${scope}" 1)"
+  IFS='|' read -r xray_count ssh_count total_count xray_preview ssh_preview <<<"${summary}"
+  [[ "${total_count}" =~ ^[0-9]+$ ]] || total_count=0
+  if (( total_count == 0 )); then
+    return 0
+  fi
+
+  while (( offset < total_count )); do
+    if ! account_refresh_all_info_files "${domain}" "${ip}" "${scope}" "${batch_limit}" "${offset}"; then
+      return 1
+    fi
+    offset=$((offset + batch_limit))
+  done
   return 0
 }
 
@@ -9433,7 +9826,7 @@ xray_delete_txn_recover_pending_all() {
 
 xray_reset_txn_recover_dir() {
   local txn_dir="${1:-}"
-  local proto username target_file previous_cred new_cred runtime_changed live_cred=""
+  local proto username target_file previous_cred new_cred runtime_changed file_committed live_cred=""
   local selected_snapshot staged_account_file
   local status_msg=""
   [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 0
@@ -9444,6 +9837,7 @@ xray_reset_txn_recover_dir() {
   previous_cred="$(mutation_txn_field_read "${txn_dir}" previous_cred 2>/dev/null || true)"
   new_cred="$(mutation_txn_field_read "${txn_dir}" new_cred 2>/dev/null || true)"
   runtime_changed="$(mutation_txn_field_read "${txn_dir}" runtime_changed 2>/dev/null || true)"
+  file_committed="$(mutation_txn_field_read "${txn_dir}" file_committed 2>/dev/null || true)"
   selected_snapshot="${txn_dir}/account.txt"
   staged_account_file="${txn_dir}/account.new.txt"
 
@@ -9452,6 +9846,21 @@ xray_reset_txn_recover_dir() {
     return 0
   fi
   if [[ "${runtime_changed}" != "1" ]]; then
+    if [[ "${file_committed}" == "1" ]]; then
+      if [[ -f "${selected_snapshot}" ]]; then
+        if account_info_restore_file_locked "${selected_snapshot}" "${target_file}" >/dev/null 2>&1; then
+          log "Recovery reset credential Xray selesai untuk ${username}@${proto}: rollback file account info lama diselesaikan dari journal."
+          mutation_txn_dir_remove "${txn_dir}"
+          return 0
+        fi
+      elif [[ -n "${previous_cred}" ]] && account_info_refresh_for_user "${proto}" "${username}" "" "" "${previous_cred}" >/dev/null 2>&1; then
+        log "Recovery reset credential Xray selesai untuk ${username}@${proto}: account info lama dipulihkan dari journal."
+        mutation_txn_dir_remove "${txn_dir}"
+        return 0
+      fi
+      warn "Recovery reset credential Xray untuk ${username}@${proto} belum bersih: rollback file account info lama gagal."
+      return 1
+    fi
     mutation_txn_dir_remove "${txn_dir}"
     return 0
   fi
@@ -9667,7 +10076,7 @@ xray_recover_pending_txn_menu() {
       xray_recover_pending_txn_pick_dir add selected_dir || { pause; return 0; }
       selected_label="$(xray_pending_txn_label "${selected_dir}")"
       echo "Journal terpilih : ${selected_label}"
-      confirm_menu_apply_now "Lanjutkan recovery journal add Xray ini sekarang?" || { pause; return 0; }
+      confirm_menu_apply_now "Lanjutkan recovery journal add Xray ini sekarang? (${selected_label})" || { pause; return 0; }
       user_data_mutation_run_locked xray_recover_pending_txn_now add "${selected_dir}"
       ;;
     2)
@@ -9675,7 +10084,7 @@ xray_recover_pending_txn_menu() {
       xray_recover_pending_txn_pick_dir delete selected_dir || { pause; return 0; }
       selected_label="$(xray_pending_txn_label "${selected_dir}")"
       echo "Journal terpilih : ${selected_label}"
-      confirm_menu_apply_now "Lanjutkan recovery journal delete Xray ini sekarang?" || { pause; return 0; }
+      confirm_menu_apply_now "Lanjutkan recovery journal delete Xray ini sekarang? (${selected_label})" || { pause; return 0; }
       user_data_mutation_run_locked xray_recover_pending_txn_now delete "${selected_dir}"
       ;;
     3)
@@ -9683,7 +10092,7 @@ xray_recover_pending_txn_menu() {
       xray_recover_pending_txn_pick_dir reset selected_dir || { pause; return 0; }
       selected_label="$(xray_pending_txn_label "${selected_dir}")"
       echo "Journal terpilih : ${selected_label}"
-      confirm_menu_apply_now "Lanjutkan recovery journal reset Xray ini sekarang?" || { pause; return 0; }
+      confirm_menu_apply_now "Lanjutkan recovery journal reset Xray ini sekarang? (${selected_label})" || { pause; return 0; }
       user_data_mutation_run_locked xray_recover_pending_txn_now reset "${selected_dir}"
       ;;
     0|kembali|k|back|b)
@@ -9959,15 +10368,20 @@ user_reset_credential_apply_locked() {
     XRAY_RESET_ABORT_PREVIOUS_CRED=""
     XRAY_RESET_ABORT_TARGET_FILE=""
     XRAY_RESET_ABORT_SELECTED_SNAPSHOT=""
+    XRAY_RESET_ABORT_FILE_COMMITTED="0"
     XRAY_RESET_ABORT_RUNTIME_CHANGED="0"
     XRAY_RESET_ABORT_ACTIVE="1"
     trap '
-      if [[ "${XRAY_RESET_ABORT_ACTIVE:-0}" == "1" && "${XRAY_RESET_ABORT_RUNTIME_CHANGED:-0}" == "1" ]]; then
-        xray_reset_client_credential_try "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
-        if [[ -n "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT:-}" && -f "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT}" && -n "${XRAY_RESET_ABORT_TARGET_FILE:-}" ]]; then
-          account_info_restore_file_locked "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT}" "${XRAY_RESET_ABORT_TARGET_FILE}" >/dev/null 2>&1 || account_info_refresh_for_user "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "" "" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
-        else
-          account_info_refresh_for_user "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "" "" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
+      if [[ "${XRAY_RESET_ABORT_ACTIVE:-0}" == "1" ]]; then
+        if [[ "${XRAY_RESET_ABORT_RUNTIME_CHANGED:-0}" == "1" ]]; then
+          xray_reset_client_credential_try "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
+        fi
+        if [[ "${XRAY_RESET_ABORT_FILE_COMMITTED:-0}" == "1" ]]; then
+          if [[ -n "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT:-}" && -f "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT}" && -n "${XRAY_RESET_ABORT_TARGET_FILE:-}" ]]; then
+            account_info_restore_file_locked "${XRAY_RESET_ABORT_SELECTED_SNAPSHOT}" "${XRAY_RESET_ABORT_TARGET_FILE}" >/dev/null 2>&1 || account_info_refresh_for_user "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "" "" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
+          else
+            account_info_refresh_for_user "${XRAY_RESET_ABORT_PROTO}" "${XRAY_RESET_ABORT_USERNAME}" "" "" "${XRAY_RESET_ABORT_PREVIOUS_CRED}" >/dev/null 2>&1 || true
+          fi
         fi
       fi
     ' EXIT INT TERM HUP QUIT
@@ -10031,6 +10445,7 @@ PY
   mutation_txn_field_write "${snapshot_dir}" target_file "${target_file}" >/dev/null 2>&1 || true
   mutation_txn_field_write "${snapshot_dir}" previous_cred "${previous_cred}" >/dev/null 2>&1 || true
   mutation_txn_field_write "${snapshot_dir}" new_cred "${new_cred}" >/dev/null 2>&1 || true
+  mutation_txn_field_write "${snapshot_dir}" file_committed "0" >/dev/null 2>&1 || true
   mutation_txn_field_write "${snapshot_dir}" runtime_changed "0" >/dev/null 2>&1 || true
   if [[ -n "${snapshot_dir}" && -f "${snapshot_source}" ]]; then
     selected_snapshot="${snapshot_dir}/account.txt"
@@ -10040,6 +10455,13 @@ PY
   XRAY_RESET_ABORT_TARGET_FILE="${target_file}"
   XRAY_RESET_ABORT_SELECTED_SNAPSHOT="${selected_snapshot}"
 
+  if ! account_info_target_write_preflight "${target_file}"; then
+    mutation_txn_dir_remove "${snapshot_dir}"
+    warn "Reset ${label,,} dibatalkan: target XRAY ACCOUNT INFO tidak siap ditulis."
+    pause
+    return 1
+  fi
+
   if ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${new_cred}" "${staged_account_file}"; then
     mutation_txn_dir_remove "${snapshot_dir}"
     warn "Reset ${label,,} dibatalkan: XRAY ACCOUNT INFO baru gagal disiapkan sebelum credential live diubah."
@@ -10047,49 +10469,42 @@ PY
     return 1
   fi
 
-  if ! xray_reset_client_credential_try "${proto}" "${username}" "${new_cred}"; then
+  if ! account_info_restore_file_locked "${staged_account_file}" "${target_file}" >/dev/null 2>&1; then
     mutation_txn_dir_remove "${snapshot_dir}"
-    warn "Gagal mereset ${label,,} untuk ${username}@${proto}."
+    warn "Reset ${label,,} dibatalkan: commit XRAY ACCOUNT INFO baru gagal sebelum credential live diubah."
+    pause
+    return 1
+  fi
+  XRAY_RESET_ABORT_FILE_COMMITTED="1"
+  mutation_txn_field_write "${snapshot_dir}" file_committed "1" >/dev/null 2>&1 || true
+
+  if ! xray_reset_client_credential_try "${proto}" "${username}" "${new_cred}"; then
+    local rollback_file_failed="false"
+    if [[ -n "${selected_snapshot}" && -f "${selected_snapshot}" ]]; then
+      if ! account_info_restore_file_locked "${selected_snapshot}" "${target_file}" >/dev/null 2>&1; then
+        if ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${previous_cred}" >/dev/null 2>&1; then
+          rollback_file_failed="true"
+        fi
+      fi
+    elif ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${previous_cred}" >/dev/null 2>&1; then
+      rollback_file_failed="true"
+    fi
+    if [[ "${rollback_file_failed}" == "true" ]]; then
+      warn "Reset ${label,,} dibatalkan: credential live baru gagal diterapkan dan rollback file account info lama juga gagal."
+      warn "Journal recovery reset Xray dipertahankan di ${snapshot_dir}."
+    else
+      XRAY_RESET_ABORT_FILE_COMMITTED="0"
+      mutation_txn_field_write "${snapshot_dir}" file_committed "0" >/dev/null 2>&1 || true
+      mutation_txn_dir_remove "${snapshot_dir}"
+      warn "Reset ${label,,} dibatalkan: credential live baru gagal diterapkan, file account info lama dipulihkan."
+    fi
     pause
     return 1
   fi
   XRAY_RESET_ABORT_RUNTIME_CHANGED="1"
   mutation_txn_field_write "${snapshot_dir}" runtime_changed "1" >/dev/null 2>&1 || true
 
-  if ! account_info_restore_file_locked "${staged_account_file}" "${target_file}" >/dev/null 2>&1; then
-    if xray_reset_client_credential_try "${proto}" "${username}" "${previous_cred}"; then
-      local rollback_file_failed="false"
-      if [[ -n "${selected_snapshot}" && -f "${selected_snapshot}" ]]; then
-        if ! account_info_restore_file_locked "${selected_snapshot}" "${target_file}" >/dev/null 2>&1; then
-          if ! account_info_refresh_for_user "${proto}" "${username}" "" "" "${previous_cred}" >/dev/null 2>&1; then
-            rollback_file_failed="true"
-          fi
-        fi
-      elif ! account_info_refresh_for_user "${proto}" "${username}" >/dev/null 2>&1; then
-        rollback_file_failed="true"
-      fi
-      if [[ "${rollback_file_failed}" == "true" ]]; then
-        warn "Reset ${label,,} dibatalkan: commit XRAY ACCOUNT INFO baru gagal, credential lama dipulihkan tetapi rollback account info gagal."
-        warn "Journal recovery reset Xray dipertahankan di ${snapshot_dir}."
-      else
-        XRAY_RESET_ABORT_RUNTIME_CHANGED="0"
-        mutation_txn_field_write "${snapshot_dir}" runtime_changed "0" >/dev/null 2>&1 || true
-        mutation_txn_dir_remove "${snapshot_dir}"
-        warn "Reset ${label,,} dibatalkan: commit XRAY ACCOUNT INFO baru gagal, credential lama dipulihkan."
-      fi
-    else
-      local live_cred=""
-      live_cred="$(xray_user_current_credential_get "${proto}" "${username}" 2>/dev/null || true)"
-      if [[ -n "${live_cred}" ]]; then
-        account_info_refresh_for_user "${proto}" "${username}" "" "" "${live_cred}" >/dev/null 2>&1 || true
-      fi
-      warn "Reset ${label,,} gagal: commit XRAY ACCOUNT INFO baru gagal dan rollback credential juga gagal."
-      warn "Journal recovery reset Xray dipertahankan di ${snapshot_dir}."
-    fi
-    pause
-    return 1
-  fi
-
+  XRAY_RESET_ABORT_FILE_COMMITTED="0"
   XRAY_RESET_ABORT_RUNTIME_CHANGED="0"
   XRAY_RESET_ABORT_ACTIVE="0"
   mutation_txn_dir_remove "${snapshot_dir}"

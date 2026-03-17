@@ -763,8 +763,12 @@ cert_menu_renew() {
       else
         warn "Gagal menyimpan journal recovery rollback cert. Snapshot cert dipertahankan di ${cert_backup_dir}."
       fi
+      if cert_renew_cert_recover_if_needed >/dev/null 2>&1; then
+        log "Rollback cert berhasil diselesaikan langsung pada flow renew ini."
+      fi
     else
       cert_renew_cert_journal_clear
+      log "Runtime TLS berhasil dipulihkan ke snapshot cert sebelumnya."
     fi
     [[ -n "${cert_backup_dir}" ]] && rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     domain_control_clear_stopped_services
@@ -789,8 +793,12 @@ cert_menu_renew() {
       else
         warn "Gagal menyimpan journal recovery rollback cert. Snapshot cert dipertahankan di ${cert_backup_dir}."
       fi
+      if cert_renew_cert_recover_if_needed >/dev/null 2>&1; then
+        log "Rollback cert berhasil diselesaikan langsung pada flow renew ini."
+      fi
     else
       cert_renew_cert_journal_clear
+      log "Runtime TLS berhasil dipulihkan ke snapshot cert sebelumnya."
     fi
     [[ -n "${cert_backup_dir}" ]] && rm -rf "${cert_backup_dir}" >/dev/null 2>&1 || true
     domain_control_clear_stopped_services
@@ -4662,6 +4670,27 @@ ssh_user_home_dir_prepare() {
   chmod 700 "${home}" 2>/dev/null || true
 }
 
+ssh_password_hash_generate() {
+  local password="${1:-}"
+  [[ -n "${password}" ]] || return 1
+  if have_cmd openssl; then
+    openssl passwd -6 -stdin 2>/dev/null <<<"${password}" | tr -d '\r' || return 1
+    return 0
+  fi
+  need_python3
+  python3 - <<'PY' "${password}"
+import crypt
+import secrets
+import string
+import sys
+
+password = sys.argv[1]
+alphabet = string.ascii_letters + string.digits + "./"
+salt = "".join(secrets.choice(alphabet) for _ in range(16))
+print(crypt.crypt(password, f"$6${salt}$"))
+PY
+}
+
 ssh_home_snapshot_create() {
   local username="${1:-}"
   local snapshot_dir="${2:-}"
@@ -4817,9 +4846,6 @@ ssh_add_txn_recover_dir() {
     return 1
   fi
 
-  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    notes+=("set expiry Linux gagal")
-  fi
   if (( ${#notes[@]} == 0 )) && ! ssh_user_state_write "${username}" "${created_at}" "${expired_at}"; then
     notes+=("tulis metadata akun SSH gagal")
   fi
@@ -4853,6 +4879,9 @@ ssh_add_txn_recover_dir() {
   if (( ${#notes[@]} == 0 )) && ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
     notes+=("refresh SSH account info gagal")
   fi
+  if (( ${#notes[@]} == 0 )) && ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    notes+=("sinkronisasi password ZIVPN gagal")
+  fi
   if (( ${#notes[@]} == 0 )) && ! ssh_qac_enforce_now_warn "${username}"; then
     notes+=("enforcement awal SSH gagal")
   fi
@@ -4865,14 +4894,11 @@ ssh_add_txn_recover_dir() {
   if (( ${#notes[@]} == 0 )) && ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
     notes+=("set password Linux gagal")
   fi
+  if (( ${#notes[@]} == 0 )) && ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
+    notes+=("set expiry Linux gagal")
+  fi
   if (( ${#notes[@]} == 0 )) && ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
     notes+=("aktifkan shell login gagal")
-  fi
-  if (( ${#notes[@]} == 0 )) && ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    notes+=("sinkronisasi password ZIVPN gagal")
-  fi
-  if (( ${#notes[@]} == 0 )) && ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
-    notes+=("refresh final SSH account info gagal")
   fi
 
   if (( ${#notes[@]} > 0 )); then
@@ -5146,7 +5172,7 @@ ssh_recover_pending_txn_menu() {
       ssh_recover_pending_txn_pick_dir add selected_dir || { pause; return 0; }
       selected_label="$(ssh_pending_txn_label "${selected_dir}")"
       echo "Journal terpilih : ${selected_label}"
-      confirm_menu_apply_now "Lanjutkan recovery journal add SSH ini sekarang?" || { pause; return 0; }
+      confirm_menu_apply_now "Lanjutkan recovery journal add SSH ini sekarang? (${selected_label})" || { pause; return 0; }
       user_data_mutation_run_locked ssh_recover_pending_txn_now add "${selected_dir}"
       ;;
     2)
@@ -5154,7 +5180,7 @@ ssh_recover_pending_txn_menu() {
       ssh_recover_pending_txn_pick_dir delete selected_dir || { pause; return 0; }
       selected_label="$(ssh_pending_txn_label "${selected_dir}")"
       echo "Journal terpilih : ${selected_label}"
-      confirm_menu_apply_now "Lanjutkan recovery journal delete SSH ini sekarang?" || { pause; return 0; }
+      confirm_menu_apply_now "Lanjutkan recovery journal delete SSH ini sekarang? (${selected_label})" || { pause; return 0; }
       user_data_mutation_run_locked ssh_recover_pending_txn_now delete "${selected_dir}"
       ;;
     0|kembali|k|back|b)
@@ -5373,6 +5399,8 @@ ssh_add_user_apply_locked_inner() {
   local speed_down="${11}"
   local speed_up="${12}"
   local add_txn_dir="" add_txn_id="" pending_shell="/usr/sbin/nologin"
+  local password_hash="" home_dir=""
+  local -a useradd_args=()
 
   add_txn_dir="$(mutation_txn_dir_new "ssh-add.${username}" 2>/dev/null || true)"
   if [[ -z "${add_txn_dir}" || ! -d "${add_txn_dir}" ]]; then
@@ -5451,69 +5479,62 @@ ssh_add_user_apply_locked_inner() {
     pause
     return 1
   fi
+  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan sinkronisasi password ZIVPN sebelum commit user Linux." "${password}" "false" "false" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  SSH_ADD_ABORT_ZIVPN_SYNCED="true"
+  if ! ssh_add_txn_marker_write "${username}" "${add_txn_id}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis marker transaksi add SSH." "${password}" "false" "false" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! ssh_dns_adblock_runtime_refresh_if_available; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH sebelum commit user Linux." "${password}" "true" "false" "${add_txn_dir}"
+    pause
+    return 1
+  fi
 
-  if ! useradd -M -d "$(ssh_user_home_dir_default "${username}")" -s "${pending_shell}" "${username}" >/dev/null 2>&1; then
-    mutation_txn_dir_remove "${add_txn_dir}"
-    ssh_add_user_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "false" "false"
+  if ! password_hash="$(ssh_password_hash_generate "${password}" 2>/dev/null)"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan hash password Linux sebelum commit user Linux." "${password}" "true" "false" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  home_dir="$(ssh_user_home_dir_default "${username}")"
+  useradd_args=(-M -d "${home_dir}" -s "${pending_shell}" -p "${password_hash}")
+  if [[ -n "${expired_at}" && "${expired_at}" != "-" ]]; then
+    useradd_args+=(-e "${expired_at}")
+  fi
+  if ! useradd "${useradd_args[@]}" "${username}" >/dev/null 2>&1; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal membuat user Linux '${username}'." "${password}" "true" "false" "${add_txn_dir}"
     pause
     return 1
   fi
   SSH_ADD_ABORT_LINUX_CREATED="true"
   mutation_txn_field_write "${add_txn_dir}" linux_created "true" >/dev/null 2>&1 || true
   if ! usermod -L "${username}" >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengunci akun Linux '${username}' saat status masih pending." "${password}" "false" "true" "${add_txn_dir}"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengunci akun Linux '${username}' saat status masih pending." "${password}" "true" "true" "${add_txn_dir}"
     pause
     return 1
   fi
   if ! chage -E 0 "${username}" >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menandai akun Linux '${username}' sebagai pending/disabled sementara." "${password}" "false" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  if ! ssh_add_txn_marker_write "${username}" "${add_txn_id}"; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menulis marker transaksi add SSH." "${password}" "false" "true" "${add_txn_dir}"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menandai akun Linux '${username}' sebagai pending/disabled sementara." "${password}" "true" "true" "${add_txn_dir}"
     pause
     return 1
   fi
 
   if ! ssh_qac_enforce_now_warn "${username}"; then
     if [[ "${ip_enabled}" == "true" ]]; then
-      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "false" "true" "${add_txn_dir}"
+      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH (IP/Login limit)." "${password}" "true" "true" "${add_txn_dir}"
     else
-      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "false" "true" "${add_txn_dir}"
+      ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal enforcement awal SSH." "${password}" "true" "true" "${add_txn_dir}"
     fi
     pause
     return 1
   fi
-  if ! ssh_dns_adblock_runtime_refresh_if_available; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime DNS Adblock SSH." "${password}" "false" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-
   if ! ssh_user_home_dir_prepare "${username}"; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan home dir user '${username}'." "${password}" "false" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  if ! printf '%s:%s\n' "${username}" "${password}" | chpasswd >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal set password user '${username}'." "${password}" "false" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  if ! zivpn_sync_user_password_warn "${username}" "${password}"; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal sinkronisasi password ZIVPN." "${password}" "true" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  SSH_ADD_ABORT_ZIVPN_SYNCED="true"
-  if ! ssh_account_info_refresh_from_state "${username}" "${password}"; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info." "${password}" "true" "true" "${add_txn_dir}"
-    pause
-    return 1
-  fi
-  if ! chage -E "${expired_at}" "${username}" >/dev/null 2>&1; then
-    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal set expiry user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal menyiapkan home dir user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
     pause
     return 1
   fi
