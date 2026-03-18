@@ -4218,8 +4218,8 @@ ssh_collect_candidate_users() {
 
   while IFS= read -r username; do
     [[ -n "${username}" ]] || continue
-    username="${username%@ssh}"
     username="${username%.json}"
+    username="${username%@ssh}"
     [[ -n "${username}" ]] || continue
     if ssh_add_txn_linux_pending_contains "${username}"; then
       continue
@@ -4233,8 +4233,8 @@ ssh_collect_candidate_users() {
 
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
-    name="${name%@ssh}"
     name="${name%.txt}"
+    name="${name%@ssh}"
     [[ -n "${name}" ]] || continue
     if ssh_add_txn_linux_pending_contains "${name}"; then
       continue
@@ -4249,6 +4249,7 @@ ssh_collect_candidate_users() {
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
     name="${name%.pass}"
+    name="${name%@ssh}"
     [[ -n "${name}" ]] || continue
     if ssh_add_txn_linux_pending_contains "${name}"; then
       continue
@@ -4939,6 +4940,9 @@ ssh_add_txn_recover_dir() {
   if (( ${#notes[@]} == 0 )) && ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
     notes+=("aktifkan shell login gagal")
   fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
+    notes+=("refresh final SSH account info gagal")
+  fi
 
   if (( ${#notes[@]} > 0 )); then
     warn "Recovery add SSH untuk '${username}' belum bersih: $(IFS=' | '; echo "${notes[*]}")."
@@ -5581,6 +5585,11 @@ ssh_add_user_apply_locked_inner() {
   fi
   if ! usermod -s /bin/bash "${username}" >/dev/null 2>&1; then
     ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal mengaktifkan shell login user '${username}'." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
+  if ! ssh_account_info_refresh_from_state "${username}" "${password}" "${acc_file}"; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh final SSH account info user '${username}' setelah sinkronisasi ZIVPN." "${password}" "true" "true" "${add_txn_dir}"
     pause
     return 1
   fi

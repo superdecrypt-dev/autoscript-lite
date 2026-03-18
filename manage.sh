@@ -5916,7 +5916,7 @@ account_collect_files() {
       fi
       pos["${key}"]="${#ACCOUNT_FILES[@]}"
       has_at["${key}"]=1
-      ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt}")
+      ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt")
       ACCOUNT_FILE_PROTOS+=("${proto}")
     done < <(find "${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
   done
@@ -5947,7 +5947,7 @@ account_collect_files() {
     fi
     pos["${key}"]="${#ACCOUNT_FILES[@]}"
     has_at["${key}"]=1
-    ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt}")
+    ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt")
     ACCOUNT_FILE_PROTOS+=("${proto}")
   done < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
 
@@ -9369,15 +9369,22 @@ xray_delete_user_restore_from_snapshots() {
     fi
   fi
 
+  local effective_quota_file=""
   if [[ -f "${canonical_quota_file}" ]]; then
+    effective_quota_file="${canonical_quota_file}"
+  elif [[ -f "${compat_quota_file}" ]]; then
+    effective_quota_file="${compat_quota_file}"
+  fi
+
+  if [[ -n "${effective_quota_file}" ]]; then
     local st_quota st_manual st_iplocked
-    st_quota="$(quota_get_status_bool "${canonical_quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
-    st_manual="$(quota_get_status_bool "${canonical_quota_file}" "manual_block" 2>/dev/null || echo "false")"
-    st_iplocked="$(quota_get_status_bool "${canonical_quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
+    st_quota="$(quota_get_status_bool "${effective_quota_file}" "quota_exhausted" 2>/dev/null || echo "false")"
+    st_manual="$(quota_get_status_bool "${effective_quota_file}" "manual_block" 2>/dev/null || echo "false")"
+    st_iplocked="$(quota_get_status_bool "${effective_quota_file}" "ip_limit_locked" 2>/dev/null || echo "false")"
     xray_routing_set_user_in_marker "dummy-quota-user" "${username}@${proto}" "$( [[ "${st_quota}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || notes+=("restore routing quota gagal")
     xray_routing_set_user_in_marker "dummy-block-user" "${username}@${proto}" "$( [[ "${st_manual}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || notes+=("restore routing manual gagal")
     xray_routing_set_user_in_marker "dummy-limit-user" "${username}@${proto}" "$( [[ "${st_iplocked}" == "true" ]] && echo on || echo off )" >/dev/null 2>&1 || notes+=("restore routing ip-limit gagal")
-    if ! quota_sync_speed_policy_for_user "${proto}" "${username}" "${canonical_quota_file}" >/dev/null 2>&1; then
+    if ! quota_sync_speed_policy_for_user "${proto}" "${username}" "${effective_quota_file}" >/dev/null 2>&1; then
       notes+=("restore speed policy runtime gagal")
     fi
     if ! account_info_refresh_warn "${proto}" "${username}" >/dev/null 2>&1; then
@@ -9877,11 +9884,15 @@ xray_add_txn_recover_dir() {
 
 xray_add_txn_recover_pending_all() {
   local txn_dir=""
+  local failed=0
   mutation_txn_prepare || return 0
   while IFS= read -r -d '' txn_dir; do
     [[ -n "${txn_dir}" ]] || continue
-    xray_add_txn_recover_dir "${txn_dir}" || true
+    if ! xray_add_txn_recover_dir "${txn_dir}"; then
+      failed=1
+    fi
   done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'xray-add.*' -print0 2>/dev/null | sort -z)
+  return "${failed}"
 }
 
 xray_delete_txn_recover_dir() {
@@ -9949,11 +9960,15 @@ xray_delete_txn_recover_dir() {
 
 xray_delete_txn_recover_pending_all() {
   local txn_dir=""
+  local failed=0
   mutation_txn_prepare || return 0
   while IFS= read -r -d '' txn_dir; do
     [[ -n "${txn_dir}" ]] || continue
-    xray_delete_txn_recover_dir "${txn_dir}" || true
+    if ! xray_delete_txn_recover_dir "${txn_dir}"; then
+      failed=1
+    fi
   done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'xray-delete.*' -print0 2>/dev/null | sort -z)
+  return "${failed}"
 }
 
 xray_reset_txn_recover_dir() {
@@ -10033,11 +10048,15 @@ xray_reset_txn_recover_dir() {
 
 xray_reset_txn_recover_pending_all() {
   local txn_dir=""
+  local failed=0
   mutation_txn_prepare || return 0
   while IFS= read -r -d '' txn_dir; do
     [[ -n "${txn_dir}" ]] || continue
-    xray_reset_txn_recover_dir "${txn_dir}" || true
+    if ! xray_reset_txn_recover_dir "${txn_dir}"; then
+      failed=1
+    fi
   done < <(find "${MUTATION_TXN_DIR}" -maxdepth 1 -type d -name 'xray-reset.*' -print0 2>/dev/null | sort -z)
+  return "${failed}"
 }
 
 xray_pending_txn_dirs_by_kind() {
@@ -10111,20 +10130,23 @@ xray_recover_pending_txn_now() {
   local txn_dir="${2:-}"
   if [[ -n "${txn_dir}" ]]; then
     case "${kind}" in
-      add) xray_add_txn_recover_dir "${txn_dir}" || true ;;
-      delete) xray_delete_txn_recover_dir "${txn_dir}" || true ;;
-      reset) xray_reset_txn_recover_dir "${txn_dir}" || true ;;
+      add) xray_add_txn_recover_dir "${txn_dir}" ;;
+      delete) xray_delete_txn_recover_dir "${txn_dir}" ;;
+      reset) xray_reset_txn_recover_dir "${txn_dir}" ;;
+      *) return 1 ;;
     esac
-    return 0
+    return $?
   fi
   case "${kind}" in
-    add) xray_add_txn_recover_pending_all || true ;;
-    delete) xray_delete_txn_recover_pending_all || true ;;
-    reset) xray_reset_txn_recover_pending_all || true ;;
+    add) xray_add_txn_recover_pending_all ;;
+    delete) xray_delete_txn_recover_pending_all ;;
+    reset) xray_reset_txn_recover_pending_all ;;
     all|*)
-      xray_add_txn_recover_pending_all || true
-      xray_delete_txn_recover_pending_all || true
-      xray_reset_txn_recover_pending_all || true
+      local failed=0
+      xray_add_txn_recover_pending_all || failed=1
+      xray_delete_txn_recover_pending_all || failed=1
+      xray_reset_txn_recover_pending_all || failed=1
+      return "${failed}"
       ;;
   esac
 }
@@ -11447,7 +11469,7 @@ user_menu() {
   while true; do
     pending_count="$(xray_pending_recovery_count)"
     [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
-    ui_menu_screen_begin "2) Xray Users"
+    ui_menu_screen_begin "1) Xray Users"
     if (( pending_count > 0 )); then
       warn "Ada ${pending_count} journal recovery Xray tertunda. Gunakan 'Recover Pending Txn' bila ingin melanjutkannya."
       hr
@@ -11575,7 +11597,7 @@ quota_collect_files() {
 
       pos["${key}"]="${#QUOTA_FILES[@]}"
       has_at["${key}"]=1
-      QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json}")
+      QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json")
       QUOTA_FILE_PROTOS+=("${proto}")
     done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
   done
@@ -11596,7 +11618,7 @@ quota_collect_files() {
 
     pos["${key}"]="${#QUOTA_FILES[@]}"
     has_at["${key}"]=1
-    QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json}")
+    QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json")
     QUOTA_FILE_PROTOS+=("${proto}")
   done < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
 }
@@ -12937,7 +12959,7 @@ quota_menu() {
   QUOTA_QUERY=""
 
   while true; do
-    ui_menu_screen_begin "4) Xray QAC"
+    ui_menu_screen_begin "3) Xray QAC"
 
     quota_collect_files
     quota_build_view_indexes
