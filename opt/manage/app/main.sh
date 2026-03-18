@@ -2,7 +2,6 @@
 
 main() {
   need_root
-  cloudflare_token_load_from_file
   init_runtime_dirs
   ensure_account_quota_dirs
 

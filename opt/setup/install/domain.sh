@@ -160,7 +160,7 @@ cf_api() {
   local endpoint="$2"
   local data="${3:-}"
 
-  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Simpan di /etc/autoscript/cloudflare.env, ${CLOUDFLARE_SECRET_DIR}/cloudflare.env, atau export env CLOUDFLARE_API_TOKEN."
+  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Isi token Cloudflare di setup.sh atau export env CLOUDFLARE_API_TOKEN."
 
   local url="https://api.cloudflare.com/client/v4${endpoint}"
   local resp code body trimmed header_file=""
@@ -497,7 +497,6 @@ domain_menu_v2() {
 
   CF_ZONE_ID="$(cf_get_zone_id_by_name "${ACME_ROOT_DOMAIN}" || true)"
   [[ -n "${CF_ZONE_ID:-}" ]] || die "Zone Cloudflare untuk ${ACME_ROOT_DOMAIN} tidak ditemukan / token tidak punya akses (butuh Zone:Read + DNS:Edit)."
-  cloudflare_token_persist_if_available
   CF_ACCOUNT_ID="$(cf_get_account_id_by_zone "${CF_ZONE_ID}" || true)"
   [[ -n "${CF_ACCOUNT_ID:-}" ]] || warn "CF_ACCOUNT_ID tidak terbaca (boleh lanjut)."
 
@@ -599,7 +598,7 @@ install_acme_and_issue_cert() {
 
   if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
     ok "Issue wildcard cert via dns_cf..."
-    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong. Simpan di /etc/autoscript/cloudflare.env, ${CLOUDFLARE_SECRET_DIR}/cloudflare.env, atau export env CLOUDFLARE_API_TOKEN."
+    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong."
     [[ -n "${CF_ZONE_ID:-}" ]] || die "CF_ZONE_ID kosong untuk mode dns_cf_wildcard."
 
     export CF_Token="${CLOUDFLARE_API_TOKEN}"

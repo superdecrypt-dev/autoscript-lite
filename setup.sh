@@ -51,18 +51,14 @@ SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
 DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
 DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
 DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
-AUTOSCRIPT_ENV_DIR="${AUTOSCRIPT_ENV_DIR:-/etc/autoscript}"
-CLOUDFLARE_SECRET_DIR="${CLOUDFLARE_SECRET_DIR:-/var/lib/autoscript-run}"
-CLOUDFLARE_API_TOKEN_FILE="${CLOUDFLARE_API_TOKEN_FILE:-${AUTOSCRIPT_ENV_DIR}/cloudflare.env}"
-CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
 # Daftar domain induk yang disediakan (private)
 PROVIDED_ROOT_DOMAINS=(
 "vyxara1.web.id"
 "vyxara2.web.id"
 )
 
-# NOTE: Token Cloudflare dibaca dari env runtime, /etc/autoscript/cloudflare.env,
-# atau file privat ${CLOUDFLARE_SECRET_DIR}/cloudflare.env.
+# NOTE: Script ini dipakai pribadi. Isi token di atas jika tidak memakai env var.
 # ACME_CERT_MODE:
 # - standalone: issue cert for DOMAIN via standalone (port 80)
 # - dns_cf_wildcard: issue wildcard cert for ACME_ROOT_DOMAIN via dns_cf
@@ -189,72 +185,6 @@ source_setup_module "opt/setup/install/zivpn.sh"
 source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
-
-cloudflare_token_read_from_path() {
-  local path="$1"
-  [[ -r "${path}" ]] || return 1
-  awk -F= '
-    $1 == "CLOUDFLARE_API_TOKEN" {
-      print substr($0, index($0, "=") + 1)
-      exit
-    }
-  ' "${path}" 2>/dev/null || true
-}
-
-cloudflare_token_internal_file() {
-  printf '%s\n' "${CLOUDFLARE_SECRET_DIR}/cloudflare.env"
-}
-
-cloudflare_token_write_file() {
-  local path="$1"
-  local token="$2"
-  local dir="" tmp=""
-  [[ -n "${path}" && -n "${token}" ]] || return 1
-  dir="$(dirname "${path}")"
-  install -d -m 700 "${dir}" || return 1
-  tmp="$(mktemp "${dir}/.cloudflare.env.XXXXXX")" || return 1
-  if ! printf 'CLOUDFLARE_API_TOKEN=%s\n' "${token}" > "${tmp}"; then
-    rm -f -- "${tmp}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  chmod 600 "${tmp}" >/dev/null 2>&1 || true
-  if ! install -m 600 "${tmp}" "${path}"; then
-    rm -f -- "${tmp}" >/dev/null 2>&1 || true
-    return 1
-  fi
-  rm -f -- "${tmp}" >/dev/null 2>&1 || true
-}
-
-cloudflare_token_load_from_file() {
-  local candidate="" token=""
-  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && return 0
-  for candidate in "${CLOUDFLARE_API_TOKEN_FILE}" "$(cloudflare_token_internal_file)"; do
-    token="$(cloudflare_token_read_from_path "${candidate}")"
-    [[ -n "${token}" ]] || continue
-    CLOUDFLARE_API_TOKEN="${token}"
-    return 0
-  done
-  return 0
-}
-
-cloudflare_token_persist_if_available() {
-  local token="${CLOUDFLARE_API_TOKEN:-}"
-  local existing=""
-  local internal_file=""
-  [[ -n "${token}" ]] || return 0
-  existing="$(cloudflare_token_read_from_path "${CLOUDFLARE_API_TOKEN_FILE}")"
-  if [[ "${existing}" != "${token}" ]]; then
-    cloudflare_token_write_file "${CLOUDFLARE_API_TOKEN_FILE}" "${token}" \
-      || die "Gagal menyimpan secret Cloudflare ke ${CLOUDFLARE_API_TOKEN_FILE}."
-  fi
-
-  internal_file="$(cloudflare_token_internal_file)"
-  existing="$(cloudflare_token_read_from_path "${internal_file}")"
-  if [[ "${existing}" != "${token}" ]]; then
-    cloudflare_token_write_file "${internal_file}" "${token}" \
-      || die "Gagal menyimpan secret Cloudflare ke ${internal_file}."
-  fi
-}
 
 trap run_exit_cleanups EXIT
 sanity_check() {
@@ -603,7 +533,6 @@ setup_run_post_domain_with_spinner() {
 main() {
   safe_clear
   need_root
-  cloudflare_token_load_from_file
   ensure_runtime_lock_dirs
   ensure_stdin_available
   validate_sshws_ports_config
