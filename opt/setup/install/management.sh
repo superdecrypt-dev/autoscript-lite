@@ -1591,7 +1591,6 @@ EOF
 sync_manage_modules_layout() {
   local tmpdir="" bundle_file="" downloaded="0" extracted_modules_dir="" extracted_manage_bin=""
   local fallback_modules_dir="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
-  local token_file_candidates=("${SCRIPT_DIR}/cloudflare.env" "${CLOUDFLARE_API_TOKEN_FILE:-/etc/autoscript/cloudflare.env}")
 
   install_bot_installer_if_present() {
     # args: src_path dst_path label
@@ -1613,21 +1612,6 @@ sync_manage_modules_layout() {
     find "${dst_dir}" -type d -exec chmod 755 {} + 2>/dev/null || true
     find "${dst_dir}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
     chown -R root:root "${dst_dir}" 2>/dev/null || true
-  }
-
-  install_manage_secret_if_present() {
-    local src_path=""
-    local candidate=""
-    for candidate in "${token_file_candidates[@]}"; do
-      [[ -r "${candidate}" ]] || continue
-      src_path="${candidate}"
-      break
-    done
-    [[ -n "${src_path}" ]] || return 0
-    install -m 600 "${src_path}" "${MANAGE_MODULES_DST_DIR}/cloudflare.env"
-    install -m 600 "${src_path}" "${fallback_modules_dir}/cloudflare.env"
-    chown root:root "${MANAGE_MODULES_DST_DIR}/cloudflare.env" 2>/dev/null || true
-    chown root:root "${fallback_modules_dir}/cloudflare.env" 2>/dev/null || true
   }
 
   install_ssh_network_restore_service() {
@@ -1663,7 +1647,6 @@ sync_manage_modules_layout() {
 
     sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${MANAGE_MODULES_DST_DIR}"
     sync_manage_target_dir "${MANAGE_MODULES_SRC_DIR}" "${fallback_modules_dir}"
-    install_manage_secret_if_present
 
     mkdir -p "$(dirname "${MANAGE_BIN}")"
     install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
@@ -1805,7 +1788,6 @@ PY
     then
       sync_manage_target_dir "${extracted_modules_dir}" "${MANAGE_MODULES_DST_DIR}"
       sync_manage_target_dir "${extracted_modules_dir}" "${fallback_modules_dir}"
-      install_manage_secret_if_present
       [[ -s "${extracted_manage_bin}" ]] || die "Binary manage hasil ekstraksi bundle kosong: ${extracted_manage_bin}"
       mkdir -p "$(dirname "${MANAGE_BIN}")"
       install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
@@ -1841,7 +1823,6 @@ sync_setup_runtime_layout() {
   local fallback_adblock_root="${fallback_root}/opt/adblock"
   local fallback_edge_root="${fallback_root}/opt/edge"
   local fallback_badvpn_root="${fallback_root}/opt/badvpn"
-  local token_secret_src=""
 
   [[ -d "${setup_src}" ]] || die "Source modular setup tidak ditemukan: ${setup_src}"
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
@@ -1879,12 +1860,6 @@ sync_setup_runtime_layout() {
   mkdir -p "$(dirname "${SETUP_FALLBACK_SCRIPT}")"
   install -m 0755 "${SCRIPT_DIR}/setup.sh" "${SETUP_FALLBACK_SCRIPT}"
   chown root:root "${SETUP_FALLBACK_SCRIPT}" 2>/dev/null || true
-  for token_secret_src in "${SCRIPT_DIR}/cloudflare.env" "${CLOUDFLARE_API_TOKEN_FILE:-/etc/autoscript/cloudflare.env}"; do
-    [[ -r "${token_secret_src}" ]] || continue
-    install -m 600 "${token_secret_src}" "${fallback_root}/cloudflare.env"
-    chown root:root "${fallback_root}/cloudflare.env" 2>/dev/null || true
-    break
-  done
   ok "Fallback modular setup siap di: ${fallback_modules_root}"
   ok "Fallback script setup siap di: ${SETUP_FALLBACK_SCRIPT}"
 }

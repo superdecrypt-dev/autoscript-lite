@@ -40,6 +40,7 @@ ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
 
 # Domain / ACME / Cloudflare (disamakan dengan setup.sh)
 AUTOSCRIPT_ENV_DIR="${AUTOSCRIPT_ENV_DIR:-/etc/autoscript}"
+CLOUDFLARE_SECRET_DIR="${CLOUDFLARE_SECRET_DIR:-/var/lib/autoscript-run}"
 CLOUDFLARE_API_TOKEN_FILE="${CLOUDFLARE_API_TOKEN_FILE:-${AUTOSCRIPT_ENV_DIR}/cloudflare.env}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 PROVIDED_ROOT_DOMAINS=(
@@ -227,12 +228,7 @@ cloudflare_token_read_from_path() {
 }
 
 cloudflare_token_internal_files() {
-  if [[ -n "${MANAGE_MODULES_DIR:-}" ]]; then
-    printf '%s\n' "${MANAGE_MODULES_DIR}/cloudflare.env"
-  fi
-  if [[ -n "${MANAGE_SCRIPT_DIR:-}" && "${MANAGE_SCRIPT_DIR}" != "/usr/local/bin" ]]; then
-    printf '%s\n' "${MANAGE_SCRIPT_DIR}/cloudflare.env"
-  fi
+  printf '%s\n' "${CLOUDFLARE_SECRET_DIR}/cloudflare.env"
 }
 
 cloudflare_token_write_file() {
@@ -2584,7 +2580,7 @@ cf_api() {
   local endpoint="$2"
   local data="${3:-}"
 
-  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Simpan di /etc/autoscript/cloudflare.env, file cloudflare.env di autoscript, atau export env CLOUDFLARE_API_TOKEN."
+  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Simpan di /etc/autoscript/cloudflare.env, ${CLOUDFLARE_SECRET_DIR}/cloudflare.env, atau export env CLOUDFLARE_API_TOKEN."
 
   local url="https://api.cloudflare.com/client/v4${endpoint}"
   local resp code body trimmed header_file=""
@@ -3814,7 +3810,7 @@ install_acme_and_issue_cert() {
   if [[ "${ACME_CERT_MODE:-standalone}" == "dns_cf_wildcard" ]]; then
     [[ -n "${ACME_ROOT_DOMAIN:-}" ]] || die "ACME_ROOT_DOMAIN kosong (mode dns_cf_wildcard)."
     [[ -n "${DOMAIN:-}" ]] || die "DOMAIN kosong (mode dns_cf_wildcard)."
-    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong untuk mode wildcard dns_cf. Simpan di /etc/autoscript/cloudflare.env, file cloudflare.env di autoscript, atau export env CLOUDFLARE_API_TOKEN."
+    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong untuk mode wildcard dns_cf. Simpan di /etc/autoscript/cloudflare.env, ${CLOUDFLARE_SECRET_DIR}/cloudflare.env, atau export env CLOUDFLARE_API_TOKEN."
     log "Issue sertifikat wildcard untuk ${DOMAIN} via acme.sh (dns_cf)..."
 
     if [[ ! -s /root/.acme.sh/dnsapi/dns_cf.sh ]]; then

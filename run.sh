@@ -467,7 +467,6 @@ install_manage() {
   local bot_installer_src="${REPO_DIR}/install-discord-bot.sh"
   local telegram_installer_src="${REPO_DIR}/install-telegram-bot.sh"
   local restore_service_src="${REPO_DIR}/opt/setup/templates/systemd/ssh-network-restore.service"
-  local token_secret_src=""
 
   [[ -f "${src}" ]] || die "File manage.sh tidak ditemukan di repositori."
   [[ -f "${bot_installer_src}" ]] || die "File install-discord-bot.sh tidak ditemukan di repositori."
@@ -488,15 +487,6 @@ install_manage() {
   find "${MANAGE_FALLBACK_MODULES_DST_DIR}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
   chown -R root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}" 2>/dev/null || true
   ok "Fallback manage: ${MANAGE_FALLBACK_MODULES_DST_DIR}"
-
-  for token_secret_src in "${REPO_DIR}/cloudflare.env" "/etc/autoscript/cloudflare.env"; do
-    [[ -r "${token_secret_src}" ]] || continue
-    install -m 600 "${token_secret_src}" "${MANAGE_MODULES_DST_DIR}/cloudflare.env"
-    install -m 600 "${token_secret_src}" "${MANAGE_FALLBACK_MODULES_DST_DIR}/cloudflare.env"
-    chown root:root "${MANAGE_MODULES_DST_DIR}/cloudflare.env" 2>/dev/null || true
-    chown root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}/cloudflare.env" 2>/dev/null || true
-    break
-  done
 
   log "Pasang manage -> ${MANAGE_BIN} ..."
   install -m 0755 "${src}" "${MANAGE_BIN}"

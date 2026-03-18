@@ -52,6 +52,7 @@ DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
 DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
 DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
 AUTOSCRIPT_ENV_DIR="${AUTOSCRIPT_ENV_DIR:-/etc/autoscript}"
+CLOUDFLARE_SECRET_DIR="${CLOUDFLARE_SECRET_DIR:-/var/lib/autoscript-run}"
 CLOUDFLARE_API_TOKEN_FILE="${CLOUDFLARE_API_TOKEN_FILE:-${AUTOSCRIPT_ENV_DIR}/cloudflare.env}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 # Daftar domain induk yang disediakan (private)
@@ -61,7 +62,7 @@ PROVIDED_ROOT_DOMAINS=(
 )
 
 # NOTE: Token Cloudflare dibaca dari env runtime, /etc/autoscript/cloudflare.env,
-# atau file cloudflare.env di dalam direktori autoscript.
+# atau file privat ${CLOUDFLARE_SECRET_DIR}/cloudflare.env.
 # ACME_CERT_MODE:
 # - standalone: issue cert for DOMAIN via standalone (port 80)
 # - dns_cf_wildcard: issue wildcard cert for ACME_ROOT_DOMAIN via dns_cf
@@ -201,7 +202,7 @@ cloudflare_token_read_from_path() {
 }
 
 cloudflare_token_internal_file() {
-  printf '%s\n' "${SCRIPT_DIR}/cloudflare.env"
+  printf '%s\n' "${CLOUDFLARE_SECRET_DIR}/cloudflare.env"
 }
 
 cloudflare_token_write_file() {
