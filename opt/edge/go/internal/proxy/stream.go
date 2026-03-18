@@ -40,6 +40,7 @@ func BridgeWithStatsAndOptions(left net.Conn, right net.Conn, leftToRightPrefix 
 		defer wg.Done()
 		var throttle paceLimiter
 		if len(prefix) > 0 {
+			throttle.Gate(uint64(len(prefix)), limiter)
 			n, err := dst.Write(prefix)
 			if n > 0 {
 				atomic.AddUint64(counter, uint64(n))
@@ -54,6 +55,7 @@ func BridgeWithStatsAndOptions(left net.Conn, right net.Conn, leftToRightPrefix 
 		for {
 			nr, er := src.Read(buf)
 			if nr > 0 {
+				throttle.Gate(uint64(nr), limiter)
 				nw, ew := dst.Write(buf[:nr])
 				if nw > 0 {
 					atomic.AddUint64(counter, uint64(nw))
@@ -101,12 +103,18 @@ type paceLimiter struct {
 	start     time.Time
 }
 
-func (p *paceLimiter) Wait(written uint64, provider RateProvider) {
-	if written == 0 || provider == nil {
+func (p *paceLimiter) Gate(planned uint64, provider RateProvider) {
+	if planned == 0 || provider == nil {
 		return
 	}
 	if gate, ok := provider.(interface{ WaitForReady(uint64) }); ok {
-		gate.WaitForReady(p.seenBytes + written)
+		gate.WaitForReady(p.seenBytes + planned)
+	}
+}
+
+func (p *paceLimiter) Wait(written uint64, provider RateProvider) {
+	if written == 0 || provider == nil {
+		return
 	}
 	p.seenBytes += written
 	rate := provider.RateBytesPerSecond()

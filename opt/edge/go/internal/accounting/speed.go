@@ -11,7 +11,10 @@ const (
 	defaultResolveDelay    = 100 * time.Millisecond
 	defaultRefreshInterval = 2 * time.Second
 	warmupFreeBytes        = 64 * 1024
-	warmupMaxWait          = 2 * time.Second
+	// Allow enough time for dropbear auth logs to become visible so the first
+	// post-auth payload does not escape shaping almost entirely on short-lived
+	// ssh-direct sessions.
+	warmupMaxWait = 8 * time.Second
 )
 
 type SSHSpeedPolicy struct {

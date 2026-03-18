@@ -563,7 +563,15 @@ def enforce_user(path):
       account_locked = False
       lock_owner = ""
   else:
-    if exists and account_locked and lock_owner == "ssh_qac":
+    restore_shell = str(status.get("lock_shell_restore") or "").strip()
+    current_shell = get_user_shell(username) if exists else ""
+    unlock_expected = bool(
+      exists and (
+        (account_locked and lock_owner == "ssh_qac") or
+        (restore_shell and current_shell and is_lock_shell(current_shell))
+      )
+    )
+    if unlock_expected:
       if unlock_user(username, status):
         account_locked = False
         lock_owner = ""

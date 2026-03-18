@@ -3741,6 +3741,13 @@ ssh_qac_traffic_scope_label() {
 
 ssh_qac_traffic_scope_line() {
   if ssh_qac_traffic_enforcement_ready; then
+    local provider active
+    provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
+    active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
+    if [[ "${provider}" == "go" ]]; then
+      echo "Quota, speed limit, dan IP/Login limit berlaku sebagai satu sistem SSH pada SSH WS, SSH SSL/TLS, dan SSH Direct selama transport melewati Edge Gateway aktif. Pada provider go, trafik SSH SSL/TLS publik mengikuti jalur backend SSH klasik setelah terminasi TLS, sedangkan SSH WS memakai limiter token-aware milik sshws-proxy. Native sshd port 22 tetap di luar scope traffic enforcement."
+      return 0
+    fi
     echo "Quota, speed limit, dan IP/Login limit berlaku sebagai satu sistem SSH pada SSH WS, SSH SSL/TLS, dan SSH Direct selama transport melewati Edge Gateway aktif. Native sshd port 22 tetap di luar scope traffic enforcement."
   else
     echo "SSH runtime belum terpasang; quota/IP-login/speed SSH masih metadata dan native sshd port 22 tidak dihitung atau di-throttle."
@@ -8349,10 +8356,67 @@ ssh_qac_atomic_update_file() {
 ssh_qac_restore_file_unlocked() {
   local src="${1:-}"
   local dst="${2:-}"
+  local tmp=""
   [[ -n "${src}" && -n "${dst}" ]] || return 1
   mkdir -p "$(dirname "${dst}")" 2>/dev/null || true
-  cp -f -- "${src}" "${dst}" || return 1
-  chmod 600 "${dst}" 2>/dev/null || true
+  tmp="$(mktemp)" || return 1
+  if ! python3 - "${src}" "${dst}" "${tmp}" <<'PY'
+import json
+import pathlib
+import shutil
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+tmp = pathlib.Path(sys.argv[3])
+
+def load_json(path):
+  try:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+  except Exception:
+    return {}
+
+payload = load_json(src)
+if not payload:
+  shutil.copyfile(src, tmp)
+  raise SystemExit(0)
+
+current = load_json(dst)
+status = payload.get("status")
+if not isinstance(status, dict):
+  status = {}
+  payload["status"] = status
+
+current_status = current.get("status")
+if not isinstance(current_status, dict):
+  current_status = {}
+
+preserve_qac_lock_context = (
+  bool(current_status.get("account_locked")) and
+  str(current_status.get("lock_owner") or "").strip() == "ssh_qac" and
+  str(current_status.get("lock_shell_restore") or "").strip() != "" and
+  not bool(status.get("account_locked")) and
+  str(status.get("lock_owner") or "").strip() == "" and
+  str(status.get("lock_shell_restore") or "").strip() == ""
+)
+
+if preserve_qac_lock_context:
+  status["account_locked"] = True
+  status["lock_owner"] = "ssh_qac"
+  status["lock_shell_restore"] = str(current_status.get("lock_shell_restore") or "").strip()
+
+tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+  then
+    rm -f -- "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  install -m 600 "${tmp}" "${dst}" || {
+    rm -f -- "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+  rm -f -- "${tmp}" >/dev/null 2>&1 || true
 }
 
 ssh_qac_restore_file_locked() {
