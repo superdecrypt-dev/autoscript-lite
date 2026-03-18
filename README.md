@@ -45,12 +45,13 @@ Catatan penting:
 - `xray-domain-guard`
 
 ## Catatan Operasional
-- Pergantian domain lewat `6) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
+- Pergantian domain lewat `8) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
 - `SSH QAC` mengatur `quota`, `IP/Login limit`, `speed limit`, dan `expiry` khusus untuk SSH.
 - `Recover Pending Txn` di `Xray Users` dan `SSH Users` adalah menu repair untuk journal transaksi yang putus di tengah, bukan menu harian. Jika `pending = 0`, menu itu bisa diabaikan.
 - `5) Xray Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Xray Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
-- `5) Xray Network > WARP Tier` dapat menampilkan status `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
-- `7) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
+- `13) Tools > WARP Tier` sekarang menampilkan `mode`, status `consumer tier`, dan bisa tetap menunjukkan `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
+- `13) Tools > WARP Tier > Zero Trust` saat ini baru slot CLI; backend runtime-nya belum diaktifkan.
+- `9) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
 
 ## Menu Utama
 ```text
@@ -59,15 +60,14 @@ Catatan penting:
 3) Xray QAC
 4) SSH QAC
 5) Xray Network
-6) Domain Control
-7) Speedtest
-8) Security
-9) Maintenance
-10) Traffic
-11) Discord Bot
-12) Telegram Bot
-13) Adblocker
-14) SSH Network
+6) SSH Network
+7) Adblocker
+8) Domain Control
+9) Speedtest
+10) Security
+11) Maintenance
+12) Traffic
+13) Tools
 0) Keluar
 ```
 
@@ -81,25 +81,24 @@ Catatan penting:
 - `4) SSH QAC`
   View JSON, set/reset quota, toggle block, toggle/set/unlock login limit, set speed download/upload, dan sinkronisasi/enforcement metadata SSH.
 - `5) Xray Network`
-  `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`, `tier free/plus`), `DNS Settings` staged, `DNS Add-ons` advanced editor, dan `Checks` routing/config/service.
-- `6) Domain Control`
-  `Set Domain`, `Current Domain`, `Guard Check`, `Guard Renew`, `Refresh Account Info`, `Repair Compat Domain Drift`, dan `Repair Target DNS Record`.
-- `7) Speedtest`
-  Jalankan speedtest live dan lihat versi binary `speedtest`.
-- `8) Security`
-  TLS/certificate (`cert info`, `check expiry`, `renew`, `reload nginx`, `recover pending renew`), `Fail2ban`, dan tuning sistem seperti `BBR`, `swap`, `ulimit`, dan `chrony`.
-- `9) Maintenance`
-  `Core Check`, restart service utama (`xray`, `nginx`, `core`, `WARP`, `SSH WS`, `Edge`, `BadVPN`), log service, status runtime, status daemon Xray, dan `Normalize Quota Dates`.
-- `10) Traffic`
-  Ringkasan analytics/traffic dan utilitas operasional terkait pemakaian runtime.
-- `11) Discord Bot`
-  Installer dan wiring bot Discord sebagai pelengkap operasi dari luar CLI host.
-- `12) Telegram Bot`
-  Installer dan wiring bot Telegram dengan flow menu-first untuk status, account, QAC, domain, network, dan ops.
-- `13) Adblocker`
-  Source adblock gabungan untuk `Xray` dan `SSH`: enable/disable runtime, manual domain, URL source, bound users, auto update, dan rebuild artifact.
-- `14) SSH Network`
+  `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`), `DNS Settings` staged, `DNS Add-ons` advanced editor, dan `Checks` routing/config/service.
+- `6) SSH Network`
   DNS steering user SSH (`dnsmasq` + `nftables`) dan routing `WARP` SSH global/per-user berbasis `fwmark`, `ip rule`, dan `wg-quick`.
+- `7) Adblocker`
+  Source adblock gabungan untuk `Xray` dan `SSH`: enable/disable runtime, manual domain, URL source, bound users, auto update, dan rebuild artifact.
+- `8) Domain Control`
+  `Set Domain`, `Current Domain`, `Guard Check`, `Guard Renew`, `Refresh Account Info`, `Repair Compat Domain Drift`, dan `Repair Target DNS Record`.
+- `9) Speedtest`
+  Jalankan speedtest live dan lihat versi binary `speedtest`.
+- `10) Security`
+  TLS/certificate (`cert info`, `check expiry`, `renew`, `reload nginx`, `recover pending renew`), `Fail2ban`, dan tuning sistem seperti `BBR`, `swap`, `ulimit`, dan `chrony`.
+- `11) Maintenance`
+  `Core Check`, restart service utama (`xray`, `nginx`, `core`, `WARP`, `SSH WS`, `Edge`, `BadVPN`), log service, status runtime, dan status daemon Xray.
+- `12) Traffic`
+  Ringkasan analytics/traffic dan utilitas operasional terkait pemakaian runtime.
+- `13) Tools`
+  Submenu utilitas yang sekarang memuat `Telegram Bot`, `Discord Bot`, dan `WARP Tier`.
+  `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Consumer (Free/Plus)` yang aktif, plus slot `Zero Trust` yang masih placeholder CLI.
 
 ## Fitur Installer dan Runtime
 - `run.sh`
@@ -122,7 +121,7 @@ Catatan penting:
 - CRUD `Xray Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset UUID/Password`, `Delete`, dan `Recover Pending Txn`.
 - CRUD `SSH Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset Password`, `Delete`, `SSH WS Status`, `Restart SSH WS`, `Active Sessions`, dan `Recover Pending Txn`.
 - `Xray QAC` dan `SSH QAC` sudah diuji live untuk flow `view/detail`, `quota`, `block`, `IP/login limit`, `speed limit`, dan `sync/enforcement`.
-- `5) Xray Network`, `6) Domain Control`, `7) Speedtest`, `13) Adblocker`, dan `14) SSH Network` sudah disweep live sampai seluruh submenu utama terpilih. Jalur mutasi berisiko tinggi seperti edit DNS full-replace atau ganti domain diuji sampai prompt dan dibatalkan dengan sadar bila tidak dibutuhkan.
+- `5) Xray Network`, `6) SSH Network`, `7) Adblocker`, `8) Domain Control`, dan `9) Speedtest` sudah disweep live sampai seluruh submenu utama terpilih. Jalur mutasi berisiko tinggi seperti edit DNS full-replace atau ganti domain diuji sampai prompt dan dibatalkan dengan sadar bila tidak dibutuhkan.
 
 ## Bot
 ### Telegram

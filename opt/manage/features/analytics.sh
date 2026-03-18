@@ -130,7 +130,7 @@ traffic_analytics_dataset_make_tmp() {
 
 traffic_analytics_overview_show() {
   title
-  echo "10) Traffic > Overview"
+  echo "12) Traffic > Overview"
   hr
 
   local dataset
@@ -210,7 +210,7 @@ PY
 
 traffic_analytics_top_users_show() {
   title
-  echo "10) Traffic > Top Users by Usage"
+  echo "12) Traffic > Top Users by Usage"
   hr
 
   local n
@@ -290,7 +290,7 @@ PY
 
 traffic_analytics_search_user_show() {
   title
-  echo "10) Traffic > Search User Traffic"
+  echo "12) Traffic > Search User Traffic"
   hr
 
   local q
@@ -374,7 +374,7 @@ PY
 
 traffic_analytics_export_json() {
   title
-  echo "10) Traffic > Export JSON"
+  echo "12) Traffic > Export JSON"
   hr
 
   local dataset out
@@ -407,7 +407,7 @@ traffic_analytics_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "10) Traffic"
+    ui_menu_screen_begin "12) Traffic"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1504,7 +1504,7 @@ fail2ban_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "8) Security"
+    ui_menu_screen_begin "10) Security"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1526,7 +1526,7 @@ fail2ban_menu() {
 # -------------------------
 wireproxy_status_menu() {
   title
-  echo "9) Maintenance > WARP Status"
+  echo "11) Maintenance > WARP Status"
   hr
 
   if ! svc_exists wireproxy; then
@@ -1599,7 +1599,7 @@ wireproxy_status_menu() {
 
 wireproxy_restart_menu() {
   title
-  echo "9) Maintenance > Restart WARP"
+  echo "11) Maintenance > Restart WARP"
   hr
 
   local confirm_rc=0
@@ -1934,7 +1934,7 @@ PY
 
 edge_runtime_status_menu() {
   title
-  echo "9) Maintenance > Edge Gateway Status"
+  echo "11) Maintenance > Edge Gateway Status"
   hr
 
   local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
@@ -2087,7 +2087,7 @@ edge_runtime_post_restart_health_check() {
 
 edge_runtime_restart_menu() {
   title
-  echo "9) Maintenance > Restart Edge Gateway"
+  echo "11) Maintenance > Restart Edge Gateway"
   hr
 
   local confirm_rc=0
@@ -2122,7 +2122,7 @@ edge_runtime_restart_menu() {
 
 edge_runtime_info_menu() {
   title
-  echo "9) Maintenance > Edge Gateway Info"
+  echo "11) Maintenance > Edge Gateway Info"
   hr
 
   local provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file
@@ -2166,7 +2166,7 @@ edge_runtime_info_menu() {
 
 badvpn_status_menu() {
   title
-  echo "9) Maintenance > BadVPN UDPGW Status"
+  echo "11) Maintenance > BadVPN UDPGW Status"
   hr
 
   local env_file ports_raw ports_label max_clients max_conn sndbuf svc
@@ -2234,7 +2234,7 @@ badvpn_post_restart_health_check() {
 
 badvpn_restart_menu() {
   title
-  echo "9) Maintenance > Restart BadVPN UDPGW"
+  echo "11) Maintenance > Restart BadVPN UDPGW"
   hr
 
   local confirm_rc=0
@@ -2322,11 +2322,11 @@ ssh_runtime_context_run() {
 
 ssh_runtime_menu_title() {
   local suffix="${1:-}"
-  local base="9) Maintenance"
+  local base="11) Maintenance"
   case "${SSH_RUNTIME_MENU_CONTEXT:-}" in
     ssh-users) base="2) SSH Users" ;;
-    ssh-network) base="14) SSH Network" ;;
-    maintenance|"") base="9) Maintenance" ;;
+    ssh-network) base="6) SSH Network" ;;
+    maintenance|"") base="11) Maintenance" ;;
   esac
   if [[ -n "${suffix}" ]]; then
     printf '%s > %s\n' "${base}" "${suffix}"
@@ -7497,6 +7497,12 @@ ssh_network_warp_helper_available() {
   [[ -x "${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}" ]]
 }
 
+ssh_network_file_fingerprint() {
+  local path="${1:-}"
+  [[ -n "${path}" && -f "${path}" ]] || return 1
+  cksum "${path}" 2>/dev/null | awk '{print $1 ":" $2}'
+}
+
 ssh_network_warp_sync_config_unlocked() {
   local iface="${1:-}" source_conf="" dest_dir="" dest_path="" helper=""
   ssh_network_interface_name_is_valid "${iface}" || {
@@ -7921,7 +7927,7 @@ ssh_network_runtime_apply_unlocked() {
   local -a warp_uids=()
   local -a endpoint_v4=() endpoint_v6=()
   local username uid override effective
-  local tmp=""
+  local tmp="" warp_conf_path="" warp_conf_before="" warp_conf_after="" warp_cfg_changed="false"
 
   cfg="$(ssh_network_config_get)"
   nft_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
@@ -7963,6 +7969,16 @@ ssh_network_runtime_apply_unlocked() {
     warn "Interface WARP SSH belum diset."
     return 1
   fi
+  warp_conf_path="$(ssh_network_warp_config_path "${warp_iface}" 2>/dev/null || true)"
+  warp_conf_before="$(ssh_network_file_fingerprint "${warp_conf_path}" 2>/dev/null || true)"
+  if ! ssh_network_warp_sync_config_unlocked "${warp_iface}"; then
+    warn "Gagal sinkron config SSH WARP dari source WARP host."
+    return 1
+  fi
+  warp_conf_after="$(ssh_network_file_fingerprint "${warp_conf_path}" 2>/dev/null || true)"
+  if [[ -n "${warp_conf_after}" && "${warp_conf_after}" != "${warp_conf_before}" ]]; then
+    warp_cfg_changed="true"
+  fi
   if ! ip link show "${warp_iface}" >/dev/null 2>&1; then
     if ! ssh_network_warp_runtime_start_unlocked "${warp_iface}"; then
       warn "Interface WARP SSH '${warp_iface}' tidak ditemukan dan provisioning otomatis gagal."
@@ -7970,6 +7986,11 @@ ssh_network_runtime_apply_unlocked() {
     fi
     if ! ip link show "${warp_iface}" >/dev/null 2>&1; then
       warn "Interface WARP SSH '${warp_iface}' belum tersedia sesudah provisioning otomatis."
+      return 1
+    fi
+  elif [[ "${warp_cfg_changed}" == "true" ]]; then
+    if ! ssh_network_warp_runtime_start_unlocked "${warp_iface}"; then
+      warn "Interface WARP SSH '${warp_iface}' gagal direfresh setelah config berubah."
       return 1
     fi
   fi
@@ -8192,9 +8213,9 @@ ssh_network_pick_routable_user() {
 ssh_network_menu_title() {
   local suffix="${1:-}"
   if [[ -n "${suffix}" ]]; then
-    printf '14) SSH Network > %s\n' "${suffix}"
+    printf '6) SSH Network > %s\n' "${suffix}"
   else
-    printf '14) SSH Network\n'
+    printf '6) SSH Network\n'
   fi
 }
 
@@ -8704,7 +8725,7 @@ ssh_network_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "14) SSH Network"
+    ui_menu_screen_begin "6) SSH Network"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -10633,7 +10654,7 @@ daemon_log_tail_show() {
   local svc="$1"
   local lines="${2:-20}"
   title
-  echo "9) Maintenance > Log ${svc}"
+  echo "11) Maintenance > Log ${svc}"
   hr
   if svc_exists "${svc}"; then
     journalctl -u "${svc}" --no-pager -n "${lines}" 2>/dev/null || true
@@ -10666,7 +10687,7 @@ sshws_restart_after_dropbear() {
 
 install_discord_bot_menu() {
   local installer_cmd="/usr/local/bin/install-discord-bot"
-  ui_menu_screen_begin "11) Discord Bot"
+  ui_menu_screen_begin "13) Tools > Discord Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Discord tidak ditemukan / tidak executable:"
@@ -10698,7 +10719,7 @@ install_discord_bot_menu() {
 
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
-  ui_menu_screen_begin "12) Telegram Bot"
+  ui_menu_screen_begin "13) Tools > Telegram Bot"
 
   if [[ ! -x "${installer_cmd}" ]]; then
     warn "Installer bot Telegram tidak ditemukan / tidak executable:"
@@ -10817,7 +10838,7 @@ xray_daemon_restart_checked() {
 
 daemon_status_menu() {
   title
-  echo "9) Maintenance > Xray Daemons"
+  echo "11) Maintenance > Xray Daemons"
   hr
 
   local sshws_dropbear_svc="${SSHWS_DROPBEAR_SERVICE:-sshws-dropbear}"

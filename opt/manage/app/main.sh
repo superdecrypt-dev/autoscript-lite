@@ -22,11 +22,6 @@ main() {
       warn "Gunakan menu Domain Control > Refresh Account Info."
       return 1
       ;;
-    __migrate-quota-dates)
-      warn "Hidden migrasi quota dinonaktifkan."
-      warn "Gunakan menu Maintenance > Normalize Quota Dates."
-      return 1
-      ;;
     __sync-domain-file)
       warn "Hidden sync compat domain dinonaktifkan."
       warn "Sinkronisasi compat domain hanya dikelola internal oleh flow Set Domain."

@@ -46,6 +46,8 @@ Sudah tercakup di bagian preflight.
 printf "0\n" | timeout 20 bash manage.sh
 printf "2\n5\n0\n0\n" | timeout 30 bash manage.sh
 printf "4\n0\n0\n" | timeout 30 bash manage.sh
+printf "13\n3\n0\n0\n" | timeout 30 bash manage.sh
+printf "11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n" | timeout 60 bash manage.sh
 bash install-discord-bot.sh status
 printf "0\n" | timeout 20 bash install-discord-bot.sh menu
 bash install-telegram-bot.sh status
@@ -57,6 +59,8 @@ Kriteria lulus:
 - Command `status` berjalan tanpa crash.
 - Menu `SSH Users` (`2)`) bisa dibuka, `List Users` tampil aman walau data kosong.
 - Menu `SSH QAC` (`4)`) bisa dibuka walau data user masih kosong.
+- `13) Tools > WARP Tier` bisa dibuka dan kembali normal.
+- Menu hasil rebalance (`11) Maintenance`, `12) Traffic`, `6) SSH Network`, `7) Adblocker`, `9) Speedtest`, `10) Security`) bisa dibuka lalu kembali normal tanpa crash.
 
 ### 3.3 Negative/Failure
 

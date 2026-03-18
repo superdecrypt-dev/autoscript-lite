@@ -1,5 +1,50 @@
 # Release Notes
 
+## Rilis 2026-03-19 (Manage Menu Rebalance + Tools/WARP Tier Surface)
+
+### Ringkasan
+Rilis ini merapikan surface user-facing `manage.sh` agar menu utama lebih seimbang dan alur fitur pendukung lebih mudah dicari. `WARP Tier` dipindah ke `Tools`, `SSH Network` dan `Adblocker` naik ke area utama, lalu `Traffic` dipisah sebagai menu analytics mandiri.
+
+### Perubahan Utama
+1. Main menu diseimbangkan ulang
+- susunan utama kini menjadi:
+  - `1) Xray Users`
+  - `2) SSH Users`
+  - `3) Xray QAC`
+  - `4) SSH QAC`
+  - `5) Xray Network`
+  - `6) SSH Network`
+  - `7) Adblocker`
+  - `8) Domain Control`
+  - `9) Speedtest`
+  - `10) Security`
+  - `11) Maintenance`
+  - `12) Traffic`
+  - `13) Tools`
+
+2. Tools menu baru untuk utilitas non-core
+- `13) Tools` sekarang memuat:
+  - `Telegram Bot`
+  - `Discord Bot`
+  - `WARP Tier`
+- `WARP Tier` kini menampilkan status utama berbasis mode, submenu `Consumer (Free/Plus)`, dan slot `Zero Trust` yang masih placeholder CLI.
+
+3. Surface operasional dipertegas
+- `6) SSH Network` sekarang muncul sebagai menu utama sendiri.
+- `12) Traffic` kini menjadi layar analytics/export terpisah.
+- `11) Maintenance` fokus ke status, restart, dan log service; `Normalize Quota Dates` tidak lagi muncul di surface user-facing terbaru.
+
+### Hasil Validasi
+- `bash -n manage.sh opt/manage/app/main.sh opt/manage/features/network.sh opt/manage/features/analytics.sh opt/manage/menus/main_menu.sh opt/manage/menus/maintenance_menu.sh` -> PASS
+- smoke `printf '0\n' | bash manage.sh` -> PASS
+- smoke `printf '13\n3\n0\n0\n' | bash manage.sh` -> PASS
+- smoke `printf '11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n' | bash manage.sh` -> PASS
+- judul live `WARP Tier` saat diakses dari menu baru -> `13) Tools > WARP Tier`
+- runtime header saat validasi:
+  - domain aktif: `d77bq.vyxara2.web.id`
+  - `WARP Status` -> `Active (FREE)`
+  - service ringkas -> `Edge Mux ✅`, `Nginx ✅`, `Xray ✅`, `SSH ✅`
+
 ## Rilis 2026-03-16 (Bot UX Refresh + Live E2E Revalidation)
 
 ### Ringkasan

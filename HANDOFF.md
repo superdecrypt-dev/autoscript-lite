@@ -54,6 +54,38 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - unit file `bot-discord*` dan `bot-telegram*` saat ini tidak terpasang
   - `systemctl list-unit-files 'bot-discord*' 'bot-telegram*'` -> `0 unit files listed`
 
+## Update Refactor Menu Manage (2026-03-19)
+- Working tree saat ini sedang memuat refactor surface `manage.sh` dan modul `opt/manage/...`; cek `git status --short` sebelum melanjutkan.
+- Main menu terbaru yang sedang disiapkan:
+  - `1) Xray Users`
+  - `2) SSH Users`
+  - `3) Xray QAC`
+  - `4) SSH QAC`
+  - `5) Xray Network`
+  - `6) SSH Network`
+  - `7) Adblocker`
+  - `8) Domain Control`
+  - `9) Speedtest`
+  - `10) Security`
+  - `11) Maintenance`
+  - `12) Traffic`
+  - `13) Tools`
+- `13) Tools` sekarang menjadi rumah untuk:
+  - `Telegram Bot`
+  - `Discord Bot`
+  - `WARP Tier`
+- `WARP Tier` sekarang diroute dari `Tools`; judul user-facing yang diharapkan adalah `13) Tools > WARP Tier`.
+- `WARP Tier > Zero Trust` saat ini masih placeholder CLI; backend runtime belum diaktifkan.
+- `11) Maintenance` tidak lagi menampilkan `Normalize Quota Dates` pada surface user-facing terbaru.
+- Smoke test live terbaru pada `2026-03-19` yang sudah lolos:
+  - `printf '0\n' | bash manage.sh`
+  - `printf '13\n3\n0\n0\n' | bash manage.sh`
+  - `printf '11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n' | bash manage.sh`
+- Runtime yang terlihat saat smoke test:
+  - domain aktif: `d77bq.vyxara2.web.id`
+  - `WARP Status` ringkas: `Active (FREE)`
+  - ringkasan service utama di header menu: `Edge Mux ✅`, `Nginx ✅`, `Xray ✅`, `SSH ✅`
+
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
 1. Sinkronisasi UX bot agar alur pilih protocol/user minim typo.
 2. Perapihan output `Add User` / `Account Info` menjadi ringkas + lampiran file akun.
@@ -69,6 +101,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 12. SSH WS sekarang memakai token path per-user dan QAC session tracking yang lebih ketat.
 13. Edge Gateway (`go`) sekarang aktif live dan menjadi frontend publik `80/443`.
 14. BadVPN UDPGW sekarang terpasang sebagai fitur tambahan SSH dengan surface status/restart di `Maintenance`.
+15. Refactor menu manage terbaru sedang merapikan ulang numbering surface user-facing, memindahkan `WARP Tier` ke `13) Tools`, dan memisahkan `12) Traffic` sebagai menu analytics mandiri.
 
 ## Catatan Working Tree Saat Handoff
 - Selalu verifikasi kondisi terbaru dengan `git status --short` sebelum mulai.

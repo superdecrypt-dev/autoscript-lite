@@ -113,8 +113,14 @@ WARP_LOCK_FILE="/run/autoscript/locks/xray-warp.lock"
 
 # Direktori laporan/export
 REPORT_DIR="/var/log/xray-manage"
+WARP_MODE_STATE_KEY="warp_mode"
 WARP_TIER_STATE_KEY="warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY="warp_plus_license_key"
+WARP_ZEROTRUST_ROOT="${WARP_ZEROTRUST_ROOT:-/etc/autoscript/warp-zerotrust}"
+WARP_ZEROTRUST_CONFIG_FILE="${WARP_ZEROTRUST_ROOT}/config.env"
+WARP_ZEROTRUST_MDM_FILE="${WARP_ZEROTRUST_MDM_FILE:-/var/lib/cloudflare-warp/mdm.xml}"
+WARP_ZEROTRUST_SERVICE="${WARP_ZEROTRUST_SERVICE:-warp-svc}"
+WARP_ZEROTRUST_PROXY_PORT="${WARP_ZEROTRUST_PROXY_PORT:-40000}"
 SSH_ACCOUNT_DIR="${ACCOUNT_ROOT}/ssh"
 SSH_QUOTA_DIR="${QUOTA_ROOT}/ssh"
 SSH_USERS_STATE_DIR="${SSH_QUOTA_DIR}"
@@ -158,7 +164,9 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
   "${WIREGUARD_DIR}" "${SSH_WARP_SYNC_BIN}" \
-  "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
+  "${WARP_MODE_STATE_KEY}" "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
+  "${WARP_ZEROTRUST_ROOT}" "${WARP_ZEROTRUST_CONFIG_FILE}" "${WARP_ZEROTRUST_MDM_FILE}" \
+  "${WARP_ZEROTRUST_SERVICE}" "${WARP_ZEROTRUST_PROXY_PORT}" \
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
   "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}" \
@@ -669,305 +677,6 @@ speed_policy_resync_after_warp_change() {
     return 1
   fi
   return 0
-}
-
-quota_migrate_dates_to_dateonly() {
-  # Normalisasi metadata quota:
-  # - created_at -> YYYY-MM-DD
-  # - expired_at -> YYYY-MM-DD
-  # Idempotent untuk nilai yang sudah sesuai.
-  local max_files="0"
-  if (( $# > 0 )) && [[ "${1:-}" == --max-files=* ]]; then
-    max_files="${1#--max-files=}"
-    shift
-  fi
-  local -a quota_targets=("$@")
-  if (( ${#quota_targets[@]} == 0 )); then
-    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
-  fi
-  need_python3
-  python3 - <<'PY' "${QUOTA_ROOT}" "${max_files}" "${quota_targets[@]}"
-import json
-import fcntl
-import os
-import re
-import sys
-import tempfile
-from datetime import datetime
-
-quota_root = sys.argv[1]
-try:
-  max_files = int(sys.argv[2])
-except Exception:
-  max_files = 0
-protos = tuple(sys.argv[3:])
-had_warnings = False
-snapshots = {}
-processed = 0
-stop_processing = False
-
-DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-DATETIME_MIN_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
-
-def normalize_date(value):
-  if value is None:
-    return None
-  s = str(value).strip()
-  if not s:
-    return None
-  s = s.replace("T", " ")
-  if s.endswith("Z"):
-    s = s[:-1]
-
-  if DATE_ONLY_RE.match(s):
-    return s
-
-  candidates = [s]
-  if s.endswith("+00:00"):
-    candidates.append(s[:-6])
-  if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
-    candidates.append(s + ":00")
-  candidates.append(s.replace(" ", "T"))
-
-  for c in candidates:
-    try:
-      d = datetime.fromisoformat(c)
-      return d.strftime("%Y-%m-%d")
-    except Exception:
-      pass
-
-  for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-    try:
-      d = datetime.strptime(s, fmt)
-      return d.strftime("%Y-%m-%d")
-    except Exception:
-      pass
-
-  if len(s) >= 10 and DATE_ONLY_RE.match(s[:10]):
-    return s[:10]
-
-  return None
-
-for proto in protos:
-  if stop_processing:
-    break
-  d = os.path.join(quota_root, proto)
-  if not os.path.isdir(d):
-    continue
-  for name in os.listdir(d):
-    if max_files > 0 and processed >= max_files:
-      stop_processing = True
-      break
-    if not name.endswith(".json"):
-      continue
-    p = os.path.join(d, name)
-    processed += 1
-    lock_path = p + ".lock"
-    try:
-      os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
-    except Exception:
-      pass
-    try:
-      lock_handle = open(lock_path, "a+", encoding="utf-8")
-      fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-    except Exception:
-      had_warnings = True
-      print(f"[manage][WARN] Skip migrasi (lock gagal): {p}", file=sys.stderr)
-      try:
-        lock_handle.close()
-      except Exception:
-        pass
-      continue
-    try:
-      try:
-        with open(p, "r", encoding="utf-8") as f:
-          meta = json.load(f)
-        if not isinstance(meta, dict):
-          continue
-      except Exception:
-        had_warnings = True
-        print(f"[manage][WARN] Skip migrasi (JSON invalid): {p}", file=sys.stderr)
-        continue
-
-      changed = False
-      for key in ("created_at", "expired_at"):
-        if key not in meta:
-          continue
-        nd = normalize_date(meta.get(key))
-        if nd is None:
-          had_warnings = True
-          print(f"[manage][WARN] Skip field {key} (format tidak dikenali) di: {p}", file=sys.stderr)
-          continue
-        if meta.get(key) != nd:
-          meta[key] = nd
-          changed = True
-
-      if changed:
-        try:
-          snapshots[p] = (open(p, "rb").read(), int(os.stat(p).st_mode & 0o777))
-        except Exception:
-          had_warnings = True
-          print(f"[manage][WARN] Skip migrasi (snapshot gagal): {p}", file=sys.stderr)
-          continue
-        dirn = os.path.dirname(p) or "."
-        fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
-        try:
-          with os.fdopen(fd, "w", encoding="utf-8") as wf:
-            json.dump(meta, wf, ensure_ascii=False, indent=2)
-            wf.write("\n")
-            wf.flush()
-            os.fsync(wf.fileno())
-          os.replace(tmp, p)
-          try:
-            os.chmod(p, 0o600)
-          except Exception:
-            pass
-        finally:
-          try:
-            if os.path.exists(tmp):
-              os.remove(tmp)
-          except Exception:
-            pass
-    finally:
-      try:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-      except Exception:
-        pass
-      try:
-        lock_handle.close()
-      except Exception:
-        pass
-
-if had_warnings and snapshots:
-  for path, (payload, mode) in snapshots.items():
-    dirn = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".rollback.", suffix=".json", dir=dirn)
-    try:
-      with os.fdopen(fd, "wb") as wf:
-        wf.write(payload)
-        wf.flush()
-        os.fsync(wf.fileno())
-      os.replace(tmp, path)
-      try:
-        if isinstance(mode, int):
-          os.chmod(path, mode)
-      except Exception:
-        pass
-    finally:
-      try:
-        if os.path.exists(tmp):
-          os.remove(tmp)
-      except Exception:
-        pass
-raise SystemExit(2 if had_warnings else 0)
-PY
-}
-
-quota_migrate_dates_report_write() {
-  local outfile="${1:-}"
-  shift || true
-  local -a quota_targets=("$@")
-  if (( ${#quota_targets[@]} == 0 )); then
-    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
-  fi
-  [[ -n "${outfile}" ]] || return 1
-  need_python3
-  python3 - <<'PY' "${outfile}" "${QUOTA_ROOT}" "${quota_targets[@]}"
-import json
-import os
-import re
-import sys
-from datetime import datetime
-
-outfile = sys.argv[1]
-quota_root = sys.argv[2]
-protos = tuple(sys.argv[3:])
-
-DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-def normalize_date(value):
-  if value is None:
-    return None
-  s = str(value).strip()
-  if not s:
-    return None
-  s = s.replace("T", " ")
-  if s.endswith("Z"):
-    s = s[:-1]
-  if DATE_ONLY_RE.match(s):
-    return s
-  candidates = [s]
-  if s.endswith("+00:00"):
-    candidates.append(s[:-6])
-  if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", s):
-    candidates.append(s + ":00")
-  candidates.append(s.replace(" ", "T"))
-  for c in candidates:
-    try:
-      d = datetime.fromisoformat(c)
-      return d.strftime("%Y-%m-%d")
-    except Exception:
-      pass
-  for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-    try:
-      d = datetime.strptime(s, fmt)
-      return d.strftime("%Y-%m-%d")
-    except Exception:
-      pass
-  if len(s) >= 10 and DATE_ONLY_RE.match(s[:10]):
-    return s[:10]
-  return None
-
-rows = []
-summary = {"ok": 0, "would_normalize": 0, "warning": 0}
-for proto in protos:
-  d = os.path.join(quota_root, proto)
-  if not os.path.isdir(d):
-    rows.append((proto, "(directory missing)", "skip", "proto directory tidak ditemukan"))
-    continue
-  for name in sorted(os.listdir(d)):
-    if not name.endswith(".json"):
-      continue
-    path = os.path.join(d, name)
-    try:
-      with open(path, "r", encoding="utf-8") as fh:
-        meta = json.load(fh)
-      if not isinstance(meta, dict):
-        raise ValueError("root JSON bukan object")
-    except Exception as exc:
-      rows.append((proto, path, "warning", f"JSON invalid: {exc}"))
-      summary["warning"] += 1
-      continue
-    notes = []
-    warning = False
-    for key in ("created_at", "expired_at"):
-      if key not in meta:
-        continue
-      nd = normalize_date(meta.get(key))
-      if nd is None:
-        warning = True
-        notes.append(f"{key}=format-tidak-dikenali")
-      elif meta.get(key) != nd:
-        notes.append(f"{key}:{meta.get(key)} -> {nd}")
-    if warning:
-      status = "warning"
-      summary["warning"] += 1
-    elif notes:
-      status = "would-normalize"
-      summary["would_normalize"] += 1
-    else:
-      status = "ok"
-      summary["ok"] += 1
-    rows.append((proto, path, status, ", ".join(notes) if notes else "-"))
-
-os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
-with open(outfile, "w", encoding="utf-8") as out:
-  out.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-  out.write("Mode: dry-run normalize quota dates (tanpa write)\n")
-  out.write(f"Summary: ok={summary['ok']} would_normalize={summary['would_normalize']} warning={summary['warning']}\n\n")
-  for proto, path, status, note in rows:
-    out.write(f"[{proto}] {status}\t{path}\t{note}\n")
-PY
 }
 
 # -------------------------
@@ -2946,7 +2655,7 @@ cf_restore_relevant_a_records_snapshot() {
 }
 
 domain_menu_v2() {
-  ui_menu_screen_begin "6) Domain Control > Set Domain" "Konfigurasi Domain TLS"
+  ui_menu_screen_begin "8) Domain Control > Set Domain" "Konfigurasi Domain TLS"
   echo -e "${UI_MUTED}Pilih metode domain untuk proses set domain.${UI_RESET}"
   echo -e "  ${UI_ACCENT}1)${UI_RESET} Input domain manual"
   echo -e "  ${UI_ACCENT}2)${UI_RESET} Gunakan domain yang disediakan"
@@ -4126,7 +3835,7 @@ domain_control_refresh_account_info_now() {
   local run_all_batches="false"
 
   title
-  echo "6) Domain Control > Refresh Account Info"
+  echo "8) Domain Control > Refresh Account Info"
   hr
 
   domain="$(normalize_domain_token "$(detect_domain)")"
@@ -4353,7 +4062,7 @@ domain_control_sync_compat_domain_now() {
   fi
 
   title
-  echo "6) Domain Control > Repair Compat Domain Drift (Repair-Only)"
+  echo "8) Domain Control > Repair Compat Domain Drift (Repair-Only)"
   hr
 
   domain="$(normalize_domain_token "$(detect_domain)")"
@@ -4489,7 +4198,7 @@ domain_control_sync_target_dns_now() {
   fi
 
   title
-  echo "6) Domain Control > Repair Target DNS Record (Manual Repair)"
+  echo "8) Domain Control > Repair Target DNS Record (Manual Repair)"
   hr
 
   while IFS= read -r pending_file; do
@@ -4651,7 +4360,7 @@ domain_control_sync_target_dns_now() {
 
 domain_control_show_info() {
   title
-  echo "6) Domain Control > Current Domain"
+  echo "8) Domain Control > Current Domain"
   hr
   echo "Domain aktif : $(detect_domain)"
   echo "Cert file    : ${CERT_FULLCHAIN}"
@@ -4667,7 +4376,7 @@ domain_control_show_info() {
 
 domain_control_guard_check() {
   title
-  echo "6) Domain Control > Guard Check"
+  echo "8) Domain Control > Guard Check"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -4711,7 +4420,7 @@ domain_control_guard_renew_if_needed() {
     return $?
   fi
   title
-  echo "6) Domain Control > Guard Renew (External Binary)"
+  echo "8) Domain Control > Guard Renew (External Binary)"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -4950,7 +4659,7 @@ domain_control_menu() {
       "7|Repair Target DNS Record (manual repair)$([[ "${cf_pending}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
       "0|Back"
     )
-    ui_menu_screen_begin "6) Domain Control"
+    ui_menu_screen_begin "8) Domain Control"
     if [[ "${cf_pending}" == "true" ]]; then
       warn "Ada ${cf_pending_count} pending repair target DNS Cloudflare. Gunakan 'Repair Target DNS Record' bila ingin menyelesaikannya."
       hr
@@ -6671,7 +6380,7 @@ sanity_check_now() {
 
 status_diagnostics_menu() {
   title
-  echo "9) Maintenance > Core Check"
+  echo "11) Maintenance > Core Check"
   hr
   svc_status_line xray
   svc_status_line nginx

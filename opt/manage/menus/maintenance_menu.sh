@@ -161,228 +161,6 @@ maintenance_restart_nginx_now() {
   nginx_restart_checked_with_listener
 }
 
-maintenance_quota_file_count() {
-  local -a quota_targets=("$@")
-  local dir count=0
-  if (( ${#quota_targets[@]} == 0 )); then
-    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
-  fi
-  for dir in "${quota_targets[@]}"; do
-    [[ -d "${QUOTA_ROOT}/${dir}" ]] || continue
-    while IFS= read -r -d '' _quota_file; do
-      count=$((count + 1))
-    done < <(find "${QUOTA_ROOT}/${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
-  done
-  printf '%s\n' "${count}"
-}
-
-maintenance_quota_targets_preview_write() {
-  local outfile="$1"
-  shift || true
-  local -a quota_targets=("$@")
-  local dir quota_file
-  [[ -n "${outfile}" ]] || return 1
-  if (( ${#quota_targets[@]} == 0 )); then
-    quota_targets=("${QUOTA_PROTO_DIRS[@]}")
-  fi
-  mkdir -p "$(dirname "${outfile}")" 2>/dev/null || true
-  : > "${outfile}" || return 1
-  {
-    printf 'Generated: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-    printf '\n'
-    for dir in "${quota_targets[@]}"; do
-      printf '[%s]\n' "${dir}"
-      if [[ ! -d "${QUOTA_ROOT}/${dir}" ]]; then
-        printf '(tidak ada target)\n\n'
-        continue
-      fi
-      local found="false"
-      while IFS= read -r -d '' quota_file; do
-        found="true"
-        printf '%s\n' "${quota_file}"
-      done < <(find "${QUOTA_ROOT}/${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
-      if [[ "${found}" != "true" ]]; then
-        printf '(tidak ada target)\n'
-      fi
-      printf '\n'
-    done
-  } > "${outfile}" || return 1
-  chmod 600 "${outfile}" 2>/dev/null || true
-  return 0
-}
-
-maintenance_normalize_quota_dates_menu() {
-  local -a quota_targets=()
-  local file_count ask_rc=0 spin_log="" rc=0 preview_report="" dry_run_report=""
-  local scope_choice="" scope_label="Semua proto Xray"
-  local max_files_per_run="10"
-  title
-  echo "9) Maintenance > Normalize Quota Dates"
-  hr
-  echo "Pilih scope normalisasi:"
-  echo "  1) Semua proto Xray"
-  echo "  2) VLESS only"
-  echo "  3) VMESS only"
-  echo "  4) TROJAN only"
-  echo "  0) Back"
-  hr
-  while true; do
-    if ! read -r -p "Pilih scope (1-4/0): " scope_choice; then
-      echo
-      return 0
-    fi
-    case "${scope_choice}" in
-      1) quota_targets=("${QUOTA_PROTO_DIRS[@]}") ; scope_label="Semua proto Xray" ; break ;;
-      2) quota_targets=("vless") ; scope_label="VLESS only" ; break ;;
-      3) quota_targets=("vmess") ; scope_label="VMESS only" ; break ;;
-      4) quota_targets=("trojan") ; scope_label="TROJAN only" ; break ;;
-      0|kembali|k|back|b) return 0 ;;
-      *) echo "Pilihan tidak valid." ;;
-    esac
-  done
-  file_count="$(maintenance_quota_file_count "${quota_targets[@]}")"
-  echo "Operasi ini menormalisasi field quota created_at/expired_at ke format YYYY-MM-DD."
-  echo "Scope       : ${scope_label}"
-  echo "Target file : ${file_count:-0}"
-  echo "Default run : 10 file pertama per eksekusi."
-  echo "Catatan     : jika ada warning, perubahan yang sempat ditulis akan di-rollback."
-  preview_report="$(preview_report_path_prepare "quota-normalize-targets" 2>/dev/null || true)"
-  if [[ -n "${preview_report}" ]] && maintenance_quota_targets_preview_write "${preview_report}" "${quota_targets[@]}"; then
-    echo "Daftar target lengkap:"
-    echo "  ${preview_report}"
-  else
-    rm -f "${preview_report}" >/dev/null 2>&1 || true
-    preview_report=""
-  fi
-  dry_run_report="$(preview_report_path_prepare "quota-normalize-dryrun" 2>/dev/null || true)"
-  if [[ -n "${dry_run_report}" ]] && quota_migrate_dates_report_write "${dry_run_report}" "${quota_targets[@]}"; then
-    echo "Dry-run report : ${dry_run_report}"
-  else
-    rm -f "${dry_run_report}" >/dev/null 2>&1 || true
-    dry_run_report=""
-  fi
-  hr
-  echo "Aksi:"
-  echo "  1) Preview only"
-  echo "  2) Dry-run normalize"
-  echo "  3) Jalankan normalisasi sekarang"
-  echo "  0) Back"
-  hr
-  local action_choice=""
-  while true; do
-    if ! read -r -p "Pilih aksi (1-3/0): " action_choice; then
-      echo
-      return 0
-    fi
-    case "${action_choice}" in
-      1)
-        if [[ -n "${preview_report}" && -f "${preview_report}" ]]; then
-          preview_report_show_file "${preview_report}" || warn "Gagal membuka preview target quota."
-        else
-          warn "Preview target quota tidak tersedia."
-        fi
-        hr
-        pause
-        return 0
-        ;;
-      2)
-        if [[ -n "${dry_run_report}" && -f "${dry_run_report}" ]]; then
-          preview_report_show_file "${dry_run_report}" || warn "Gagal membuka dry-run quota."
-        else
-          warn "Dry-run quota tidak tersedia."
-        fi
-        hr
-        pause
-        return 0
-        ;;
-      3) break ;;
-      0|kembali|k|back|b) return 0 ;;
-      *) echo "Pilihan tidak valid." ;;
-    esac
-  done
-
-  if ! confirm_yn_or_back "Jalankan normalisasi quota dates untuk ${scope_label} sekarang?"; then
-    ask_rc=$?
-    if (( ask_rc == 2 )); then
-      warn "Normalisasi quota dates dibatalkan (kembali)."
-    else
-      warn "Normalisasi quota dates dibatalkan."
-    fi
-    pause
-    return 0
-  fi
-  read -r -p "Batas file per run (Enter=10, 1-10, atau kembali): " max_files_per_run
-  if is_back_choice "${max_files_per_run}"; then
-    warn "Normalisasi quota dates dibatalkan pada pemilihan limit file."
-    pause
-    return 0
-  fi
-  [[ -n "${max_files_per_run}" ]] || max_files_per_run="10"
-  if [[ ! "${max_files_per_run}" =~ ^[0-9]+$ ]]; then
-    warn "Limit file per run tidak valid. Dibatalkan."
-    pause
-    return 0
-  fi
-  if (( max_files_per_run < 1 || max_files_per_run > 10 )); then
-    warn "Limit file per run harus berada di rentang 1-10."
-    pause
-    return 0
-  fi
-  local bulk_ack=""
-  read -r -p "Ketik persis 'NORMALIZE ${scope_choice}' untuk lanjut normalisasi quota (atau kembali): " bulk_ack
-  if is_back_choice "${bulk_ack}"; then
-    warn "Normalisasi quota dates dibatalkan pada checkpoint typed confirmation."
-    pause
-    return 0
-  fi
-  if [[ "${bulk_ack}" != "NORMALIZE ${scope_choice}" ]]; then
-    warn "Konfirmasi typed normalisasi quota tidak cocok. Dibatalkan."
-    pause
-    return 0
-  fi
-  if [[ "${file_count:-0}" =~ ^[0-9]+$ ]] && (( file_count >= 20 )); then
-    if ! confirm_menu_apply_now "Target normalisasi mencapai ${file_count} file quota. Tetap lanjut bulk write sekarang?"; then
-      warn "Normalisasi quota dates dibatalkan pada checkpoint bulk-write."
-      pause
-      return 0
-    fi
-  fi
-
-  if ui_run_logged_command_with_spinner spin_log "Menormalisasi quota dates (${scope_label})" quota_migrate_dates_to_dateonly "--max-files=${max_files_per_run}" "${quota_targets[@]}"; then
-    rc=0
-  else
-    rc=$?
-  fi
-
-  hr
-  if [[ -n "${spin_log}" && -s "${spin_log}" ]]; then
-    cat "${spin_log}" 2>/dev/null || true
-    hr
-  fi
-  rm -f "${spin_log}" >/dev/null 2>&1 || true
-
-  case "${rc}" in
-    0)
-      log "Normalisasi quota dates selesai."
-      if [[ "${file_count:-0}" =~ ^[0-9]+$ ]] && (( file_count > max_files_per_run )); then
-        warn "Eksekusi ini hanya memproses ${max_files_per_run} file pertama. Jalankan ulang menu ini untuk batch berikutnya."
-      fi
-      pause
-      return 0
-      ;;
-    2)
-      warn "Normalisasi quota dates menghasilkan warning; perubahan yang sudah ditulis telah di-rollback."
-      pause
-      return 1
-      ;;
-    *)
-      warn "Normalisasi quota dates gagal dengan status ${rc}."
-      pause
-      return 1
-      ;;
-  esac
-}
-
 maintenance_menu() {
   local -a items=(
     "1|Core Check"
@@ -402,11 +180,10 @@ maintenance_menu() {
     "15|Edge Info"
     "16|BadVPN Status"
     "17|Restart BadVPN"
-    "18|Normalize Quota Dates"
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "9) Maintenance"
+    ui_menu_screen_begin "11) Maintenance"
     ui_menu_render_two_columns_fixed items
     hr
     if ! read -r -p "Pilih: " c; then
@@ -452,7 +229,6 @@ maintenance_menu() {
       15) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;
       16) menu_run_isolated_report "BadVPN Status" badvpn_status_menu ;;
       17) menu_run_isolated_report "BadVPN Restart" badvpn_restart_menu ;;
-      18) menu_run_isolated_report "Normalize Quota Dates" maintenance_normalize_quota_dates_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

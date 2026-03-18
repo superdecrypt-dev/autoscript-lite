@@ -19,11 +19,11 @@ Ini disengaja sebagai fase transisi yang aman. Jangan asumsikan file placeholder
 
 ## Peta Source of Truth
 
-- `opt/manage/features/network.sh`: menu `5) Xray Network`, `7) Speedtest`, dan `13) Adblocker`
-- `opt/manage/features/analytics.sh`: menu `2) SSH Users`, `4) SSH QAC`, `14) SSH Network`, dan flow TLS/renew
-- `manage.sh`: menu `1) Xray Users`, `3) Xray QAC`, `6) Domain Control`, dan banyak helper runtime inti
-- `opt/manage/features/analytics.sh`: juga memegang `8) Security`, `10) Traffic`, `11) Discord Bot`, dan `12) Telegram Bot`
-- `opt/manage/menus/maintenance_menu.sh`: router menu `9) Maintenance`, dengan helper runtime tersebar di `analytics.sh`, `network.sh`, dan `manage.sh`
+- `opt/manage/features/network.sh`: menu `5) Xray Network`, `7) Adblocker`, `9) Speedtest`, dan flow `WARP Tier` yang kini muncul via `13) Tools`
+- `opt/manage/features/analytics.sh`: menu `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, dan flow TLS/renew
+- `manage.sh`: menu `1) Xray Users`, `3) Xray QAC`, `8) Domain Control`, dan banyak helper runtime inti
+- `opt/manage/features/analytics.sh`: juga memegang `10) Security`, `12) Traffic`, serta layar `Telegram Bot`/`Discord Bot` yang kini diroute dari `13) Tools`
+- `opt/manage/menus/maintenance_menu.sh`: router menu `11) Maintenance`, dengan helper runtime tersebar di `analytics.sh`, `network.sh`, dan `manage.sh`
 
 Gunakan peta ini saat audit atau patch agar tidak salah mengubah file modular yang
 ternyata belum memegang logic live.
@@ -40,22 +40,23 @@ ternyata belum memegang logic live.
   Quota, block, login/IP limit, speed limit, sync/enforcement, dan detail metadata SSH.
 - `5) Xray Network`
   WARP, DNS settings/add-ons, dan diagnostics runtime Xray.
-- `6) Domain Control`
-  Set domain, current domain, guard check/renew, refresh account info, repair compat drift, dan repair target DNS.
-- `7) Speedtest`
-  Run speedtest dan version check.
-- `8) Security`
-  TLS/cert menu, fail2ban, dan tuning sistem.
-- `9) Maintenance`
-  Restart/status service, log, status daemon, dan normalize quota dates.
-- `10) Traffic`
-  Analytics dan ringkasan traffic runtime.
-- `11) Discord Bot` / `12) Telegram Bot`
-  Installer bot dan wiring integrasi operasional.
-- `13) Adblocker`
-  Shared source Adblock untuk Xray + SSH, termasuk URL source, auto update, dan rebuild artifact.
-- `14) SSH Network`
+- `6) SSH Network`
   DNS steering SSH dan routing WARP SSH global/per-user.
+- `7) Adblocker`
+  Shared source Adblock untuk Xray + SSH, termasuk URL source, auto update, dan rebuild artifact.
+- `8) Domain Control`
+  Set domain, current domain, guard check/renew, refresh account info, repair compat drift, dan repair target DNS.
+- `9) Speedtest`
+  Run speedtest dan version check.
+- `10) Security`
+  TLS/cert menu, fail2ban, dan tuning sistem.
+- `11) Maintenance`
+  Restart/status service, log, dan status daemon.
+- `12) Traffic`
+  Analytics dan ringkasan traffic runtime.
+- `13) Tools`
+  Telegram Bot, Discord Bot, dan WARP Tier.
+  `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Consumer (Free/Plus)`, dan slot `Zero Trust` yang masih placeholder CLI.
 
 ## Guardrail Maintainer
 
