@@ -130,6 +130,27 @@ write_xray_config() {
       },
       {
         "type": "field",
+        "user": [
+          "dummy-block-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-quota-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-limit-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
         "domain": [
           "geosite:apple",
           "geosite:meta",
@@ -168,27 +189,6 @@ write_xray_config() {
           "dummy-direct-user"
         ],
         "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-block-user"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-quota-user"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-limit-user"
-        ],
-        "outboundTag": "blocked"
       },
       {
         "type": "field",
@@ -753,13 +753,28 @@ def merge_routing_state(routing, marker_users, speed_rules):
       outbound_tag = str(rule.get("outboundTag") or "").strip()
       return outbound_tag in ("api", "blocked")
 
-    insert_idx = len(rules)
-    for idx, rule in enumerate(rules):
-      if is_protected_rule(rule):
-        continue
-      insert_idx = idx
-      break
-    rules[insert_idx:insert_idx] = speed_rules
+    def is_hard_block_user_rule(rule):
+      if not isinstance(rule, dict) or rule.get("type") != "field":
+        return False
+      if str(rule.get("outboundTag") or "").strip() != "blocked":
+        return False
+      users = rule.get("user")
+      if not isinstance(users, list):
+        return False
+      hard_markers = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"}
+      return any(isinstance(user, str) and user in hard_markers for user in users)
+
+    prefix_rules = []
+    hard_block_rules = []
+    other_rules = []
+    for rule in rules:
+      if is_protected_rule(rule) and not is_hard_block_user_rule(rule):
+        prefix_rules.append(rule)
+      elif is_hard_block_user_rule(rule):
+        hard_block_rules.append(rule)
+      else:
+        other_rules.append(rule)
+    rules = prefix_rules + hard_block_rules + speed_rules + other_rules
     routing["rules"] = rules
 
 def preserve_speed_outbounds(cfg):

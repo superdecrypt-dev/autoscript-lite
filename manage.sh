@@ -7313,6 +7313,41 @@ else:
   raise SystemExit("state harus 'on' atau 'off'")
 
 target["user"] = users
+hard_block_markers = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"}
+
+def is_api_rule(rule):
+  return isinstance(rule, dict) and rule.get("type") == "field" and rule.get("outboundTag") == "api"
+
+def is_static_block_rule(rule):
+  if not isinstance(rule, dict) or rule.get("type") != "field":
+    return False
+  if rule.get("outboundTag") != "blocked":
+    return False
+  users_local = rule.get("user")
+  return not isinstance(users_local, list)
+
+def is_hard_block_user_rule(rule):
+  if not isinstance(rule, dict) or rule.get("type") != "field":
+    return False
+  if rule.get("outboundTag") != "blocked":
+    return False
+  users_local = rule.get("user")
+  if not isinstance(users_local, list):
+    return False
+  return any(item in hard_block_markers for item in users_local if isinstance(item, str))
+
+prefix_rules = []
+hard_block_rules = []
+other_rules = []
+for rule in rules:
+  if is_api_rule(rule) or is_static_block_rule(rule):
+    prefix_rules.append(rule)
+  elif is_hard_block_user_rule(rule):
+    hard_block_rules.append(rule)
+  else:
+    other_rules.append(rule)
+
+rules = prefix_rules + hard_block_rules + other_rules
 routing["rules"] = rules
 cfg["routing"] = routing
 
@@ -7711,6 +7746,19 @@ def is_protected_rule(r):
   ot = r.get("outboundTag")
   return isinstance(ot, str) and ot in ("api", "blocked")
 
+def is_hard_block_user_rule(r):
+  if not isinstance(r, dict):
+    return False
+  if r.get("type") != "field":
+    return False
+  if norm_tag(r.get("outboundTag")) != "blocked":
+    return False
+  users = r.get("user")
+  if not isinstance(users, list):
+    return False
+  hard_markers = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"}
+  return any(isinstance(x, str) and x in hard_markers for x in users)
+
 def norm_tag(v):
   if not isinstance(v, str):
     return ""
@@ -7851,13 +7899,6 @@ for r in rules:
     continue
   kept_rules.append(r)
 
-insert_idx = len(kept_rules)
-for i, r in enumerate(kept_rules):
-  if is_protected_rule(r):
-    continue
-  insert_idx = i
-  break
-
 speed_rules = []
 for mark, users in sorted(mark_users.items()):
   marker = f"{marker_prefix}{mark}"
@@ -7872,7 +7913,18 @@ for mark, users in sorted(mark_users.items()):
   rule["outboundTag"] = ot
   speed_rules.append(rule)
 
-merged_rules = kept_rules[:insert_idx] + speed_rules + kept_rules[insert_idx:]
+prefix_rules = []
+hard_block_rules = []
+other_rules = []
+for rule in kept_rules:
+  if is_protected_rule(rule) and not is_hard_block_user_rule(rule):
+    prefix_rules.append(rule)
+  elif is_hard_block_user_rule(rule):
+    hard_block_rules.append(rule)
+  else:
+    other_rules.append(rule)
+
+merged_rules = prefix_rules + hard_block_rules + speed_rules + other_rules
 routing["rules"] = merged_rules
 rt_cfg["routing"] = routing
 dump_json(rt_dst, rt_cfg)
