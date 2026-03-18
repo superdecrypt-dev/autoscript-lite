@@ -69,13 +69,23 @@ EOF
     0644
 
   systemctl daemon-reload
-  if systemctl enable --now xray-domain-guard.timer >/dev/null 2>&1; then
-    systemctl start xray-domain-guard.service >/dev/null 2>&1 || true
-    ok "Domain guard aktif:"
-    ok "  - binary: /usr/local/bin/xray-domain-guard"
-    ok "  - config: ${DOMAIN_GUARD_CONFIG_FILE}"
-    ok "  - timer : xray-domain-guard.timer (12 jam)"
-  else
-    warn "Gagal mengaktifkan xray-domain-guard.timer. Cek: systemctl status xray-domain-guard.timer --no-pager"
+  if ! systemctl enable --now xray-domain-guard.timer >/dev/null 2>&1; then
+    systemctl status xray-domain-guard.timer --no-pager >&2 || true
+    journalctl -u xray-domain-guard.timer -n 80 --no-pager >&2 || true
+    die "Gagal mengaktifkan xray-domain-guard.timer."
   fi
+  if ! systemctl is-active --quiet xray-domain-guard.timer; then
+    systemctl status xray-domain-guard.timer --no-pager >&2 || true
+    journalctl -u xray-domain-guard.timer -n 80 --no-pager >&2 || true
+    die "xray-domain-guard.timer tidak active setelah enable --now."
+  fi
+  if ! systemctl start xray-domain-guard.service >/dev/null 2>&1; then
+    systemctl status xray-domain-guard.service --no-pager >&2 || true
+    journalctl -u xray-domain-guard.service -n 80 --no-pager >&2 || true
+    die "Gagal menjalankan xray-domain-guard.service."
+  fi
+  ok "Domain guard aktif:"
+  ok "  - binary: /usr/local/bin/xray-domain-guard"
+  ok "  - config: ${DOMAIN_GUARD_CONFIG_FILE}"
+  ok "  - timer : xray-domain-guard.timer (12 jam)"
 }

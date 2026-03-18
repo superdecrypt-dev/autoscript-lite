@@ -51,14 +51,17 @@ SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
 DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
 DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
 DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
-CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
+AUTOSCRIPT_ENV_DIR="${AUTOSCRIPT_ENV_DIR:-/etc/autoscript}"
+CLOUDFLARE_API_TOKEN_FILE="${CLOUDFLARE_API_TOKEN_FILE:-${AUTOSCRIPT_ENV_DIR}/cloudflare.env}"
+CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 # Daftar domain induk yang disediakan (private)
 PROVIDED_ROOT_DOMAINS=(
 "vyxara1.web.id"
 "vyxara2.web.id"
 )
 
-# NOTE: Script ini dipakai pribadi. Isi token di atas jika tidak memakai env var.
+# NOTE: Token Cloudflare dibaca dari env runtime, /etc/autoscript/cloudflare.env,
+# atau file cloudflare.env di dalam direktori autoscript.
 # ACME_CERT_MODE:
 # - standalone: issue cert for DOMAIN via standalone (port 80)
 # - dns_cf_wildcard: issue wildcard cert for ACME_ROOT_DOMAIN via dns_cf
@@ -186,6 +189,72 @@ source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
 
+cloudflare_token_read_from_path() {
+  local path="$1"
+  [[ -r "${path}" ]] || return 1
+  awk -F= '
+    $1 == "CLOUDFLARE_API_TOKEN" {
+      print substr($0, index($0, "=") + 1)
+      exit
+    }
+  ' "${path}" 2>/dev/null || true
+}
+
+cloudflare_token_internal_file() {
+  printf '%s\n' "${SCRIPT_DIR}/cloudflare.env"
+}
+
+cloudflare_token_write_file() {
+  local path="$1"
+  local token="$2"
+  local dir="" tmp=""
+  [[ -n "${path}" && -n "${token}" ]] || return 1
+  dir="$(dirname "${path}")"
+  install -d -m 700 "${dir}" || return 1
+  tmp="$(mktemp "${dir}/.cloudflare.env.XXXXXX")" || return 1
+  if ! printf 'CLOUDFLARE_API_TOKEN=%s\n' "${token}" > "${tmp}"; then
+    rm -f -- "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  chmod 600 "${tmp}" >/dev/null 2>&1 || true
+  if ! install -m 600 "${tmp}" "${path}"; then
+    rm -f -- "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  rm -f -- "${tmp}" >/dev/null 2>&1 || true
+}
+
+cloudflare_token_load_from_file() {
+  local candidate="" token=""
+  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && return 0
+  for candidate in "${CLOUDFLARE_API_TOKEN_FILE}" "$(cloudflare_token_internal_file)"; do
+    token="$(cloudflare_token_read_from_path "${candidate}")"
+    [[ -n "${token}" ]] || continue
+    CLOUDFLARE_API_TOKEN="${token}"
+    return 0
+  done
+  return 0
+}
+
+cloudflare_token_persist_if_available() {
+  local token="${CLOUDFLARE_API_TOKEN:-}"
+  local existing=""
+  local internal_file=""
+  [[ -n "${token}" ]] || return 0
+  existing="$(cloudflare_token_read_from_path "${CLOUDFLARE_API_TOKEN_FILE}")"
+  if [[ "${existing}" != "${token}" ]]; then
+    cloudflare_token_write_file "${CLOUDFLARE_API_TOKEN_FILE}" "${token}" \
+      || die "Gagal menyimpan secret Cloudflare ke ${CLOUDFLARE_API_TOKEN_FILE}."
+  fi
+
+  internal_file="$(cloudflare_token_internal_file)"
+  existing="$(cloudflare_token_read_from_path "${internal_file}")"
+  if [[ "${existing}" != "${token}" ]]; then
+    cloudflare_token_write_file "${internal_file}" "${token}" \
+      || die "Gagal menyimpan secret Cloudflare ke ${internal_file}."
+  fi
+}
+
 trap run_exit_cleanups EXIT
 sanity_check() {
   local failed=0
@@ -238,6 +307,15 @@ sanity_check() {
     failed=1
   fi
 
+  if systemctl is-active --quiet wireproxy; then
+    ok "check: wireproxy active"
+  else
+    warn "check: wireproxy inactive"
+    systemctl status wireproxy --no-pager >&2 || true
+    journalctl -u wireproxy -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
   if systemctl is-active --quiet sshws-dropbear; then
     ok "check: sshws-dropbear active"
   else
@@ -270,6 +348,33 @@ sanity_check() {
   else
     warn "check: ssh qac timer inactive"
     systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet zivpn.service; then
+    ok "check: zivpn active"
+  else
+    warn "check: zivpn inactive"
+    systemctl status zivpn.service --no-pager >&2 || true
+    journalctl -u zivpn.service -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
+    ok "check: ssh adblock active"
+  else
+    warn "check: ssh adblock inactive"
+    systemctl status "${SSH_DNS_ADBLOCK_SERVICE}" --no-pager >&2 || true
+    journalctl -u "${SSH_DNS_ADBLOCK_SERVICE}" -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
+  if systemctl is-active --quiet xray-domain-guard.timer; then
+    ok "check: domain guard timer active"
+  else
+    warn "check: domain guard timer inactive"
+    systemctl status xray-domain-guard.timer --no-pager >&2 || true
+    journalctl -u xray-domain-guard.timer -n 120 --no-pager >&2 || true
     failed=1
   fi
 
@@ -437,7 +542,6 @@ setup_post_domain_main() {
   setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
   setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
   setup_run_step "Install management scripts" install_management_scripts
-  setup_run_step "Sinkron modul manage" sync_manage_modules_layout
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
   setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
@@ -445,6 +549,9 @@ setup_post_domain_main() {
   setup_run_step "Konfigurasi logrotate" setup_logrotate
   setup_run_step "Konfigurasi jail fail2ban" configure_fail2ban_aggressive_jails
   setup_run_step "Sanity check" sanity_check
+  if [[ "${SETUP_SKIP_MANAGE_SYNC:-0}" != "1" ]]; then
+    setup_run_step "Sinkron modul manage" sync_manage_modules_layout
+  fi
 }
 
 setup_run_post_domain_with_spinner() {
@@ -495,6 +602,7 @@ setup_run_post_domain_with_spinner() {
 main() {
   safe_clear
   need_root
+  cloudflare_token_load_from_file
   ensure_runtime_lock_dirs
   ensure_stdin_available
   validate_sshws_ports_config

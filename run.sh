@@ -55,6 +55,7 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/install/badvpn.sh"
   "opt/setup/bin/badvpn-udpgw-launcher.sh"
   "opt/setup/install/domain_guard.sh"
+  "opt/setup/templates/systemd/ssh-network-restore.service"
   "opt/setup/templates/config/edge-runtime.env"
   "opt/setup/templates/config/badvpn-runtime.env"
   "opt/setup/templates/systemd/edge-mux.service"
@@ -465,10 +466,13 @@ install_manage() {
   local src="${REPO_DIR}/manage.sh"
   local bot_installer_src="${REPO_DIR}/install-discord-bot.sh"
   local telegram_installer_src="${REPO_DIR}/install-telegram-bot.sh"
+  local restore_service_src="${REPO_DIR}/opt/setup/templates/systemd/ssh-network-restore.service"
+  local token_secret_src=""
 
   [[ -f "${src}" ]] || die "File manage.sh tidak ditemukan di repositori."
   [[ -f "${bot_installer_src}" ]] || die "File install-discord-bot.sh tidak ditemukan di repositori."
   [[ -f "${telegram_installer_src}" ]] || die "File install-telegram-bot.sh tidak ditemukan di repositori."
+  [[ -f "${restore_service_src}" ]] || die "Template ssh-network-restore.service tidak ditemukan di repositori."
   preflight_repo_layout "${REPO_DIR}"
 
   log "Sync manage -> ${MANAGE_MODULES_DST_DIR} ..."
@@ -485,9 +489,37 @@ install_manage() {
   chown -R root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}" 2>/dev/null || true
   ok "Fallback manage: ${MANAGE_FALLBACK_MODULES_DST_DIR}"
 
+  for token_secret_src in "${REPO_DIR}/cloudflare.env" "/etc/autoscript/cloudflare.env"; do
+    [[ -r "${token_secret_src}" ]] || continue
+    install -m 600 "${token_secret_src}" "${MANAGE_MODULES_DST_DIR}/cloudflare.env"
+    install -m 600 "${token_secret_src}" "${MANAGE_FALLBACK_MODULES_DST_DIR}/cloudflare.env"
+    chown root:root "${MANAGE_MODULES_DST_DIR}/cloudflare.env" 2>/dev/null || true
+    chown root:root "${MANAGE_FALLBACK_MODULES_DST_DIR}/cloudflare.env" 2>/dev/null || true
+    break
+  done
+
   log "Pasang manage -> ${MANAGE_BIN} ..."
   install -m 0755 "${src}" "${MANAGE_BIN}"
   ok "manage siap."
+
+  log "Pasang ssh-network-restore.service ..."
+  install -m 0644 "${restore_service_src}" /etc/systemd/system/ssh-network-restore.service
+  local restore_result=""
+  systemctl daemon-reload
+  systemctl enable ssh-network-restore.service >/dev/null 2>&1 || die "Gagal mengaktifkan ssh-network-restore.service."
+  systemctl reset-failed ssh-network-restore.service >/dev/null 2>&1 || true
+  if ! systemctl restart ssh-network-restore.service >/dev/null 2>&1; then
+    systemctl status ssh-network-restore.service --no-pager >&2 || true
+    journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
+    die "Gagal menjalankan ssh-network-restore.service."
+  fi
+  restore_result="$(systemctl show -p Result --value ssh-network-restore.service 2>/dev/null || true)"
+  if [[ "${restore_result}" != "success" ]] || ! systemctl is-active --quiet ssh-network-restore.service; then
+    systemctl status ssh-network-restore.service --no-pager >&2 || true
+    journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
+    die "ssh-network-restore.service tidak sehat setelah restart (Result=${restore_result:-unknown})."
+  fi
+  ok "ssh-network-restore.service aktif."
 
   log "Pasang installer Discord -> ${BOT_INSTALLER_BIN} ..."
   install -m 0755 "${bot_installer_src}" "${BOT_INSTALLER_BIN}"
@@ -576,7 +608,7 @@ run_setup() {
 
   log "Buka setup interaktif..."
   subtle "Prompt domain tetap dijalankan dari setup.sh."
-  bash "${setup}"
+  SETUP_SKIP_MANAGE_SYNC=1 bash "${setup}"
   ok "setup.sh selesai."
 }
 
@@ -594,10 +626,10 @@ main() {
   check_os
   run_step_with_spinner "Memeriksa dependency" check_deps
   run_step_with_spinner "Menyiapkan source repo" clone_repo
+  run_setup
   run_step_with_spinner "Memasang panel manage" install_manage
   run_step_with_spinner "Menyiapkan source Discord" seed_discord_bot_home
   run_step_with_spinner "Menyiapkan source Telegram" seed_telegram_bot_home
-  run_setup
   run_step_with_spinner "Membersihkan source installer" cleanup_repo_after_success
 
   echo

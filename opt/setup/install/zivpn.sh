@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ZIVPN UDP install/runtime module for setup runtime.
 
-ZIVPN_UPSTREAM_AMD64_INSTALLER_URL="${ZIVPN_UPSTREAM_AMD64_INSTALLER_URL:-https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi.sh}"
-ZIVPN_UPSTREAM_ARM64_INSTALLER_URL="${ZIVPN_UPSTREAM_ARM64_INSTALLER_URL:-https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/zi2.sh}"
+ZIVPN_UPSTREAM_REF="${ZIVPN_UPSTREAM_REF:-b1a288920c1a494597dbb8411d6d1ef51612140b}"
+ZIVPN_UPSTREAM_AMD64_INSTALLER_URL="${ZIVPN_UPSTREAM_AMD64_INSTALLER_URL:-https://raw.githubusercontent.com/zahidbd2/udp-zivpn/${ZIVPN_UPSTREAM_REF}/zi.sh}"
+ZIVPN_UPSTREAM_ARM64_INSTALLER_URL="${ZIVPN_UPSTREAM_ARM64_INSTALLER_URL:-https://raw.githubusercontent.com/zahidbd2/udp-zivpn/${ZIVPN_UPSTREAM_REF}/zi2.sh}"
 ZIVPN_SYNC_HELPER_DST="${ZIVPN_SYNC_HELPER_DST:-/usr/local/bin/zivpn-password-sync}"
 
 zivpn_arch_label() {
@@ -35,7 +36,7 @@ zivpn_run_upstream_installer() {
     die "Gagal membuat log sementara ZIVPN."
   }
 
-  if ! wget -qO "${tmp_script}" "${url}"; then
+  if ! download_file_checked "${url}" "${tmp_script}" "installer upstream ZIVPN"; then
     rm -f "${tmp_script}" "${tmp_log}" >/dev/null 2>&1 || true
     die "Gagal mengunduh installer upstream ZIVPN: ${url}"
   fi
@@ -67,6 +68,8 @@ install_zivpn_stack() {
   if systemctl is-active --quiet zivpn.service; then
     ok "ZIVPN UDP upstream aktif."
   else
-    warn "Installer upstream ZIVPN selesai, tetapi service belum aktif. Cek: journalctl -u zivpn.service -n 120 --no-pager"
+    systemctl status zivpn.service --no-pager >&2 || true
+    journalctl -u zivpn.service -n 120 --no-pager >&2 || true
+    die "Installer upstream ZIVPN selesai, tetapi zivpn.service belum active."
   fi
 }

@@ -160,7 +160,7 @@ cf_api() {
   local endpoint="$2"
   local data="${3:-}"
 
-  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Isi token Cloudflare di setup.sh atau export env CLOUDFLARE_API_TOKEN."
+  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN belum di-set. Simpan di /etc/autoscript/cloudflare.env, file cloudflare.env di autoscript, atau export env CLOUDFLARE_API_TOKEN."
 
   local url="https://api.cloudflare.com/client/v4${endpoint}"
   local resp code body trimmed header_file=""
@@ -298,22 +298,31 @@ EOF
   cf_api POST "/zones/${zone_id}/dns_records" "${payload}" >/dev/null || die "Gagal membuat A record Cloudflare untuk ${name}"
 }
 
-cf_force_a_record_dns_only() {
+cf_sync_a_record_proxy_state() {
   local zone_id="$1"
   local fqdn="$2"
   local ip="$3"
+  local proxied="${4:-false}"
+  local failed=0
+  local matched=0
   local json
   local lines=()
   local line rid rip rprox payload
 
+  if [[ "${proxied}" != "true" && "${proxied}" != "false" ]]; then
+    proxied="false"
+  fi
+
   json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
   if [[ -z "${json:-}" ]] || ! echo "${json}" | jq -e '.success == true' >/dev/null 2>&1; then
-    return 0
+    warn "Gagal membaca status DNS A target ${fqdn} dari Cloudflare."
+    return 1
   fi
 
   mapfile -t lines < <(echo "${json}" | jq -r '.result[] | "\(.id)\t\(.content)\t\(.proxied)"' 2>/dev/null || true)
   if [[ ${#lines[@]} -eq 0 ]]; then
-    return 0
+    warn "Record DNS A target ${fqdn} tidak ditemukan saat sinkron proxy state."
+    return 1
   fi
 
   for line in "${lines[@]}"; do
@@ -321,15 +330,26 @@ cf_force_a_record_dns_only() {
     line="${line#*$'\t'}"
     rip="${line%%$'\t'*}"
     rprox="${line#*$'\t'}"
-    if [[ "${rip}" == "${ip}" && "${rprox}" == "true" ]]; then
+    if [[ "${rip}" == "${ip}" ]]; then
+      matched=1
+    fi
+    if [[ "${rip}" == "${ip}" && "${rprox}" != "${proxied}" ]]; then
       payload="$(cat <<EOF
-{"type":"A","name":"${fqdn}","content":"${ip}","ttl":1,"proxied":false}
+{"type":"A","name":"${fqdn}","content":"${ip}","ttl":1,"proxied":${proxied}}
 EOF
 )"
       cf_api PUT "/zones/${zone_id}/dns_records/${rid}" "${payload}" >/dev/null \
-        || warn "Gagal memaksa DNS only untuk record ${fqdn} (${rid})"
+        || {
+          warn "Gagal sinkron proxy state untuk record ${fqdn} (${rid})"
+          failed=1
+        }
     fi
   done
+  if (( matched == 0 )); then
+    warn "Record DNS A target ${fqdn} tidak lagi mengarah ke ${ip} saat sinkron proxy state."
+    return 1
+  fi
+  return "${failed}"
 }
 
 gen_subdomain_random() {
@@ -376,7 +396,9 @@ cf_prepare_subdomain_a_record() {
       if [[ "${any_same}" == "1" ]]; then
         warn "A record sudah ada: ${fqdn} -> ${ip} (sama dengan IP VPS)"
         if confirm_yn "Lanjut menggunakan domain ini?"; then
-          cf_force_a_record_dns_only "${zone_id}" "${fqdn}" "${ip}"
+          if ! cf_sync_a_record_proxy_state "${zone_id}" "${fqdn}" "${ip}" "${proxied}"; then
+            die "Gagal menyelaraskan proxy state untuk record Cloudflare existing ${fqdn}."
+          fi
           ok "Lanjut."
           return 0
         fi
@@ -390,12 +412,10 @@ cf_prepare_subdomain_a_record() {
   if [[ ${#same_ip[@]} -gt 0 ]]; then
     local line
     for line in "${same_ip[@]}"; do
-      local rid="${line%%$'\t'*}"
       local rname="${line#*$'\t'}"
       if [[ "${rname}" != "${fqdn}" ]]; then
         warn "Ditemukan A record lain dengan IP sama (${ip}): ${rname} -> ${ip}"
-        warn "Menghapus A record: ${rname}"
-        cf_delete_record "${zone_id}" "${rid}"
+        warn "Record lain dipertahankan; cleanup lintas domain tidak dilakukan otomatis."
       fi
     done
   fi
@@ -477,6 +497,7 @@ domain_menu_v2() {
 
   CF_ZONE_ID="$(cf_get_zone_id_by_name "${ACME_ROOT_DOMAIN}" || true)"
   [[ -n "${CF_ZONE_ID:-}" ]] || die "Zone Cloudflare untuk ${ACME_ROOT_DOMAIN} tidak ditemukan / token tidak punya akses (butuh Zone:Read + DNS:Edit)."
+  cloudflare_token_persist_if_available
   CF_ACCOUNT_ID="$(cf_get_account_id_by_zone "${CF_ZONE_ID}" || true)"
   [[ -n "${CF_ACCOUNT_ID:-}" ]] || warn "CF_ACCOUNT_ID tidak terbaca (boleh lanjut)."
 
@@ -516,10 +537,12 @@ domain_menu_v2() {
 
   echo
   if confirm_yn "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    warn "Cloudflare proxy dimatikan."
+    CF_PROXIED="true"
+    ok "Cloudflare proxy: ON"
+  else
+    CF_PROXIED="false"
+    ok "Cloudflare proxy: OFF"
   fi
-  CF_PROXIED="false"
-  ok "Cloudflare proxy: OFF"
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
   ok "Domain: ${DOMAIN}"
 
@@ -576,7 +599,7 @@ install_acme_and_issue_cert() {
 
   if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
     ok "Issue wildcard cert via dns_cf..."
-    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong."
+    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN kosong. Simpan di /etc/autoscript/cloudflare.env, file cloudflare.env di autoscript, atau export env CLOUDFLARE_API_TOKEN."
     [[ -n "${CF_ZONE_ID:-}" ]] || die "CF_ZONE_ID kosong untuk mode dns_cf_wildcard."
 
     export CF_Token="${CLOUDFLARE_API_TOKEN}"
