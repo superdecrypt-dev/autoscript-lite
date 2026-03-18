@@ -34,6 +34,10 @@ NGINX_CONF="/etc/nginx/conf.d/xray.conf"
 CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
 CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
+WIREPROXY_CONF="/etc/wireproxy/config.conf"
+WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
+SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
+SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
 SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
@@ -408,6 +412,7 @@ setup_post_domain_main() {
   setup_run_step "Install wireproxy" install_wireproxy
   setup_run_step "Siapkan wgcf" setup_wgcf
   setup_run_step "Siapkan wireproxy" setup_wireproxy
+  setup_run_step "Siapkan SSH WARP" setup_ssh_warp_interface
   setup_run_step "Bersihkan file wgcf" cleanup_wgcf_files
   setup_run_step "Install repo nginx" install_nginx_official_repo
   setup_run_step "Tulis config utama nginx" write_nginx_main_conf

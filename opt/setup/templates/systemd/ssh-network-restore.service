@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore SSH Network runtime routing
+After=network-online.target wireproxy.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/manage
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/manage __apply-ssh-network
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

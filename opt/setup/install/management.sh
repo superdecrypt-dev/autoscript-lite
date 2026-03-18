@@ -1614,6 +1614,22 @@ sync_manage_modules_layout() {
     chown -R root:root "${dst_dir}" 2>/dev/null || true
   }
 
+  install_ssh_network_restore_service() {
+    render_setup_template_or_die \
+      "systemd/ssh-network-restore.service" \
+      "/etc/systemd/system/ssh-network-restore.service" \
+      0644
+    systemctl daemon-reload
+    if ! systemctl enable ssh-network-restore.service >/dev/null 2>&1; then
+      die "Gagal mengaktifkan ssh-network-restore.service."
+    fi
+    if ! systemctl start ssh-network-restore.service >/dev/null 2>&1; then
+      warn "ssh-network-restore.service gagal dijalankan saat setup."
+      warn "Sinkronkan manual lewat menu SSH Network > Apply Runtime setelah setup selesai."
+      journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
+    fi
+  }
+
   sync_manage_from_local_source() {
     [[ -d "${MANAGE_MODULES_SRC_DIR}" ]] || return 1
     [[ -f "${SCRIPT_DIR}/manage.sh" ]] || {
@@ -1627,6 +1643,7 @@ sync_manage_modules_layout() {
     mkdir -p "$(dirname "${MANAGE_BIN}")"
     install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
     chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+    install_ssh_network_restore_service
     ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
@@ -1767,6 +1784,7 @@ PY
       mkdir -p "$(dirname "${MANAGE_BIN}")"
       install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+      install_ssh_network_restore_service
       install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"

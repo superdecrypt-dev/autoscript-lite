@@ -1795,6 +1795,7 @@ edge_runtime_print_observability_summary() {
   python3 - <<'PY' "${addr}" "${status_tmp}"
 import json
 import pathlib
+import re
 import sys
 
 addr = sys.argv[1]
@@ -2308,9 +2309,39 @@ sshws_detect_proxy_port() {
   fi
 }
 
+ssh_runtime_context_run() {
+  local ctx="${1:-}"
+  shift || true
+  local prev="${SSH_RUNTIME_MENU_CONTEXT:-}"
+  SSH_RUNTIME_MENU_CONTEXT="${ctx}"
+  "$@"
+  local rc=$?
+  SSH_RUNTIME_MENU_CONTEXT="${prev}"
+  return "${rc}"
+}
+
+ssh_runtime_menu_title() {
+  local suffix="${1:-}"
+  local base="9) Maintenance"
+  case "${SSH_RUNTIME_MENU_CONTEXT:-}" in
+    ssh-users) base="2) SSH Users" ;;
+    ssh-network) base="14) SSH Network" ;;
+    maintenance|"") base="9) Maintenance" ;;
+  esac
+  if [[ -n "${suffix}" ]]; then
+    printf '%s > %s\n' "${base}" "${suffix}"
+  else
+    printf '%s\n' "${base}"
+  fi
+}
+
 sshws_status_menu() {
   title
-  echo "9) Maintenance > SSH WS Status"
+  if [[ "${SSH_RUNTIME_MENU_CONTEXT:-}" == "ssh-network" ]]; then
+    echo "$(ssh_runtime_menu_title "Status")"
+  else
+    echo "$(ssh_runtime_menu_title "SSH WS Status")"
+  fi
   hr
 
   local services=("${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")
@@ -2432,7 +2463,11 @@ sshws_restart_services_checked() {
 
 sshws_restart_menu() {
   title
-  echo "9) Maintenance > Restart SSH WS"
+  if [[ "${SSH_RUNTIME_MENU_CONTEXT:-}" == "ssh-network" ]]; then
+    echo "$(ssh_runtime_menu_title "Restart SSH Transport")"
+  else
+    echo "$(ssh_runtime_menu_title "Restart SSH WS")"
+  fi
   hr
 
   local confirm_rc=0
@@ -2613,7 +2648,11 @@ sshws_probe_result_is_healthy() {
 
 sshws_combined_logs_menu() {
   title
-  echo "9) Maintenance > SSH WS Combined Logs"
+  if [[ "${SSH_RUNTIME_MENU_CONTEXT:-}" == "ssh-network" ]]; then
+    echo "$(ssh_runtime_menu_title "Combined Logs")"
+  else
+    echo "$(ssh_runtime_menu_title "SSH WS Combined Logs")"
+  fi
   hr
 
   local -a svc_args=()
@@ -2640,7 +2679,11 @@ sshws_diagnostics_menu() {
   local choice=""
   while true; do
     title
-    echo "9) Maintenance > SSH WS Diagnostics"
+    if [[ "${SSH_RUNTIME_MENU_CONTEXT:-}" == "ssh-network" ]]; then
+      echo "$(ssh_runtime_menu_title "Diagnostics")"
+    else
+      echo "$(ssh_runtime_menu_title "SSH WS Diagnostics")"
+    fi
     hr
 
     local dropbear_port stunnel_port proxy_port domain probe_path
@@ -3439,6 +3482,10 @@ if os.path.isfile(state_file):
 
 status_raw = payload.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
+network_raw = payload.get("network")
+network = network_raw if isinstance(network_raw, dict) else {}
+network_raw = payload.get("network")
+network = network_raw if isinstance(network_raw, dict) else {}
 
 quota_limit = to_int(payload.get("quota_limit"), 0)
 if quota_limit < 0:
@@ -3618,6 +3665,8 @@ if os.path.isfile(state_file):
 
 status_raw = payload.get("status")
 status = status_raw if isinstance(status_raw, dict) else {}
+network_raw = payload.get("network")
+network = network_raw if isinstance(network_raw, dict) else {}
 
 quota_limit = to_int(payload.get("quota_limit"), 0)
 if quota_limit < 0:
@@ -4594,6 +4643,8 @@ ssh_add_user_rollback() {
     cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
     if [[ -n "${cleanup_failed}" ]]; then
       cleanup_notes+=("${cleanup_failed}")
+    elif ! ssh_network_runtime_refresh_if_available; then
+      cleanup_notes+=("refresh runtime SSH Network gagal")
     fi
     warn "${reason}"
     if (( ${#rollback_notes[@]} > 0 )); then
@@ -4850,6 +4901,10 @@ ssh_add_txn_recover_dir() {
       warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak pre-Linux gagal (${cleanup_failed})."
       return 1
     fi
+    if ! ssh_network_runtime_refresh_if_available; then
+      warn "Recovery add SSH untuk '${username}' belum bersih: refresh runtime SSH Network gagal."
+      return 1
+    fi
     marker_id="$(ssh_add_txn_marker_read "${username}" 2>/dev/null || true)"
     if [[ -n "${txn_id}" && -n "${marker_id}" && "${marker_id}" == "${txn_id}" ]]; then
       ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
@@ -4868,6 +4923,10 @@ ssh_add_txn_recover_dir() {
     cleanup_failed="$(ssh_user_artifacts_cleanup_locked "${username}" 2>/dev/null || true)"
     if [[ -n "${cleanup_failed}" ]]; then
       warn "Recovery add SSH untuk '${username}' belum bersih: cleanup artefak gagal (${cleanup_failed})."
+      return 1
+    fi
+    if ! ssh_network_runtime_refresh_if_available; then
+      warn "Recovery add SSH untuk '${username}' belum bersih: refresh runtime SSH Network gagal."
       return 1
     fi
     marker_id="$(ssh_add_txn_marker_read "${username}" 2>/dev/null || true)"
@@ -4931,6 +4990,9 @@ ssh_add_txn_recover_dir() {
   fi
   if (( ${#notes[@]} == 0 )) && ! ssh_dns_adblock_runtime_refresh_if_available; then
     notes+=("refresh runtime DNS Adblock SSH gagal")
+  fi
+  if (( ${#notes[@]} == 0 )) && ! ssh_network_runtime_refresh_if_available; then
+    notes+=("refresh runtime SSH Network gagal")
   fi
   if (( ${#notes[@]} == 0 )) && ! ssh_user_home_dir_prepare "${username}"; then
     notes+=("menyiapkan home dir Linux gagal")
@@ -4997,6 +5059,8 @@ ssh_delete_user_cleanup_after_linux_delete() {
     notes+=("cleanup artefak lokal gagal: ${cleanup_failed}")
   elif ! ssh_dns_adblock_runtime_refresh_if_available; then
     notes+=("refresh runtime DNS adblock gagal")
+  elif ! ssh_network_runtime_refresh_if_available; then
+    notes+=("refresh runtime SSH Network gagal")
   fi
 
   if (( ${#notes[@]} > 0 )); then
@@ -5600,6 +5664,11 @@ ssh_add_user_apply_locked_inner() {
     pause
     return 1
   fi
+  if ! ssh_network_runtime_refresh_if_available; then
+    ssh_add_user_fail_with_rollback "${username}" "${qf}" "${acc_file}" "Gagal refresh runtime SSH Network setelah commit user Linux." "${password}" "true" "true" "${add_txn_dir}"
+    pause
+    return 1
+  fi
 
   SSH_ADD_ABORT_ACTIVE="0"
   ssh_add_txn_marker_clear "${username}" >/dev/null 2>&1 || true
@@ -5668,6 +5737,9 @@ ssh_delete_user_snapshot_restore() {
   fi
   if ! ssh_dns_adblock_runtime_refresh_if_available; then
     notes+=("refresh runtime DNS adblock rollback gagal")
+  fi
+  if ! ssh_network_runtime_refresh_if_available; then
+    notes+=("refresh runtime SSH Network rollback gagal")
   fi
 
   if (( ${#notes[@]} > 0 )); then
@@ -7185,7 +7257,7 @@ sshws_active_sessions_menu() {
     sshws_active_sessions_apply_filter
 
     title
-    echo "2) SSH Users > Active Sessions"
+    echo "$(ssh_runtime_menu_title "Active Sessions")"
     hr
     sshws_active_sessions_print_page "${SSHWS_SESSION_PAGE}"
     hr
@@ -7239,6 +7311,1414 @@ sshws_active_sessions_menu() {
           sleep 1
         fi
         ;;
+    esac
+  done
+}
+
+ssh_network_lock_prepare() {
+  local lock_file="${SSH_NETWORK_LOCK_FILE:-/run/autoscript/locks/ssh-network.lock}"
+  mkdir -p "$(dirname "${lock_file}")" 2>/dev/null || true
+  chmod 700 "$(dirname "${lock_file}")" 2>/dev/null || true
+}
+
+ssh_network_interface_name_is_valid() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9._-]{1,15}$ ]]
+}
+
+ssh_network_run_locked() {
+  local lock_file rc=0
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
+  ssh_network_lock_prepare
+  lock_file="${SSH_NETWORK_LOCK_FILE:-/run/autoscript/locks/ssh-network.lock}"
+  if have_cmd flock; then
+    if (
+      flock -x 200 || exit 1
+      SSH_NETWORK_LOCK_HELD=1 "$@"
+    ) 200>"${lock_file}"; then
+      return 0
+    fi
+    return $?
+  fi
+  SSH_NETWORK_LOCK_HELD=1 "$@"
+  rc=$?
+  return "${rc}"
+}
+
+ssh_network_config_get() {
+  need_python3
+  python3 - <<'PY' "${SSH_NETWORK_CONFIG_FILE}" \
+    "${SSH_NETWORK_NFT_TABLE}" \
+    "${SSH_NETWORK_FWMARK}" \
+    "${SSH_NETWORK_ROUTE_TABLE}" \
+    "${SSH_NETWORK_RULE_PREF}" \
+    "${SSH_NETWORK_WARP_INTERFACE}"
+import pathlib
+import re
+import sys
+
+cfg_path = pathlib.Path(sys.argv[1])
+defaults = {
+  "global_mode": "direct",
+  "nft_table": str(sys.argv[2] or "autoscript_ssh_network").strip() or "autoscript_ssh_network",
+  "fwmark": str(sys.argv[3] or "42042").strip() or "42042",
+  "route_table": str(sys.argv[4] or "42042").strip() or "42042",
+  "rule_pref": str(sys.argv[5] or "14200").strip() or "14200",
+  "warp_interface": str(sys.argv[6] or "warp-ssh0").strip() or "warp-ssh0",
+}
+data = {}
+if cfg_path.exists():
+  try:
+    for line in cfg_path.read_text(encoding="utf-8").splitlines():
+      line = line.strip()
+      if not line or line.startswith("#") or "=" not in line:
+        continue
+      key, value = line.split("=", 1)
+      data[key.strip()] = value.strip()
+  except Exception:
+    data = {}
+
+global_mode = str(data.get("SSH_NETWORK_ROUTE_GLOBAL", defaults["global_mode"])).strip().lower()
+if global_mode not in ("direct", "warp"):
+  global_mode = defaults["global_mode"]
+
+def read_num(key, fallback):
+  raw = str(data.get(key, fallback)).strip()
+  try:
+    return str(int(float(raw)))
+  except Exception:
+    return str(fallback)
+
+warp_interface = str(data.get("SSH_NETWORK_WARP_INTERFACE", defaults["warp_interface"])).strip() or defaults["warp_interface"]
+if not re.fullmatch(r"[A-Za-z0-9._-]{1,15}", warp_interface):
+  warp_interface = defaults["warp_interface"]
+
+print(f"global_mode={global_mode}")
+print(f"nft_table={str(data.get('SSH_NETWORK_NFT_TABLE', defaults['nft_table'])).strip() or defaults['nft_table']}")
+print(f"fwmark={read_num('SSH_NETWORK_FWMARK', defaults['fwmark'])}")
+print(f"route_table={read_num('SSH_NETWORK_ROUTE_TABLE', defaults['route_table'])}")
+print(f"rule_pref={read_num('SSH_NETWORK_RULE_PREF', defaults['rule_pref'])}")
+print(f"warp_interface={warp_interface}")
+PY
+}
+
+ssh_network_config_set_values() {
+  local tmp
+  need_python3
+  mkdir -p "${SSH_NETWORK_ROOT}" 2>/dev/null || true
+  touch "${SSH_NETWORK_CONFIG_FILE}"
+  tmp="$(mktemp "${WORK_DIR}/.ssh-network-config.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-network-config.$$"
+  python3 - <<'PY' "${SSH_NETWORK_CONFIG_FILE}" "${tmp}" "$@"
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+items = sys.argv[3:]
+if len(items) % 2 != 0:
+  raise SystemExit(2)
+updates = {}
+for i in range(0, len(items), 2):
+  updates[str(items[i])] = str(items[i + 1])
+
+lines = []
+if src.exists():
+  try:
+    lines = src.read_text(encoding="utf-8").splitlines()
+  except Exception:
+    lines = []
+
+out = []
+seen = set()
+for line in lines:
+  stripped = line.strip()
+  if not stripped or stripped.startswith("#") or "=" not in line:
+    out.append(line)
+    continue
+  key, _ = line.split("=", 1)
+  key = key.strip()
+  if key in updates:
+    out.append(f"{key}={updates[key]}")
+    seen.add(key)
+  else:
+    out.append(line)
+
+for key, value in updates.items():
+  if key in seen:
+    continue
+  out.append(f"{key}={value}")
+
+dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+PY
+  local rc=$?
+  if (( rc == 0 )); then
+    mv -f "${tmp}" "${SSH_NETWORK_CONFIG_FILE}" || {
+      rm -f "${tmp}" >/dev/null 2>&1 || true
+      return 1
+    }
+    chmod 600 "${SSH_NETWORK_CONFIG_FILE}" >/dev/null 2>&1 || true
+  else
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+  fi
+  return "${rc}"
+}
+
+ssh_network_global_mode_set() {
+  local mode="${1:-}"
+  case "${mode}" in
+    direct|warp) ;;
+    *) return 1 ;;
+  esac
+  ssh_network_config_set_values SSH_NETWORK_ROUTE_GLOBAL "${mode}"
+}
+
+ssh_network_warp_interface_set() {
+  local iface="${1:-}"
+  ssh_network_interface_name_is_valid "${iface}" || return 1
+  ssh_network_config_set_values SSH_NETWORK_WARP_INTERFACE "${iface}"
+}
+
+ssh_network_warp_config_path() {
+  local iface="${1:-}"
+  ssh_network_interface_name_is_valid "${iface}" || return 1
+  printf '%s/%s.conf\n' "${WIREGUARD_DIR:-/etc/wireguard}" "${iface}"
+}
+
+ssh_network_warp_unit_name() {
+  local iface="${1:-}"
+  ssh_network_interface_name_is_valid "${iface}" || return 1
+  printf 'wg-quick@%s\n' "${iface}"
+}
+
+ssh_network_warp_helper_available() {
+  [[ -x "${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}" ]]
+}
+
+ssh_network_warp_sync_config_unlocked() {
+  local iface="${1:-}" source_conf="" dest_dir="" dest_path="" helper=""
+  ssh_network_interface_name_is_valid "${iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  source_conf="${WIREPROXY_CONF:-/etc/wireproxy/config.conf}"
+  dest_dir="${WIREGUARD_DIR:-/etc/wireguard}"
+  dest_path="$(ssh_network_warp_config_path "${iface}")" || return 1
+  [[ -s "${source_conf}" ]] || {
+    warn "Source config WARP host tidak ditemukan: ${source_conf}"
+    return 1
+  }
+  mkdir -p "${dest_dir}" 2>/dev/null || true
+  chmod 700 "${dest_dir}" 2>/dev/null || true
+
+  helper="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
+  if ssh_network_warp_helper_available; then
+    "${helper}" --interface "${iface}" --source "${source_conf}" --dest-dir "${dest_dir}" >/dev/null 2>&1 || {
+      warn "Gagal merender config SSH WARP dari ${source_conf}."
+      return 1
+    }
+  else
+    need_python3
+    python3 - <<'PY' "${source_conf}" "${dest_path}" >/dev/null 2>&1 || {
+import os
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+keep_sections = {"[Interface]", "[Peer]"}
+drop_interface_keys = {"dns", "table", "preup", "postup", "predown", "postdown", "saveconfig"}
+
+def compact_blank(lines):
+    out = []
+    prev_blank = False
+    for line in lines:
+        blank = not line.strip()
+        if blank and prev_blank:
+            continue
+        out.append("" if blank else line.rstrip())
+        prev_blank = blank
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+source_text = src.read_text(encoding="utf-8")
+out = []
+current = None
+table_inserted = False
+for raw in source_text.splitlines():
+    line = raw.rstrip("\n")
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        if current == "[Interface]" and not table_inserted:
+            out.append("Table = off")
+            out.append("")
+            table_inserted = True
+        current = stripped if stripped in keep_sections else None
+        if current is not None:
+            out.append(current)
+        continue
+    if current is None:
+        continue
+    if not stripped:
+        out.append("")
+        continue
+    if stripped.startswith("#") or stripped.startswith(";"):
+        out.append(line)
+        continue
+    key = stripped.split("=", 1)[0].strip().lower()
+    if current == "[Interface]" and key in drop_interface_keys:
+        continue
+    out.append(line)
+
+if current == "[Interface]" and not table_inserted:
+    out.append("Table = off")
+
+rendered = "\n".join(compact_blank(out)).rstrip() + "\n"
+if "[Interface]" not in rendered or "[Peer]" not in rendered:
+    raise SystemExit("source config tidak memuat [Interface] dan [Peer] yang valid")
+
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(rendered, encoding="utf-8")
+os.chmod(dst, 0o600)
+PY
+      warn "Gagal merender fallback config SSH WARP dari ${source_conf}."
+      return 1
+    }
+  fi
+  chmod 600 "${dest_path}" >/dev/null 2>&1 || true
+  return 0
+}
+
+ssh_network_warp_sync_config_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_warp_sync_config_now "$@"
+    return $?
+  fi
+  ssh_network_warp_sync_config_unlocked "$@"
+}
+
+ssh_network_warp_runtime_start_unlocked() {
+  local iface="${1:-}" unit=""
+  ssh_network_interface_name_is_valid "${iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  have_cmd wg-quick || {
+    warn "wg-quick tidak tersedia. Install wireguard-tools atau rerun setup.sh."
+    return 1
+  }
+  if ! systemctl cat "wg-quick@.service" >/dev/null 2>&1 && ! systemctl cat "wg-quick@${iface}" >/dev/null 2>&1; then
+    warn "Template service wg-quick@.service tidak tersedia."
+    return 1
+  fi
+  ssh_network_warp_sync_config_unlocked "${iface}" || return 1
+  unit="$(ssh_network_warp_unit_name "${iface}")" || return 1
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if svc_is_active "${unit}"; then
+    if ! svc_restart_checked "${unit}" 30; then
+      warn "Gagal restart ${unit}."
+      return 1
+    fi
+  else
+    if ! systemctl enable --now "${unit}" >/dev/null 2>&1; then
+      warn "Gagal mengaktifkan ${unit}."
+      return 1
+    fi
+    if ! svc_wait_active "${unit}" 30; then
+      warn "${unit} belum aktif sesudah start."
+      return 1
+    fi
+  fi
+  if ! have_cmd ip || ! ip link show "${iface}" >/dev/null 2>&1; then
+    warn "Interface SSH WARP '${iface}' belum tersedia sesudah start."
+    return 1
+  fi
+  return 0
+}
+
+ssh_network_warp_runtime_start_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_warp_runtime_start_now "$@"
+    return $?
+  fi
+  ssh_network_warp_runtime_start_unlocked "$@"
+}
+
+ssh_network_warp_runtime_deactivate_unlocked() {
+  local iface="${1:-}" unit="" conf_path=""
+  ssh_network_interface_name_is_valid "${iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  unit="$(ssh_network_warp_unit_name "${iface}")" || return 1
+  conf_path="$(ssh_network_warp_config_path "${iface}" 2>/dev/null || true)"
+  systemctl disable --now "${unit}" >/dev/null 2>&1 || systemctl stop "${unit}" >/dev/null 2>&1 || true
+  if svc_exists "${unit}" && ! svc_wait_inactive "${unit}" 20; then
+    warn "${unit} belum berhenti sepenuhnya."
+    return 1
+  fi
+  if [[ -n "${conf_path}" && -f "${conf_path}" ]] && have_cmd wg-quick; then
+    wg-quick down "${iface}" >/dev/null 2>&1 || true
+  fi
+  if have_cmd ip && ip link show "${iface}" >/dev/null 2>&1; then
+    ip link delete dev "${iface}" >/dev/null 2>&1 || true
+  fi
+  if have_cmd ip && ip link show "${iface}" >/dev/null 2>&1; then
+    warn "Interface SSH WARP '${iface}' masih aktif sesudah stop."
+    return 1
+  fi
+  return 0
+}
+
+ssh_network_warp_interface_decommission_unlocked() {
+  local iface="${1:-}" conf_path=""
+  ssh_network_interface_name_is_valid "${iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  ssh_network_warp_runtime_deactivate_unlocked "${iface}" || return 1
+  conf_path="$(ssh_network_warp_config_path "${iface}" 2>/dev/null || true)"
+  if [[ -n "${conf_path}" && -f "${conf_path}" ]]; then
+    rm -f "${conf_path}" >/dev/null 2>&1 || {
+      warn "Config interface WARP SSH lama '${iface}' gagal dibersihkan."
+      return 1
+    }
+  fi
+  return 0
+}
+
+ssh_network_warp_runtime_stop_unlocked() {
+  local iface="${1:-}"
+  ssh_network_interface_name_is_valid "${iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  ssh_network_runtime_clear_unlocked >/dev/null 2>&1 || true
+  ssh_network_warp_runtime_deactivate_unlocked "${iface}"
+}
+
+ssh_network_warp_runtime_stop_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_warp_runtime_stop_now "$@"
+    return $?
+  fi
+  ssh_network_warp_runtime_stop_unlocked "$@"
+}
+
+ssh_network_warp_interface_change_unlocked() {
+  local new_iface="${1:-}" cfg current_iface=""
+  ssh_network_interface_name_is_valid "${new_iface}" || {
+    warn "Nama interface WARP SSH tidak valid."
+    return 1
+  }
+  cfg="$(ssh_network_config_get)"
+  current_iface="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+  if ! ssh_network_interface_name_is_valid "${current_iface}"; then
+    current_iface=""
+  fi
+  if [[ "${new_iface}" == "${current_iface}" ]]; then
+    return 0
+  fi
+  ssh_network_warp_interface_set "${new_iface}" || return 1
+  if ssh_network_runtime_apply_unlocked; then
+    if [[ -n "${current_iface}" && "${current_iface}" != "${new_iface}" ]]; then
+      if ! ssh_network_warp_interface_decommission_unlocked "${current_iface}"; then
+        warn "Cleanup interface lama '${current_iface}' gagal. Rollback ke interface sebelumnya..."
+        if ssh_network_warp_interface_set "${current_iface}" >/dev/null 2>&1 && ssh_network_runtime_apply_unlocked >/dev/null 2>&1; then
+          ssh_network_warp_interface_decommission_unlocked "${new_iface}" >/dev/null 2>&1 || true
+        fi
+        return 1
+      fi
+    fi
+    return 0
+  fi
+  if [[ -n "${current_iface}" && "${current_iface}" != "${new_iface}" ]]; then
+    ssh_network_warp_interface_set "${current_iface}" >/dev/null 2>&1 || true
+    ssh_network_runtime_apply_unlocked >/dev/null 2>&1 || true
+    ssh_network_warp_interface_decommission_unlocked "${new_iface}" >/dev/null 2>&1 || true
+  fi
+  return 1
+}
+
+ssh_network_warp_interface_change_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_warp_interface_change_now "$@"
+    return $?
+  fi
+  if [[ "${SSH_QAC_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_qac_run_locked ssh_network_warp_interface_change_now "$@"
+    return $?
+  fi
+  ssh_network_warp_interface_change_unlocked "$@"
+}
+
+ssh_network_warp_endpoint_ips() {
+  local iface="${1:-}" conf_path=""
+  ssh_network_interface_name_is_valid "${iface}" || return 1
+  conf_path="$(ssh_network_warp_config_path "${iface}")" || return 1
+  [[ -f "${conf_path}" ]] || return 1
+  need_python3
+  python3 - <<'PY' "${conf_path}" 2>/dev/null || true
+import ipaddress
+import socket
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+endpoint_host = ""
+for raw in path.read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key.strip().lower() != "endpoint":
+        continue
+    endpoint = value.strip()
+    if endpoint.startswith("[") and "]" in endpoint:
+        endpoint_host = endpoint[1:].split("]", 1)[0].strip()
+    else:
+        endpoint_host = endpoint.rsplit(":", 1)[0].strip()
+    break
+
+if not endpoint_host:
+    raise SystemExit(0)
+
+ipv4 = []
+ipv6 = []
+try:
+    ip = ipaddress.ip_address(endpoint_host)
+    if ip.version == 4:
+        ipv4.append(str(ip))
+    else:
+        ipv6.append(str(ip))
+except ValueError:
+    try:
+        infos = socket.getaddrinfo(endpoint_host, None, 0, socket.SOCK_DGRAM)
+    except Exception:
+        infos = []
+    seen4 = set()
+    seen6 = set()
+    for family, _, _, _, sockaddr in infos:
+        host = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if ip.version == 4 and host not in seen4:
+            seen4.add(host)
+            ipv4.append(host)
+        elif ip.version == 6 and host not in seen6:
+            seen6.add(host)
+            ipv6.append(host)
+
+for item in ipv4:
+    print(f"ipv4|{item}")
+for item in ipv6:
+    print(f"ipv6|{item}")
+PY
+}
+
+ssh_network_user_route_mode_get() {
+  local qf="${1:-}"
+  [[ -n "${qf}" && -f "${qf}" ]] || {
+    printf '%s\n' "inherit"
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${qf}" 2>/dev/null || true
+import json
+import sys
+
+mode = "inherit"
+try:
+  payload = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+  if isinstance(payload, dict):
+    network = payload.get("network")
+    if isinstance(network, dict):
+      candidate = str(network.get("route_mode") or "").strip().lower()
+      if candidate in ("inherit", "direct", "warp"):
+        mode = candidate
+except Exception:
+  pass
+print(mode)
+PY
+}
+
+ssh_network_user_route_mode_set() {
+  local username="${1:-}"
+  local mode="${2:-}"
+  local qf=""
+  [[ -n "${username}" ]] || return 1
+  case "${mode}" in
+    inherit|direct|warp) ;;
+    *) return 1 ;;
+  esac
+  ssh_state_dirs_prepare
+  qf="$(ssh_user_state_resolve_file "${username}")"
+  [[ -n "${qf}" ]] || qf="$(ssh_user_state_file "${username}")"
+  [[ -n "${qf}" ]] || return 1
+  if [[ ! -f "${qf}" ]]; then
+    if ! id "${username}" >/dev/null 2>&1; then
+      warn "User Linux '${username}' belum ada untuk SSH Network."
+      return 1
+    fi
+    if ! ssh_qac_metadata_bootstrap_if_missing "${username}" "${qf}"; then
+      warn "Gagal menyiapkan metadata SSH untuk '${username}'."
+      return 1
+    fi
+  fi
+  ssh_qac_atomic_update_file "${qf}" network_route_mode_set "${mode}"
+}
+
+ssh_network_effective_rows() {
+  local cfg global_mode username uid qf override effective
+  cfg="$(ssh_network_config_get)"
+  global_mode="$(printf '%s\n' "${cfg}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+  [[ "${global_mode}" == "warp" ]] || global_mode="direct"
+  while IFS= read -r username; do
+    [[ -n "${username}" ]] || continue
+    uid="$(id -u "${username}" 2>/dev/null || true)"
+    [[ "${uid}" =~ ^[0-9]+$ ]] || continue
+    qf="$(ssh_user_state_resolve_file "${username}")"
+    override="$(ssh_network_user_route_mode_get "${qf}")"
+    case "${override}" in
+      direct|warp) effective="${override}" ;;
+      *) effective="${global_mode}" ; override="inherit" ;;
+    esac
+    printf '%s|%s|%s|%s\n' "${username}" "${uid:--}" "${override}" "${effective}"
+  done < <(ssh_collect_candidate_users false)
+}
+
+ssh_network_runtime_clear_unlocked() {
+  local nft_table mark route_table rule_pref mark_hex=""
+  local cfg
+  cfg="$(ssh_network_config_get)"
+  nft_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+  mark="$(printf '%s\n' "${cfg}" | awk -F'=' '/^fwmark=/{print $2; exit}')"
+  route_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^route_table=/{print $2; exit}')"
+  rule_pref="$(printf '%s\n' "${cfg}" | awk -F'=' '/^rule_pref=/{print $2; exit}')"
+  if [[ "${mark}" =~ ^[0-9]+$ ]]; then
+    printf -v mark_hex '0x%x' "${mark}"
+  fi
+  if have_cmd nft && [[ -n "${nft_table}" ]]; then
+    nft delete table inet "${nft_table}" >/dev/null 2>&1 || true
+  fi
+  if have_cmd ip; then
+    while ip rule del pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1; do :; done
+    while ip rule del pref "${rule_pref}" fwmark "${mark}" table "${route_table}" >/dev/null 2>&1; do :; done
+    while ip -6 rule del pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1; do :; done
+    while ip -6 rule del pref "${rule_pref}" fwmark "${mark}" table "${route_table}" >/dev/null 2>&1; do :; done
+    ip route flush table "${route_table}" >/dev/null 2>&1 || true
+    ip -6 route flush table "${route_table}" >/dev/null 2>&1 || true
+  fi
+}
+
+ssh_network_runtime_apply_unlocked() {
+  local cfg nft_table mark route_table rule_pref warp_iface mark_hex=""
+  local -a warp_uids=()
+  local -a endpoint_v4=() endpoint_v6=()
+  local username uid override effective
+  local tmp=""
+
+  cfg="$(ssh_network_config_get)"
+  nft_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+  mark="$(printf '%s\n' "${cfg}" | awk -F'=' '/^fwmark=/{print $2; exit}')"
+  route_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^route_table=/{print $2; exit}')"
+  rule_pref="$(printf '%s\n' "${cfg}" | awk -F'=' '/^rule_pref=/{print $2; exit}')"
+  warp_iface="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+  if [[ "${mark}" =~ ^[0-9]+$ ]]; then
+    printf -v mark_hex '0x%x' "${mark}"
+  fi
+
+  while IFS='|' read -r username uid override effective; do
+    [[ -n "${username}" ]] || continue
+    [[ "${uid}" =~ ^[0-9]+$ ]] || continue
+    [[ "${effective}" == "warp" ]] || continue
+    warp_uids+=("${uid}")
+  done < <(ssh_network_effective_rows)
+
+  if (( ${#warp_uids[@]} == 0 )); then
+    ssh_network_runtime_clear_unlocked
+    if [[ -n "${warp_iface}" ]] && ssh_network_interface_name_is_valid "${warp_iface}"; then
+      if ! ssh_network_warp_runtime_deactivate_unlocked "${warp_iface}"; then
+        warn "Runtime routing SSH sudah dibersihkan, tetapi interface WARP '${warp_iface}' gagal dihentikan."
+        return 1
+      fi
+    fi
+    return 0
+  fi
+
+  have_cmd nft || {
+    warn "nft tidak tersedia. Routing SSH tidak bisa di-apply."
+    return 1
+  }
+  have_cmd ip || {
+    warn "iproute2 tidak tersedia. Routing SSH tidak bisa di-apply."
+    return 1
+  }
+  if [[ -z "${warp_iface}" ]]; then
+    warn "Interface WARP SSH belum diset."
+    return 1
+  fi
+  if ! ip link show "${warp_iface}" >/dev/null 2>&1; then
+    if ! ssh_network_warp_runtime_start_unlocked "${warp_iface}"; then
+      warn "Interface WARP SSH '${warp_iface}' tidak ditemukan dan provisioning otomatis gagal."
+      return 1
+    fi
+    if ! ip link show "${warp_iface}" >/dev/null 2>&1; then
+      warn "Interface WARP SSH '${warp_iface}' belum tersedia sesudah provisioning otomatis."
+      return 1
+    fi
+  fi
+  while IFS='|' read -r fam ipaddr; do
+    [[ -n "${fam}" && -n "${ipaddr}" ]] || continue
+    case "${fam}" in
+      ipv4) endpoint_v4+=("${ipaddr}") ;;
+      ipv6) endpoint_v6+=("${ipaddr}") ;;
+    esac
+  done < <(ssh_network_warp_endpoint_ips "${warp_iface}")
+
+  tmp="$(mktemp "${WORK_DIR}/.ssh-network-nft.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-network-nft.$$"
+  {
+    printf 'table inet %s {\n' "${nft_table}"
+    printf '  chain output {\n'
+    printf '    type route hook output priority mangle; policy accept;\n'
+    printf '    oifname "lo" return\n'
+    printf '    ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4 } return\n'
+    printf '    ip6 daddr { ::1/128, fc00::/7, fe80::/10, ff00::/8 } return\n'
+    if (( ${#endpoint_v4[@]} > 0 )); then
+      printf '    ip daddr { '
+      printf '%s' "${endpoint_v4[0]}"
+      local idx
+      for ((idx=1; idx<${#endpoint_v4[@]}; idx++)); do
+        printf ', %s' "${endpoint_v4[$idx]}"
+      done
+      printf ' } return\n'
+    fi
+    if (( ${#endpoint_v6[@]} > 0 )); then
+      printf '    ip6 daddr { '
+      printf '%s' "${endpoint_v6[0]}"
+      local idx6
+      for ((idx6=1; idx6<${#endpoint_v6[@]}; idx6++)); do
+        printf ', %s' "${endpoint_v6[$idx6]}"
+      done
+      printf ' } return\n'
+    fi
+    local seen_uid="" uid_entry=""
+    while IFS= read -r uid_entry; do
+      [[ "${uid_entry}" == "${seen_uid}" ]] && continue
+      seen_uid="${uid_entry}"
+      printf '    meta skuid %s meta mark set %s\n' "${uid_entry}" "${mark}"
+    done < <(printf '%s\n' "${warp_uids[@]}" | sort -n)
+    printf '  }\n'
+    printf '}\n'
+  } > "${tmp}"
+
+  ssh_network_runtime_clear_unlocked
+  if ! nft -f "${tmp}" >/dev/null 2>&1; then
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    warn "Gagal menerapkan nft routing SSH."
+    return 1
+  fi
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+
+  ip route replace table "${route_table}" default dev "${warp_iface}" >/dev/null 2>&1 || {
+    ssh_network_runtime_clear_unlocked
+    warn "Gagal menerapkan route table SSH ke interface ${warp_iface}."
+    return 1
+  }
+  ip -6 route replace table "${route_table}" default dev "${warp_iface}" >/dev/null 2>&1 || true
+  ip rule add pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1 || {
+    ssh_network_runtime_clear_unlocked
+    warn "Gagal menambah ip rule SSH."
+    return 1
+  }
+  ip -6 rule add pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1 || true
+  return 0
+}
+
+ssh_network_runtime_apply_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_runtime_apply_now
+    return $?
+  fi
+  if [[ "${SSH_QAC_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_qac_run_locked ssh_network_runtime_apply_now
+    return $?
+  fi
+  ssh_network_runtime_apply_unlocked
+}
+
+ssh_network_runtime_refresh_if_available() {
+  declare -F ssh_network_runtime_apply_now >/dev/null 2>&1 || return 0
+  ssh_network_runtime_apply_now
+}
+
+ssh_network_runtime_status_get() {
+  local cfg global_mode nft_table mark route_table rule_pref warp_iface mark_hex=""
+  local nft_state="absent" ip_rule_state="absent" ip_rule_v6_state="absent" iface_state="missing"
+  local route_table_v4_state="absent" route_table_v6_state="absent"
+  local effective_warp_users="0" warp_conf_state="missing" warp_service_state="missing"
+  local warp_unit="" warp_conf_path="" route_v4_lines="" route_v6_lines=""
+  cfg="$(ssh_network_config_get)"
+  global_mode="$(printf '%s\n' "${cfg}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+  nft_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+  mark="$(printf '%s\n' "${cfg}" | awk -F'=' '/^fwmark=/{print $2; exit}')"
+  route_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^route_table=/{print $2; exit}')"
+  rule_pref="$(printf '%s\n' "${cfg}" | awk -F'=' '/^rule_pref=/{print $2; exit}')"
+  warp_iface="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+  if [[ "${mark}" =~ ^[0-9]+$ ]]; then
+    printf -v mark_hex '0x%x' "${mark}"
+  fi
+  if have_cmd nft && nft list table inet "${nft_table}" >/dev/null 2>&1; then
+    nft_state="present"
+  fi
+  if have_cmd ip; then
+    if ip rule show 2>/dev/null | grep -Eiq "(^| )${rule_pref}:.*fwmark (${mark}|${mark_hex:-${mark}})(/0xffffffff)? .*lookup ${route_table}( |$)"; then
+      ip_rule_state="present"
+    fi
+    if ip -6 rule show 2>/dev/null | grep -Eiq "(^| )${rule_pref}:.*fwmark (${mark}|${mark_hex:-${mark}})(/0xffffffff)? .*lookup ${route_table}( |$)"; then
+      ip_rule_v6_state="present"
+    fi
+    route_v4_lines="$(ip route show table "${route_table}" 2>/dev/null || true)"
+    if [[ -n "${route_v4_lines//[$' \t\r\n']/}" ]]; then
+      if [[ -n "${warp_iface}" && " ${route_v4_lines//$'\n'/ } " == *" dev ${warp_iface} "* ]]; then
+        route_table_v4_state="present"
+      else
+        route_table_v4_state="mismatch"
+      fi
+    fi
+    route_v6_lines="$(ip -6 route show table "${route_table}" 2>/dev/null || true)"
+    if [[ -n "${route_v6_lines//[$' \t\r\n']/}" ]]; then
+      if [[ -n "${warp_iface}" && " ${route_v6_lines//$'\n'/ } " == *" dev ${warp_iface} "* ]]; then
+        route_table_v6_state="present"
+      else
+        route_table_v6_state="mismatch"
+      fi
+    fi
+  fi
+  if [[ -n "${warp_iface}" ]] && have_cmd ip && ip link show "${warp_iface}" >/dev/null 2>&1; then
+    iface_state="present"
+  fi
+  if [[ -n "${warp_iface}" ]]; then
+    warp_conf_path="$(ssh_network_warp_config_path "${warp_iface}" 2>/dev/null || true)"
+    [[ -n "${warp_conf_path}" && -f "${warp_conf_path}" ]] && warp_conf_state="present"
+    warp_unit="$(ssh_network_warp_unit_name "${warp_iface}" 2>/dev/null || true)"
+    if systemctl cat "wg-quick@.service" >/dev/null 2>&1 || { [[ -n "${warp_unit}" ]] && systemctl cat "${warp_unit}" >/dev/null 2>&1; }; then
+      warp_service_state="$(svc_state "${warp_unit}")"
+      [[ -n "${warp_service_state}" ]] || warp_service_state="inactive"
+    fi
+  fi
+  effective_warp_users="$(ssh_network_effective_rows | awk -F'|' '$4=="warp"{c++} END{print c+0}')"
+  printf 'global_mode=%s\n' "${global_mode}"
+  printf 'nft_table=%s\n' "${nft_table}"
+  printf 'fwmark=%s\n' "${mark}"
+  printf 'route_table=%s\n' "${route_table}"
+  printf 'rule_pref=%s\n' "${rule_pref}"
+  printf 'warp_interface=%s\n' "${warp_iface}"
+  printf 'warp_interface_state=%s\n' "${iface_state}"
+  printf 'warp_config_state=%s\n' "${warp_conf_state}"
+  printf 'warp_service_state=%s\n' "${warp_service_state}"
+  printf 'nft_state=%s\n' "${nft_state}"
+  printf 'ip_rule_state=%s\n' "${ip_rule_state}"
+  printf 'ip_rule_v6_state=%s\n' "${ip_rule_v6_state}"
+  printf 'route_table_v4_state=%s\n' "${route_table_v4_state}"
+  printf 'route_table_v6_state=%s\n' "${route_table_v6_state}"
+  printf 'effective_warp_users=%s\n' "${effective_warp_users}"
+}
+
+ssh_network_effective_rows_print() {
+  local username uid override effective
+  printf "%-18s %-8s %-10s %-10s\n" "Username" "UID" "Override" "Effective"
+  hr
+  while IFS='|' read -r username uid override effective; do
+    [[ -n "${username}" ]] || continue
+    printf "%-18s %-8s %-10s %-10s\n" "${username}" "${uid:--}" "${override}" "${effective}"
+  done < <(ssh_network_effective_rows)
+}
+
+ssh_network_pick_routable_user() {
+  local -n _out_ref="$1"
+  _out_ref=""
+
+  local -a users=()
+  local name="" uid="" override="" effective=""
+  while IFS='|' read -r name uid override effective; do
+    [[ -n "${name}" ]] || continue
+    users+=("${name}")
+  done < <(ssh_network_effective_rows)
+
+  if (( ${#users[@]} > 1 )); then
+    IFS=$'\n' users=($(printf '%s\n' "${users[@]}" | sort -u))
+    unset IFS
+  fi
+
+  if (( ${#users[@]} == 0 )); then
+    warn "Belum ada akun SSH routable yang bisa dipilih dari menu ini."
+    return 1
+  fi
+
+  local i pick
+  echo "Pilih akun SSH routable:"
+  for i in "${!users[@]}"; do
+    printf "  %d) %s\n" "$((i + 1))" "${users[$i]}"
+  done
+
+  while true; do
+    if ! read -r -p "Nomor akun (1-${#users[@]}/kembali): " pick; then
+      echo
+      return 1
+    fi
+    if is_back_choice "${pick}"; then
+      return 1
+    fi
+    [[ "${pick}" =~ ^[0-9]+$ ]] || {
+      warn "Input tidak valid."
+      continue
+    }
+    if (( pick < 1 || pick > ${#users[@]} )); then
+      warn "Nomor di luar daftar."
+      continue
+    fi
+    _out_ref="${users[$((pick - 1))]}"
+    return 0
+  done
+}
+
+ssh_network_menu_title() {
+  local suffix="${1:-}"
+  if [[ -n "${suffix}" ]]; then
+    printf '14) SSH Network > %s\n' "${suffix}"
+  else
+    printf '14) SSH Network\n'
+  fi
+}
+
+ssh_network_dns_menu() {
+  while true; do
+    local st cfg enabled dns_port primary secondary dns_service sync_service nft_table users_count
+    local dns_state dns_state_raw sync_state sync_state_raw
+    st="$(ssh_dns_adblock_status_get)"
+    cfg="$(ssh_dns_resolver_config_get)"
+    enabled="$(printf '%s\n' "${st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
+    dns_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
+    primary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_primary=/{print $2; exit}')"
+    secondary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_secondary=/{print $2; exit}')"
+    dns_service="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+    dns_state_raw="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
+    sync_service="$(printf '%s\n' "${st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+    sync_state_raw="$(printf '%s\n' "${st}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
+    nft_table="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+    users_count="$(printf '%s\n' "${st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
+    if [[ -n "${dns_state_raw}" ]]; then
+      dns_state="${dns_state_raw}"
+    elif [[ -n "${dns_service}" && "${dns_service}" != "missing" ]] && svc_exists "${dns_service}"; then
+      dns_state="$(svc_state "${dns_service}")"
+    else
+      dns_state="missing"
+    fi
+    if [[ -n "${sync_state_raw}" ]]; then
+      sync_state="${sync_state_raw}"
+    elif [[ -n "${sync_service}" && "${sync_service}" != "missing" ]] && svc_exists "${sync_service}"; then
+      sync_state="$(svc_state "${sync_service}")"
+    else
+      sync_state="missing"
+    fi
+    [[ -n "${dns_port}" ]] || dns_port="${SSH_DNS_ADBLOCK_PORT:-5353}"
+    [[ -n "${primary}" ]] || primary="1.1.1.1"
+    [[ -n "${secondary}" ]] || secondary="8.8.8.8"
+
+    title
+    echo "$(ssh_network_menu_title "DNS for SSH")"
+    hr
+    printf "%-14s : %s\n" "Backend" "dnsmasq + nft meta skuid"
+    printf "%-14s : %s\n" "Steering" "$([[ "${enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+    printf "%-14s : %s\n" "DNS Service" "${dns_service:--}"
+    printf "%-14s : %s\n" "DNS State" "${dns_state:--}"
+    printf "%-14s : %s\n" "Sync Service" "${sync_service:--}"
+    printf "%-14s : %s\n" "Sync State" "${sync_state:--}"
+    printf "%-14s : %s\n" "NFT Table" "${nft_table:--}"
+    printf "%-14s : %s\n" "Managed Users" "${users_count:-0}"
+    printf "%-14s : %s\n" "DNS Port" "${dns_port}"
+    printf "%-14s : %s\n" "Primary DNS" "${primary}"
+    printf "%-14s : %s\n" "Secondary DNS" "${secondary}"
+    hr
+    echo "  1) Enable DNS Steering"
+    echo "  2) Disable DNS Steering"
+    echo "  3) Set Primary DNS"
+    echo "  4) Set Secondary DNS"
+    echo "  5) Apply DNS Runtime"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1)
+        if ! confirm_yn_or_back "Aktifkan DNS steering untuk user SSH managed sekarang?"; then
+          warn "Enable DNS steering dibatalkan."
+        elif ssh_dns_adblock_set_enabled_now 1; then
+          log "DNS steering SSH diaktifkan."
+        else
+          warn "DNS steering SSH gagal diaktifkan."
+        fi
+        pause
+        ;;
+      2)
+        if ! confirm_yn_or_back "Nonaktifkan DNS steering untuk user SSH managed sekarang?"; then
+          warn "Disable DNS steering dibatalkan."
+        elif ssh_dns_adblock_set_enabled_now 0; then
+          log "DNS steering SSH dinonaktifkan."
+        else
+          warn "DNS steering SSH gagal dinonaktifkan."
+        fi
+        pause
+        ;;
+      3)
+        local new_primary
+        if ! read -r -p "Primary DNS SSH (IPv4/IPv6 literal) (atau kembali): " new_primary; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${new_primary}"; then
+          continue
+        fi
+        new_primary="$(dns_server_literal_normalize "${new_primary}")" || {
+          warn "Primary DNS SSH harus IPv4/IPv6 literal."
+          pause
+          continue
+        }
+        if ! confirm_yn_or_back "Set Primary DNS SSH ke ${new_primary} sekarang?"; then
+          warn "Set Primary DNS SSH dibatalkan."
+          pause
+          continue
+        fi
+        if ssh_dns_resolver_set_upstreams "${new_primary}" "${secondary}"; then
+          log "Primary DNS SSH diubah ke ${new_primary}."
+        else
+          warn "Primary DNS SSH gagal diubah."
+        fi
+        pause
+        ;;
+      4)
+        local new_secondary
+        if ! read -r -p "Secondary DNS SSH (IPv4/IPv6 literal) (atau kembali): " new_secondary; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${new_secondary}"; then
+          continue
+        fi
+        new_secondary="$(dns_server_literal_normalize "${new_secondary}")" || {
+          warn "Secondary DNS SSH harus IPv4/IPv6 literal."
+          pause
+          continue
+        }
+        if ! confirm_yn_or_back "Set Secondary DNS SSH ke ${new_secondary} sekarang?"; then
+          warn "Set Secondary DNS SSH dibatalkan."
+          pause
+          continue
+        fi
+        if ssh_dns_resolver_set_upstreams "${primary}" "${new_secondary}"; then
+          log "Secondary DNS SSH diubah ke ${new_secondary}."
+        else
+          warn "Secondary DNS SSH gagal diubah."
+        fi
+        pause
+        ;;
+      5)
+        if ssh_dns_resolver_apply_now; then
+          log "Runtime DNS SSH berhasil disinkronkan."
+        else
+          warn "Runtime DNS SSH gagal disinkronkan."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_network_route_global_menu() {
+  while true; do
+    local st global_mode warp_iface iface_state nft_state ip_rule_state ip_rule_v6_state
+    local route_table_v4_state route_table_v6_state effective_warp_users
+    st="$(ssh_network_runtime_status_get)"
+    global_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+    warp_iface="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+    iface_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface_state=/{print $2; exit}')"
+    nft_state="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_state=/{print $2; exit}')"
+    ip_rule_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_state=/{print $2; exit}')"
+    ip_rule_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_v6_state=/{print $2; exit}')"
+    route_table_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v4_state=/{print $2; exit}')"
+    route_table_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v6_state=/{print $2; exit}')"
+    effective_warp_users="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
+
+    title
+    echo "$(ssh_network_menu_title "Routing SSH Global")"
+    hr
+    printf "%-18s : %s\n" "Backend" "nftables mark + ip rule + route table"
+    printf "%-18s : %s\n" "Global Mode" "${global_mode}"
+    printf "%-18s : %s\n" "WARP Interface" "${warp_iface}"
+    printf "%-18s : %s\n" "Interface State" "${iface_state}"
+    printf "%-18s : %s\n" "NFT Runtime" "${nft_state}"
+    printf "%-18s : %s\n" "IP Rule IPv4" "${ip_rule_state}"
+    printf "%-18s : %s\n" "IP Rule IPv6" "${ip_rule_v6_state}"
+    printf "%-18s : %s\n" "Route Table IPv4" "${route_table_v4_state}"
+    printf "%-18s : %s\n" "Route Table IPv6" "${route_table_v6_state}"
+    printf "%-18s : %s\n" "Effective Warp Users" "${effective_warp_users}"
+    hr
+    ssh_network_effective_rows_print
+    hr
+    echo "  1) Set Global Mode: Direct"
+    echo "  2) Set Global Mode: WARP"
+    echo "  3) Set WARP Interface"
+    echo "  4) Apply Routing Runtime"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1)
+        local prev_mode="${global_mode}"
+        if ! confirm_yn_or_back "Set routing SSH global ke DIRECT sekarang?"; then
+          warn "Set routing global direct dibatalkan."
+        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+          log "Routing SSH global diubah ke DIRECT."
+        else
+          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
+          warn "Routing SSH global gagal diubah ke DIRECT."
+        fi
+        pause
+        ;;
+      2)
+        local prev_mode="${global_mode}"
+        if ! confirm_yn_or_back "Set routing SSH global ke WARP sekarang?"; then
+          warn "Set routing global WARP dibatalkan."
+        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+          log "Routing SSH global diubah ke WARP."
+        else
+          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
+          warn "Routing SSH global gagal diubah ke WARP."
+        fi
+        pause
+        ;;
+      3)
+        local new_iface=""
+        if ! read -r -p "Nama interface WARP SSH (contoh warp-ssh0) (atau kembali): " new_iface; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${new_iface}"; then
+          continue
+        fi
+        if ! confirm_yn_or_back "Set interface WARP SSH ke ${new_iface} sekarang?"; then
+          warn "Set interface WARP SSH dibatalkan."
+        elif ssh_network_warp_interface_change_now "${new_iface}"; then
+          log "Interface WARP SSH disimpan dan runtime direkonsiliasi: ${new_iface}"
+        else
+          warn "Interface WARP SSH gagal diganti."
+        fi
+        pause
+        ;;
+      4)
+        if ssh_network_runtime_apply_now; then
+          log "Runtime routing SSH berhasil disinkronkan."
+        else
+          warn "Runtime routing SSH gagal disinkronkan."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_network_route_user_menu() {
+  while true; do
+    title
+    echo "$(ssh_network_menu_title "Routing SSH Per-User")"
+    hr
+    printf "%-18s : %s\n" "Backend" "Per-user override di metadata SSH"
+    printf "%-18s : %s\n" "Enforcement" "meta skuid -> fwmark -> ip rule"
+    printf "%-18s : %s\n" "Target" "inherit / direct / warp"
+    hr
+    ssh_network_effective_rows_print
+    hr
+    echo "  1) Set User: Inherit"
+    echo "  2) Set User: Direct"
+    echo "  3) Set User: WARP"
+    echo "  4) Apply Routing Runtime"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1|2|3)
+        local target_user="" target_mode="" target_qf="" prev_mode=""
+        case "${c}" in
+          1) target_mode="inherit" ;;
+          2) target_mode="direct" ;;
+          3) target_mode="warp" ;;
+        esac
+        if ! ssh_network_pick_routable_user target_user; then
+          pause
+          continue
+        fi
+        target_qf="$(ssh_user_state_resolve_file "${target_user}")"
+        prev_mode="$(ssh_network_user_route_mode_get "${target_qf}")"
+        if ! confirm_yn_or_back "Set routing SSH '${target_user}' ke ${target_mode} sekarang?"; then
+          warn "Set routing user dibatalkan."
+        elif ssh_network_user_route_mode_set "${target_user}" "${target_mode}" && ssh_network_runtime_apply_now; then
+          log "Routing SSH '${target_user}' diubah ke ${target_mode}."
+        else
+          [[ -n "${prev_mode}" ]] && ssh_network_user_route_mode_set "${target_user}" "${prev_mode}" >/dev/null 2>&1 || true
+          warn "Routing SSH '${target_user}' gagal diubah."
+        fi
+        pause
+        ;;
+      4)
+        if ssh_network_runtime_apply_now; then
+          log "Runtime routing SSH berhasil disinkronkan."
+        else
+          warn "Runtime routing SSH gagal disinkronkan."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_network_warp_global_menu() {
+  while true; do
+    local st global_mode warp_iface iface_state warp_conf_state warp_service_state
+    local nft_state ip_rule_state ip_rule_v6_state route_table_v4_state route_table_v6_state effective_warp_users
+    local wire_state="missing"
+    st="$(ssh_network_runtime_status_get)"
+    global_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+    warp_iface="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+    iface_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface_state=/{print $2; exit}')"
+    warp_conf_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_config_state=/{print $2; exit}')"
+    warp_service_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_service_state=/{print $2; exit}')"
+    nft_state="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_state=/{print $2; exit}')"
+    ip_rule_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_state=/{print $2; exit}')"
+    ip_rule_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_v6_state=/{print $2; exit}')"
+    route_table_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v4_state=/{print $2; exit}')"
+    route_table_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v6_state=/{print $2; exit}')"
+    effective_warp_users="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
+    if svc_exists wireproxy; then
+      wire_state="$(svc_state wireproxy)"
+    fi
+    title
+    echo "$(ssh_network_menu_title "WARP SSH Global")"
+    hr
+    printf "%-18s : %s\n" "Global WARP" "$([[ "${global_mode}" == "warp" ]] && echo "ON" || echo "OFF")"
+    printf "%-18s : %s\n" "Backend" "Interface route + fwmark"
+    printf "%-18s : %s\n" "Target Interface" "${warp_iface}"
+    printf "%-18s : %s\n" "Interface State" "${iface_state}"
+    printf "%-18s : %s\n" "Config State" "${warp_conf_state}"
+    printf "%-18s : %s\n" "Service State" "${warp_service_state}"
+    printf "%-18s : %s\n" "NFT Runtime" "${nft_state}"
+    printf "%-18s : %s\n" "IP Rule IPv4" "${ip_rule_state}"
+    printf "%-18s : %s\n" "IP Rule IPv6" "${ip_rule_v6_state}"
+    printf "%-18s : %s\n" "Route Table IPv4" "${route_table_v4_state}"
+    printf "%-18s : %s\n" "Route Table IPv6" "${route_table_v6_state}"
+    printf "%-18s : %s\n" "Effective Warp Users" "${effective_warp_users}"
+    printf "%-18s : %s\n" "Host WARP" "wireproxy=${wire_state}"
+    hr
+    echo "  1) Enable WARP Global"
+    echo "  2) Disable WARP Global"
+    echo "  3) Provision/Refresh Interface"
+    echo "  4) Start WARP Interface"
+    echo "  5) Stop WARP Interface"
+    echo "  6) Set WARP Interface"
+    echo "  7) Apply Runtime"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1)
+        local prev_mode="${global_mode}"
+        if ! confirm_yn_or_back "Aktifkan WARP global untuk trafik SSH sekarang?"; then
+          warn "Enable WARP SSH global dibatalkan."
+        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+          log "WARP SSH global diaktifkan."
+        else
+          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
+          warn "WARP SSH global gagal diaktifkan."
+        fi
+        pause
+        ;;
+      2)
+        local prev_mode="${global_mode}"
+        if ! confirm_yn_or_back "Matikan WARP global untuk trafik SSH sekarang?"; then
+          warn "Disable WARP SSH global dibatalkan."
+        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+          log "WARP SSH global dimatikan."
+        else
+          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
+          warn "WARP SSH global gagal dimatikan."
+        fi
+        pause
+        ;;
+      3)
+        if ssh_network_warp_sync_config_now "${warp_iface}"; then
+          log "Config interface WARP SSH berhasil disegarkan."
+        else
+          warn "Config interface WARP SSH gagal disegarkan."
+        fi
+        pause
+        ;;
+      4)
+        if ssh_network_warp_runtime_start_now "${warp_iface}"; then
+          log "Interface WARP SSH berhasil diaktifkan."
+        else
+          warn "Interface WARP SSH gagal diaktifkan."
+        fi
+        pause
+        ;;
+      5)
+        if ! confirm_yn_or_back "Matikan interface WARP SSH ${warp_iface} sekarang?"; then
+          warn "Stop interface WARP SSH dibatalkan."
+        elif ssh_network_warp_runtime_stop_now "${warp_iface}"; then
+          log "Interface WARP SSH dihentikan."
+        else
+          warn "Interface WARP SSH gagal dihentikan."
+        fi
+        pause
+        ;;
+      6)
+        local new_iface=""
+        if ! read -r -p "Nama interface WARP SSH (atau kembali): " new_iface; then
+          echo
+          return 0
+        fi
+        if is_back_choice "${new_iface}"; then
+          continue
+        fi
+        if ! confirm_yn_or_back "Set interface WARP SSH ke ${new_iface} sekarang?"; then
+          warn "Set interface WARP SSH dibatalkan."
+        elif ssh_network_warp_interface_change_now "${new_iface}"; then
+          log "Interface WARP SSH disimpan dan runtime direkonsiliasi: ${new_iface}"
+        else
+          warn "Interface WARP SSH gagal diganti."
+        fi
+        pause
+        ;;
+      7)
+        if ssh_network_runtime_apply_now; then
+          log "Runtime WARP SSH berhasil disinkronkan."
+        else
+          warn "Runtime WARP SSH gagal disinkronkan."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_network_warp_user_menu() {
+  while true; do
+    title
+    echo "$(ssh_network_menu_title "WARP SSH Per-User")"
+    hr
+    printf "%-18s : %s\n" "Backend" "Per-user WARP override"
+    printf "%-18s : %s\n" "State" "network.route_mode"
+    printf "%-18s : %s\n" "Apply Path" "nft mark + ip rule"
+    hr
+    ssh_network_effective_rows_print
+    hr
+    echo "  1) Enable WARP for User"
+    echo "  2) Disable WARP for User"
+    echo "  3) Reset User to Inherit"
+    echo "  4) Apply Runtime"
+    echo "  0) Back"
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1|2|3)
+        local target_user="" target_mode="" target_qf="" prev_mode=""
+        case "${c}" in
+          1) target_mode="warp" ;;
+          2) target_mode="direct" ;;
+          3) target_mode="inherit" ;;
+        esac
+        if ! ssh_network_pick_routable_user target_user; then
+          pause
+          continue
+        fi
+        target_qf="$(ssh_user_state_resolve_file "${target_user}")"
+        prev_mode="$(ssh_network_user_route_mode_get "${target_qf}")"
+        if ! confirm_yn_or_back "Set mode WARP SSH '${target_user}' ke ${target_mode} sekarang?"; then
+          warn "Set mode WARP user dibatalkan."
+        elif ssh_network_user_route_mode_set "${target_user}" "${target_mode}" && ssh_network_runtime_apply_now; then
+          log "Mode WARP SSH '${target_user}' diubah ke ${target_mode}."
+        else
+          [[ -n "${prev_mode}" ]] && ssh_network_user_route_mode_set "${target_user}" "${prev_mode}" >/dev/null 2>&1 || true
+          warn "Mode WARP SSH '${target_user}' gagal diubah."
+        fi
+        pause
+        ;;
+      4)
+        if ssh_network_runtime_apply_now; then
+          log "Runtime WARP SSH berhasil disinkronkan."
+        else
+          warn "Runtime WARP SSH gagal disinkronkan."
+        fi
+        pause
+        ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
+ssh_network_menu() {
+  local -a items=(
+    "1|DNS for SSH"
+    "2|Routing SSH Global"
+    "3|Routing SSH Per-User"
+    "4|WARP SSH Global"
+    "5|WARP SSH Per-User"
+    "0|Back"
+  )
+  while true; do
+    ui_menu_screen_begin "14) SSH Network"
+    ui_menu_render_options items 76
+    hr
+    if ! read -r -p "Pilih: " c; then
+      echo
+      return 0
+    fi
+    case "${c}" in
+      1) menu_run_isolated_report "DNS for SSH" ssh_network_dns_menu ;;
+      2) menu_run_isolated_report "Routing SSH Global" ssh_network_route_global_menu ;;
+      3) menu_run_isolated_report "Routing SSH Per-User" ssh_network_route_user_menu ;;
+      4) menu_run_isolated_report "WARP SSH Global" ssh_network_warp_global_menu ;;
+      5) menu_run_isolated_report "WARP SSH Per-User" ssh_network_warp_user_menu ;;
+      0|kembali|k|back|b) return 0 ;;
+      *) invalid_choice ;;
     esac
   done
 }
@@ -7305,9 +8785,9 @@ ssh_menu() {
         fi
         ;;
       5) ssh_list_users_menu ;;
-      6) sshws_status_menu ;;
-      7) sshws_restart_menu ;;
-      8) sshws_active_sessions_menu ;;
+      6) ssh_runtime_context_run ssh-users sshws_status_menu ;;
+      7) ssh_runtime_context_run ssh-users sshws_restart_menu ;;
+      8) ssh_runtime_context_run ssh-users sshws_active_sessions_menu ;;
       9) menu_run_isolated_report "Recover Pending SSH Txn" ssh_recover_pending_txn_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
@@ -8263,8 +9743,17 @@ payload["status"] = {
   "lock_owner": str(status.get("lock_owner") or "").strip(),
   "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
 }
+network_raw = payload.get("network")
+network = network_raw if isinstance(network_raw, dict) else {}
+route_mode = str(network.get("route_mode") or "inherit").strip().lower()
+if route_mode not in ("inherit", "direct", "warp"):
+  route_mode = "inherit"
+payload["network"] = {
+  "route_mode": route_mode,
+}
 
 st = payload["status"]
+net = payload["network"]
 
 if action == "bootstrap_marker_set":
   if len(args) != 1:
@@ -8313,6 +9802,13 @@ elif action == "set_speed_all_enable":
   st["speed_down_mbit"] = parse_float(args[0], "speed_down_mbit", 0.000001)
   st["speed_up_mbit"] = parse_float(args[1], "speed_up_mbit", 0.000001)
   st["speed_limit_enabled"] = True
+elif action == "network_route_mode_set":
+  if len(args) != 1:
+    raise SystemExit("network_route_mode_set butuh 1 argumen (inherit/direct/warp)")
+  mode = str(args[0] or "").strip().lower()
+  if mode not in ("inherit", "direct", "warp"):
+    raise SystemExit("network route mode harus inherit/direct/warp")
+  net["route_mode"] = mode
 else:
   raise SystemExit(f"aksi ssh_qac_atomic_update_file tidak dikenali: {action}")
 
@@ -8321,6 +9817,7 @@ if action != "bootstrap_marker_set":
   payload["bootstrap_source"] = ""
 
 payload["status"] = st
+payload["network"] = net
 text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 dirn = os.path.dirname(qf) or "."
 fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)

@@ -5,10 +5,44 @@
 # - Domain/Geosite: direct exceptions (editable list, template tetap readonly)
 # - Adblock: custom geosite ext:custom.dat:adblock (enable/disable)
 # -------------------------
+xray_network_menu_title() {
+  local suffix="${1:-}"
+  local base="5) Xray Network"
+  if [[ -n "${suffix}" ]]; then
+    printf '%s > %s\n' "${base}" "${suffix}"
+  else
+    printf '%s\n' "${base}"
+  fi
+}
+
+adblock_menu_title() {
+  local suffix="${1:-}"
+  local base="13) Adblocker"
+  if [[ -n "${suffix}" ]]; then
+    printf '%s > %s\n' "${base}" "${suffix}"
+  else
+    printf '%s\n' "${base}"
+  fi
+}
+
 warp_status() {
+  local summary_ready="true"
   title
   echo "WARP (wireproxy) status"
   hr
+  if ! xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+    summary_ready="false"
+  fi
+  if ! xray_json_file_require_valid "${XRAY_INBOUNDS_CONF}" "Xray inbounds config" "1"; then
+    summary_ready="false"
+  fi
+  if [[ "${summary_ready}" == "true" ]]; then
+    warp_controls_summary || true
+    hr
+  else
+    warn "Ringkasan routing WARP dilewati karena konfigurasi Xray tidak valid."
+    hr
+  fi
   if svc_exists wireproxy; then
     systemctl status wireproxy --no-pager || true
   else
@@ -179,6 +213,187 @@ xray_dns_conf_bootstrap_locked() {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     return 1
   fi
+  return 0
+}
+
+xray_json_file_probe() {
+  local file="${1:-}"
+  need_python3
+  python3 - <<'PY' "${file}"
+import json
+import sys
+
+path = sys.argv[1]
+if not path:
+  print("state=missing")
+  print("error=path kosong")
+  raise SystemExit(3)
+
+try:
+  with open(path, 'r', encoding='utf-8') as f:
+    json.load(f)
+except FileNotFoundError:
+  print("state=missing")
+  print("error=file tidak ditemukan")
+  raise SystemExit(3)
+except Exception as exc:
+  print("state=invalid")
+  print("error=" + str(exc).replace("\n", " "))
+  raise SystemExit(2)
+
+print("state=ok")
+print("error=")
+PY
+}
+
+xray_json_file_state_get() {
+  local file="${1:-}"
+  local probe="" rc=0 state=""
+  probe="$(xray_json_file_probe "${file}" 2>/dev/null)" || rc=$?
+  state="$(printf '%s\n' "${probe}" | awk -F'=' '/^state=/{print $2; exit}' 2>/dev/null || true)"
+  if [[ -n "${state}" ]]; then
+    printf '%s\n' "${state}"
+    return 0
+  fi
+  if (( rc == 3 )); then
+    printf 'missing\n'
+  elif (( rc == 0 )); then
+    printf 'ok\n'
+  else
+    printf 'invalid\n'
+  fi
+  return 0
+}
+
+xray_json_file_require_valid() {
+  local file="${1:-}"
+  local label="${2:-JSON file}"
+  local allow_missing="${3:-0}"
+  local probe="" rc=0 state="" error=""
+
+  probe="$(xray_json_file_probe "${file}" 2>&1)" || rc=$?
+  state="$(printf '%s\n' "${probe}" | awk -F'=' '/^state=/{print $2; exit}' 2>/dev/null || true)"
+  error="$(printf '%s\n' "${probe}" | awk -F'=' '/^error=/{print substr($0,7); exit}' 2>/dev/null || true)"
+
+  if (( rc == 0 )) || [[ "${state}" == "ok" ]]; then
+    return 0
+  fi
+
+  if (( rc == 3 )) || [[ "${state}" == "missing" ]]; then
+    if [[ "${allow_missing}" == "1" ]]; then
+      return 0
+    fi
+    warn "${label} tidak ditemukan: ${file}"
+    return 1
+  fi
+
+  warn "${label} invalid: ${file}"
+  if [[ -n "${error}" ]]; then
+    warn "Detail: ${error}"
+  fi
+  return 1
+}
+
+xray_stage_origin_meta_path() {
+  local candidate="${1:-}"
+  printf '%s.origin.meta\n' "${candidate}"
+}
+
+xray_file_sha256_get() {
+  local file="${1:-}"
+  need_python3
+  python3 - <<'PY' "${file}" || return 1
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.is_file():
+  raise SystemExit(1)
+
+h = hashlib.sha256()
+with path.open("rb") as f:
+  while True:
+    chunk = f.read(1024 * 1024)
+    if not chunk:
+      break
+    h.update(chunk)
+
+print(h.hexdigest())
+PY
+}
+
+xray_stage_origin_capture() {
+  local candidate="${1:-}"
+  local live_path="${2:-}"
+  local meta="" sha=""
+  [[ -n "${candidate}" && -n "${live_path}" ]] || return 1
+  meta="$(xray_stage_origin_meta_path "${candidate}")"
+  if [[ -f "${live_path}" ]]; then
+    sha="$(xray_file_sha256_get "${live_path}")" || return 1
+    {
+      printf 'exists=1\n'
+      printf 'sha256=%s\n' "${sha}"
+    } > "${meta}" || return 1
+  else
+    {
+      printf 'exists=0\n'
+      printf 'sha256=\n'
+    } > "${meta}" || return 1
+  fi
+  chmod 600 "${meta}" >/dev/null 2>&1 || true
+  return 0
+}
+
+xray_stage_origin_verify_live() {
+  local candidate="${1:-}"
+  local live_path="${2:-}"
+  local label="${3:-Konfigurasi}"
+  local meta="" expected_exists="" expected_sha="" actual_sha=""
+  [[ -n "${candidate}" && -n "${live_path}" ]] || return 1
+  meta="$(xray_stage_origin_meta_path "${candidate}")"
+  if [[ ! -f "${meta}" ]]; then
+    warn "Metadata staging ${label} tidak ditemukan. Buang staging lalu ulangi dari state live terbaru."
+    return 1
+  fi
+
+  expected_exists="$(awk -F'=' '/^exists=/{print $2; exit}' "${meta}" 2>/dev/null || true)"
+  expected_sha="$(awk -F'=' '/^sha256=/{print $2; exit}' "${meta}" 2>/dev/null || true)"
+
+  case "${expected_exists}" in
+    1)
+      if [[ ! -f "${live_path}" ]]; then
+        warn "${label} live berubah sejak staging dibuat (file sekarang hilang). Buang staging lalu ulangi."
+        return 1
+      fi
+      actual_sha="$(xray_file_sha256_get "${live_path}")" || {
+        warn "Gagal menghitung checksum live untuk ${label}."
+        return 1
+      }
+      if [[ "${actual_sha}" != "${expected_sha}" ]]; then
+        warn "${label} live berubah sejak staging dibuat. Buang staging lalu ulangi dari state terbaru."
+        return 1
+      fi
+      ;;
+    0)
+      if [[ -e "${live_path}" ]]; then
+        warn "${label} live berubah sejak staging dibuat (sebelumnya belum ada, sekarang sudah ada). Buang staging lalu ulangi."
+        return 1
+      fi
+      ;;
+    *)
+      warn "Metadata staging ${label} tidak valid. Buang staging lalu ulangi."
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+xray_stage_candidate_cleanup() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 0
+  rm -f "${candidate}" "$(xray_stage_origin_meta_path "${candidate}")" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -775,26 +990,48 @@ if default_idx < 0:
 
 def toggle_user_marker(marker, outbound, enable):
   global default_idx
-  idx = find_rule_idx(marker, outbound)
+  idxs = []
+  merged = []
+  seen = set()
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    users = r.get('user') or []
+    if not isinstance(users, list) or 'inboundTag' in r:
+      continue
+    if marker not in users:
+      continue
+    idxs.append(i)
+    for u in users:
+      if not isinstance(u, str):
+        continue
+      u = u.strip()
+      if not u or u == marker or u in seen:
+        continue
+      seen.add(u)
+      merged.append(u)
+  idx = idxs[0] if idxs else -1
+  for dup_idx in reversed(idxs[1:]):
+    rules.pop(dup_idx)
+    if dup_idx < default_idx:
+      default_idx -= 1
   if idx < 0 and not enable:
     return
   if idx < 0 and enable:
     rules.insert(default_idx, {"type": "field", "user": [marker], "outboundTag": outbound})
     idx = default_idx
     default_idx += 1
+    merged = []
   rule = rules[idx]
   if not isinstance(rule, dict):
     rule = {"type": "field", "user": [marker], "outboundTag": outbound}
-  users = rule.get('user')
-  if not isinstance(users, list):
-    users = []
-  users = [u for u in users if u != marker and u != email]
-  users.insert(0, marker)
+  users = [u for u in merged if u != email]
   if enable and email not in users:
     users.append(email)
   rule['type'] = 'field'
   rule['outboundTag'] = outbound
-  rule['user'] = users
+  rule['user'] = [marker] + users
   rules[idx] = rule
 
 if mode == 'direct':
@@ -1010,26 +1247,46 @@ if default_idx < 0:
 
 def toggle_inbound_marker(marker, outbound, enable):
   global default_idx
-  idx = find_rule_idx(marker, outbound)
+  idxs = []
+  merged = []
+  seen = set()
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    tags = r.get('inboundTag') or []
+    if not isinstance(tags, list) or marker not in tags:
+      continue
+    idxs.append(i)
+    for tag in tags:
+      if not isinstance(tag, str):
+        continue
+      tag = tag.strip()
+      if not tag or tag == marker or tag in seen:
+        continue
+      seen.add(tag)
+      merged.append(tag)
+  idx = idxs[0] if idxs else -1
+  for dup_idx in reversed(idxs[1:]):
+    rules.pop(dup_idx)
+    if dup_idx < default_idx:
+      default_idx -= 1
   if idx < 0 and not enable:
     return
   if idx < 0 and enable:
     rules.insert(default_idx, {"type": "field", "inboundTag": [marker], "outboundTag": outbound})
     idx = default_idx
     default_idx += 1
+    merged = []
   rule = rules[idx]
   if not isinstance(rule, dict):
     rule = {"type": "field", "inboundTag": [marker], "outboundTag": outbound}
-  tags = rule.get('inboundTag')
-  if not isinstance(tags, list):
-    tags = []
-  tags = [t for t in tags if t != marker and t != inbound_tag]
-  tags.insert(0, marker)
+  tags = [t for t in merged if t != inbound_tag]
   if enable and inbound_tag not in tags:
     tags.append(inbound_tag)
   rule['type'] = 'field'
   rule['outboundTag'] = outbound
-  rule['inboundTag'] = tags
+  rule['inboundTag'] = [marker] + tags
   rules[idx] = rule
 
 if mode == 'direct':
@@ -1124,7 +1381,11 @@ network_show_summary() {
   hr
 
   if [[ -f "${XRAY_ROUTING_CONF}" ]]; then
-    xray_routing_default_rule_get
+    if xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+      xray_routing_default_rule_get
+    else
+      warn "Ringkasan routing dilewati karena JSON routing invalid."
+    fi
     hr
   else
     warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
@@ -1171,6 +1432,7 @@ except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
 out=[]
+seen=set()
 for r in rules:
   if not isinstance(r, dict): 
     continue
@@ -1183,9 +1445,9 @@ for r in rules:
     continue
   if marker in u:
     for x in u:
-      if isinstance(x, str) and x and x != marker:
+      if isinstance(x, str) and x and x != marker and x not in seen:
         out.append(x)
-    break
+        seen.add(x)
 for x in out:
   print(x)
 PY
@@ -1208,6 +1470,7 @@ except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
 out=[]
+seen=set()
 for r in rules:
   if not isinstance(r, dict): 
     continue
@@ -1220,9 +1483,9 @@ for r in rules:
     continue
   if marker in ib:
     for x in ib:
-      if isinstance(x, str) and x and x != marker:
+      if isinstance(x, str) and x and x != marker and x not in seen:
         out.append(x)
-    break
+        seen.add(x)
 for x in out:
   print(x)
 PY
@@ -1244,7 +1507,8 @@ try:
 except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
-custom=None
+custom=[]
+seen=set()
 for r in rules:
   if not isinstance(r, dict):
     continue
@@ -1254,10 +1518,10 @@ for r in rules:
     continue
   dom=r.get('domain') or []
   if isinstance(dom, list) and marker in dom:
-    custom=[x for x in dom if isinstance(x, str) and x and x != marker]
-    break
-if not isinstance(custom, list):
-  custom=[]
+    for x in dom:
+      if isinstance(x, str) and x and x != marker and x not in seen:
+        custom.append(x)
+        seen.add(x)
 for x in custom:
   print(x)
 PY
@@ -1268,6 +1532,9 @@ xray_routing_candidate_prepare() {
   if [[ -n "${_out_ref}" && -f "${_out_ref}" ]]; then
     return 0
   fi
+  if ! xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+    return 1
+  fi
   _out_ref="$(mktemp "${WORK_DIR}/routing-stage.XXXXXX.json" 2>/dev/null || true)"
   [[ -n "${_out_ref}" ]] || return 1
   cp -a "${XRAY_ROUTING_CONF}" "${_out_ref}" || {
@@ -1275,6 +1542,11 @@ xray_routing_candidate_prepare() {
     _out_ref=""
     return 1
   }
+  if ! xray_stage_origin_capture "${_out_ref}" "${XRAY_ROUTING_CONF}"; then
+    xray_stage_candidate_cleanup "${_out_ref}"
+    _out_ref=""
+    return 1
+  fi
   chmod 600 "${_out_ref}" >/dev/null 2>&1 || true
   return 0
 }
@@ -1384,26 +1656,48 @@ if default_idx < 0:
   raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
 def toggle_user_marker(marker, outbound, enable):
   global default_idx
-  idx = find_rule_idx(marker, outbound)
+  idxs = []
+  merged = []
+  seen = set()
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    users = r.get('user') or []
+    if not isinstance(users, list) or 'inboundTag' in r:
+      continue
+    if marker not in users:
+      continue
+    idxs.append(i)
+    for u in users:
+      if not isinstance(u, str):
+        continue
+      u = u.strip()
+      if not u or u == marker or u in seen:
+        continue
+      seen.add(u)
+      merged.append(u)
+  idx = idxs[0] if idxs else -1
+  for dup_idx in reversed(idxs[1:]):
+    rules.pop(dup_idx)
+    if dup_idx < default_idx:
+      default_idx -= 1
   if idx < 0 and not enable:
     return
   if idx < 0 and enable:
     rules.insert(default_idx, {"type": "field", "user": [marker], "outboundTag": outbound})
     idx = default_idx
     default_idx += 1
+    merged = []
   rule = rules[idx]
   if not isinstance(rule, dict):
     rule = {"type": "field", "user": [marker], "outboundTag": outbound}
-  users = rule.get('user')
-  if not isinstance(users, list):
-    users = []
-  users = [u for u in users if u != marker and u != email]
-  users.insert(0, marker)
+  users = [u for u in merged if u != email]
   if enable and email not in users:
     users.append(email)
   rule['type'] = 'field'
   rule['outboundTag'] = outbound
-  rule['user'] = users
+  rule['user'] = [marker] + users
   rules[idx] = rule
 if mode == 'direct':
   toggle_user_marker("dummy-warp-user", "warp", False)
@@ -1479,26 +1773,46 @@ if default_idx < 0:
   raise SystemExit("Default rule tidak ditemukan, tidak bisa insert rule baru")
 def toggle_inbound_marker(marker, outbound, enable):
   global default_idx
-  idx = find_rule_idx(marker, outbound)
+  idxs = []
+  merged = []
+  seen = set()
+  for i, r in enumerate(rules):
+    if not isinstance(r, dict): continue
+    if r.get('type') != 'field': continue
+    if r.get('outboundTag') != outbound: continue
+    tags = r.get('inboundTag') or []
+    if not isinstance(tags, list) or marker not in tags:
+      continue
+    idxs.append(i)
+    for tag in tags:
+      if not isinstance(tag, str):
+        continue
+      tag = tag.strip()
+      if not tag or tag == marker or tag in seen:
+        continue
+      seen.add(tag)
+      merged.append(tag)
+  idx = idxs[0] if idxs else -1
+  for dup_idx in reversed(idxs[1:]):
+    rules.pop(dup_idx)
+    if dup_idx < default_idx:
+      default_idx -= 1
   if idx < 0 and not enable:
     return
   if idx < 0 and enable:
     rules.insert(default_idx, {"type": "field", "inboundTag": [marker], "outboundTag": outbound})
     idx = default_idx
     default_idx += 1
+    merged = []
   rule = rules[idx]
   if not isinstance(rule, dict):
     rule = {"type": "field", "inboundTag": [marker], "outboundTag": outbound}
-  tags = rule.get('inboundTag')
-  if not isinstance(tags, list):
-    tags = []
-  tags = [t for t in tags if t != marker and t != inbound_tag]
-  tags.insert(0, marker)
+  tags = [t for t in merged if t != inbound_tag]
   if enable and inbound_tag not in tags:
     tags.append(inbound_tag)
   rule['type'] = 'field'
   rule['outboundTag'] = outbound
-  rule['inboundTag'] = tags
+  rule['inboundTag'] = [marker] + tags
   rules[idx] = rule
 if mode == 'direct':
   toggle_inbound_marker("dummy-warp-inbounds", "warp", False)
@@ -1687,6 +2001,7 @@ xray_routing_apply_candidate_file() {
   set +e
   (
     flock -x 200
+    xray_stage_origin_verify_live "${candidate}" "${XRAY_ROUTING_CONF}" "Routing Xray" || exit 89
     cp -a "${XRAY_ROUTING_CONF}" "${backup}" || exit 1
     cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
     xray_write_file_atomic "${XRAY_ROUTING_CONF}" "${candidate}" || {
@@ -1704,6 +2019,10 @@ xray_routing_apply_candidate_file() {
   rc=$?
   set -e
 
+  if (( rc == 89 )); then
+    warn "Apply staged routing dibatalkan karena file live berubah sejak staging dibuat."
+    return 1
+  fi
   xray_txn_rc_or_die "${rc}" \
     "Gagal apply staged routing (rollback ke backup: ${backup})" \
     "xray tidak aktif setelah apply staged routing. Config di-rollback ke backup: ${backup}"
@@ -1754,17 +2073,45 @@ warp_controls_summary() {
     wire_state="not-installed"
   fi
 
-  local wu du wi di dd wd
-  wu="$(xray_routing_rule_user_list_get "dummy-warp-user" "warp" | wc -l | tr -d ' ')"
-  du="$(xray_routing_rule_user_list_get "dummy-direct-user" "direct" | wc -l | tr -d ' ')"
-  wi="$(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" | wc -l | tr -d ' ')"
-  di="$(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" | wc -l | tr -d ' ')"
+  local wu du wi di dd wd user_conflicts=0 inbound_conflicts=0 entry
+  local -a warp_users=() direct_users=() warp_inbounds=() direct_inbounds=()
+  declare -A warp_user_set=()
+  declare -A direct_user_set=()
+  declare -A warp_inbound_set=()
+  declare -A direct_inbound_set=()
+  mapfile -t warp_users < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null || true)
+  mapfile -t direct_users < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null || true)
+  mapfile -t warp_inbounds < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null || true)
+  mapfile -t direct_inbounds < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null || true)
+  wu="${#warp_users[@]}"
+  du="${#direct_users[@]}"
+  wi="${#warp_inbounds[@]}"
+  di="${#direct_inbounds[@]}"
   dd="$(xray_routing_custom_domain_list_get "regexp:^$" "direct" | wc -l | tr -d ' ')"
   wd="$(xray_routing_custom_domain_list_get "regexp:^\$WARP" "warp" | wc -l | tr -d ' ')"
+  for entry in "${warp_users[@]}"; do
+    [[ -n "${entry}" ]] && warp_user_set["${entry}"]=1
+  done
+  for entry in "${direct_users[@]}"; do
+    [[ -n "${entry}" ]] && direct_user_set["${entry}"]=1
+  done
+  for entry in "${warp_inbounds[@]}"; do
+    [[ -n "${entry}" ]] && warp_inbound_set["${entry}"]=1
+  done
+  for entry in "${direct_inbounds[@]}"; do
+    [[ -n "${entry}" ]] && direct_inbound_set["${entry}"]=1
+  done
+  for entry in "${!warp_user_set[@]}"; do
+    [[ -n "${direct_user_set[${entry}]:-}" ]] && ((user_conflicts+=1))
+  done
+  for entry in "${!warp_inbound_set[@]}"; do
+    [[ -n "${direct_inbound_set[${entry}]:-}" ]] && ((inbound_conflicts+=1))
+  done
 
   echo "WARP Global : ${global}"
   echo "wireproxy   : ${wire_state}"
   echo "Override    : user warp=${wu}, user direct=${du} | inbound warp=${wi}, inbound direct=${di}"
+  echo "Conflict    : user=${user_conflicts}, inbound=${inbound_conflicts}"
   echo "Domain list : direct=${dd}, warp=${wd}"
 }
 
@@ -1819,10 +2166,10 @@ def get_default_mode():
       mode='warp'
     elif ot == 'direct':
       mode='direct'
-      elif isinstance(ot, str) and ot:
-        mode='unknown'
-      else:
-        mode='unknown'
+    elif isinstance(ot, str) and ot:
+      mode='unknown'
+    else:
+      mode='unknown'
   return mode, bal
 
 def rule_list_user(marker, outbound):
@@ -2269,7 +2616,7 @@ PY
 ssh_dns_adblock_config_get() {
   need_python3
   [[ -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" ]] || {
-    printf 'enabled=0\ndns_port=-\nauto_update_enabled=0\n'
+    printf 'enabled=0\ndns_port=-\nupstream_primary=1.1.1.1\nupstream_secondary=8.8.8.8\nauto_update_enabled=0\n'
     return 0
   }
   python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" 2>/dev/null || true
@@ -2291,9 +2638,99 @@ for line in text.splitlines():
 
 print(f"enabled={data.get('SSH_DNS_ADBLOCK_ENABLED', '0')}")
 print(f"dns_port={data.get('SSH_DNS_ADBLOCK_PORT', '-')}")
+print(f"upstream_primary={data.get('SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY', '1.1.1.1')}")
+print(f"upstream_secondary={data.get('SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY', '8.8.8.8')}")
 print(f"auto_update_enabled={data.get('AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED', '0')}")
 print(f"auto_update_days={data.get('AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS', '1')}")
 PY
+}
+
+ssh_dns_resolver_config_get() {
+  local cfg dns_port primary secondary
+  cfg="$(ssh_dns_adblock_config_get)"
+  dns_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
+  primary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_primary=/{print $2; exit}')"
+  secondary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_secondary=/{print $2; exit}')"
+  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="${SSH_DNS_ADBLOCK_PORT:-5353}"
+  [[ -n "${primary}" ]] || primary="1.1.1.1"
+  [[ -n "${secondary}" ]] || secondary="8.8.8.8"
+  printf 'dns_port=%s\n' "${dns_port}"
+  printf 'upstream_primary=%s\n' "${primary}"
+  printf 'upstream_secondary=%s\n' "${secondary}"
+}
+
+ssh_dns_resolver_runtime_conf_write() {
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked ssh_dns_resolver_runtime_conf_write "$@"
+    return $?
+  fi
+  local cfg dns_port primary secondary tmp
+  cfg="$(ssh_dns_resolver_config_get)"
+  dns_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
+  primary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_primary=/{print $2; exit}')"
+  secondary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_secondary=/{print $2; exit}')"
+  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="${SSH_DNS_ADBLOCK_PORT:-5353}"
+  primary="$(dns_server_literal_normalize "${primary}")" || primary="1.1.1.1"
+  secondary="$(dns_server_literal_normalize "${secondary}")" || secondary="8.8.8.8"
+
+  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}")" 2>/dev/null || true
+  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-dnsmasq.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-dnsmasq.$$"
+  cat > "${tmp}" <<EOF
+# SSH Adblock resolver
+port=${dns_port}
+listen-address=127.0.0.1
+bind-interfaces
+no-resolv
+no-hosts
+domain-needed
+bogus-priv
+cache-size=1000
+server=${primary}
+server=${secondary}
+conf-file=${SSH_DNS_ADBLOCK_RENDERED_FILE}
+EOF
+  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" || {
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+  chmod 644 "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" >/dev/null 2>&1 || true
+  return 0
+}
+
+ssh_dns_resolver_apply_now() {
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked ssh_dns_resolver_apply_now "$@"
+    return $?
+  fi
+  ssh_dns_resolver_runtime_conf_write || return 1
+  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
+    svc_restart_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Restart ${SSH_DNS_ADBLOCK_SERVICE} gagal."
+      return 1
+    }
+  else
+    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+      return 1
+    }
+  fi
+  ssh_dns_adblock_apply_now
+}
+
+ssh_dns_resolver_set_upstreams() {
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked ssh_dns_resolver_set_upstreams "$@"
+    return $?
+  fi
+  local primary="${1:-}"
+  local secondary="${2:-}"
+  primary="$(dns_server_literal_normalize "${primary}")" || return 1
+  secondary="$(dns_server_literal_normalize "${secondary}")" || return 1
+  adblock_config_set_values \
+    SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY "${primary}" \
+    SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY "${secondary}" || return 1
+  ssh_dns_resolver_apply_now
 }
 
 ssh_dns_adblock_config_set_enabled() {
@@ -2427,7 +2864,9 @@ ssh_dns_adblock_status_get() {
     [[ -n "${auto_update_days}" ]] || auto_update_days="1"
     printf '%s\n' "${cfg}"
     printf 'dns_service=missing\n'
+    printf 'dns_service_state=missing\n'
     printf 'sync_service=missing\n'
+    printf 'sync_service_state=missing\n'
     printf 'nft_table=absent\n'
     printf 'bound_users=0\n'
     printf 'users_count=0\n'
@@ -2438,6 +2877,7 @@ ssh_dns_adblock_status_get() {
     printf 'rendered_file=missing\n'
     printf 'custom_dat=%s\n' "$(adblock_custom_dat_status_get)"
     printf 'auto_update_service=missing\n'
+    printf 'auto_update_service_state=missing\n'
     printf 'auto_update_timer=%s\n' "$([[ "${auto_update_enabled}" == "1" ]] && echo "inactive" || echo "inactive")"
     printf 'auto_update_days=%s\n' "${auto_update_days}"
     printf 'auto_update_schedule=every %s day(s)\n' "${auto_update_days}"
@@ -2835,7 +3275,7 @@ adblock_auto_update_days_menu() {
   local confirm_rc=0
   while true; do
     title
-    echo "5) Network > Adblock > Set Auto Update Interval"
+    echo "$(adblock_menu_title "Set Auto Update Interval")"
     hr
     echo "Masukkan jumlah hari. Contoh: 1, 3, 7"
     hr
@@ -2967,7 +3407,7 @@ adblock_manual_domain_add_menu() {
   local input normalized confirm_rc=0
   while true; do
     title
-    echo "5) Network > Adblock > Add Domain"
+    echo "$(adblock_menu_title "Add Domain")"
     hr
     echo "Masukkan domain plain. Contoh: ads.example.com"
     hr
@@ -3061,7 +3501,7 @@ adblock_manual_domain_delete_menu() {
   local line choice idx i selected_domain confirm_rc=0
   while true; do
     title
-    echo "5) Network > Adblock > Delete Domain"
+    echo "$(adblock_menu_title "Delete Domain")"
     hr
     domains=()
     while IFS= read -r line; do
@@ -3302,7 +3742,7 @@ adblock_disable_all() {
 
 ssh_dns_adblock_show_bound_users() {
   title
-  echo "5) Network > Adblock > Bound Users"
+  echo "$(adblock_menu_title "Bound Users")"
   hr
   if [[ ! -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]]; then
     warn "adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
@@ -3339,7 +3779,7 @@ xray_adblock_menu() {
     asset_status="$(adblock_custom_dat_status_get)"
 
     title
-    echo "5) Network > Adblock (Custom Geosite)"
+    echo "$(adblock_menu_title "Custom Geosite")"
     hr
     printf "Geosite File : %s\n" "${CUSTOM_GEOSITE_DAT}"
     printf "Asset Status : %s\n" "${asset_status}"
@@ -3383,24 +3823,41 @@ xray_adblock_menu() {
 
 ssh_dns_adblock_menu() {
   while true; do
-    local st enabled dns_port dns_service sync_service nft_table users_count entries
+    local st enabled dns_port dns_service dns_state sync_service sync_state nft_table users_count entries source_urls
     st="$(ssh_dns_adblock_status_get)"
     enabled="$(printf '%s\n' "${st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
     dns_port="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
     dns_service="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+    dns_state="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
     sync_service="$(printf '%s\n' "${st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+    sync_state="$(printf '%s\n' "${st}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
     nft_table="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
     users_count="$(printf '%s\n' "${st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
-  entries="$(printf '%s\n' "${st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
-  local source_urls
-  source_urls="$(printf '%s\n' "${st}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
+    entries="$(printf '%s\n' "${st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
+    source_urls="$(printf '%s\n' "${st}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
+    if [[ -z "${dns_state}" ]]; then
+      if [[ -n "${dns_service}" && "${dns_service}" != "missing" ]] && svc_exists "${dns_service}"; then
+        dns_state="$(svc_state "${dns_service}")"
+      else
+        dns_state="missing"
+      fi
+    fi
+    if [[ -z "${sync_state}" ]]; then
+      if [[ -n "${sync_service}" && "${sync_service}" != "missing" ]] && svc_exists "${sync_service}"; then
+        sync_state="$(svc_state "${sync_service}")"
+      else
+        sync_state="missing"
+      fi
+    fi
 
     title
-    echo "5) Network > Adblock > SSH Adblock"
+    echo "$(adblock_menu_title "SSH Adblock")"
     hr
     printf "Rule Status   : %s\n" "$([[ "${enabled}" == "1" ]] && echo "ON" || echo "OFF")"
     printf "DNS Service   : %s\n" "${dns_service:--}"
+    printf "DNS State     : %s\n" "${dns_state:--}"
     printf "Sync Service  : %s\n" "${sync_service:--}"
+    printf "Sync State    : %s\n" "${sync_state:--}"
     printf "NFT Table     : %s\n" "${nft_table:--}"
     printf "Managed Users : %s\n" "${users_count:-0}"
     printf "Blocklist     : %s entries\n" "${entries:-0}"
@@ -3416,23 +3873,23 @@ ssh_dns_adblock_menu() {
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
-	    case "${c}" in
-	      1)
-	        if ssh_dns_adblock_set_enabled_now 1; then
-	          log "SSH Adblock diaktifkan."
-	        else
-	          warn "SSH Adblock gagal diaktifkan."
-	        fi
-	        pause
-	        ;;
-	      2)
-	        if ssh_dns_adblock_set_enabled_now 0; then
-	          log "SSH Adblock dinonaktifkan."
-	        else
-	          warn "SSH Adblock gagal dinonaktifkan."
-	        fi
-	        pause
-	        ;;
+    case "${c}" in
+      1)
+        if ssh_dns_adblock_set_enabled_now 1; then
+          log "SSH Adblock diaktifkan."
+        else
+          warn "SSH Adblock gagal diaktifkan."
+        fi
+        pause
+        ;;
+      2)
+        if ssh_dns_adblock_set_enabled_now 0; then
+          log "SSH Adblock dinonaktifkan."
+        else
+          warn "SSH Adblock gagal dinonaktifkan."
+        fi
+        pause
+        ;;
       3)
         ssh_dns_adblock_url_add_menu
         ;;
@@ -3529,7 +3986,7 @@ ssh_dns_adblock_url_add_menu() {
   local input normalized confirm_rc=0
   while true; do
     title
-    echo "5) Network > Adblock > Add URL Source"
+    echo "$(adblock_menu_title "Add URL Source")"
     hr
     echo "Sumber URL harus berbentuk http:// atau https://"
     hr
@@ -3623,7 +4080,7 @@ ssh_dns_adblock_url_delete_menu() {
   local line choice idx i selected_url confirm_rc=0
   while true; do
     title
-    echo "5) Network > Adblock > Delete URL Source"
+    echo "$(adblock_menu_title "Delete URL Source")"
     hr
     urls=()
     while IFS= read -r line; do
@@ -3682,9 +4139,9 @@ adblock_menu() {
   need_python3
   while true; do
     local xray_st xray_enabled xray_outbound xray_duplicates
-    local ssh_st ssh_enabled dns_port dns_service sync_service nft_table users_count entries source_urls
+    local ssh_st ssh_enabled dns_port dns_service dns_state sync_service sync_state nft_table users_count entries source_urls
     local dirty manual_domains merged_domains rendered_status xray_asset last_update overall_status
-    local auto_update_enabled auto_update_timer auto_update_schedule auto_update_days
+    local auto_update_enabled auto_update_timer auto_update_schedule auto_update_days auto_update_service auto_update_service_state
     xray_st="$(xray_routing_adblock_rule_get 2>/dev/null || true)"
     xray_enabled="$(printf '%s\n' "${xray_st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
     xray_outbound="$(printf '%s\n' "${xray_st}" | awk -F'=' '/^outbound=/{sub(/^outbound=/,""); print; exit}')"
@@ -3694,7 +4151,9 @@ adblock_menu() {
     ssh_enabled="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
     dns_port="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
     dns_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+    dns_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
     sync_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+    sync_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
     nft_table="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
     users_count="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
     entries="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
@@ -3705,10 +4164,33 @@ adblock_menu() {
     rendered_status="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
     xray_asset="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^custom_dat=/{print $2; exit}')"
     auto_update_enabled="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_enabled=/{print $2; exit}')"
+    auto_update_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_service=/{print $2; exit}')"
+    auto_update_service_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_service_state=/{print $2; exit}')"
     auto_update_timer="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_timer=/{print $2; exit}')"
     auto_update_days="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
     auto_update_schedule="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_schedule=/{print $2; exit}')"
     last_update="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^last_update=/{sub(/^last_update=/,""); print; exit}')"
+    if [[ -z "${dns_state}" ]]; then
+      if [[ -n "${dns_service}" && "${dns_service}" != "missing" ]] && svc_exists "${dns_service}"; then
+        dns_state="$(svc_state "${dns_service}")"
+      else
+        dns_state="missing"
+      fi
+    fi
+    if [[ -z "${sync_state}" ]]; then
+      if [[ -n "${sync_service}" && "${sync_service}" != "missing" ]] && svc_exists "${sync_service}"; then
+        sync_state="$(svc_state "${sync_service}")"
+      else
+        sync_state="missing"
+      fi
+    fi
+    if [[ -z "${auto_update_service_state}" ]]; then
+      if [[ -n "${auto_update_service}" && "${auto_update_service}" != "missing" ]] && svc_exists "${auto_update_service}"; then
+        auto_update_service_state="$(svc_state "${auto_update_service}")"
+      else
+        auto_update_service_state="missing"
+      fi
+    fi
 
     if [[ "${xray_enabled}" == "1" && "${ssh_enabled}" == "1" ]]; then
       overall_status="ON"
@@ -3719,7 +4201,7 @@ adblock_menu() {
     fi
 
     title
-    echo "5) Network > Adblock"
+    echo "$(adblock_menu_title)"
     hr
     echo "Satu source: manual domains + URL sources. Output runtime: Xray custom.dat + SSH dnsmasq."
     hr
@@ -3729,6 +4211,8 @@ adblock_menu() {
     printf "URL Sources  : %s\n" "${source_urls:-0}"
     printf "Merged List  : %s domain\n" "${merged_domains:-0}"
     printf "Auto Update  : %s\n" "$([[ "${auto_update_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+    printf "Update Svc   : %s\n" "${auto_update_service:--}"
+    printf "Update State : %s\n" "${auto_update_service_state:--}"
     printf "Update Timer : %s\n" "${auto_update_timer:--}"
     printf "Interval     : %s day(s)\n" "${auto_update_days:-1}"
     printf "Schedule     : %s\n" "${auto_update_schedule:--}"
@@ -3744,7 +4228,9 @@ adblock_menu() {
     hr
     printf "SSH Rule     : %s\n" "$([[ "${ssh_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
     printf "DNS Service  : %s\n" "${dns_service:--}"
+    printf "DNS State    : %s\n" "${dns_state:--}"
     printf "Sync Service : %s\n" "${sync_service:--}"
+    printf "Sync State   : %s\n" "${sync_state:--}"
     printf "NFT Table    : %s\n" "${nft_table:--}"
     printf "Managed Users: %s\n" "${users_count:-0}"
     printf "Blocklist    : %s entries\n" "${entries:-0}"
@@ -3845,6 +4331,15 @@ warp_global_menu() {
   local source_file="" c="" desired=""
   while true; do
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
+    if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
+      title
+      echo "WARP Controls > WARP Global"
+      hr
+      warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
     title
     echo "WARP Controls > WARP Global"
     hr
@@ -3919,7 +4414,7 @@ warp_global_menu() {
           pause
           continue
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
         log "Staged WARP Global changes diterapkan."
@@ -3932,7 +4427,7 @@ warp_global_menu() {
           continue
         fi
         if confirm_menu_apply_now "Buang staged WARP Global changes?"; then
-          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
           log "Staged WARP Global changes dibuang."
@@ -3954,7 +4449,7 @@ warp_global_menu() {
             fi
           fi
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         return 0
         ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
@@ -4002,6 +4497,24 @@ warp_per_user_menu() {
 
   while true; do
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
+    if ! xray_json_file_require_valid "${XRAY_INBOUNDS_CONF}" "Xray inbounds config"; then
+      title
+      echo "WARP Controls > WARP per-user"
+      hr
+      warn "Menu diblok karena inbounds JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
+    if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
+      title
+      echo "WARP Controls > WARP per-user"
+      hr
+      warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
     mapfile -t all_users_raw < <(xray_inbounds_all_client_emails_get 2>/dev/null || true)
 
     local all_users=()
@@ -4036,13 +4549,18 @@ warp_per_user_menu() {
       [[ -n "${u}" ]] && direct_set["${u}"]=1
     done
 
-    local global_mode default_mode
+    local global_mode default_mode user_conflicts=0
     global_mode="$(warp_global_mode_get "${source_file}" || true)"
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
       *) default_mode="unknown" ;;
     esac
+    for u in "${all_users[@]}"; do
+      if [[ -n "${direct_set[${u}]:-}" && -n "${warp_set[${u}]:-}" ]]; then
+        ((user_conflicts+=1))
+      fi
+    done
 
     local total pages start end i row email status
     total="${#all_users[@]}"
@@ -4061,14 +4579,19 @@ warp_per_user_menu() {
       echo "Staging   : pending apply"
     fi
     hr
-    printf "%-4s %-32s %-7s\n" "No" "User" "Status"
-    printf "%-4s %-32s %-7s\n" "----" "--------------------------------" "-------"
+    printf "%-4s %-32s %-8s\n" "No" "User" "Status"
+    printf "%-4s %-32s %-8s\n" "----" "--------------------------------" "--------"
+    if (( user_conflicts > 0 )); then
+      echo "Conflict  : ${user_conflicts} user memiliki override direct+warp sekaligus."
+    fi
 
     for (( i=start; i<end; i++ )); do
       row=$((i - start + 1))
       email="${all_users[$i]}"
 
-      if [[ -n "${direct_set[${email}]:-}" ]]; then
+      if [[ -n "${direct_set[${email}]:-}" && -n "${warp_set[${email}]:-}" ]]; then
+        status="conflict"
+      elif [[ -n "${direct_set[${email}]:-}" ]]; then
         status="direct"
       elif [[ -n "${warp_set[${email}]:-}" ]]; then
         status="warp"
@@ -4076,7 +4599,7 @@ warp_per_user_menu() {
         status="${default_mode}"
       fi
 
-      printf "%-4s %-32s %-7s\n" "${row}" "${email}" "${status}"
+      printf "%-4s %-32s %-8s\n" "${row}" "${email}" "${status}"
     done
 
     echo
@@ -4100,7 +4623,7 @@ warp_per_user_menu() {
           fi
         fi
       fi
-      rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+      xray_stage_candidate_cleanup "${routing_candidate}"
       return 0
     fi
 
@@ -4131,7 +4654,7 @@ warp_per_user_menu() {
           pause
           continue
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
         log "Staged WARP per-user changes diterapkan."
@@ -4145,7 +4668,7 @@ warp_per_user_menu() {
           continue
         fi
         if confirm_menu_apply_now "Buang staged WARP per-user changes?"; then
-          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
           log "Staged WARP per-user changes dibuang."
@@ -4170,7 +4693,9 @@ warp_per_user_menu() {
     email="${all_users[$((start + c - 1))]}"
 
     local cur_status
-    if [[ -n "${direct_set[${email}]:-}" ]]; then
+    if [[ -n "${direct_set[${email}]:-}" && -n "${warp_set[${email}]:-}" ]]; then
+      cur_status="conflict"
+    elif [[ -n "${direct_set[${email}]:-}" ]]; then
       cur_status="direct"
     elif [[ -n "${warp_set[${email}]:-}" ]]; then
       cur_status="warp"
@@ -4278,6 +4803,24 @@ warp_per_inbounds_menu() {
 
   while true; do
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
+    if ! xray_json_file_require_valid "${XRAY_INBOUNDS_CONF}" "Xray inbounds config"; then
+      title
+      echo "WARP Controls > WARP per-protocol inbounds"
+      hr
+      warn "Menu diblok karena inbounds JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
+    if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
+      title
+      echo "WARP Controls > WARP per-protocol inbounds"
+      hr
+      warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
     mapfile -t all_tags_raw < <(xray_inbounds_all_tags_get 2>/dev/null || true)
 
     local tags=()
@@ -4312,13 +4855,18 @@ warp_per_inbounds_menu() {
       [[ -n "${t}" ]] && direct_set["${t}"]=1
     done
 
-    local global_mode default_mode
+    local global_mode default_mode inbound_conflicts=0
     global_mode="$(warp_global_mode_get "${source_file}" || true)"
     case "${global_mode}" in
       warp) default_mode="warp" ;;
       direct) default_mode="direct" ;;
       *) default_mode="unknown" ;;
     esac
+    for t in "${tags[@]}"; do
+      if [[ -n "${direct_set[${t}]:-}" && -n "${warp_set[${t}]:-}" ]]; then
+        ((inbound_conflicts+=1))
+      fi
+    done
 
     title
     echo "WARP Controls > WARP per-protocol inbounds"
@@ -4328,14 +4876,19 @@ warp_per_inbounds_menu() {
       echo "Staging   : pending apply"
     fi
     hr
-    printf "%-4s %-28s %-7s\n" "No" "Protocol (Inbound Tag)" "Status"
-    printf "%-4s %-28s %-7s\n" "----" "----------------------------" "-------"
+    printf "%-4s %-28s %-8s\n" "No" "Protocol (Inbound Tag)" "Status"
+    printf "%-4s %-28s %-8s\n" "----" "----------------------------" "--------"
+    if (( inbound_conflicts > 0 )); then
+      echo "Conflict  : ${inbound_conflicts} inbound memiliki override direct+warp sekaligus."
+    fi
 
     local i status
     for (( i=0; i<${#tags[@]}; i++ )); do
       t="${tags[$i]}"
 
-      if [[ -n "${direct_set[${t}]:-}" ]]; then
+      if [[ -n "${direct_set[${t}]:-}" && -n "${warp_set[${t}]:-}" ]]; then
+        status="conflict"
+      elif [[ -n "${direct_set[${t}]:-}" ]]; then
         status="direct"
       elif [[ -n "${warp_set[${t}]:-}" ]]; then
         status="warp"
@@ -4343,7 +4896,7 @@ warp_per_inbounds_menu() {
         status="${default_mode}"
       fi
 
-      printf "%-4s %-28s %-7s\n" "$((i + 1))" "${t}" "${status}"
+      printf "%-4s %-28s %-8s\n" "$((i + 1))" "${t}" "${status}"
     done
 
     hr
@@ -4365,7 +4918,7 @@ warp_per_inbounds_menu() {
           fi
         fi
       fi
-      rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+      xray_stage_candidate_cleanup "${routing_candidate}"
       return 0
     fi
 
@@ -4384,7 +4937,7 @@ warp_per_inbounds_menu() {
           pause
           continue
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
         log "Staged WARP per-inbound changes diterapkan."
@@ -4398,7 +4951,7 @@ warp_per_inbounds_menu() {
           continue
         fi
         if confirm_menu_apply_now "Buang staged WARP per-inbound changes?"; then
-          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
           log "Staged WARP per-inbound changes dibuang."
@@ -4422,7 +4975,9 @@ warp_per_inbounds_menu() {
     t="${tags[$((c - 1))]}"
 
     local cur_status
-    if [[ -n "${direct_set[${t}]:-}" ]]; then
+    if [[ -n "${direct_set[${t}]:-}" && -n "${warp_set[${t}]:-}" ]]; then
+      cur_status="conflict"
+    elif [[ -n "${direct_set[${t}]:-}" ]]; then
       cur_status="direct"
     elif [[ -n "${warp_set[${t}]:-}" ]]; then
       cur_status="warp"
@@ -4503,6 +5058,15 @@ warp_domain_geosite_menu() {
 
   while true; do
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
+    if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
+      title
+      echo "WARP Controls > WARP per-Geosite/Domain"
+      hr
+      warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
     title
     echo "WARP Controls > WARP per-Geosite/Domain"
     hr
@@ -4575,7 +5139,7 @@ warp_domain_geosite_menu() {
           fi
         fi
       fi
-      rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+      xray_stage_candidate_cleanup "${routing_candidate}"
       break
     fi
 
@@ -4687,7 +5251,7 @@ warp_domain_geosite_menu() {
           pause
           continue
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
         log "Staged WARP per-domain/geosite changes diterapkan."
@@ -4700,7 +5264,7 @@ warp_domain_geosite_menu() {
           continue
         fi
         if confirm_menu_apply_now "Buang staged WARP per-domain/geosite changes?"; then
-          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
           log "Staged WARP per-domain/geosite changes dibuang."
@@ -5298,7 +5862,7 @@ warp_tier_show_status() {
 
 warp_tier_switch_free() {
   title
-  echo "5) Network > WARP Controls > Switch ke WARP Free"
+  echo "$(xray_network_menu_title "WARP Controls > Switch ke WARP Free")"
   hr
 
   local confirm_rc=0
@@ -5393,7 +5957,7 @@ warp_tier_switch_free() {
 warp_tier_switch_plus() {
   local rc
   title
-  echo "5) Network > WARP Controls > Switch ke WARP Plus"
+  echo "$(xray_network_menu_title "WARP Controls > Switch ke WARP Plus")"
   hr
 
   local confirm_rc=0
@@ -5516,7 +6080,7 @@ warp_tier_switch_plus() {
 warp_tier_reconnect_regenerate() {
   local rc
   title
-  echo "5) Network > WARP Controls > Reconnect/Regenerate"
+  echo "$(xray_network_menu_title "WARP Controls > Reconnect/Regenerate")"
   hr
 
   local confirm_rc=0
@@ -5633,7 +6197,7 @@ warp_tier_reconnect_regenerate() {
 warp_tier_menu() {
   while true; do
     title
-    echo "5) Network > WARP Controls > WARP Tier (Free/Plus)"
+    echo "$(xray_network_menu_title "WARP Controls > WARP Tier (Free/Plus)")"
     hr
     warp_tier_show_status
     hr
@@ -5647,7 +6211,7 @@ warp_tier_menu() {
     case "${c}" in
       1)
         title
-        echo "5) Network > WARP Controls > WARP Tier Status"
+        echo "$(xray_network_menu_title "WARP Controls > WARP Tier Status")"
         hr
         warp_tier_show_status
         hr
@@ -5686,7 +6250,7 @@ warp_controls_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "5) Network > WARP"
+    ui_menu_screen_begin "$(xray_network_menu_title "WARP")"
     ui_menu_render_options items 76
     hr
     read -r -p "Pilih: " c
@@ -5734,7 +6298,7 @@ domain_geosite_menu() {
   while true; do
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
     title
-    echo "5) Network > Domain/Geosite Routing (Direct List)"
+    echo "$(xray_network_menu_title "Domain/Geosite Routing (Direct List)")"
     hr
     if [[ "${pending_changes}" == "true" ]]; then
       echo "Mode edit : STAGED"
@@ -5885,7 +6449,7 @@ PY
           pause
           continue
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
         log "Staged direct routing changes diterapkan."
@@ -5898,7 +6462,7 @@ PY
           continue
         fi
         if confirm_menu_apply_now "Buang staged direct routing changes?"; then
-          rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
           log "Staged direct routing changes dibuang."
@@ -5920,7 +6484,7 @@ PY
             fi
           fi
         fi
-        rm -f "${routing_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${routing_candidate}"
         break
         ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
@@ -5952,6 +6516,8 @@ PY
 
 xray_dns_status_get() {
   # output:
+  # parse_state=ok|missing|invalid
+  # error=<...>
   # primary=<...>
   # secondary=<...>
   # strategy=<...>
@@ -5960,6 +6526,8 @@ xray_dns_status_get() {
   need_python3
 
   if [[ ! -f "${src_file}" ]]; then
+    echo "parse_state=missing"
+    echo "error="
     echo "primary="
     echo "secondary="
     echo "strategy="
@@ -5975,6 +6543,12 @@ try:
   with open(src,'r',encoding='utf-8') as f:
     cfg=json.load(f)
 except Exception:
+  print('parse_state=invalid')
+  print('error=JSON DNS invalid atau tidak bisa dibaca')
+  print('primary=')
+  print('secondary=')
+  print('strategy=')
+  print('cache=on')
   raise SystemExit(0)
 
 dns=cfg.get('dns') or {}
@@ -6003,6 +6577,8 @@ strategy=qs if isinstance(qs, str) else ''
 disable_cache=dns.get('disableCache')
 cache='off' if bool(disable_cache) else 'on'
 
+print('parse_state=ok')
+print('error=')
 print('primary=' + primary)
 print('secondary=' + secondary)
 print('strategy=' + strategy)
@@ -6014,6 +6590,9 @@ xray_dns_candidate_prepare() {
   local -n _out_ref="$1"
   if [[ -n "${_out_ref}" && -f "${_out_ref}" ]]; then
     return 0
+  fi
+  if ! xray_json_file_require_valid "${XRAY_DNS_CONF}" "Xray DNS config" "1"; then
+    return 1
   fi
   _out_ref="$(mktemp "${WORK_DIR}/dns-stage.XXXXXX.json" 2>/dev/null || true)"
   [[ -n "${_out_ref}" ]] || return 1
@@ -6029,6 +6608,11 @@ xray_dns_candidate_prepare() {
       _out_ref=""
       return 1
     }
+  fi
+  if ! xray_stage_origin_capture "${_out_ref}" "${XRAY_DNS_CONF}"; then
+    xray_stage_candidate_cleanup "${_out_ref}"
+    _out_ref=""
+    return 1
   fi
   chmod 600 "${_out_ref}" >/dev/null 2>&1 || true
   return 0
@@ -6055,12 +6639,12 @@ if os.path.isfile(path):
   try:
     with open(path, "r", encoding="utf-8") as f:
       cfg = json.load(f)
-  except Exception:
-    cfg = {}
+  except Exception as exc:
+    raise SystemExit(f"Config DNS tidak valid: {exc}")
 else:
   cfg = {}
 if not isinstance(cfg, dict):
-  cfg = {}
+  raise SystemExit("Config DNS tidak valid: root JSON bukan object")
 
 dns = cfg.get("dns")
 if not isinstance(dns, dict):
@@ -6138,6 +6722,7 @@ xray_dns_apply_candidate_file() {
   set +e
   (
     flock -x 200
+    xray_stage_origin_verify_live "${candidate}" "${XRAY_DNS_CONF}" "DNS Xray" || exit 89
     xray_dns_conf_bootstrap_locked || exit 1
     ensure_path_writable "${XRAY_DNS_CONF}"
     cp -a "${XRAY_DNS_CONF}" "${backup}" || exit 1
@@ -6157,6 +6742,10 @@ xray_dns_apply_candidate_file() {
   rc=$?
   set -e
 
+  if (( rc == 89 )); then
+    warn "Apply staged DNS dibatalkan karena file live berubah sejak staging dibuat."
+    return 1
+  fi
   xray_txn_rc_or_die "${rc}" \
     "Gagal apply staged DNS settings (rollback ke backup: ${backup})" \
     "xray tidak aktif setelah apply staged DNS settings. Config di-rollback ke backup: ${backup}"
@@ -6456,11 +7045,13 @@ PY
 dns_show_status() {
   local src_file="${1:-${XRAY_DNS_CONF}}"
   local title_label="${2:-DNS Status}"
-  local primary secondary strategy cache
-  primary="$(xray_dns_status_get "${src_file}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
-  secondary="$(xray_dns_status_get "${src_file}" | awk -F'=' '/^secondary=/{print $2; exit}' 2>/dev/null || true)"
-  strategy="$(xray_dns_status_get "${src_file}" | awk -F'=' '/^strategy=/{print $2; exit}' 2>/dev/null || true)"
-  cache="$(xray_dns_status_get "${src_file}" | awk -F'=' '/^cache=/{print $2; exit}' 2>/dev/null || true)"
+  local primary secondary strategy cache parse_state status_blob
+  status_blob="$(xray_dns_status_get "${src_file}")"
+  parse_state="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^parse_state=/{print $2; exit}' 2>/dev/null || true)"
+  primary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
+  secondary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^secondary=/{print $2; exit}' 2>/dev/null || true)"
+  strategy="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^strategy=/{print $2; exit}' 2>/dev/null || true)"
+  cache="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^cache=/{print $2; exit}' 2>/dev/null || true)"
 
   if [[ "${cache}" == "on" ]]; then
     cache="ON"
@@ -6476,6 +7067,11 @@ dns_show_status() {
   echo "${title_label}"
   hr
   echo
+  case "${parse_state}" in
+    invalid) printf "Parser State    : %s\n" "INVALID JSON" ;;
+    missing) printf "Parser State    : %s\n" "MISSING" ;;
+    *) printf "Parser State    : %s\n" "OK" ;;
+  esac
   printf "Primary DNS     : %s\n" "${primary}"
   printf "Secondary DNS   : %s\n" "${secondary}"
   printf "Query Strategy  : %s\n" "${strategy}"
@@ -6538,30 +7134,40 @@ PY
 dns_settings_menu() {
   local dns_candidate=""
   local pending_changes="false"
-  local status_source="" status_label="" primary="" secondary="" strategy="" cache=""
+  local status_source="" status_label="" status_blob="" primary="" secondary="" strategy="" cache="" parse_state=""
   while true; do
     status_source="${dns_candidate:-${XRAY_DNS_CONF}}"
     status_label="LIVE"
     if [[ "${pending_changes}" == "true" && -n "${dns_candidate}" ]]; then
       status_label="STAGED"
     fi
-    primary="$(xray_dns_status_get "${status_source}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
-    secondary="$(xray_dns_status_get "${status_source}" | awk -F'=' '/^secondary=/{print $2; exit}' 2>/dev/null || true)"
-    strategy="$(xray_dns_status_get "${status_source}" | awk -F'=' '/^strategy=/{print $2; exit}' 2>/dev/null || true)"
-    cache="$(xray_dns_status_get "${status_source}" | awk -F'=' '/^cache=/{print $2; exit}' 2>/dev/null || true)"
+    status_blob="$(xray_dns_status_get "${status_source}")"
+    parse_state="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^parse_state=/{print $2; exit}' 2>/dev/null || true)"
+    primary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
+    secondary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^secondary=/{print $2; exit}' 2>/dev/null || true)"
+    strategy="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^strategy=/{print $2; exit}' 2>/dev/null || true)"
+    cache="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^cache=/{print $2; exit}' 2>/dev/null || true)"
     [[ -n "${primary}" ]] || primary="-"
     [[ -n "${secondary}" ]] || secondary="-"
     [[ -n "${strategy}" ]] || strategy="-"
     [[ -n "${cache}" ]] || cache="on"
 
     title
-    echo "5) Network > DNS Settings"
+    echo "$(xray_network_menu_title "DNS Settings")"
     hr
     echo "Source status : ${status_label}"
+    case "${parse_state}" in
+      invalid) echo "Parser state  : INVALID JSON" ;;
+      missing) echo "Parser state  : MISSING (akan bootstrap saat apply)" ;;
+      *) echo "Parser state  : OK" ;;
+    esac
     echo "Primary DNS   : ${primary}"
     echo "Secondary DNS : ${secondary}"
     echo "QueryStrategy : ${strategy}"
     echo "DNS Cache     : $( [[ "${cache}" == "on" ]] && echo ON || echo OFF )"
+    if [[ "${parse_state}" == "invalid" ]]; then
+      warn "DNS Settings diblok sampai JSON DNS valid kembali. Gunakan DNS Editor atau Checks untuk memperbaiki file."
+    fi
     hr
     echo "  1) Set Primary DNS"
     echo "  2) Set Secondary DNS"
@@ -6579,6 +7185,10 @@ dns_settings_menu() {
     read -r -p "Pilih: " c
     case "${c}" in
       1)
+        if [[ "${parse_state}" == "invalid" ]]; then
+          pause
+          continue
+        fi
         read -r -p "Primary DNS (contoh 1.1.1.1) (atau kembali): " d
         if is_back_choice "${d}"; then
           continue
@@ -6608,6 +7218,10 @@ dns_settings_menu() {
         pause
         ;;
       2)
+        if [[ "${parse_state}" == "invalid" ]]; then
+          pause
+          continue
+        fi
         local current_primary=""
         read -r -p "Secondary DNS (contoh 8.8.8.8) (atau kembali): " d
         if is_back_choice "${d}"; then
@@ -6618,7 +7232,7 @@ dns_settings_menu() {
           pause
           continue
         }
-        current_primary="$(xray_dns_status_get "${status_source}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
+        current_primary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
         if [[ -z "${current_primary}" ]]; then
           warn "Primary DNS belum diset. Set Primary DNS dulu sebelum mengisi Secondary DNS."
           pause
@@ -6644,6 +7258,10 @@ dns_settings_menu() {
         pause
         ;;
       3)
+        if [[ "${parse_state}" == "invalid" ]]; then
+          pause
+          continue
+        fi
         read -r -p "Query Strategy (UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6, clear=hapus) (atau kembali): " qs
         if is_back_choice "${qs}"; then
           continue
@@ -6695,6 +7313,10 @@ dns_settings_menu() {
         esac
         ;;
       4)
+        if [[ "${parse_state}" == "invalid" ]]; then
+          pause
+          continue
+        fi
         if ! confirm_menu_apply_now "Stage toggle DNS Cache sekarang?"; then
           pause
           continue
@@ -6715,6 +7337,11 @@ dns_settings_menu() {
         ;;
       5)
         if [[ "${pending_changes}" == "true" ]]; then
+          if [[ "${parse_state}" == "invalid" ]]; then
+            warn "Staged DNS invalid. Buang staging lalu ulangi dari state live terbaru."
+            pause
+            continue
+          fi
           if ! confirm_menu_apply_now "Apply semua staged DNS changes sekarang?"; then
             pause
             continue
@@ -6723,7 +7350,7 @@ dns_settings_menu() {
             pause
             continue
           fi
-          rm -f "${dns_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${dns_candidate}"
           dns_candidate=""
           pending_changes="false"
           pause
@@ -6738,7 +7365,7 @@ dns_settings_menu() {
           continue
         fi
         if confirm_menu_apply_now "Buang semua staged DNS changes?"; then
-          rm -f "${dns_candidate}" >/dev/null 2>&1 || true
+          xray_stage_candidate_cleanup "${dns_candidate}"
           dns_candidate=""
           pending_changes="false"
           log "Staged DNS changes dibuang."
@@ -6756,7 +7383,12 @@ dns_settings_menu() {
       0|kembali|k|back|b)
         if [[ "${pending_changes}" == "true" ]]; then
           local back_rc=0
-          if confirm_yn_or_back "Apply staged DNS changes sebelum keluar? Pilih no untuk membuang staging."; then
+          if [[ "${parse_state}" == "invalid" ]]; then
+            warn "Staged DNS invalid. Staging dibuang."
+            xray_stage_candidate_cleanup "${dns_candidate}"
+            dns_candidate=""
+            pending_changes="false"
+          elif confirm_yn_or_back "Apply staged DNS changes sebelum keluar? Pilih no untuk membuang staging."; then
             if ! dns_settings_run_mutation "Staged DNS settings applied" xray_dns_apply_candidate_file "${dns_candidate}"; then
               pause
               continue
@@ -6766,11 +7398,11 @@ dns_settings_menu() {
             if (( back_rc == 2 )); then
               continue
             fi
-            rm -f "${dns_candidate}" >/dev/null 2>&1 || true
+            xray_stage_candidate_cleanup "${dns_candidate}"
             log "Staged DNS changes dibuang."
           fi
         fi
-        rm -f "${dns_candidate}" >/dev/null 2>&1 || true
+        xray_stage_candidate_cleanup "${dns_candidate}"
         break
         ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
@@ -6781,7 +7413,7 @@ dns_settings_menu() {
 dns_addons_menu() {
   while true; do
     title
-    echo "5) Network > DNS Add-ons"
+    echo "$(xray_network_menu_title "DNS Add-ons")"
     hr
     if [[ -f "${XRAY_DNS_CONF}" ]]; then
       echo "DNS conf: ${XRAY_DNS_CONF}"
@@ -6802,7 +7434,7 @@ dns_addons_menu() {
         if have_cmd nano; then
           if ! xray_dns_run_locked dns_addons_edit_with_nano; then
             pause
-            return 1
+            continue
           fi
           pause
         else
@@ -6974,7 +7606,7 @@ dns_addons_edit_with_nano() {
 network_diagnostics_menu() {
   while true; do
     title
-    echo "5) Network > Diagnostics"
+    echo "$(xray_network_menu_title "Diagnostics")"
     hr
     echo "  1) Show summary (routing)"
     echo "  2) Validate conf.d JSON (jq)"
@@ -7057,11 +7689,10 @@ network_menu() {
     "2|DNS"
     "3|DNS Editor"
     "4|Checks"
-    "5|Adblock"
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "5) Network"
+    ui_menu_screen_begin "$(xray_network_menu_title)"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -7073,7 +7704,6 @@ network_menu() {
       2) menu_run_isolated_report "DNS Settings" dns_settings_menu ;;
       3) menu_run_isolated_report "DNS Add-ons" dns_addons_menu ;;
       4) menu_run_isolated_report "Network Diagnostics" network_diagnostics_menu ;;
-      5) menu_run_isolated_report "Adblock" adblock_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

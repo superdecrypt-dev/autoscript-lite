@@ -121,7 +121,7 @@ install_extra_deps() {
   mkdir -p /var/log/chrony
 
   ensure_dpkg_consistent
-  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear dnsmasq-base
+  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear dnsmasq-base wireguard-tools
 
   if command -v stunnel4 >/dev/null 2>&1 || command -v stunnel >/dev/null 2>&1; then
     ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base; stunnel sudah tersedia)."

@@ -77,7 +77,8 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
 4. `enable_cron_service`, `setup_time_sync_chrony`, `enable_bbr`,
    `setup_swap_2gb`, `tune_ulimit`, `install_fail2ban_aggressive`
    - target modul: `install/network.sh`
-5. `install_wgcf`, `setup_wgcf`, `install_wireproxy`, `setup_wireproxy`
+5. `install_wgcf`, `setup_wgcf`, `install_wireproxy`, `setup_wireproxy`,
+   `setup_ssh_warp_interface`
    - target modul: `install/network.sh`
 6. `domain_menu_v2`, Cloudflare helpers, `install_acme_and_issue_cert`
    - target modul: `install/domain.sh`

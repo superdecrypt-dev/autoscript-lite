@@ -444,9 +444,9 @@ maintenance_menu() {
       7) menu_run_isolated_report "Wireproxy Status" wireproxy_status_menu ;;
       8) menu_run_isolated_report "Wireproxy Restart" wireproxy_restart_menu ;;
       9) menu_run_isolated_report "Daemon Status" daemon_status_menu ;;
-      10) menu_run_isolated_report "SSHWS Status" sshws_status_menu ;;
-      11) menu_run_isolated_report "SSHWS Restart" sshws_restart_menu ;;
-      12) menu_run_isolated_report "SSHWS Diagnostics" sshws_diagnostics_menu ;;
+      10) menu_run_isolated_report "SSHWS Status" ssh_runtime_context_run maintenance sshws_status_menu ;;
+      11) menu_run_isolated_report "SSHWS Restart" ssh_runtime_context_run maintenance sshws_restart_menu ;;
+      12) menu_run_isolated_report "SSHWS Diagnostics" ssh_runtime_context_run maintenance sshws_diagnostics_menu ;;
       13) menu_run_isolated_report "Edge Runtime Status" edge_runtime_status_menu ;;
       14) menu_run_isolated_report "Edge Runtime Restart" edge_runtime_restart_menu ;;
       15) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;

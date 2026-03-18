@@ -79,7 +79,7 @@ Bukan ingress SSH.
 
 ### Model
 
-- user mengelola source bersama dari `5) Network > Adblock`
+- user mengelola source bersama dari `13) Adblocker`
 - menu `Update Adblock` membangun ulang `custom.dat`
 - rule routing Xray tetap memakai `ext:custom.dat:adblock`
 - domain yang match diarahkan ke outbound `blocked`
@@ -222,7 +222,7 @@ Tetapi itu harus dianggap hardening tambahan, bukan bagian fase pertama.
 
 Supaya tetap sederhana, adblock cukup muncul di satu jalur user-facing:
 
-- `5) Network > Adblock`
+- `13) Adblocker`
 
 Isi menu gabungan:
 

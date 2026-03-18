@@ -77,6 +77,8 @@ rendered_path = pathlib.Path(sys.argv[2])
 merged_path = pathlib.Path(sys.argv[3])
 preserve_keys = {
   "SSH_DNS_ADBLOCK_ENABLED",
+  "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY",
+  "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY",
   "AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED",
   "AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS",
   "AUTOSCRIPT_ADBLOCK_DIRTY",
@@ -228,12 +230,17 @@ install_ssh_dns_adblock_foundation() {
 
   adblock_auto_update_days_effective="$(adblock_config_get_value AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS "${ADBLOCK_AUTO_UPDATE_DAYS}")"
   [[ "${adblock_auto_update_days_effective}" =~ ^[1-9][0-9]*$ ]] || adblock_auto_update_days_effective="${ADBLOCK_AUTO_UPDATE_DAYS}"
+  local dns_upstream_primary dns_upstream_secondary
+  dns_upstream_primary="$(adblock_config_get_value SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY "1.1.1.1")"
+  dns_upstream_secondary="$(adblock_config_get_value SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY "8.8.8.8")"
 
   render_setup_template_or_die \
     "config/ssh-adblock-dnsmasq.conf" \
     "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" \
     0644 \
     "SSH_DNS_ADBLOCK_PORT=${SSH_DNS_ADBLOCK_PORT}" \
+    "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY=${dns_upstream_primary}" \
+    "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY=${dns_upstream_secondary}" \
     "SSH_DNS_ADBLOCK_RENDERED_FILE=${SSH_DNS_ADBLOCK_RENDERED_FILE}"
 
   render_setup_template_or_die \

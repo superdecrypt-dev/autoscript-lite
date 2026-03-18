@@ -11,7 +11,7 @@ main_menu_render_options() {
     "2|SSH Users"
     "3|Xray QAC"
     "4|SSH QAC"
-    "5|Network"
+    "5|Xray Network"
     "6|Domain Control"
     "7|Speedtest"
     "8|Security"
@@ -19,6 +19,8 @@ main_menu_render_options() {
     "10|Traffic"
     "11|Discord Bot"
     "12|Telegram Bot"
+    "13|Adblocker"
+    "14|SSH Network"
     "0|Keluar"
   )
   ui_menu_render_two_columns_fixed items
@@ -41,7 +43,7 @@ main_menu() {
       2|ssh) run_action "SSH Users" ssh_menu ;;
       3|quota) run_action "Xray QAC" quota_menu ;;
       4|sshquota|ssh-qac) run_action "SSH QAC" ssh_quota_menu ;;
-      5|network) run_action "Network" network_menu ;;
+      5|network) run_action "Xray Network" network_menu ;;
       6|domain) run_action "Domain Control" domain_control_menu ;;
       7|speedtest|speed) run_action "Speedtest" speedtest_menu ;;
       8|security) run_action "Security" fail2ban_menu ;;
@@ -49,6 +51,8 @@ main_menu() {
       10|analytics|traffic) run_action "Traffic" traffic_analytics_menu ;;
       11) run_action "Discord Bot" install_discord_bot_menu ;;
       12) run_action "Telegram Bot" install_telegram_bot_menu ;;
+      13|adblock|adblocker) run_action "Adblocker" adblock_menu ;;
+      14|ssh-network|sshnet) run_action "SSH Network" ssh_network_menu ;;
       0|kembali|k|back|b) exit 0 ;;
       *) invalid_choice ;;
     esac

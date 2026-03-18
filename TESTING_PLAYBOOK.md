@@ -408,6 +408,18 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `DNS Summary`
 - `Domain Guard Status`
 - `Domain Guard Check`
+- `Xray Network -> WARP Global`: stage perubahan, ubah `30-routing.json` dari shell terpisah, lalu coba apply staged. Ekspektasi: apply ditolak karena live berubah sejak staging dibuat.
+- `Xray Network -> WARP Global` setelah stale conflict: submenu tetap terbuka agar operator bisa `discard` atau stage ulang, bukan terpental ke parent menu.
+- `Xray Network -> DNS Settings`: korupkan sementara `02-dns.json`, buka menu, pastikan tampil `Parser state: INVALID JSON` dan menu per-field menolak staging sampai file valid lagi.
+- `Xray Network -> WARP Per User / Per Inbound`: saat `10-inbounds.json` atau `30-routing.json` invalid, menu harus warn invalid JSON, bukan menampilkan list kosong.
+- `Xray Network -> WARP Status`: verifikasi layar menampilkan `WARP Global`, jumlah override, dan `Conflict` selain status `wireproxy`.
+- `Xray Network -> WARP Per User / Per Inbound`: bila 1 entity sengaja dimasukkan ke marker `direct` dan `warp` sekaligus, status menu harus tampil `conflict`.
+- `SSH Network -> Routing SSH Global -> Apply Runtime`
+- `SSH Network -> WARP SSH Per-User -> Enable WARP for User`
+- `SSH Network -> WARP SSH Per-User -> Reset User to Inherit` lalu verifikasi `wg-quick@<iface>` kembali `inactive` dan `disabled`
+- `SSH Network -> WARP SSH Global -> Stop WARP Interface`
+- `SSH Network -> WARP SSH Global -> Set WARP Interface`
+- `systemctl restart ssh-network-restore.service` lalu verifikasi `Result=success`
 
 6. Ops
 - `View Ops Status`

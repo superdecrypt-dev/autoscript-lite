@@ -48,8 +48,8 @@ Catatan penting:
 - Pergantian domain lewat `6) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
 - `SSH QAC` mengatur `quota`, `IP/Login limit`, `speed limit`, dan `expiry` khusus untuk SSH.
 - `Recover Pending Txn` di `Xray Users` dan `SSH Users` adalah menu repair untuk journal transaksi yang putus di tengah, bukan menu harian. Jika `pending = 0`, menu itu bisa diabaikan.
-- `5) Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
-- `5) Network > WARP Tier` dapat menampilkan status `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
+- `5) Xray Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Xray Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
+- `5) Xray Network > WARP Tier` dapat menampilkan status `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
 - `7) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
 
 ## Menu Utama
@@ -58,7 +58,7 @@ Catatan penting:
 2) SSH Users
 3) Xray QAC
 4) SSH QAC
-5) Network
+5) Xray Network
 6) Domain Control
 7) Speedtest
 8) Security
@@ -66,6 +66,8 @@ Catatan penting:
 10) Traffic
 11) Discord Bot
 12) Telegram Bot
+13) Adblocker
+14) SSH Network
 0) Keluar
 ```
 
@@ -78,8 +80,8 @@ Catatan penting:
   View JSON, set/reset quota, toggle block, toggle/set/unlock IP limit, set speed download/upload, dan enforcement metadata user Xray.
 - `4) SSH QAC`
   View JSON, set/reset quota, toggle block, toggle/set/unlock login limit, set speed download/upload, dan sinkronisasi/enforcement metadata SSH.
-- `5) Network`
-  `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`, `tier free/plus`), `DNS Settings` staged, `DNS Add-ons` advanced editor, `Checks` routing/config/service, dan `Adblock` untuk manual list, URL source, bound users, auto update, dan runtime rebuild.
+- `5) Xray Network`
+  `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`, `tier free/plus`), `DNS Settings` staged, `DNS Add-ons` advanced editor, dan `Checks` routing/config/service.
 - `6) Domain Control`
   `Set Domain`, `Current Domain`, `Guard Check`, `Guard Renew`, `Refresh Account Info`, `Repair Compat Domain Drift`, dan `Repair Target DNS Record`.
 - `7) Speedtest`
@@ -94,6 +96,10 @@ Catatan penting:
   Installer dan wiring bot Discord sebagai pelengkap operasi dari luar CLI host.
 - `12) Telegram Bot`
   Installer dan wiring bot Telegram dengan flow menu-first untuk status, account, QAC, domain, network, dan ops.
+- `13) Adblocker`
+  Source adblock gabungan untuk `Xray` dan `SSH`: enable/disable runtime, manual domain, URL source, bound users, auto update, dan rebuild artifact.
+- `14) SSH Network`
+  DNS steering user SSH (`dnsmasq` + `nftables`) dan routing `WARP` SSH global/per-user berbasis `fwmark`, `ip rule`, dan `wg-quick`.
 
 ## Fitur Installer dan Runtime
 - `run.sh`
@@ -116,7 +122,7 @@ Catatan penting:
 - CRUD `Xray Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset UUID/Password`, `Delete`, dan `Recover Pending Txn`.
 - CRUD `SSH Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset Password`, `Delete`, `SSH WS Status`, `Restart SSH WS`, `Active Sessions`, dan `Recover Pending Txn`.
 - `Xray QAC` dan `SSH QAC` sudah diuji live untuk flow `view/detail`, `quota`, `block`, `IP/login limit`, `speed limit`, dan `sync/enforcement`.
-- `5) Network`, `6) Domain Control`, dan `7) Speedtest` sudah disweep live sampai seluruh submenu utama terpilih. Jalur mutasi berisiko tinggi seperti edit DNS full-replace atau ganti domain diuji sampai prompt dan dibatalkan dengan sadar bila tidak dibutuhkan.
+- `5) Xray Network`, `6) Domain Control`, `7) Speedtest`, `13) Adblocker`, dan `14) SSH Network` sudah disweep live sampai seluruh submenu utama terpilih. Jalur mutasi berisiko tinggi seperti edit DNS full-replace atau ganti domain diuji sampai prompt dan dibatalkan dengan sadar bila tidak dibutuhkan.
 
 ## Bot
 ### Telegram

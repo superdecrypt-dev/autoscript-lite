@@ -899,8 +899,10 @@ func printStatus(cfg config) {
 	}
 	fmt.Printf("enabled=%d\n", boolInt(cfg.Enabled))
 	fmt.Printf("dirty=%d\n", boolInt(cfg.Dirty))
-	fmt.Printf("dns_service=%s\n", serviceState(cfg.DNSService))
-	fmt.Printf("sync_service=%s\n", serviceState(cfg.SyncService))
+	fmt.Printf("dns_service=%s\n", strings.TrimSpace(cfg.DNSService))
+	fmt.Printf("dns_service_state=%s\n", serviceState(cfg.DNSService))
+	fmt.Printf("sync_service=%s\n", strings.TrimSpace(cfg.SyncService))
+	fmt.Printf("sync_service_state=%s\n", serviceState(cfg.SyncService))
 	if tableExists(cfg.NFTTable) {
 		fmt.Printf("nft_table=present\n")
 	} else {
@@ -928,7 +930,8 @@ func printStatus(cfg config) {
 	}
 	fmt.Printf("custom_dat_path=%s\n", cfg.CustomDat)
 	fmt.Printf("auto_update_enabled=%d\n", boolInt(cfg.AutoUpdateEnabled))
-	fmt.Printf("auto_update_service=%s\n", serviceState(cfg.AutoUpdateService))
+	fmt.Printf("auto_update_service=%s\n", strings.TrimSpace(cfg.AutoUpdateService))
+	fmt.Printf("auto_update_service_state=%s\n", serviceState(cfg.AutoUpdateService))
 	fmt.Printf("auto_update_timer=%s\n", serviceState(cfg.AutoUpdateTimer))
 	fmt.Printf("auto_update_days=%d\n", cfg.AutoUpdateDays)
 	fmt.Printf("auto_update_schedule=every %d day(s)\n", cfg.AutoUpdateDays)

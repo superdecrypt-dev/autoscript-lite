@@ -31,7 +31,9 @@ CERT_DIR="/opt/cert"
 CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
 CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
 WIREPROXY_CONF="/etc/wireproxy/config.conf"
+WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
 WGCF_DIR="/etc/wgcf"
+SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
 XRAY_ASSET_DIR="/usr/local/share/xray"
 CUSTOM_GEOSITE_DAT="${XRAY_ASSET_DIR}/custom.dat"
 ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
@@ -142,11 +144,20 @@ SSH_DNS_ADBLOCK_DNSMASQ_CONF="${SSH_DNS_ADBLOCK_ROOT}/dnsmasq.conf"
 SSH_DNS_ADBLOCK_SERVICE="${SSH_DNS_ADBLOCK_SERVICE:-ssh-adblock-dns.service}"
 SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-adblock-sync.service}"
 SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/adblock-sync}"
+SSH_NETWORK_ROOT="${SSH_NETWORK_ROOT:-/etc/autoscript/ssh-network}"
+SSH_NETWORK_CONFIG_FILE="${SSH_NETWORK_ROOT}/config.env"
+SSH_NETWORK_NFT_TABLE="${SSH_NETWORK_NFT_TABLE:-autoscript_ssh_network}"
+SSH_NETWORK_FWMARK="${SSH_NETWORK_FWMARK:-42042}"
+SSH_NETWORK_ROUTE_TABLE="${SSH_NETWORK_ROUTE_TABLE:-42042}"
+SSH_NETWORK_RULE_PREF="${SSH_NETWORK_RULE_PREF:-14200}"
+SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
+SSH_NETWORK_LOCK_FILE="${SSH_NETWORK_LOCK_FILE:-/run/autoscript/locks/ssh-network.lock}"
 ADBLOCK_AUTO_UPDATE_SERVICE="${ADBLOCK_AUTO_UPDATE_SERVICE:-adblock-update.service}"
 ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
+  "${WIREGUARD_DIR}" "${SSH_WARP_SYNC_BIN}" \
   "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
   "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
   "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
@@ -159,6 +170,9 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
   "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${SSH_DNS_ADBLOCK_URLS_FILE}" "${SSH_DNS_ADBLOCK_RENDERED_FILE}" \
   "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" "${SSH_DNS_ADBLOCK_SERVICE}" \
   "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}" \
+  "${SSH_NETWORK_ROOT}" "${SSH_NETWORK_CONFIG_FILE}" "${SSH_NETWORK_NFT_TABLE}" \
+  "${SSH_NETWORK_FWMARK}" "${SSH_NETWORK_ROUTE_TABLE}" "${SSH_NETWORK_RULE_PREF}" \
+  "${SSH_NETWORK_WARP_INTERFACE}" "${SSH_NETWORK_LOCK_FILE}" \
   "${ADBLOCK_AUTO_UPDATE_SERVICE}" "${ADBLOCK_AUTO_UPDATE_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
@@ -206,6 +220,8 @@ init_runtime_dirs() {
   chmod 700 "${SSH_ACCOUNT_DIR}" || true
   mkdir -p "${SSH_USERS_STATE_DIR}"
   chmod 700 "${SSH_USERS_STATE_DIR}" || true
+  mkdir -p "${SSH_NETWORK_ROOT}" 2>/dev/null || true
+  chmod 700 "${SSH_NETWORK_ROOT}" 2>/dev/null || true
 
   local lock_dir
   for lock_dir in \
@@ -214,7 +230,8 @@ init_runtime_dirs() {
     "$(dirname "${USER_DATA_MUTATION_LOCK_FILE}")" \
     "$(dirname "${ROUTING_LOCK_FILE}")" \
     "$(dirname "${DNS_LOCK_FILE}")" \
-    "$(dirname "${WARP_LOCK_FILE}")"; do
+    "$(dirname "${WARP_LOCK_FILE}")" \
+    "$(dirname "${SSH_NETWORK_LOCK_FILE}")"; do
     mkdir -p "${lock_dir}" 2>/dev/null || true
     chmod 700 "${lock_dir}" 2>/dev/null || true
   done
