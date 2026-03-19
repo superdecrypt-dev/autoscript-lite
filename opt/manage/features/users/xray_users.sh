@@ -4079,7 +4079,7 @@ user_add_menu() {
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
-  if ! read -r -p "Protocol (1-5/kembali): " p; then
+  if ! read -r -p "Protocol (1-3/kembali): " p; then
     echo
     return 0
   fi
@@ -4317,7 +4317,7 @@ user_del_menu() {
   echo "Pilih protocol:"
   proto_list_menu_print
   hr
-  if ! read -r -p "Protocol (1-5/kembali): " p; then
+  if ! read -r -p "Protocol (1-3/kembali): " p; then
     echo
     return 0
   fi
@@ -4437,6 +4437,7 @@ user_del_menu() {
 
 user_extend_expiry_menu() {
   local page=0
+  local selected_file="" selected_proto="" username="" proto=""
   while true; do
     title
     echo "Xray Users > Set Expiry"
@@ -4447,7 +4448,7 @@ user_extend_expiry_menu() {
     ACCOUNT_PAGE="${page}"
     account_print_table_page "${ACCOUNT_PAGE}"
     hr
-    echo "Ketik: lanjut / next / previous / kembali"
+    echo "Ketik NO akun untuk pilih langsung, atau: lanjut / next / previous / kembali"
     if ! read -r -p "Pilihan: " nav; then
       echo
       return 0
@@ -4465,7 +4466,35 @@ user_extend_expiry_menu() {
       previous|p|prev)
         if (( page > 0 )); then page=$((page - 1)); fi
         ;;
-      *) invalid_choice ;;
+      *)
+        if [[ ! "${nav}" =~ ^[0-9]+$ ]]; then
+          invalid_choice
+          continue
+        fi
+
+        local total pages start end rows idx
+        total="${#ACCOUNT_FILES[@]}"
+        pages=$(( (total + ACCOUNT_PAGE_SIZE - 1) / ACCOUNT_PAGE_SIZE ))
+        if (( page < 0 )); then page=0; fi
+        if (( pages > 0 && page >= pages )); then page=$((pages - 1)); fi
+        start=$((page * ACCOUNT_PAGE_SIZE))
+        end=$((start + ACCOUNT_PAGE_SIZE))
+        if (( end > total )); then end="${total}"; fi
+        rows=$((end - start))
+
+        if (( nav < 1 || nav > rows )); then
+          warn "NO di luar range"
+          pause
+          continue
+        fi
+
+        idx=$((start + nav - 1))
+        selected_file="${ACCOUNT_FILES[$idx]}"
+        selected_proto="${ACCOUNT_FILE_PROTOS[$idx]}"
+        username="$(account_parse_username_from_file "${selected_file}" "${selected_proto}")"
+        proto="${selected_proto}"
+        break
+        ;;
     esac
   done
 
@@ -4476,46 +4505,54 @@ user_extend_expiry_menu() {
   ensure_account_quota_dirs
   need_python3
 
-  echo "Pilih protocol:"
-  proto_list_menu_print
-  hr
-  if ! read -r -p "Protocol (1-5/kembali): " p; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${p}"; then
-    return 0
-  fi
-  local proto
-  proto="$(proto_menu_pick_to_value "${p}")"
-  if [[ -z "${proto}" ]]; then
-    warn "Protocol tidak valid"
-    pause
-    return 0
-  fi
-
-  if ! read -r -p "Username (atau kembali): " username; then
-    echo
-    return 0
-  fi
-  if is_back_choice "${username}"; then
-    return 0
-  fi
-  if [[ -z "${username}" ]]; then
-    warn "Username kosong"
-    pause
-    return 0
-  fi
-
-  if ! validate_username "${username}"; then
-    warn "Username tidak valid. Gunakan: A-Z a-z 0-9 . _ - (tanpa spasi, tanpa '/', tanpa '..', tanpa '@')."
-    pause
-    return 0
-  fi
-
   local quota_file acc_file
-  quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  if [[ -n "${selected_file}" ]]; then
+    acc_file="${selected_file}"
+    quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+    echo "Akun terpilih langsung dari tabel:"
+    echo "  Protocol : ${proto}"
+    echo "  Username : ${username}"
+    hr
+  else
+    echo "Pilih protocol:"
+    proto_list_menu_print
+    hr
+    if ! read -r -p "Protocol (1-3/kembali): " p; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${p}"; then
+      return 0
+    fi
+    proto="$(proto_menu_pick_to_value "${p}")"
+    if [[ -z "${proto}" ]]; then
+      warn "Protocol tidak valid"
+      pause
+      return 0
+    fi
+
+    if ! read -r -p "Username (atau kembali): " username; then
+      echo
+      return 0
+    fi
+    if is_back_choice "${username}"; then
+      return 0
+    fi
+    if [[ -z "${username}" ]]; then
+      warn "Username kosong"
+      pause
+      return 0
+    fi
+
+    if ! validate_username "${username}"; then
+      warn "Username tidak valid. Gunakan: A-Z a-z 0-9 . _ - (tanpa spasi, tanpa '/', tanpa '..', tanpa '@')."
+      pause
+      return 0
+    fi
+
+    quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+    acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
+  fi
 
   if [[ ! -f "${quota_file}" ]]; then
     warn "Quota file tidak ditemukan: ${quota_file}"
@@ -4915,5 +4952,4 @@ QUOTA_PAGE_SIZE=10
 QUOTA_PAGE=0
 QUOTA_QUERY=""
 QUOTA_VIEW_INDEXES=()
-
 

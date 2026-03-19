@@ -83,14 +83,17 @@ wireproxy_restart_menu() {
   hr
 
   local confirm_rc=0
-  if ! confirm_yn_or_back "Restart wireproxy sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+  confirm_yn_or_back "Restart wireproxy sekarang?"
+  confirm_rc=$?
+  if (( confirm_rc != 0 )); then
+    if (( confirm_rc == 2 )); then
+      warn "Restart wireproxy dibatalkan (kembali)."
+    else
       warn "Restart wireproxy dibatalkan."
-      hr
-      pause
-      return 0
     fi
+    hr
+    pause
+    return 0
   fi
 
   local restart_failed="false"
@@ -571,14 +574,17 @@ edge_runtime_restart_menu() {
   hr
 
   local confirm_rc=0
-  if ! confirm_yn_or_back "Restart Edge Gateway sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+  confirm_yn_or_back "Restart Edge Gateway sekarang?"
+  confirm_rc=$?
+  if (( confirm_rc != 0 )); then
+    if (( confirm_rc == 2 )); then
+      warn "Restart Edge Gateway dibatalkan (kembali)."
+    else
       warn "Restart Edge Gateway dibatalkan."
-      hr
-      pause
-      return 0
     fi
+    hr
+    pause
+    return 0
   fi
 
   local restart_failed="false"
@@ -718,14 +724,17 @@ badvpn_restart_menu() {
   hr
 
   local confirm_rc=0
-  if ! confirm_yn_or_back "Restart BadVPN UDPGW sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+  confirm_yn_or_back "Restart BadVPN UDPGW sekarang?"
+  confirm_rc=$?
+  if (( confirm_rc != 0 )); then
+    if (( confirm_rc == 2 )); then
+      warn "Restart BadVPN UDPGW dibatalkan (kembali)."
+    else
       warn "Restart BadVPN UDPGW dibatalkan."
-      hr
-      pause
-      return 0
     fi
+    hr
+    pause
+    return 0
   fi
 
   local restart_failed="false"
@@ -1006,4 +1015,3 @@ daemon_status_menu() {
 }
 
 # -------------------------
-

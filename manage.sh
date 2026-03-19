@@ -2013,7 +2013,9 @@ main_info_warp_status_get() {
     echo "Inactive"
     return 0
   fi
-  if declare -F warp_tier_target_effective_get >/dev/null 2>&1; then
+  if declare -F warp_tier_target_cached_get >/dev/null 2>&1; then
+    target="$(warp_tier_target_cached_get 2>/dev/null || true)"
+  elif declare -F warp_tier_target_effective_get >/dev/null 2>&1; then
     target="$(warp_tier_target_effective_get 2>/dev/null || true)"
   else
     target="$(warp_tier_state_target_get 2>/dev/null || true)"

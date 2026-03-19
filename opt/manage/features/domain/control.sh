@@ -1300,8 +1300,9 @@ domain_control_refresh_account_info_now() {
     esac
   done
 
-  if ! confirm_yn_or_back "Refresh ACCOUNT INFO untuk scope ${scope_label} ini sekarang?"; then
-    ask_rc=$?
+  confirm_yn_or_back "Refresh ACCOUNT INFO untuk scope ${scope_label} ini sekarang?"
+  ask_rc=$?
+  if (( ask_rc != 0 )); then
     if (( ask_rc == 2 )); then
       warn "Refresh ACCOUNT INFO dibatalkan (kembali)."
     else
@@ -1481,8 +1482,9 @@ domain_control_sync_compat_domain_now() {
     fi
   fi
 
-  if ! confirm_yn_or_back "Sinkronkan compat domain file ke domain aktif sekarang?"; then
-    ask_rc=$?
+  confirm_yn_or_back "Sinkronkan compat domain file ke domain aktif sekarang?"
+  ask_rc=$?
+  if (( ask_rc != 0 )); then
     if (( ask_rc == 2 )); then
       warn "Sinkronisasi compat domain dibatalkan (kembali)."
     else
@@ -1635,8 +1637,9 @@ domain_control_sync_target_dns_now() {
     pause
     return 1
   fi
-  if ! confirm_yn_or_back "Lanjutkan repair target DNS Cloudflare sekarang?"; then
-    ask_rc=$?
+  confirm_yn_or_back "Lanjutkan repair target DNS Cloudflare sekarang?"
+  ask_rc=$?
+  if (( ask_rc != 0 )); then
     if (( ask_rc == 2 )); then
       warn "Repair target DNS dibatalkan (kembali)."
     else
@@ -1827,8 +1830,9 @@ domain_control_guard_renew_if_needed() {
     return 0
   fi
 
-  if ! confirm_yn_or_back "Lanjutkan guard renew-if-needed sekarang setelah melihat preflight di atas?"; then
-    ask_rc=$?
+  confirm_yn_or_back "Lanjutkan guard renew-if-needed sekarang setelah melihat preflight di atas?"
+  ask_rc=$?
+  if (( ask_rc != 0 )); then
     if (( ask_rc == 2 )); then
       warn "Dibatalkan dan kembali ke Domain Control."
       pause
@@ -2099,5 +2103,4 @@ domain_control_menu() {
     esac
   done
 }
-
 

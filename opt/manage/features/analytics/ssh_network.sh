@@ -321,7 +321,9 @@ ssh_network_xray_redir_chain_v6_get() {
 }
 
 ssh_network_host_warp_mode_get() {
-  if declare -F warp_mode_display_get >/dev/null 2>&1; then
+  if declare -F warp_mode_display_cached_get >/dev/null 2>&1; then
+    warp_mode_display_cached_get 2>/dev/null || printf 'Free/Plus\n'
+  elif declare -F warp_mode_display_get >/dev/null 2>&1; then
     warp_mode_display_get 2>/dev/null || printf 'Free/Plus\n'
   else
     printf 'Free/Plus\n'
@@ -360,6 +362,19 @@ ssh_network_host_warp_proxy_port_get() {
   else
     printf '%s\n' "${WARP_ZEROTRUST_PROXY_PORT:-40000}"
   fi
+}
+
+ssh_network_dedicated_interface_guard() {
+  local mode=""
+  if declare -F warp_mode_state_get >/dev/null 2>&1; then
+    mode="$(warp_mode_state_get 2>/dev/null || true)"
+  fi
+  if [[ "${mode}" == "zerotrust" ]]; then
+    warn "Dedicated Interface SSH tidak kompatibel saat host aktif di Zero Trust."
+    warn "Gunakan backend Local Proxy, atau kembalikan host ke Free/Plus lebih dulu."
+    return 1
+  fi
+  return 0
 }
 
 ssh_network_warp_interface_set() {
@@ -1242,6 +1257,10 @@ ssh_network_runtime_apply_unlocked() {
     return 0
   fi
 
+  if ! ssh_network_dedicated_interface_guard; then
+    return 1
+  fi
+
   have_cmd nft || {
     warn "nft tidak tersedia. Routing SSH tidak bisa di-apply."
     return 1
@@ -1778,7 +1797,12 @@ ssh_network_route_global_menu() {
           echo
           return 0
         fi
+        backend_pick="$(printf '%s' "${backend_pick}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
         if is_back_choice "${backend_pick}"; then
+          continue
+        fi
+        if [[ "${backend_pick}" == "interface" ]] && ! ssh_network_dedicated_interface_guard; then
+          pause
           continue
         fi
         if ! confirm_yn_or_back "Set backend WARP SSH ke ${backend_pick} sekarang?"; then
@@ -1806,23 +1830,50 @@ ssh_network_route_global_menu() {
 
 ssh_network_route_user_menu() {
   while true; do
-    local st="" backend_effective="" backend_applied=""
+    local st="" backend_effective="" backend_applied="" menu_context=""
+    local menu_title="" backend_label="" target_label="" option1="" option2="" option3=""
+    local mode1="" mode2="" mode3="" confirm_prompt="" cancel_msg="" success_msg="" fail_msg=""
     st="$(ssh_network_runtime_status_get)"
     backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
     backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
+    menu_context="${SSH_NETWORK_USER_MENU_CONTEXT:-routing}"
+    if [[ "${menu_context}" == "warp" ]]; then
+      menu_title="WARP SSH Per-User"
+      backend_label="Alias kontrol WARP per-user"
+      target_label="shared route_mode: warp / direct / inherit"
+      option1="Enable WARP for User"
+      option2="Disable WARP for User"
+      option3="Reset User to Inherit"
+      mode1="warp"
+      mode2="direct"
+      mode3="inherit"
+    else
+      menu_title="Routing SSH Per-User"
+      backend_label="Per-user override di metadata SSH"
+      target_label="inherit / direct / warp"
+      option1="Set User: Inherit"
+      option2="Set User: Direct"
+      option3="Set User: WARP"
+      mode1="inherit"
+      mode2="direct"
+      mode3="warp"
+    fi
     title
-    echo "$(ssh_network_menu_title "Routing SSH Per-User")"
+    echo "$(ssh_network_menu_title "${menu_title}")"
     hr
-    printf "%-18s : %s\n" "Backend" "Per-user override di metadata SSH"
+    printf "%-18s : %s\n" "Backend" "${backend_label}"
+    if [[ "${menu_context}" == "warp" ]]; then
+      printf "%-18s : %s\n" "State" "shared dengan Routing SSH Per-User (network.route_mode)"
+    fi
     printf "%-18s : %s\n" "Target Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_effective}")"
     printf "%-18s : %s\n" "Applied Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_applied}")"
-    printf "%-18s : %s\n" "Target" "inherit / direct / warp"
+    printf "%-18s : %s\n" "Target" "${target_label}"
     hr
     ssh_network_effective_rows_print
     hr
-    echo "  1) Set User: Inherit"
-    echo "  2) Set User: Direct"
-    echo "  3) Set User: WARP"
+    echo "  1) ${option1}"
+    echo "  2) ${option2}"
+    echo "  3) ${option3}"
     echo "  4) Apply Routing Runtime"
     echo "  0) Back"
     hr
@@ -1834,9 +1885,9 @@ ssh_network_route_user_menu() {
       1|2|3)
         local target_user="" target_mode="" target_qf="" prev_mode=""
         case "${c}" in
-          1) target_mode="inherit" ;;
-          2) target_mode="direct" ;;
-          3) target_mode="warp" ;;
+          1) target_mode="${mode1}" ;;
+          2) target_mode="${mode2}" ;;
+          3) target_mode="${mode3}" ;;
         esac
         if ! ssh_network_pick_routable_user target_user; then
           pause
@@ -1844,13 +1895,24 @@ ssh_network_route_user_menu() {
         fi
         target_qf="$(ssh_user_state_resolve_file "${target_user}")"
         prev_mode="$(ssh_network_user_route_mode_get "${target_qf}")"
-        if ! confirm_yn_or_back "Set routing SSH '${target_user}' ke ${target_mode} sekarang?"; then
-          warn "Set routing user dibatalkan."
+        if [[ "${menu_context}" == "warp" ]]; then
+          confirm_prompt="Set mode WARP SSH '${target_user}' ke ${target_mode} sekarang?"
+          cancel_msg="Set mode WARP user dibatalkan."
+          success_msg="Mode WARP SSH '${target_user}' diubah ke ${target_mode}."
+          fail_msg="Mode WARP SSH '${target_user}' gagal diubah."
+        else
+          confirm_prompt="Set routing SSH '${target_user}' ke ${target_mode} sekarang?"
+          cancel_msg="Set routing user dibatalkan."
+          success_msg="Routing SSH '${target_user}' diubah ke ${target_mode}."
+          fail_msg="Routing SSH '${target_user}' gagal diubah."
+        fi
+        if ! confirm_yn_or_back "${confirm_prompt}"; then
+          warn "${cancel_msg}"
         elif ssh_network_user_route_mode_set "${target_user}" "${target_mode}" && ssh_network_runtime_apply_now; then
-          log "Routing SSH '${target_user}' diubah ke ${target_mode}."
+          log "${success_msg}"
         else
           [[ -n "${prev_mode}" ]] && ssh_network_user_route_mode_set "${target_user}" "${prev_mode}" >/dev/null 2>&1 || true
-          warn "Routing SSH '${target_user}' gagal diubah."
+          warn "${fail_msg}"
         fi
         pause
         ;;
@@ -1916,26 +1978,24 @@ ssh_network_warp_global_menu() {
     fi
     case "${c}" in
       1)
-        local prev_mode="${global_mode}" prev_backend="${warp_backend:-auto}"
+        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Aktifkan WARP global untuk trafik SSH sekarang?"; then
           warn "Enable WARP SSH global dibatalkan."
-        elif ssh_network_warp_backend_set auto && ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
           log "WARP SSH global diaktifkan."
         else
-          ssh_network_warp_backend_set "${prev_backend}" >/dev/null 2>&1 || true
           ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal diaktifkan."
         fi
         pause
         ;;
       2)
-        local prev_mode="${global_mode}" prev_backend="${warp_backend:-auto}"
+        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Matikan WARP global untuk trafik SSH sekarang?"; then
           warn "Disable WARP SSH global dibatalkan."
-        elif ssh_network_warp_backend_set auto && ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
           log "WARP SSH global dimatikan."
         else
-          ssh_network_warp_backend_set "${prev_backend}" >/dev/null 2>&1 || true
           ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal dimatikan."
         fi
@@ -1948,67 +2008,8 @@ ssh_network_warp_global_menu() {
 }
 
 ssh_network_warp_user_menu() {
-  while true; do
-    local st="" backend_effective="" backend_applied=""
-    st="$(ssh_network_runtime_status_get)"
-    backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
-    backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
-    title
-    echo "$(ssh_network_menu_title "WARP SSH Per-User")"
-    hr
-    printf "%-18s : %s\n" "Backend" "Per-user WARP override"
-    printf "%-18s : %s\n" "State" "network.route_mode"
-    printf "%-18s : %s\n" "Target Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_effective}")"
-    printf "%-18s : %s\n" "Applied Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_applied}")"
-    hr
-    ssh_network_effective_rows_print
-    hr
-    echo "  1) Enable WARP for User"
-    echo "  2) Disable WARP for User"
-    echo "  3) Reset User to Inherit"
-    echo "  4) Apply Runtime"
-    echo "  0) Back"
-    hr
-    if ! read -r -p "Pilih: " c; then
-      echo
-      return 0
-    fi
-    case "${c}" in
-      1|2|3)
-        local target_user="" target_mode="" target_qf="" prev_mode=""
-        case "${c}" in
-          1) target_mode="warp" ;;
-          2) target_mode="direct" ;;
-          3) target_mode="inherit" ;;
-        esac
-        if ! ssh_network_pick_routable_user target_user; then
-          pause
-          continue
-        fi
-        target_qf="$(ssh_user_state_resolve_file "${target_user}")"
-        prev_mode="$(ssh_network_user_route_mode_get "${target_qf}")"
-        if ! confirm_yn_or_back "Set mode WARP SSH '${target_user}' ke ${target_mode} sekarang?"; then
-          warn "Set mode WARP user dibatalkan."
-        elif ssh_network_user_route_mode_set "${target_user}" "${target_mode}" && ssh_network_runtime_apply_now; then
-          log "Mode WARP SSH '${target_user}' diubah ke ${target_mode}."
-        else
-          [[ -n "${prev_mode}" ]] && ssh_network_user_route_mode_set "${target_user}" "${prev_mode}" >/dev/null 2>&1 || true
-          warn "Mode WARP SSH '${target_user}' gagal diubah."
-        fi
-        pause
-        ;;
-      4)
-        if ssh_network_runtime_apply_now; then
-          log "Runtime WARP SSH berhasil disinkronkan."
-        else
-          warn "Runtime WARP SSH gagal disinkronkan."
-        fi
-        pause
-        ;;
-      0|kembali|k|back|b) return 0 ;;
-      *) invalid_choice ;;
-    esac
-  done
+  local SSH_NETWORK_USER_MENU_CONTEXT="warp"
+  ssh_network_route_user_menu
 }
 
 ssh_network_menu() {

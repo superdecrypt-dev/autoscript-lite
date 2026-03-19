@@ -163,14 +163,17 @@ sshws_restart_menu() {
   hr
 
   local confirm_rc=0
-  if ! confirm_yn_or_back "Restart semua service SSH WS sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+  confirm_yn_or_back "Restart semua service SSH WS sekarang?"
+  confirm_rc=$?
+  if (( confirm_rc != 0 )); then
+    if (( confirm_rc == 2 )); then
+      warn "Restart SSH WS dibatalkan (kembali)."
+    else
       warn "Restart SSH WS dibatalkan."
-      hr
-      pause
-      return 0
     fi
+    hr
+    pause
+    return 0
   fi
 
   if ! sshws_restart_services_checked "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}"; then
@@ -464,5 +467,4 @@ sshws_diagnostics_menu() {
     esac
   done
 }
-
 

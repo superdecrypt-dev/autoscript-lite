@@ -496,6 +496,7 @@ PY
 }
 
 ssh_dns_adblock_status_get() {
+  local raw_status=""
   if [[ ! -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]]; then
     local cfg auto_update_enabled auto_update_days
     cfg="$(ssh_dns_adblock_config_get)"
@@ -524,7 +525,57 @@ ssh_dns_adblock_status_get() {
     printf 'last_update=-\n'
     return 0
   fi
-  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --status 2>/dev/null || true
+  raw_status="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --status 2>/dev/null || true)"
+  if [[ -z "${raw_status}" ]]; then
+    return 0
+  fi
+
+  local dns_service dns_state sync_service sync_state auto_service auto_state
+  dns_service="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+  dns_state="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
+  sync_service="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+  sync_state="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
+  auto_service="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^auto_update_service=/{print $2; exit}')"
+  auto_state="$(printf '%s\n' "${raw_status}" | awk -F'=' '/^auto_update_service_state=/{print $2; exit}')"
+
+  adblock_status_token_is_service_state() {
+    case "${1:-}" in
+      active|inactive|failed|activating|deactivating|reloading|unknown|missing|not-found)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  if [[ -z "${dns_state}" ]] && adblock_status_token_is_service_state "${dns_service}"; then
+    dns_state="${dns_service}"
+    dns_service="${SSH_DNS_ADBLOCK_SERVICE}"
+  fi
+  if [[ -z "${sync_state}" ]] && adblock_status_token_is_service_state "${sync_service}"; then
+    sync_state="${sync_service}"
+    sync_service="${SSH_DNS_ADBLOCK_SYNC_SERVICE}"
+  fi
+  if [[ -z "${auto_state}" ]] && adblock_status_token_is_service_state "${auto_service}"; then
+    auto_state="${auto_service}"
+    auto_service="${ADBLOCK_AUTO_UPDATE_SERVICE}"
+  fi
+
+  printf '%s\n' "${raw_status}" | awk -F= '
+    $1!="dns_service" &&
+    $1!="dns_service_state" &&
+    $1!="sync_service" &&
+    $1!="sync_service_state" &&
+    $1!="auto_update_service" &&
+    $1!="auto_update_service_state" { print $0 }
+  '
+  printf 'dns_service=%s\n' "${dns_service:-missing}"
+  printf 'dns_service_state=%s\n' "${dns_state:-missing}"
+  printf 'sync_service=%s\n' "${sync_service:-missing}"
+  printf 'sync_service_state=%s\n' "${sync_state:-missing}"
+  printf 'auto_update_service=%s\n' "${auto_service:-missing}"
+  printf 'auto_update_service_state=%s\n' "${auto_state:-missing}"
 }
 
 ssh_dns_adblock_apply_now() {
@@ -926,13 +977,16 @@ adblock_auto_update_days_menu() {
     if is_back_choice "${input}"; then
       return 0
     fi
-    if ! confirm_yn_or_back "Set interval Auto Update ke ${input} hari sekarang?"; then
-      confirm_rc=$?
-      if (( confirm_rc == 1 || confirm_rc == 2 )); then
+    confirm_yn_or_back "Set interval Auto Update ke ${input} hari sekarang?"
+    confirm_rc=$?
+    if (( confirm_rc != 0 )); then
+      if (( confirm_rc == 2 )); then
+        warn "Set interval Auto Update dibatalkan (kembali)."
+      else
         warn "Set interval Auto Update dibatalkan."
-        pause
-        continue
       fi
+      pause
+      continue
     fi
     if adblock_auto_update_set_days "${input}"; then
       pause
@@ -1063,13 +1117,16 @@ adblock_manual_domain_add_menu() {
       pause
       continue
     }
-    if ! confirm_yn_or_back "Tambahkan domain ${normalized} ke daftar manual Adblock sekarang?"; then
-      confirm_rc=$?
-      if (( confirm_rc == 1 || confirm_rc == 2 )); then
+    confirm_yn_or_back "Tambahkan domain ${normalized} ke daftar manual Adblock sekarang?"
+    confirm_rc=$?
+    if (( confirm_rc != 0 )); then
+      if (( confirm_rc == 2 )); then
+        warn "Tambah domain Adblock dibatalkan (kembali)."
+      else
         warn "Tambah domain Adblock dibatalkan."
-        pause
-        continue
       fi
+      pause
+      continue
     fi
     if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil ditambahkan." adblock_manual_domain_add_commit "${normalized}"; then
       pause
@@ -1177,13 +1234,16 @@ adblock_manual_domain_delete_menu() {
       continue
     fi
     selected_domain="${domains[$idx]}"
-    if ! confirm_yn_or_back "Hapus domain ${selected_domain} dari daftar manual Adblock sekarang?"; then
-      confirm_rc=$?
-      if (( confirm_rc == 1 || confirm_rc == 2 )); then
+    confirm_yn_or_back "Hapus domain ${selected_domain} dari daftar manual Adblock sekarang?"
+    confirm_rc=$?
+    if (( confirm_rc != 0 )); then
+      if (( confirm_rc == 2 )); then
+        warn "Delete domain Adblock dibatalkan (kembali)."
+      else
         warn "Delete domain Adblock dibatalkan."
-        pause
-        continue
       fi
+      pause
+      continue
     fi
     if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil dihapus." adblock_manual_domain_delete_commit "${selected_domain}"; then
       pause
@@ -1642,13 +1702,16 @@ ssh_dns_adblock_url_add_menu() {
       pause
       continue
     }
-    if ! confirm_yn_or_back "Tambahkan URL source ${normalized} ke Adblock sekarang?"; then
-      confirm_rc=$?
-      if (( confirm_rc == 1 || confirm_rc == 2 )); then
+    confirm_yn_or_back "Tambahkan URL source ${normalized} ke Adblock sekarang?"
+    confirm_rc=$?
+    if (( confirm_rc != 0 )); then
+      if (( confirm_rc == 2 )); then
+        warn "Tambah URL source Adblock dibatalkan (kembali)."
+      else
         warn "Tambah URL source Adblock dibatalkan."
-        pause
-        continue
       fi
+      pause
+      continue
     fi
     if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil ditambahkan." ssh_dns_adblock_url_add_commit "${normalized}"; then
       pause
@@ -1758,13 +1821,16 @@ ssh_dns_adblock_url_delete_menu() {
       continue
     fi
     selected_url="${urls[$idx]}"
-    if ! confirm_yn_or_back "Hapus URL source ${selected_url} dari Adblock sekarang?"; then
-      confirm_rc=$?
-      if (( confirm_rc == 1 || confirm_rc == 2 )); then
+    confirm_yn_or_back "Hapus URL source ${selected_url} dari Adblock sekarang?"
+    confirm_rc=$?
+    if (( confirm_rc != 0 )); then
+      if (( confirm_rc == 2 )); then
+        warn "Delete URL source Adblock dibatalkan (kembali)."
+      else
         warn "Delete URL source Adblock dibatalkan."
-        pause
-        continue
       fi
+      pause
+      continue
     fi
     if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil dihapus." ssh_dns_adblock_url_delete_commit "${selected_url}"; then
       pause
@@ -1964,5 +2030,4 @@ adblock_menu() {
     esac
   done
 }
-
 

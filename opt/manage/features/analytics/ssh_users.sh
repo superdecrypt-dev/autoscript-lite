@@ -1593,10 +1593,10 @@ ssh_pick_managed_user() {
   while true; do
     if ! read -r -p "Nomor akun (1-${#users[@]}/kembali): " pick; then
       echo
-      return 1
+      return 2
     fi
     if is_back_choice "${pick}"; then
-      return 1
+      return 2
     fi
     [[ "${pick}" =~ ^[0-9]+$ ]] || { warn "Input harus angka."; continue; }
     if (( pick < 1 || pick > ${#users[@]} )); then
@@ -3637,14 +3637,21 @@ ssh_delete_user_menu() {
   hr
 
   local username
-  if ! ssh_pick_managed_user username; then
+  local pick_rc=0
+  ssh_pick_managed_user username
+  pick_rc=$?
+  if (( pick_rc != 0 )); then
+    if (( pick_rc == 2 )); then
+      return 0
+    fi
     pause
     return 0
   fi
 
   local ask_rc=0
-  if ! confirm_yn_or_back "Hapus akun SSH '${username}' sekarang?"; then
-    ask_rc=$?
+  confirm_yn_or_back "Hapus akun SSH '${username}' sekarang?"
+  ask_rc=$?
+  if (( ask_rc != 0 )); then
     if (( ask_rc == 2 )); then
       return 0
     fi
@@ -3668,7 +3675,13 @@ ssh_extend_expiry_menu() {
   hr
 
   local username
-  if ! ssh_pick_managed_user username; then
+  local pick_rc=0
+  ssh_pick_managed_user username
+  pick_rc=$?
+  if (( pick_rc != 0 )); then
+    if (( pick_rc == 2 )); then
+      return 0
+    fi
     pause
     return 0
   fi
@@ -3781,7 +3794,13 @@ ssh_reset_password_menu() {
   hr
 
   local username
-  if ! ssh_pick_managed_user username; then
+  local pick_rc=0
+  ssh_pick_managed_user username
+  pick_rc=$?
+  if (( pick_rc != 0 )); then
+    if (( pick_rc == 2 )); then
+      return 0
+    fi
     pause
     return 0
   fi
@@ -4542,5 +4561,4 @@ sshws_active_sessions_menu() {
     esac
   done
 }
-
 

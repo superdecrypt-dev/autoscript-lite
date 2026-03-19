@@ -92,6 +92,82 @@ warp_mode_display_get() {
   printf 'Free/Plus\n'
 }
 
+warp_tier_last_verified_get() {
+  local last_verified=""
+  last_verified="$(network_state_get "warp_tier_last_verified" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)"
+  case "${last_verified}" in
+    free|plus) printf '%s\n' "${last_verified}" ;;
+    *) printf '\n' ;;
+  esac
+}
+
+warp_tier_last_verified_at_get() {
+  network_state_get "warp_tier_last_verified_at" 2>/dev/null | tr -d '\r' || true
+}
+
+warp_tier_last_verified_age_get() {
+  local last_verified_at="${1:-}"
+  local now_ts="" verified_ts="" age_sec=""
+  [[ -n "${last_verified_at}" ]] || return 0
+  have_cmd date || return 0
+  now_ts="$(date +%s 2>/dev/null || true)"
+  verified_ts="$(date -d "${last_verified_at}" +%s 2>/dev/null || true)"
+  if [[ "${now_ts}" =~ ^[0-9]+$ && "${verified_ts}" =~ ^[0-9]+$ && "${now_ts}" -ge "${verified_ts}" ]]; then
+    age_sec="$((now_ts - verified_ts))"
+    if (( age_sec < 60 )); then
+      printf '%ss lalu\n' "${age_sec}"
+    elif (( age_sec < 3600 )); then
+      printf '%sm lalu\n' "$((age_sec / 60))"
+    elif (( age_sec < 86400 )); then
+      printf '%sj lalu\n' "$((age_sec / 3600))"
+    else
+      printf '%sh lalu\n' "$((age_sec / 86400))"
+    fi
+  fi
+}
+
+warp_tier_target_cached_get() {
+  local target="" last_verified=""
+  target="$(warp_tier_state_target_get 2>/dev/null || true)"
+  case "${target}" in
+    free|plus)
+      printf '%s\n' "${target}"
+      return 0
+      ;;
+  esac
+  last_verified="$(warp_tier_last_verified_get)"
+  case "${last_verified}" in
+    free|plus)
+      printf '%s\n' "${last_verified}"
+      return 0
+      ;;
+  esac
+  printf 'unknown\n'
+}
+
+warp_mode_display_cached_get() {
+  local mode="" target=""
+  mode="$(warp_mode_state_get 2>/dev/null || true)"
+  case "${mode}" in
+    zerotrust)
+      printf 'Zero Trust\n'
+      return 0
+      ;;
+  esac
+  target="$(warp_tier_target_cached_get 2>/dev/null || true)"
+  case "${target}" in
+    free)
+      printf 'Free\n'
+      ;;
+    plus)
+      printf 'Plus\n'
+      ;;
+    *)
+      printf 'Free/Plus\n'
+      ;;
+  esac
+}
+
 adblock_menu_title() {
   local suffix="${1:-}"
   local base="7) Adblocker"
@@ -2157,7 +2233,21 @@ warp_tier_target_effective_get() {
 }
 
 warp_tier_reconnect_target_get() {
-  local live target
+  local mode live target
+  mode="$(warp_mode_state_get 2>/dev/null || true)"
+  if [[ "${mode}" == "zerotrust" ]]; then
+    target="$(warp_tier_target_cached_get 2>/dev/null || true)"
+    case "${target}" in
+      free|plus)
+        echo "${target}"
+        return 0
+        ;;
+      *)
+        echo "unknown"
+        return 0
+        ;;
+    esac
+  fi
   live="$(warp_live_tier_get)"
   case "${live}" in
     free|plus)
@@ -2168,7 +2258,7 @@ warp_tier_reconnect_target_get() {
   target="$(warp_tier_target_effective_get)"
   case "${target}" in
     free|plus) echo "${target}" ;;
-    *) echo "free" ;;
+    *) echo "unknown" ;;
   esac
 }
 
@@ -2686,6 +2776,72 @@ warp_tier_show_status() {
   fi
 }
 
+warp_tier_free_plus_show_status() {
+  local active_mode="" target="" svc_state="not-installed" socks_state="unknown"
+  local zt_service_state="missing" zt_proxy_state="not-listening" zt_runtime_note=""
+  local last_verified="" last_verified_at="" last_verified_age="" license_raw="" license_masked=""
+  active_mode="$(warp_mode_state_get 2>/dev/null || true)"
+  if [[ "${active_mode}" != "zerotrust" ]]; then
+    warp_tier_show_status
+    return 0
+  fi
+
+  target="$(warp_tier_target_cached_get)"
+  last_verified="$(warp_tier_last_verified_get)"
+  last_verified_at="$(warp_tier_last_verified_at_get)"
+  last_verified_age="$(warp_tier_last_verified_age_get "${last_verified_at}")"
+  license_raw="$(warp_plus_license_state_get)"
+  license_masked="$(warp_plus_license_mask "${license_raw}")"
+  if svc_exists wireproxy; then
+    svc_state="$(svc_state wireproxy)"
+  fi
+  if svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
+    zt_service_state="$(svc_state "${WARP_ZEROTRUST_SERVICE}")"
+  fi
+  zt_proxy_state="$(warp_zero_trust_proxy_state_get 2>/dev/null || printf 'not-listening\n')"
+  socks_state="standby (host in Zero Trust)"
+  case "${zt_service_state}:${zt_proxy_state}" in
+    active:listening)
+      zt_runtime_note="active on host; Free/Plus saat ini standby"
+      ;;
+    active:*)
+      zt_runtime_note="service active, tetapi proxy ${zt_proxy_state}; Free/Plus saat ini standby"
+      ;;
+    inactive:*)
+      zt_runtime_note="inactive on host; Free/Plus saat ini standby"
+      ;;
+    missing:*)
+      zt_runtime_note="service missing on host; Free/Plus saat ini standby"
+      ;;
+    *)
+      zt_runtime_note="${zt_service_state} on host; proxy ${zt_proxy_state}; Free/Plus saat ini standby"
+      ;;
+  esac
+
+  printf "Mode          : Free/Plus\n"
+  printf "Backend       : Free/Plus (wgcf + wireproxy)\n"
+  printf "Free/Plus Tier: %s\n" "${target}"
+  printf "Free/Plus Live: standby (host in Zero Trust)\n"
+  printf "wireproxy     : %s\n" "${svc_state}"
+  printf "SOCKS5        : %s\n" "${socks_state}"
+  printf "Zero Trust    : %s\n" "${zt_runtime_note}"
+  if [[ "${target}" == "unknown" ]]; then
+    printf "Probe Status  : target Free/Plus belum tersimpan; status live tidak diprobe saat host aktif di Zero Trust.\n"
+  fi
+  case "${last_verified}" in
+    free|plus) printf "Last Verified : %s\n" "${last_verified}" ;;
+  esac
+  if [[ -n "${last_verified_at}" ]]; then
+    printf "Verified At   : %s\n" "${last_verified_at}"
+    [[ -n "${last_verified_age}" ]] && printf "Verified Age  : %s\n" "${last_verified_age}"
+  fi
+  if [[ -n "${license_raw}" ]]; then
+    printf "WARP+ License : %s\n" "${license_masked}"
+  else
+    printf "WARP+ License : (kosong)\n"
+  fi
+}
+
 warp_tier_zero_trust_show_status() {
   local cfg team client_id client_secret proxy_port config_state="" active_mode="" active_mode_display=""
   local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
@@ -2739,7 +2895,7 @@ warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
   printf "Rollout Note  : Zero Trust sekarang difokuskan ke jalur Xray via proxy lokal\n"
   printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
-  printf "Rollout Note  : Backend interface legacy SSH tetap dipertahankan sebagai fallback, tetapi tidak kompatibel dengan Zero Trust\n"
+  printf "Rollout Note  : Dedicated interface SSH tetap dipertahankan sebagai fallback, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_free_plus_backend_prepare_activate_unlocked() {
@@ -2782,21 +2938,40 @@ warp_zero_trust_client_secret_set() {
   warp_zero_trust_config_set_values WARP_ZEROTRUST_CLIENT_SECRET "${value}"
 }
 
+warp_action_confirm_or_cancel() {
+  local prompt="${1:-}"
+  local cancel_msg="${2:-Aksi dibatalkan.}"
+  local confirm_rc=0
+
+  confirm_yn_or_back "${prompt}"
+  confirm_rc=$?
+  case "${confirm_rc}" in
+    0)
+      return 0
+      ;;
+    1|2)
+      warn "${cancel_msg}"
+      hr
+      pause
+      return 1
+      ;;
+    *)
+      warn "${cancel_msg}"
+      hr
+      pause
+      return 1
+      ;;
+  esac
+}
+
 warp_zero_trust_apply_connect() {
   local rc
   title
   echo "$(warp_tier_zero_trust_menu_title "Apply / Connect")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Aktifkan backend Zero Trust sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Aktivasi Zero Trust dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Aktifkan backend Zero Trust sekarang?" "Aktivasi Zero Trust dibatalkan."; then
+    return 0
   fi
 
   (
@@ -2873,15 +3048,8 @@ warp_zero_trust_disconnect() {
   echo "$(warp_tier_zero_trust_menu_title "Disconnect")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Putuskan backend Zero Trust sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Disconnect Zero Trust dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Putuskan backend Zero Trust sekarang?" "Disconnect Zero Trust dibatalkan."; then
+    return 0
   fi
 
   (
@@ -2913,15 +3081,8 @@ warp_zero_trust_return_to_free_plus() {
   echo "$(warp_tier_zero_trust_menu_title "Return to Free/Plus")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Kembalikan backend WARP ke Free/Plus sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Kembali ke Free/Plus dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Kembalikan backend WARP ke Free/Plus sekarang?" "Kembali ke Free/Plus dibatalkan."; then
+    return 0
   fi
 
   (
@@ -2974,15 +3135,8 @@ warp_tier_switch_free() {
   echo "$(warp_tier_free_plus_menu_title "Switch ke WARP Free")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Switch ke WARP Free sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Switch ke WARP Free dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Switch ke WARP Free sekarang?" "Switch ke WARP Free dibatalkan."; then
+    return 0
   fi
 
   local rc
@@ -3075,15 +3229,8 @@ warp_tier_switch_plus() {
   echo "$(warp_tier_free_plus_menu_title "Switch ke WARP Plus")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Switch ke WARP Plus sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Switch ke WARP Plus dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Switch ke WARP Plus sekarang?" "Switch ke WARP Plus dibatalkan."; then
+    return 0
   fi
 
   (
@@ -3205,15 +3352,8 @@ warp_tier_reconnect_regenerate() {
   echo "$(warp_tier_free_plus_menu_title "Reconnect/Regenerate")"
   hr
 
-  local confirm_rc=0
-  if ! confirm_yn_or_back "Reconnect/Regenerate WARP sesuai target sekarang?"; then
-    confirm_rc=$?
-    if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Reconnect/Regenerate WARP dibatalkan."
-      hr
-      pause
-      return 0
-    fi
+  if ! warp_action_confirm_or_cancel "Reconnect/Regenerate WARP sesuai target sekarang?" "Reconnect/Regenerate WARP dibatalkan."; then
+    return 0
   fi
 
   (
@@ -3235,7 +3375,11 @@ warp_tier_reconnect_regenerate() {
 
     target="$(warp_tier_reconnect_target_get)"
     if [[ "${target}" != "free" && "${target}" != "plus" ]]; then
-      target="free"
+      warn "Target reconnect Free/Plus belum diketahui."
+      warn "Gunakan menu Switch ke WARP Free atau Switch ke WARP Plus dulu agar target tersimpan jelas."
+      hr
+      pause
+      exit 1
     fi
 
     snap_dir="$(mktemp -d "${WORK_DIR}/.warp-reconnect.XXXXXX" 2>/dev/null || true)"
@@ -3363,7 +3507,7 @@ warp_tier_free_plus_menu() {
       printf "Current Mode  : Zero Trust (aksi di menu ini akan mengembalikan backend ke Free/Plus)\n"
       hr
     fi
-    warp_tier_show_status
+    warp_tier_free_plus_show_status
     hr
     echo "  1) Show status"
     echo "  2) Switch ke WARP Free"
@@ -3377,7 +3521,7 @@ warp_tier_free_plus_menu() {
         title
         echo "$(warp_tier_free_plus_menu_title "Status")"
         hr
-        warp_tier_show_status
+        warp_tier_free_plus_show_status
         hr
         pause
         ;;
