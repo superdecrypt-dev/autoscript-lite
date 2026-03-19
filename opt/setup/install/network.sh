@@ -314,6 +314,86 @@ PY
   fi
 }
 
+cloudflare_warp_tier_state_get() {
+  local tier=""
+  if [[ ! -f "${WARP_STATE_FILE}" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  tier="$(python3 - <<'PY' "${WARP_STATE_FILE}" 2>/dev/null || true
+import json
+import sys
+
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh) or {}
+except Exception:
+  data = {}
+value = str(data.get("warp_tier_target") or "").strip().lower()
+if value in {"free", "plus"}:
+  print(value)
+PY
+)"
+  if [[ "${tier}" == "free" || "${tier}" == "plus" ]]; then
+    printf '%s\n' "${tier}"
+  else
+    printf 'unknown\n'
+  fi
+}
+
+cloudflare_warp_seed_consumer_free_state_if_missing() {
+  local mode="" tier="" tmp="" now=""
+  mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
+  [[ "${mode}" == "zerotrust" ]] && return 0
+
+  tier="$(cloudflare_warp_tier_state_get 2>/dev/null || true)"
+  if [[ "${tier}" == "free" || "${tier}" == "plus" ]]; then
+    return 0
+  fi
+
+  tmp="$(mktemp)" || return 1
+  now="$(date '+%Y-%m-%d %H:%M:%S')"
+  python3 - <<'PY' "${WARP_STATE_FILE}" "${tmp}" "${now}" || {
+import json
+import os
+import sys
+
+path = sys.argv[1]
+tmp = sys.argv[2]
+now = sys.argv[3]
+try:
+  if os.path.exists(path):
+    with open(path, "r", encoding="utf-8") as fh:
+      data = json.load(fh) or {}
+  else:
+    data = {}
+except Exception:
+  data = {}
+
+tier = str(data.get("warp_tier_target") or "").strip().lower()
+if tier not in {"free", "plus"}:
+  data["warp_tier_target"] = "free"
+if str(data.get("warp_mode") or "").strip().lower() != "zerotrust":
+  data["warp_mode"] = "consumer"
+if str(data.get("warp_tier_last_verified") or "").strip().lower() not in {"free", "plus"}:
+  data["warp_tier_last_verified"] = data["warp_tier_target"]
+if not str(data.get("warp_tier_last_verified_at") or "").strip():
+  data["warp_tier_last_verified_at"] = now
+
+with open(tmp, "w", encoding="utf-8") as fh:
+  json.dump(data, fh, ensure_ascii=False, indent=2)
+  fh.write("\n")
+os.replace(tmp, path)
+PY
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+  chmod 600 "${WARP_STATE_FILE}" >/dev/null 2>&1 || true
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
+}
+
 cloudflare_warp_repo_configure() {
   local codename="" arch="" key_tmp="" key_gpg_tmp=""
   codename="$(cloudflare_warp_repo_codename_get)"
@@ -483,6 +563,7 @@ EOF
 }
 
 setup_wireproxy() {
+  local active_mode=""
   ok "Siapkan wireproxy..."
 
   mkdir -p /etc/wireproxy
@@ -514,7 +595,29 @@ EOF
     0644
 
   systemctl daemon-reload
+  active_mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
+  if [[ "${active_mode}" == "zerotrust" ]]; then
+    if command -v warp-cli >/dev/null 2>&1; then
+      warp-cli --accept-tos connect >/dev/null 2>&1 || true
+    fi
+    systemctl disable --now wireproxy >/dev/null 2>&1 || systemctl stop wireproxy >/dev/null 2>&1 || true
+    ok "wireproxy siap dalam keadaan idle karena mode runtime WARP saat ini adalah Zero Trust."
+    return 0
+  fi
+
+  if systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 && systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
+    if command -v warp-cli >/dev/null 2>&1; then
+      warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    fi
+    systemctl disable --now "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 || systemctl stop "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 || true
+  fi
+
   service_enable_restart_checked wireproxy || die "wireproxy gagal diaktifkan. Cek: journalctl -u wireproxy -n 100 --no-pager"
+  if cloudflare_warp_seed_consumer_free_state_if_missing; then
+    ok "state WARP consumer disiapkan: Free."
+  else
+    warn "Gagal inisialisasi state WARP consumer; main menu mungkin sementara hanya menampilkan Active."
+  fi
   ok "wireproxy aktif."
 }
 
