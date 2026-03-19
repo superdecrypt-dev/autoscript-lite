@@ -52,7 +52,8 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if not ok_u:
             return user_or_err
         _title, msg = system.op_quota_detail(str(proto_or_err).lower(), str(user_or_err))
-        return ok_response(title, msg)
+        data = {"allow_sensitive_output": True} if str(proto_or_err).lower() == system.SSH_PROTOCOL else None
+        return ok_response(title, msg, data=data)
 
     if action == "set_quota_limit":
         if not settings.mutations_enabled:

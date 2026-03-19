@@ -92,14 +92,10 @@ ssh_qac_run_locked() {
 }
 
 ssh_account_info_password_mode() {
-  case "${SSH_ACCOUNT_INFO_STORE_PASSWORD:-1}" in
-    0|false|no|off|n)
-      echo "mask"
-      ;;
-    *)
-      echo "store"
-      ;;
-  esac
+  # User-facing policy: password SSH harus tampil apa adanya di CLI.
+  # Variabel legacy dibiarkan ada demi kompatibilitas, tetapi tidak lagi
+  # dipakai untuk memask password di SSH ACCOUNT INFO.
+  echo "store"
 }
 
 ssh_state_dirs_prepare() {
@@ -1073,7 +1069,7 @@ ssh_account_info_write() {
   # args: username password quota_bytes expired_at created_at ip_enabled ip_limit speed_enabled speed_down speed_up sshws_token [output_file_override] [domain_override] [ip_override] [isp_override] [country_override]
   local username="${1:-}"
   local password_raw="${2:-}"
-  local password_mode password_out
+  local password_out
   local quota_bytes="${3:-0}"
   local expired_at="${4:--}"
   local created_at="${5:-}"
@@ -1090,13 +1086,7 @@ ssh_account_info_write() {
   local country_override="${16:-}"
 
   ssh_state_dirs_prepare
-  password_mode="$(ssh_account_info_password_mode)"
-  if [[ "${password_mode}" == "store" ]]; then
-    password_out="${password_raw:-"-"}"
-  else
-    # Pada mode mask, selalu tampil hidden agar konsisten di setiap refresh.
-    password_out="(hidden)"
-  fi
+  password_out="${password_raw:-"-"}"
 
   local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
@@ -2916,11 +2906,6 @@ ssh_add_user_apply_locked_inner() {
   else
     echo "(SSH ACCOUNT INFO tidak ditemukan: ${acc_file})"
   fi
-  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
-    hr
-    echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
-  fi
   hr
   pause
 }
@@ -3412,12 +3397,6 @@ ssh_reset_password_apply_locked() {
     fi
     pause
     return 1
-  fi
-  if [[ "$(ssh_account_info_password_mode)" != "store" && -n "${password}" ]]; then
-    hr
-    echo "One-time Password : ${password}"
-    echo "Note             : password tidak disimpan plaintext di file account info."
-    hr
   fi
   rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
 
@@ -3974,10 +3953,10 @@ PY
     if [[ -f "${acc_file}" ]]; then
       cat "${acc_file}"
       password_info="$(grep -E '^Password[[:space:]]*:' "${acc_file}" 2>/dev/null | head -n1 | sed -E 's/^Password[[:space:]]*:[[:space:]]*//' || true)"
-      if [[ "$(ssh_account_info_password_mode)" != "store" || -z "${password_info}" || "${password_info}" == "********" ]]; then
+      if [[ "${password_info}" == "********" || "${password_info}" == "(hidden)" ]]; then
         hr
-        warn "Password plaintext tidak tersedia di account info (mode mask)."
-        echo "Gunakan menu 4) Reset Password untuk mendapatkan one-time password."
+        warn "File account ini masih memakai format lama yang memask password."
+        echo "Gunakan menu 4) Reset Password bila ingin menulis ulang SSH ACCOUNT INFO."
       fi
     else
       warn "SSH ACCOUNT INFO tidak ditemukan untuk '${username}'."
@@ -4561,4 +4540,3 @@ sshws_active_sessions_menu() {
     esac
   done
 }
-
