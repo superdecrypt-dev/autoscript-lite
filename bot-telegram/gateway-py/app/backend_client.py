@@ -8,6 +8,36 @@ import httpx
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
+    # Current parity menu IDs.
+    "26:setup_domain_custom": 420.0,
+    "26:setup_domain_cloudflare": 420.0,
+    "26:domain_guard_check": 190.0,
+    "26:domain_guard_renew": 320.0,
+    "26:refresh_account_info": 240.0,
+    "26:renew_cert": 420.0,
+    "29:run": 190.0,
+    "31:restart_wireproxy": 90.0,
+    "31:restart_edge_gateway": 90.0,
+    "31:restart_badvpn": 90.0,
+    "32:create_backup": 240.0,
+    "32:restore_latest": 420.0,
+    "32:restore_from_upload": 420.0,
+    "33:warp_restart": 120.0,
+    "37:dns_for_ssh_apply": 180.0,
+    "40:warp_ssh_global_enable": 180.0,
+    "40:warp_ssh_global_disable": 180.0,
+    "41:routing_ssh_apply": 180.0,
+    "35:adblock_enable": 420.0,
+    "35:adblock_disable": 120.0,
+    "35:adblock_update": 420.0,
+    "42:warp_tier_switch_free": 420.0,
+    "42:warp_tier_switch_plus": 420.0,
+    "42:warp_tier_reconnect": 420.0,
+    "43:warp_tier_zero_trust_apply": 420.0,
+    "43:warp_tier_zero_trust_disconnect": 90.0,
+    "43:warp_tier_zero_trust_return_free_plus": 420.0,
+
+    # Transitional menu IDs from older bot layouts.
     "5:adblock_enable": 420.0,
     "5:adblock_disable": 120.0,
     "5:adblock_update": 420.0,

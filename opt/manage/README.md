@@ -85,7 +85,7 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `5) Xray Network`
   WARP, DNS settings/add-ons, dan diagnostics runtime Xray.
 - `6) SSH Network`
-  DNS steering SSH dan routing WARP SSH global/per-user.
+  DNS steering SSH dan kontrol WARP SSH global/per-user.
 - `7) Adblocker`
   Shared source Adblock untuk Xray + SSH, termasuk URL source, auto update, dan rebuild artifact.
 - `8) Domain Control`

@@ -15,7 +15,7 @@ PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
 DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 KV_SECRET_RE = re.compile(
-    r"(?i)\b([A-Za-z0-9_-]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_-]*)\s*([:=])\s*([^\s]+)"
+    r"(?i)\b([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)\s*([:=])\s*([^\s]+)"
 )
 BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
 
@@ -216,3 +216,20 @@ def decode_download_payload(data: dict) -> tuple[str, bytes] | None:
         return None
 
     return filename, payload
+
+
+def sanitize_download_attachment(
+    filename: str,
+    payload: bytes,
+    *,
+    allow_password: bool = False,
+) -> tuple[str, bytes]:
+    try:
+        text = payload.decode("utf-8")
+    except Exception:
+        return filename, payload
+
+    sanitized = _sanitize_output_text(text, allow_password=allow_password)
+    if sanitized == text:
+        return filename, payload
+    return filename, sanitized.encode("utf-8")

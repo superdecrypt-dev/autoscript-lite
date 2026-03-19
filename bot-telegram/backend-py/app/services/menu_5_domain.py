@@ -31,19 +31,11 @@ def handle(action: str, params: dict, settings) -> dict:
     if action == "setup_domain_cloudflare":
         if not settings.mutations_enabled:
             return error_response("forbidden", "Domain Control", "Dangerous actions dinonaktifkan via env.")
-        title = "Domain Control - Set Domain (Cloudflare)"
+        title = "Domain Control - Set Domain Auto"
         warnings: list[str] = []
         ok_r, root_or_err = require_param(params, "root_domain", title)
         if not ok_r:
             return root_or_err
-        subdomain_mode_raw = str(params.get("subdomain_mode", "auto") or "auto").strip().lower()
-        if subdomain_mode_raw in {"1", "auto", "acak", "random", "generate", "generated"}:
-            subdomain_mode = "auto"
-        elif subdomain_mode_raw in {"2", "manual", "input", "custom"}:
-            subdomain_mode = "manual"
-        else:
-            subdomain_mode = "auto"
-        subdomain = str(params.get("subdomain", "") or "")
         proxied = False
         proxied_raw = str(params.get("proxied", "") or "").strip()
         if proxied_raw:
@@ -64,8 +56,8 @@ def handle(action: str, params: dict, settings) -> dict:
 
         ok_set, title, msg = system_mutations.op_domain_setup_cloudflare(
             root_domain_input=str(root_or_err),
-            subdomain_mode=subdomain_mode,
-            subdomain=subdomain,
+            subdomain_mode="auto",
+            subdomain="",
             proxied=bool(proxied),
             allow_existing_same_ip=bool(allow_existing),
         )

@@ -273,7 +273,7 @@ Gunakan checklist ini saat regresi fitur bot terbaru:
 - `View Domain Info`
 - `View Nginx Name`
 - `Set Domain Manual`
-- `Set Domain Auto`
+- `Set Domain Auto` (pilih root domain saja)
 - `Refresh Accounts`
 
 4. Network
@@ -415,7 +415,7 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `View Domain Info`
 - `TLS Certificate Info`
 - `Set Domain Manual`
-- `Set Domain Auto`
+- `Set Domain Auto` (pilih root domain saja)
 - `Refresh Accounts`
 - `Renew Cert`
 

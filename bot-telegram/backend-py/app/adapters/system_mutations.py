@@ -24,6 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
 from ..utils.locks import file_lock
 
@@ -57,6 +58,8 @@ NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 WGCF_DIR = Path("/etc/wgcf")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
+SSH_NETWORK_ENV_FILE = Path("/etc/autoscript/ssh-network/config.env")
+SSH_NETWORK_LOCK_FILE = "/run/autoscript/locks/ssh-network.lock"
 ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
 ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
 ADBLOCK_TIMER_DIR = Path("/etc/systemd/system")
@@ -66,6 +69,7 @@ ADBLOCK_DEFAULT_BLOCKLIST = "/etc/autoscript/ssh-adblock/blocked.domains"
 ADBLOCK_DEFAULT_URLS = "/etc/autoscript/ssh-adblock/source.urls"
 ADBLOCK_DEFAULT_MERGED = "/etc/autoscript/ssh-adblock/merged.domains"
 ADBLOCK_DEFAULT_RENDERED = "/etc/autoscript/ssh-adblock/blocklist.generated.conf"
+ADBLOCK_DEFAULT_DNSMASQ_CONF = "/etc/autoscript/ssh-adblock/dnsmasq.conf"
 ADBLOCK_DEFAULT_CUSTOM_DAT = "/usr/local/share/xray/custom.dat"
 ADBLOCK_DEFAULT_DNS_SERVICE = "ssh-adblock-dns.service"
 ADBLOCK_DEFAULT_SYNC_SERVICE = "adblock-sync.service"
@@ -93,11 +97,22 @@ QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 DEFAULT_EGRESS_PORTS = {"1-65535", "0-65535"}
 DNS_LOCK_FILE = "/run/autoscript/locks/xray-dns.lock"
 WARP_LOCK_FILE = "/run/autoscript/locks/xray-warp.lock"
+WARP_MODE_STATE_KEY = "warp_mode"
 DNS_QUERY_STRATEGY_ALLOWED = {"UseIP", "UseIPv4", "UseIPv6", "PreferIPv4", "PreferIPv6"}
 DNS_RESTART_TIMEOUT_SEC = 8
 DNS_ROLLBACK_RESTART_TIMEOUT_SEC = 5
 WARP_TIER_STATE_KEY = "warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY = "warp_plus_license_key"
+WARP_ZEROTRUST_ROOT = Path("/etc/autoscript/warp-zerotrust")
+WARP_ZEROTRUST_CONFIG_FILE = WARP_ZEROTRUST_ROOT / "config.env"
+WARP_ZEROTRUST_MDM_FILE = Path("/var/lib/cloudflare-warp/mdm.xml")
+WARP_ZEROTRUST_SERVICE = "warp-svc"
+WARP_ZEROTRUST_PROXY_PORT = "40000"
+MANAGE_SCRIPT_CANDIDATES = (
+    Path("/usr/local/bin/manage"),
+    Path("/opt/autoscript/manage.sh"),
+    Path("/root/project/autoscript/manage.sh"),
+)
 WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
 READONLY_GEOSITE_DOMAINS = {
     "geosite:apple",
@@ -898,14 +913,20 @@ def _restore_domain_runtime_snapshot(
 
 def _capture_warp_runtime_snapshot() -> dict[str, Any]:
     wireproxy_exists = _service_exists("wireproxy")
+    zerotrust_exists = _service_exists(WARP_ZEROTRUST_SERVICE)
     return {
         "account_file": _snapshot_optional_file(WGCF_DIR / "wgcf-account.toml"),
         "profile_file": _snapshot_optional_file(WGCF_DIR / "wgcf-profile.conf"),
         "wireproxy_conf": _snapshot_optional_file(WIREPROXY_CONF),
+        "zerotrust_config": _snapshot_optional_file(WARP_ZEROTRUST_CONFIG_FILE),
+        "zerotrust_mdm": _snapshot_optional_file(WARP_ZEROTRUST_MDM_FILE),
+        "mode_target": _network_state_get(WARP_MODE_STATE_KEY) or None,
         "tier_target": _network_state_get(WARP_TIER_STATE_KEY) or None,
         "license_key": _network_state_get(WARP_PLUS_LICENSE_STATE_KEY) or None,
         "wireproxy_exists": wireproxy_exists,
         "wireproxy_was_active": _service_is_active("wireproxy") if wireproxy_exists else False,
+        "zerotrust_exists": zerotrust_exists,
+        "zerotrust_was_active": _service_is_active(WARP_ZEROTRUST_SERVICE) if zerotrust_exists else False,
     }
 
 
@@ -941,6 +962,8 @@ def _restore_warp_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]
         (WGCF_DIR / "wgcf-account.toml", "account_file"),
         (WGCF_DIR / "wgcf-profile.conf", "profile_file"),
         (WIREPROXY_CONF, "wireproxy_conf"),
+        (WARP_ZEROTRUST_CONFIG_FILE, "zerotrust_config"),
+        (WARP_ZEROTRUST_MDM_FILE, "zerotrust_mdm"),
     ):
         entry = snapshot.get(key)
         if not isinstance(entry, dict):
@@ -952,6 +975,7 @@ def _restore_warp_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]
     try:
         _network_state_update_many(
             {
+                WARP_MODE_STATE_KEY: snapshot.get("mode_target"),
                 WARP_TIER_STATE_KEY: snapshot.get("tier_target"),
                 WARP_PLUS_LICENSE_STATE_KEY: snapshot.get("license_key"),
             }
@@ -967,8 +991,458 @@ def _restore_warp_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]
             if not _stop_and_wait_inactive("wireproxy", timeout_sec=30):
                 failures.append("wireproxy gagal dikembalikan ke state inactive saat rollback WARP.")
 
+    if bool(snapshot.get("zerotrust_exists")):
+        if bool(snapshot.get("zerotrust_was_active")):
+            if not _restart_and_wait(WARP_ZEROTRUST_SERVICE, timeout_sec=30):
+                failures.append(f"{WARP_ZEROTRUST_SERVICE} gagal restart saat rollback WARP.")
+        elif _service_is_active(WARP_ZEROTRUST_SERVICE):
+            if not _stop_and_wait_inactive(WARP_ZEROTRUST_SERVICE, timeout_sec=30):
+                failures.append(f"{WARP_ZEROTRUST_SERVICE} gagal dikembalikan ke state inactive saat rollback WARP.")
+
     if failures:
         return False, " | ".join(failures)
+    return True, "ok"
+
+
+def _manage_script_path() -> Path | None:
+    for candidate in MANAGE_SCRIPT_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _ssh_network_env_map() -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        if not SSH_NETWORK_ENV_FILE.exists():
+            return data
+        for raw in SSH_NETWORK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            data[key.strip()] = value.strip()
+    except Exception:
+        return {}
+    return data
+
+
+def _ssh_network_env_value(key: str, default: str = "") -> str:
+    value = _ssh_network_env_map().get(key)
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def _ssh_network_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
+    lines: list[str] = []
+    if SSH_NETWORK_ENV_FILE.exists():
+        try:
+            lines = SSH_NETWORK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            return False, f"Gagal membaca config env SSH Network: {exc}"
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        line = str(raw or "")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key, _ = line.split("=", 1)
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+        out.append(line)
+
+    for key, value in updates.items():
+        if key in seen:
+            continue
+        out.append(f"{key}={value}")
+
+    try:
+        SSH_NETWORK_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(SSH_NETWORK_ENV_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(SSH_NETWORK_ENV_FILE, 0o600)
+    except Exception as exc:
+        return False, f"Gagal menulis config env SSH Network: {exc}"
+    return True, "ok"
+
+
+def _ssh_network_global_mode_get() -> str:
+    value = _ssh_network_env_value("SSH_NETWORK_ROUTE_GLOBAL", "direct").strip().lower()
+    return value if value in {"direct", "warp"} else "direct"
+
+
+def _ssh_network_backend_get() -> str:
+    value = _ssh_network_env_value("SSH_NETWORK_WARP_BACKEND", "auto").strip().lower()
+    return value if value in {"auto", "local-proxy", "interface"} else "auto"
+
+
+def _ssh_network_backend_effective(configured: str | None = None) -> str:
+    value = str(configured or _ssh_network_backend_get()).strip().lower()
+    if value in {"local-proxy", "interface"}:
+        return value
+    if shutil.which("xray") and shutil.which("iptables"):
+        return "local-proxy"
+    return "interface"
+
+
+def _ssh_network_effective_rows() -> list[dict[str, str]]:
+    global_mode = _ssh_network_global_mode_get()
+    rows: list[dict[str, str]] = []
+    if not SSH_QUOTA_DIR.exists():
+        return rows
+
+    for quota_path in sorted(SSH_QUOTA_DIR.glob("*.json")):
+        ok, payload = _read_json(quota_path)
+        if not ok or not isinstance(payload, dict):
+            continue
+
+        username = str(payload.get("username") or quota_path.stem.split("@", 1)[0]).strip()
+        if not username:
+            continue
+
+        network = payload.get("network")
+        override = "inherit"
+        if isinstance(network, dict):
+            candidate = str(network.get("route_mode") or "").strip().lower()
+            if candidate in {"inherit", "direct", "warp"}:
+                override = candidate
+
+        effective = global_mode if override == "inherit" else override
+        rows.append(
+            {
+                "username": username,
+                "override": override,
+                "effective": effective,
+            }
+        )
+
+    return rows
+
+
+def _ssh_network_host_mode_state() -> str:
+    value = _network_state_get(WARP_MODE_STATE_KEY).strip().lower()
+    if value in {"consumer", "zerotrust"}:
+        return value
+    if _service_exists(WARP_ZEROTRUST_SERVICE) and _service_is_active(WARP_ZEROTRUST_SERVICE):
+        return "zerotrust"
+    return "consumer"
+
+
+def _ssh_network_require_backend_compatible(backend: str) -> tuple[bool, str]:
+    backend_n = str(backend or "").strip().lower()
+    if backend_n == "interface" and _ssh_network_host_mode_state() == "zerotrust":
+        return (
+            False,
+            "Dedicated Interface SSH tidak kompatibel saat host aktif di Zero Trust. "
+            "Gunakan Local Proxy atau kembalikan host ke Free/Plus lebih dulu.",
+        )
+    return True, "ok"
+
+
+def _warp_restart_target_service() -> tuple[bool, str, str, str]:
+    zerotrust_exists = _service_exists(WARP_ZEROTRUST_SERVICE)
+    zerotrust_active = zerotrust_exists and _service_is_active(WARP_ZEROTRUST_SERVICE)
+    if zerotrust_active or _ssh_network_host_mode_state() == "zerotrust":
+        if not zerotrust_exists:
+            return False, "", "Zero Trust", f"{WARP_ZEROTRUST_SERVICE}.service tidak terdeteksi."
+        return True, WARP_ZEROTRUST_SERVICE, "Zero Trust", "ok"
+
+    if _service_exists("wireproxy"):
+        return True, "wireproxy", "Free/Plus", "ok"
+
+    return False, "", "Free/Plus", "wireproxy.service tidak terdeteksi."
+
+
+def _ssh_network_apply_runtime() -> tuple[bool, str]:
+    manage_script = _manage_script_path()
+    if manage_script is None:
+        return False, "manage script tidak ditemukan untuk apply SSH Network."
+    return _run_cmd(["bash", str(manage_script), "__apply-ssh-network"], timeout=180)
+
+
+def _ssh_network_snapshot() -> dict[str, Any]:
+    return {
+        "env": _snapshot_optional_file(SSH_NETWORK_ENV_FILE),
+    }
+
+
+def _ssh_network_restore_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]:
+    entry = snapshot.get("env")
+    if not isinstance(entry, dict):
+        return True, "ok"
+    return _restore_optional_file(SSH_NETWORK_ENV_FILE, entry)
+
+
+def _normalize_ip_literal(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("kosong")
+    return str(ipaddress.ip_address(raw))
+
+
+def _listener_present(port: int) -> bool:
+    if shutil.which("ss") is None:
+        return False
+    ok, out = _run_cmd(["ss", "-lnt"], timeout=8)
+    if not ok:
+        return False
+    return bool(re.search(rf":{int(port)}(?:\s|$)", out))
+
+
+def _adblock_dnsmasq_conf_path() -> Path:
+    return _adblock_path_from_env("SSH_DNS_ADBLOCK_DNSMASQ_CONF", ADBLOCK_DEFAULT_DNSMASQ_CONF)
+
+
+def _ssh_dns_resolver_runtime_conf_write() -> tuple[bool, str]:
+    dns_port = str(_adblock_env_value("SSH_DNS_ADBLOCK_PORT", "5353")).strip()
+    if not dns_port.isdigit():
+        dns_port = "5353"
+    primary = _normalize_ip_literal(_adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY", "1.1.1.1"))
+    secondary = _normalize_ip_literal(_adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY", "8.8.8.8"))
+    rendered = _adblock_path_from_env("SSH_DNS_ADBLOCK_RENDERED_FILE", ADBLOCK_DEFAULT_RENDERED)
+    dnsmasq_conf = _adblock_dnsmasq_conf_path()
+    content = (
+        "# SSH Adblock resolver\n"
+        f"port={dns_port}\n"
+        "listen-address=127.0.0.1\n"
+        "bind-interfaces\n"
+        "no-resolv\n"
+        "no-hosts\n"
+        "domain-needed\n"
+        "bogus-priv\n"
+        "cache-size=1000\n"
+        f"server={primary}\n"
+        f"server={secondary}\n"
+        f"conf-file={rendered}\n"
+    )
+    try:
+        dnsmasq_conf.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(dnsmasq_conf, content)
+        os.chmod(dnsmasq_conf, 0o644)
+    except Exception as exc:
+        return False, f"Gagal menulis dnsmasq SSH Adblock: {exc}"
+    return True, "ok"
+
+
+def _ssh_dns_resolver_apply_now() -> tuple[bool, str]:
+    ok_write, msg_write = _ssh_dns_resolver_runtime_conf_write()
+    if not ok_write:
+        return False, msg_write
+
+    dns_service = _adblock_dns_service_name()
+    if not _service_exists(dns_service):
+        return False, f"Service DNS SSH tidak ditemukan: {dns_service}"
+    if not _restart_and_wait(dns_service, timeout_sec=20):
+        return False, f"Service DNS SSH gagal start/restart: {dns_service}"
+
+    if not ADBLOCK_SYNC_BIN.exists():
+        return False, "adblock-sync tidak ditemukan."
+    ok_apply, out_apply = _run_cmd([str(ADBLOCK_SYNC_BIN), "--apply"], timeout=120)
+    if not ok_apply:
+        return False, out_apply
+    return True, out_apply
+
+
+def _ssh_network_user_route_mode_set(username: str, mode: str) -> tuple[bool, str]:
+    username_n = str(username or "").strip()
+    mode_n = str(mode or "").strip().lower()
+    if not _is_valid_ssh_username(username_n):
+        return False, "Username SSH tidak valid."
+    if mode_n not in {"inherit", "direct", "warp"}:
+        return False, "Mode routing SSH harus inherit/direct/warp."
+
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, username_n))
+    payload: dict[str, Any]
+    if target is None:
+        if not _linux_user_exists(username_n):
+            return False, f"User Linux '{username_n}' belum ada."
+        ok_state, target_or_err, payload_or_err = _ssh_load_state(
+            username_n,
+            create_missing=True,
+            created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+            expired_at="-",
+        )
+        if not ok_state:
+            return False, str(target_or_err)
+        assert isinstance(target_or_err, Path)
+        assert isinstance(payload_or_err, dict)
+        target = target_or_err
+        payload = payload_or_err
+    else:
+        ok_raw, raw_payload = _read_json(target)
+        if ok_raw and isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            ok_state, _, payload_or_err = _ssh_load_state(username_n, create_missing=True)
+            if not ok_state or not isinstance(payload_or_err, dict):
+                return False, f"Gagal membaca metadata SSH untuk '{username_n}'."
+            payload = payload_or_err
+
+    network = payload.get("network")
+    if not isinstance(network, dict):
+        network = {}
+    network["route_mode"] = mode_n
+    payload["network"] = network
+
+    try:
+        _write_json_atomic(target, payload)
+        _chmod_600(target)
+    except Exception as exc:
+        return False, f"Gagal menyimpan route_mode SSH untuk '{username_n}': {exc}"
+    return True, "ok"
+
+
+def _warp_zero_trust_env_map() -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        if not WARP_ZEROTRUST_CONFIG_FILE.exists():
+            return data
+        for raw in WARP_ZEROTRUST_CONFIG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            data[key.strip()] = value.strip()
+    except Exception:
+        return {}
+    return data
+
+
+def _warp_zero_trust_env_value(key: str, default: str = "") -> str:
+    value = _warp_zero_trust_env_map().get(key)
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def _warp_zero_trust_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
+    lines: list[str] = []
+    if WARP_ZEROTRUST_CONFIG_FILE.exists():
+        try:
+            lines = WARP_ZEROTRUST_CONFIG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            return False, f"Gagal membaca config Zero Trust: {exc}"
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        line = str(raw or "")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key, _ = line.split("=", 1)
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+        out.append(line)
+
+    for key, value in updates.items():
+        if key in seen:
+            continue
+        out.append(f"{key}={value}")
+
+    try:
+        WARP_ZEROTRUST_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(WARP_ZEROTRUST_CONFIG_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(WARP_ZEROTRUST_CONFIG_FILE, 0o600)
+    except Exception as exc:
+        return False, f"Gagal menulis config Zero Trust: {exc}"
+    return True, "ok"
+
+
+def _warp_zero_trust_proxy_port_get() -> str:
+    port = str(_warp_zero_trust_env_value("WARP_ZEROTRUST_PROXY_PORT", WARP_ZEROTRUST_PROXY_PORT)).strip()
+    return port if port.isdigit() else WARP_ZEROTRUST_PROXY_PORT
+
+
+def _warp_zero_trust_cli_first_line(*args: str) -> str:
+    if shutil.which("warp-cli") is None:
+        return "unknown"
+    ok, out = _run_cmd(["warp-cli", *args], timeout=20)
+    if not ok:
+        last = str(out).splitlines()[-1].strip() if str(out).splitlines() else str(out).strip()
+        return last or "unknown"
+    for raw in out.splitlines():
+        line = str(raw or "").strip()
+        if line:
+            return line
+    return "unknown"
+
+
+def _warp_zero_trust_proxy_wait_connected(timeout_sec: int = 30) -> bool:
+    try:
+        port = int(_warp_zero_trust_proxy_port_get())
+    except Exception:
+        return False
+    end = time.time() + max(1, timeout_sec)
+    while time.time() < end:
+        if shutil.which("warp-cli") is not None:
+            _run_cmd(["warp-cli", "connect"], timeout=20)
+        if _listener_present(port):
+            return True
+        time.sleep(1.0)
+    return _listener_present(port)
+
+
+def _warp_zero_trust_disconnect_backend() -> tuple[bool, str]:
+    if shutil.which("warp-cli") is not None:
+        _run_cmd(["warp-cli", "disconnect"], timeout=20)
+    if _service_exists(WARP_ZEROTRUST_SERVICE) and _service_is_active(WARP_ZEROTRUST_SERVICE):
+        if not _stop_and_wait_inactive(WARP_ZEROTRUST_SERVICE, timeout_sec=30):
+            return False, f"Gagal menghentikan {WARP_ZEROTRUST_SERVICE}."
+    return True, "ok"
+
+
+def _warp_zero_trust_render_mdm_file() -> tuple[bool, str]:
+    team = str(_warp_zero_trust_env_value("WARP_ZEROTRUST_TEAM", "")).strip().lower()
+    client_id = str(_warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_ID", "")).strip()
+    client_secret = str(_warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_SECRET", "")).strip()
+    proxy_port = _warp_zero_trust_proxy_port_get()
+    if not team or not client_id or not client_secret:
+        return False, "Config Zero Trust belum lengkap."
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<dict>\n"
+        "  <key>organization</key>\n"
+        f"  <string>{xml_escape(team)}</string>\n"
+        "  <key>display_name</key>\n"
+        "  <string>Autoscript Zero Trust</string>\n"
+        "  <key>auth_client_id</key>\n"
+        f"  <string>{xml_escape(client_id)}</string>\n"
+        "  <key>auth_client_secret</key>\n"
+        f"  <string>{xml_escape(client_secret)}</string>\n"
+        "  <key>onboarding</key>\n"
+        "  <false/>\n"
+        "  <key>auto_connect</key>\n"
+        "  <integer>1</integer>\n"
+        "  <key>service_mode</key>\n"
+        "  <string>proxy</string>\n"
+        "  <key>proxy_port</key>\n"
+        f"  <integer>{proxy_port}</integer>\n"
+        "</dict>\n"
+    )
+    try:
+        WARP_ZEROTRUST_MDM_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(WARP_ZEROTRUST_MDM_FILE, xml)
+        os.chmod(WARP_ZEROTRUST_MDM_FILE, 0o600)
+    except Exception as exc:
+        return False, f"Gagal menulis mdm.xml Zero Trust: {exc}"
+    return True, "ok"
+
+
+def _warp_zero_trust_ssh_guard() -> tuple[bool, str]:
+    backend_effective = _ssh_network_backend_effective()
+    effective_warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
+    if effective_warp_users > 0 and backend_effective != "local-proxy":
+        return (
+            False,
+            "Zero Trust belum kompatibel dengan SSH Network yang effective WARP users-nya aktif di backend non-Local Proxy.",
+        )
     return True, "ok"
 
 
@@ -1507,13 +1981,14 @@ def _warp_tier_target_get() -> str:
 
 
 def _warp_tier_reconnect_target_get() -> str:
-    live = _warp_live_tier()
-    if live in {"free", "plus"}:
-        return live
+    if _network_state_get(WARP_MODE_STATE_KEY).strip().lower() != "zerotrust":
+        live = _warp_live_tier()
+        if live in {"free", "plus"}:
+            return live
     target = _warp_tier_target_get()
     if target in {"free", "plus"}:
         return target
-    return "free"
+    return "unknown"
 
 
 def _warp_wait_live_tier(expected: str, timeout_sec: int = 20) -> bool:
@@ -1540,6 +2015,41 @@ def _warp_tier_status_message() -> str:
         f"Live Tier     : {live}",
         f"wireproxy     : {wireproxy_state}",
         f"WARP+ License : {license_masked}",
+    ]
+    return "\n".join(lines)
+
+
+def _warp_zero_trust_status_message() -> str:
+    team = _warp_zero_trust_env_value("WARP_ZEROTRUST_TEAM", "").strip().lower()
+    client_id = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_ID", "").strip()
+    client_secret = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_SECRET", "").strip()
+    proxy_port = _warp_zero_trust_proxy_port_get()
+    config_state = "complete" if team and client_id and client_secret else "incomplete"
+    svc_state = "missing"
+    if _service_exists(WARP_ZEROTRUST_SERVICE):
+        svc_state = _service_state(WARP_ZEROTRUST_SERVICE)
+    mdm_state = "present" if WARP_ZEROTRUST_MDM_FILE.exists() else "missing"
+    cli_status = _warp_zero_trust_cli_first_line("status")
+    reg_status = _warp_zero_trust_cli_first_line("registration", "show")
+    proxy_state = "not-listening"
+    try:
+        if _listener_present(int(proxy_port)):
+            proxy_state = "listening"
+    except Exception:
+        proxy_state = "unknown"
+    lines = [
+        f"Mode          : {'Zero Trust' if _network_state_get(WARP_MODE_STATE_KEY).strip().lower() == 'zerotrust' else 'Free/Plus'}",
+        "Backend       : cloudflare-warp (Zero Trust proxy)",
+        f"Team Name     : {team or '(kosong)'}",
+        f"Client ID     : {_warp_mask_license(client_id)}",
+        f"Client Secret : {_warp_mask_license(client_secret)}",
+        f"Config State  : {config_state}",
+        f"{WARP_ZEROTRUST_SERVICE:<14} : {svc_state}",
+        f"MDM Policy    : {mdm_state}",
+        f"Proxy Bind    : 127.0.0.1:{proxy_port}",
+        f"Proxy State   : {proxy_state}",
+        f"CLI Status    : {cli_status}",
+        f"Registration  : {reg_status}",
     ]
     return "\n".join(lines)
 
@@ -3223,23 +3733,30 @@ def _dns_set_secondary(cfg: dict[str, Any], value: str) -> tuple[bool, str]:
 
 def _dns_set_query_strategy(cfg: dict[str, Any], strategy: str) -> tuple[bool, str]:
     val = str(strategy or "").strip()
-    if val not in DNS_QUERY_STRATEGY_ALLOWED:
-        choices = ", ".join(sorted(DNS_QUERY_STRATEGY_ALLOWED))
-        return False, f"Query strategy invalid. Pilihan: {choices}."
     dns_obj = cfg.get("dns")
     assert isinstance(dns_obj, dict)
-    dns_obj["queryStrategy"] = val
-    return True, f"Query strategy di-set ke {val}."
+    if val.lower() in {"default", "clear", "none", "unset", "reset", "off"}:
+        dns_obj.pop("queryStrategy", None)
+        return True, "Query strategy dikembalikan ke default."
+
+    canonical = next((item for item in DNS_QUERY_STRATEGY_ALLOWED if item.lower() == val.lower()), "")
+    if canonical not in DNS_QUERY_STRATEGY_ALLOWED:
+        choices = ", ".join(sorted(DNS_QUERY_STRATEGY_ALLOWED))
+        return False, f"Query strategy invalid. Pilihan: {choices}, atau default untuk reset."
+    dns_obj["queryStrategy"] = canonical
+    return True, f"Query strategy di-set ke {canonical}."
 
 
 def _dns_toggle_cache(cfg: dict[str, Any]) -> tuple[bool, str]:
     dns_obj = cfg.get("dns")
     assert isinstance(dns_obj, dict)
     current = bool(dns_obj.get("disableCache"))
-    dns_obj["disableCache"] = not current
-    state = "OFF" if not current else "ON"
+    if current:
+        dns_obj.pop("disableCache", None)
+        return True, "DNS cache sekarang: DEFAULT."
+    dns_obj["disableCache"] = True
     # disableCache=true means cache OFF.
-    return True, f"DNS cache sekarang: {state}."
+    return True, "DNS cache sekarang: OFF."
 
 
 def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str, str]:
@@ -3701,13 +4218,14 @@ def _restore_account_info_snapshots(snapshots: dict[Path, dict[str, Any]]) -> li
 
 
 @_user_data_mutation_locked
-def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) -> tuple[int, int]:
+def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) -> tuple[int, int, int]:
     _ensure_runtime_dirs()
     domain_eff = str(domain or "").strip() or _detect_domain()
     ip_eff = str(ip or "").strip() or _detect_public_ipv4()
 
     updated = 0
     failed = 0
+    skipped = 0
     snapshots: dict[Path, dict[str, Any]] = {}
 
     for proto in USER_PROTOCOLS:
@@ -3732,6 +4250,11 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
 
         for username in sorted(selected.keys()):
             target = selected[username]
+            if proto == SSH_PROTOCOL:
+                quota_target = _resolve_existing(_quota_candidates(proto, username))
+                if quota_target is None and not _linux_user_exists(username):
+                    skipped += 1
+                    continue
             if target not in snapshots:
                 snapshots[target] = _snapshot_optional_file(target)
             ok, _ = _refresh_account_info_for_user(proto, username, domain=domain_eff, ip=ip_eff)
@@ -3745,7 +4268,7 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
         updated = 0
         if restore_notes:
             failed += len(restore_notes)
-    return updated, failed
+    return updated, failed, skipped
 
 
 def _account_refresh_outcome(
@@ -3799,8 +4322,10 @@ def op_account_info_compat_refresh_if_needed() -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
 
-    updated, failed = _refresh_all_account_info(domain=domain, ip=ip_override)
+    updated, failed, skipped = _refresh_all_account_info(domain=domain, ip=ip_override)
     msg = f"Compat refresh selesai: updated={updated}, failed={failed}"
+    if skipped > 0:
+        msg += f", skipped={skipped}"
     if failed > 0:
         return False, title, msg
     return True, title, msg
@@ -6369,7 +6894,7 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
         if ok_rb and previous_domain:
-            _, rb_failed = _refresh_all_account_info(domain=previous_domain)
+            _, rb_failed, _ = _refresh_all_account_info(domain=previous_domain)
             if rb_failed > 0:
                 return False, title, (
                     f"{error_msg}\nRollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama "
@@ -6383,7 +6908,7 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     ok_ip, ip_or_err = _get_public_ipv4()
     if ok_ip:
         ip_override = str(ip_or_err)
-    updated, failed = _refresh_all_account_info(domain=domain_n, ip=ip_override)
+    updated, failed, skipped = _refresh_all_account_info(domain=domain_n, ip=ip_override)
     lines = [
         f"Domain aktif sekarang: {domain_n}",
         "- Certificate mode : standalone",
@@ -6393,6 +6918,8 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
         lines.append(
             f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
+    if skipped > 0:
+        lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
     return True, title, "\n".join(lines)
 
 
@@ -6504,7 +7031,7 @@ def op_domain_setup_cloudflare(
     if error_msg:
         ok_rb, msg_rb = _restore_domain_runtime_snapshot(snapshot)
         if ok_rb and previous_domain:
-            _, rb_failed = _refresh_all_account_info(domain=previous_domain, ip=vps_ipv4)
+            _, rb_failed, _ = _refresh_all_account_info(domain=previous_domain, ip=vps_ipv4)
             if rb_failed > 0:
                 return False, title, (
                     f"{error_msg}\nRollback domain berhasil, tetapi {rb_failed} ACCOUNT INFO domain lama "
@@ -6514,7 +7041,7 @@ def op_domain_setup_cloudflare(
             return False, title, error_msg
         return False, title, f"{error_msg}\nRollback domain gagal:\n{msg_rb}"
 
-    updated, failed = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
+    updated, failed, skipped = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
     lines = [
         f"Domain aktif sekarang: {domain_final}",
         f"- Root domain      : {root_domain}",
@@ -6528,6 +7055,8 @@ def op_domain_setup_cloudflare(
         lines.append(
             f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain/DNS/certificate aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
+    if skipped > 0:
+        lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
     lines.append(f"- ACCOUNT INFO updated: {updated}")
     return True, title, "\n".join(lines)
 
@@ -6549,24 +7078,31 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
     if not ok_ng:
         return False, title, ng_msg
 
-    updated, failed = _refresh_all_account_info(domain=domain_n)
+    updated, failed, skipped = _refresh_all_account_info(domain=domain_n)
     if failed > 0:
         return True, title, (
             f"Domain berhasil diubah ke: {domain_n}\n"
             f"- ACCOUNT INFO updated: {updated}\n"
             f"- Warning: {failed} ACCOUNT INFO gagal direfresh. Domain aktif tetap dipertahankan; jalankan refresh eksplisit bila diperlukan."
         )
-    return True, title, f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
+    msg = f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
+    if skipped > 0:
+        msg += f"\n- Catatan: {skipped} entri account-info yatim dilewati otomatis."
+    return True, title, msg
 
 
 @_user_data_mutation_locked
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
-    updated, failed = _refresh_all_account_info()
+    updated, failed, skipped = _refresh_all_account_info()
     title = "Domain Control - Refresh Account Info"
     msg = f"Selesai: updated={updated}, failed={failed}"
+    if skipped > 0:
+        msg += f", skipped={skipped}"
     if failed > 0:
         msg += "\nSebagian ACCOUNT INFO gagal direfresh."
         return False, title, msg
+    if skipped > 0:
+        msg += "\nEntri account-info yatim dilewati otomatis."
     return True, title, msg
 
 
@@ -6736,11 +7272,15 @@ def op_network_warp_status_report() -> tuple[bool, str, str]:
 
 def op_network_warp_restart() -> tuple[bool, str, str]:
     title = "Network Controls - Restart WARP"
-    if not _service_exists("wireproxy"):
-        return False, title, "wireproxy.service tidak terdeteksi."
-    if not _restart_and_wait("wireproxy", timeout_sec=30):
-        return False, title, "wireproxy tidak aktif setelah restart."
-    return True, title, f"wireproxy restart sukses.\nStatus: {'active' if _service_is_active('wireproxy') else 'inactive'}"
+    ok_target, service_name, backend_label, msg_target = _warp_restart_target_service()
+    if not ok_target:
+        return False, title, msg_target
+    if not _restart_and_wait(service_name, timeout_sec=40):
+        return False, title, f"{service_name} tidak aktif setelah restart."
+    return True, title, (
+        f"Restart WARP mengikuti backend host: {backend_label} ({service_name}).\n"
+        f"Status: {'active' if _service_is_active(service_name) else 'inactive'}"
+    )
 
 
 def op_network_warp_set_global_mode(mode: str) -> tuple[bool, str, str]:
@@ -6885,6 +7425,13 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
 
     with file_lock(WARP_LOCK_FILE):
         snapshot = _capture_warp_runtime_snapshot()
+        if snapshot.get("mode_target") == "zerotrust":
+            ok_stop_zt, msg_stop_zt = _warp_zero_trust_disconnect_backend()
+            if not ok_stop_zt:
+                ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+                if ok_rb:
+                    return False, title, msg_stop_zt
+                return False, title, f"{msg_stop_zt}\nRollback WARP gagal:\n{msg_rb}"
         WGCF_DIR.mkdir(parents=True, exist_ok=True)
         account_file = WGCF_DIR / "wgcf-account.toml"
         profile_file = WGCF_DIR / "wgcf-profile.conf"
@@ -6933,6 +7480,7 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
         try:
             _network_state_update_many(
                 {
+                    WARP_MODE_STATE_KEY: "consumer",
                     WARP_TIER_STATE_KEY: "free",
                     WARP_PLUS_LICENSE_STATE_KEY: snapshot.get("license_key"),
                 }
@@ -6942,6 +7490,13 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
             if ok_rb:
                 return False, title, f"Gagal menyimpan state target WARP free: {exc}"
             return False, title, f"Gagal menyimpan state target WARP free: {exc}\nRollback WARP gagal:\n{msg_rb}"
+
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
+        if not ok_refresh:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Switch free berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Switch free berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     msg = (
         "Switch tier ke free berhasil.\n"
@@ -6960,12 +7515,19 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
         return False, title, "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
 
     with file_lock(WARP_LOCK_FILE):
-        snapshot = _capture_warp_runtime_snapshot()
         key = str(license_key or "").strip()
         if not key:
             key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
         if not key:
             return False, title, "License key WARP+ kosong."
+        snapshot = _capture_warp_runtime_snapshot()
+        if snapshot.get("mode_target") == "zerotrust":
+            ok_stop_zt, msg_stop_zt = _warp_zero_trust_disconnect_backend()
+            if not ok_stop_zt:
+                ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+                if ok_rb:
+                    return False, title, msg_stop_zt
+                return False, title, f"{msg_stop_zt}\nRollback WARP gagal:\n{msg_rb}"
 
         ok_build, profile_or_err = _warp_wgcf_build_profile("plus", key)
         if not ok_build:
@@ -6994,6 +7556,7 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
         try:
             _network_state_update_many(
                 {
+                    WARP_MODE_STATE_KEY: "consumer",
                     WARP_TIER_STATE_KEY: "plus",
                     WARP_PLUS_LICENSE_STATE_KEY: key,
                 }
@@ -7003,6 +7566,13 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
             if ok_rb:
                 return False, title, f"Gagal menyimpan state target WARP plus: {exc}"
             return False, title, f"Gagal menyimpan state target WARP plus: {exc}\nRollback WARP gagal:\n{msg_rb}"
+
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
+        if not ok_refresh:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Switch plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Switch plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     msg = (
         "Switch tier ke plus berhasil.\n"
@@ -7022,6 +7592,19 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
     with file_lock(WARP_LOCK_FILE):
         snapshot = _capture_warp_runtime_snapshot()
         target = _warp_tier_reconnect_target_get()
+        if target not in {"free", "plus"}:
+            return (
+                False,
+                title,
+                "Target reconnect Free/Plus belum diketahui. Gunakan Switch ke WARP Free atau Switch ke WARP Plus dulu agar target tersimpan jelas.",
+            )
+        if snapshot.get("mode_target") == "zerotrust":
+            ok_stop_zt, msg_stop_zt = _warp_zero_trust_disconnect_backend()
+            if not ok_stop_zt:
+                ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+                if ok_rb:
+                    return False, title, msg_stop_zt
+                return False, title, f"{msg_stop_zt}\nRollback WARP gagal:\n{msg_rb}"
 
         if target == "plus":
             key = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip()
@@ -7056,7 +7639,10 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
             return False, title, f"Live WARP tier tidak sesuai target {target} setelah reconnect/regenerate.\nRollback WARP gagal:\n{msg_rb}"
 
         try:
-            updates: dict[str, str | None] = {WARP_TIER_STATE_KEY: target}
+            updates: dict[str, str | None] = {
+                WARP_MODE_STATE_KEY: "consumer",
+                WARP_TIER_STATE_KEY: target,
+            }
             if target == "plus":
                 updates[WARP_PLUS_LICENSE_STATE_KEY] = _network_state_get(WARP_PLUS_LICENSE_STATE_KEY).strip() or snapshot.get("license_key")
             _network_state_update_many(updates)
@@ -7066,8 +7652,322 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state target WARP setelah reconnect: {exc}"
             return False, title, f"Gagal menyimpan state target WARP setelah reconnect: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
+        if not ok_refresh:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Reconnect WARP berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Reconnect WARP berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
+
     msg = f"Reconnect/regenerate selesai untuk target: {target}\n- Apply: {msg_apply}\n\n{_warp_tier_status_message()}"
     return True, title, msg
+
+
+def op_network_warp_tier_zero_trust_set_team(team: str) -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Set Team Name"
+    team_n = str(team or "").strip().lower()
+    if not team_n or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", team_n):
+        return False, title, "Team name Zero Trust tidak valid."
+    ok_set, msg_set = _warp_zero_trust_update_env_many({"WARP_ZEROTRUST_TEAM": team_n})
+    if not ok_set:
+        return False, title, msg_set
+    return True, title, f"Team name Zero Trust disimpan: {team_n}"
+
+
+def op_network_warp_tier_zero_trust_set_client_id(client_id: str) -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Set Client ID"
+    value = str(client_id or "").strip()
+    if not value:
+        return False, title, "Client ID Zero Trust tidak boleh kosong."
+    ok_set, msg_set = _warp_zero_trust_update_env_many({"WARP_ZEROTRUST_CLIENT_ID": value})
+    if not ok_set:
+        return False, title, msg_set
+    return True, title, "Client ID Zero Trust disimpan."
+
+
+def op_network_warp_tier_zero_trust_set_client_secret(client_secret: str) -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Set Client Secret"
+    value = str(client_secret or "").strip()
+    if not value:
+        return False, title, "Client secret Zero Trust tidak boleh kosong."
+    ok_set, msg_set = _warp_zero_trust_update_env_many({"WARP_ZEROTRUST_CLIENT_SECRET": value})
+    if not ok_set:
+        return False, title, msg_set
+    return True, title, "Client secret Zero Trust disimpan."
+
+
+def op_network_warp_tier_zero_trust_apply() -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Apply / Connect"
+    if shutil.which("warp-cli") is None:
+        return False, title, "warp-cli tidak ditemukan. Install Cloudflare WARP client dulu."
+    if not _service_exists(WARP_ZEROTRUST_SERVICE):
+        return False, title, f"Service {WARP_ZEROTRUST_SERVICE} tidak ditemukan."
+
+    ok_guard, msg_guard = _warp_zero_trust_ssh_guard()
+    if not ok_guard:
+        return False, title, msg_guard
+
+    with file_lock(WARP_LOCK_FILE):
+        snapshot = _capture_warp_runtime_snapshot()
+
+        ok_mdm, msg_mdm = _warp_zero_trust_render_mdm_file()
+        if not ok_mdm:
+            return False, title, msg_mdm
+
+        if snapshot.get("wireproxy_exists") and snapshot.get("wireproxy_was_active"):
+            if not _stop_and_wait_inactive("wireproxy", timeout_sec=30):
+                ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+                if ok_rb:
+                    return False, title, "Gagal menghentikan wireproxy sebelum aktivasi Zero Trust."
+                return False, title, f"Gagal menghentikan wireproxy sebelum aktivasi Zero Trust.\nRollback WARP gagal:\n{msg_rb}"
+
+        if not _restart_and_wait(WARP_ZEROTRUST_SERVICE, timeout_sec=30):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"{WARP_ZEROTRUST_SERVICE} tidak sehat setelah restart."
+            return False, title, f"{WARP_ZEROTRUST_SERVICE} tidak sehat setelah restart.\nRollback WARP gagal:\n{msg_rb}"
+        if not _warp_zero_trust_proxy_wait_connected(timeout_sec=30):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, "Proxy Zero Trust belum listening setelah connect."
+            return False, title, f"Proxy Zero Trust belum listening setelah connect.\nRollback WARP gagal:\n{msg_rb}"
+
+        try:
+            _network_state_update_many({WARP_MODE_STATE_KEY: "zerotrust"})
+        except Exception as exc:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Gagal menyimpan state Zero Trust: {exc}"
+            return False, title, f"Gagal menyimpan state Zero Trust: {exc}\nRollback WARP gagal:\n{msg_rb}"
+
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
+        if not ok_refresh:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Zero Trust aktif, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Zero Trust aktif, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
+
+    return True, title, f"Zero Trust berhasil diaktifkan.\n\n{_warp_zero_trust_status_message()}"
+
+
+def op_network_warp_tier_zero_trust_disconnect() -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Disconnect"
+    with file_lock(WARP_LOCK_FILE):
+        ok_disc, msg_disc = _warp_zero_trust_disconnect_backend()
+        if not ok_disc:
+            return False, title, msg_disc
+        try:
+            _network_state_update_many({WARP_MODE_STATE_KEY: "zerotrust"})
+        except Exception as exc:
+            return False, title, f"Gagal mempertahankan state Zero Trust: {exc}"
+    return True, title, f"Zero Trust diputuskan.\n\n{_warp_zero_trust_status_message()}"
+
+
+def op_network_warp_tier_zero_trust_return_free_plus() -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Return to Free/Plus"
+    if not _service_exists("wireproxy"):
+        return False, title, "wireproxy tidak ditemukan. Jalankan setup.sh terlebih dulu."
+
+    with file_lock(WARP_LOCK_FILE):
+        snapshot = _capture_warp_runtime_snapshot()
+        ok_disc, msg_disc = _warp_zero_trust_disconnect_backend()
+        if not ok_disc:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, msg_disc
+            return False, title, f"{msg_disc}\nRollback WARP gagal:\n{msg_rb}"
+
+        if not _restart_and_wait("wireproxy", timeout_sec=30):
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, "wireproxy tidak sehat sesudah kembali ke Free/Plus."
+            return False, title, f"wireproxy tidak sehat sesudah kembali ke Free/Plus.\nRollback WARP gagal:\n{msg_rb}"
+
+        try:
+            _network_state_update_many({WARP_MODE_STATE_KEY: "consumer"})
+        except Exception as exc:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Gagal menyimpan state Free/Plus: {exc}"
+            return False, title, f"Gagal menyimpan state Free/Plus: {exc}\nRollback WARP gagal:\n{msg_rb}"
+
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
+        if not ok_refresh:
+            ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
+            if ok_rb:
+                return False, title, f"Kembali ke Free/Plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Kembali ke Free/Plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
+
+    return True, title, f"Host dikembalikan ke Free/Plus.\n\n{_warp_tier_status_message()}"
+
+
+def op_ssh_network_dns_set_enabled(enabled: bool) -> tuple[bool, str, str]:
+    title = "SSH Network - DNS for SSH"
+    snapshot = {
+        "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
+        "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
+    }
+    with file_lock(ADBLOCK_LOCK_FILE):
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "1" if enabled else "0"})
+        if not ok_env:
+            return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
+        if not ok_apply:
+            _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
+            _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
+            return False, title, msg_apply
+    state = "diaktifkan" if enabled else "dinonaktifkan"
+    return True, title, f"DNS steering SSH berhasil {state}."
+
+
+def op_ssh_network_dns_set_primary(value: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Set Primary DNS"
+    try:
+        primary = _normalize_ip_literal(value)
+    except Exception:
+        return False, title, "Primary DNS SSH harus IPv4/IPv6 literal."
+    secondary = _adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY", "8.8.8.8")
+    snapshot = {
+        "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
+        "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
+    }
+    with file_lock(ADBLOCK_LOCK_FILE):
+        ok_env, msg_env = _adblock_update_env_many(
+            {
+                "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY": primary,
+                "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY": _normalize_ip_literal(secondary),
+            }
+        )
+        if not ok_env:
+            return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
+        if not ok_apply:
+            _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
+            _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
+            return False, title, msg_apply
+    return True, title, f"Primary DNS SSH diubah ke {primary}."
+
+
+def op_ssh_network_dns_set_secondary(value: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Set Secondary DNS"
+    try:
+        secondary = _normalize_ip_literal(value)
+    except Exception:
+        return False, title, "Secondary DNS SSH harus IPv4/IPv6 literal."
+    primary = _adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY", "1.1.1.1")
+    snapshot = {
+        "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
+        "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
+    }
+    with file_lock(ADBLOCK_LOCK_FILE):
+        ok_env, msg_env = _adblock_update_env_many(
+            {
+                "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY": _normalize_ip_literal(primary),
+                "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY": secondary,
+            }
+        )
+        if not ok_env:
+            return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
+        if not ok_apply:
+            _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
+            _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
+            return False, title, msg_apply
+    return True, title, f"Secondary DNS SSH diubah ke {secondary}."
+
+
+def op_ssh_network_dns_apply_runtime() -> tuple[bool, str, str]:
+    title = "SSH Network - Apply DNS Runtime"
+    with file_lock(ADBLOCK_LOCK_FILE):
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, "Runtime DNS SSH berhasil disinkronkan."
+
+
+def op_ssh_network_set_global_mode(mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Routing SSH Global"
+    mode_n = str(mode or "").strip().lower()
+    if mode_n not in {"direct", "warp"}:
+        return False, title, "Mode routing SSH harus direct/warp."
+    with file_lock(SSH_NETWORK_LOCK_FILE):
+        current_mode = _ssh_network_env_map().get("SSH_NETWORK_ROUTE_GLOBAL", "direct").strip().lower()
+        if current_mode == mode_n:
+            return True, title, f"Routing SSH global sudah {mode_n.upper()}; runtime tidak diubah."
+        snapshot = _ssh_network_snapshot()
+        ok_env, msg_env = _ssh_network_update_env_many({"SSH_NETWORK_ROUTE_GLOBAL": mode_n})
+        if not ok_env:
+            return False, title, msg_env
+        ok_apply, msg_apply = _ssh_network_apply_runtime()
+        if not ok_apply:
+            _ssh_network_restore_snapshot(snapshot)
+            _ssh_network_apply_runtime()
+            return False, title, msg_apply
+    return True, title, f"Routing SSH global diubah ke {mode_n.upper()}."
+
+
+def op_ssh_network_set_backend(backend: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Save WARP Backend"
+    backend_n = str(backend or "").strip().lower()
+    if backend_n not in {"auto", "local-proxy", "interface"}:
+        return False, title, "Backend WARP SSH harus auto/local-proxy/interface."
+    ok_guard, msg_guard = _ssh_network_require_backend_compatible(backend_n)
+    if not ok_guard:
+        return False, title, msg_guard
+    ok_env, msg_env = _ssh_network_update_env_many({"SSH_NETWORK_WARP_BACKEND": backend_n})
+    if not ok_env:
+        return False, title, msg_env
+    return True, title, (
+        f"Backend WARP SSH disimpan: {backend_n}. "
+        "Jalankan Apply Routing Runtime untuk merekonsiliasi runtime."
+    )
+
+
+def op_ssh_network_apply_runtime() -> tuple[bool, str, str]:
+    title = "SSH Network - Apply Routing Runtime"
+    ok_apply, msg_apply = _ssh_network_apply_runtime()
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, "Runtime routing SSH berhasil disinkronkan."
+
+
+def op_ssh_network_set_user_route_mode(username: str, mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Routing SSH Per-User"
+    target_user = str(username or "").strip()
+    mode_n = str(mode or "").strip().lower()
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, target_user))
+    snapshot = _snapshot_optional_file(target) if isinstance(target, Path) else {"exists": False}
+    with _user_data_mutation_lock():
+        ok_set, msg_set = _ssh_network_user_route_mode_set(target_user, mode_n)
+        if not ok_set:
+            return False, title, msg_set
+        ok_apply, msg_apply = _ssh_network_apply_runtime()
+        if not ok_apply:
+            restored_path = target or SSH_QUOTA_DIR / f"{target_user}@{SSH_PROTOCOL}.json"
+            _restore_optional_file(restored_path, snapshot)
+            _ssh_network_apply_runtime()
+            return False, title, msg_apply
+    return True, title, f"Routing SSH '{target_user}' diubah ke {mode_n}."
+
+
+def op_ssh_network_set_warp_global(enabled: bool) -> tuple[bool, str, str]:
+    return op_ssh_network_set_global_mode("warp" if enabled else "direct")
+
+
+def op_ssh_network_set_warp_user_mode(username: str, mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - WARP SSH Per-User"
+    ok_op, _, msg = op_ssh_network_set_user_route_mode(username, mode)
+    if not ok_op:
+        return False, title, msg
+    target_user = str(username or "").strip()
+    if mode == "warp":
+        return True, title, f"Mode WARP SSH '{target_user}' diubah ke warp."
+    if mode == "direct":
+        return True, title, f"Mode WARP SSH '{target_user}' diubah ke direct."
+    return True, title, f"Mode WARP SSH '{target_user}' dikembalikan ke inherit."
 
 
 def op_network_set_dns_primary(value: str) -> tuple[bool, str, str]:

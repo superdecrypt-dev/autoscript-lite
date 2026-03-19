@@ -1,4 +1,4 @@
-from ..adapters import system
+from ..adapters import system, system_mutations
 from ..utils.response import error_response, ok_response
 
 
@@ -52,11 +52,12 @@ def handle(action: str, params: dict, settings) -> dict:
             return error_response("forbidden", "Maintenance", "Dangerous actions dinonaktifkan via env.")
         if action == "restart_edge_gateway":
             ok, title, msg = system.op_restart_edge_gateway()
+        elif action == "restart_wireproxy":
+            ok, title, msg = system_mutations.op_network_warp_restart()
         else:
             svc = {
                 "restart_xray": "xray",
                 "restart_nginx": "nginx",
-                "restart_wireproxy": "wireproxy",
                 "restart_badvpn": "badvpn-udpgw",
             }[action]
             ok, title, msg = system.op_restart_service(svc)

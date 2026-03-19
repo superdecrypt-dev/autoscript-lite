@@ -1839,8 +1839,8 @@ ssh_network_route_user_menu() {
     menu_context="${SSH_NETWORK_USER_MENU_CONTEXT:-routing}"
     if [[ "${menu_context}" == "warp" ]]; then
       menu_title="WARP SSH Per-User"
-      backend_label="Alias kontrol WARP per-user"
-      target_label="shared route_mode: warp / direct / inherit"
+      backend_label="Kontrol WARP per-user"
+      target_label="enable / disable / inherit"
       option1="Enable WARP for User"
       option2="Disable WARP for User"
       option3="Reset User to Inherit"
@@ -1863,7 +1863,7 @@ ssh_network_route_user_menu() {
     hr
     printf "%-18s : %s\n" "Backend" "${backend_label}"
     if [[ "${menu_context}" == "warp" ]]; then
-      printf "%-18s : %s\n" "State" "shared dengan Routing SSH Per-User (network.route_mode)"
+      printf "%-18s : %s\n" "State" "metadata SSH: network.route_mode"
     fi
     printf "%-18s : %s\n" "Target Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_effective}")"
     printf "%-18s : %s\n" "Applied Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_applied}")"
@@ -1874,7 +1874,11 @@ ssh_network_route_user_menu() {
     echo "  1) ${option1}"
     echo "  2) ${option2}"
     echo "  3) ${option3}"
-    echo "  4) Apply Routing Runtime"
+    if [[ "${menu_context}" == "warp" ]]; then
+      echo "  4) Apply WARP Runtime"
+    else
+      echo "  4) Apply Routing Runtime"
+    fi
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1918,9 +1922,17 @@ ssh_network_route_user_menu() {
         ;;
       4)
         if ssh_network_runtime_apply_now; then
-          log "Runtime routing SSH berhasil disinkronkan."
+          if [[ "${menu_context}" == "warp" ]]; then
+            log "Runtime WARP SSH berhasil disinkronkan."
+          else
+            log "Runtime routing SSH berhasil disinkronkan."
+          fi
         else
-          warn "Runtime routing SSH gagal disinkronkan."
+          if [[ "${menu_context}" == "warp" ]]; then
+            warn "Runtime WARP SSH gagal disinkronkan."
+          else
+            warn "Runtime routing SSH gagal disinkronkan."
+          fi
         fi
         pause
         ;;
@@ -2015,10 +2027,8 @@ ssh_network_warp_user_menu() {
 ssh_network_menu() {
   local -a items=(
     "1|DNS for SSH"
-    "2|Routing SSH Global"
-    "3|Routing SSH Per-User"
-    "4|WARP SSH Global"
-    "5|WARP SSH Per-User"
+    "2|WARP SSH Global"
+    "3|WARP SSH Per-User"
     "0|Back"
   )
   while true; do
@@ -2031,10 +2041,8 @@ ssh_network_menu() {
     fi
     case "${c}" in
       1) menu_run_isolated_report "DNS for SSH" ssh_network_dns_menu ;;
-      2) menu_run_isolated_report "Routing SSH Global" ssh_network_route_global_menu ;;
-      3) menu_run_isolated_report "Routing SSH Per-User" ssh_network_route_user_menu ;;
-      4) menu_run_isolated_report "WARP SSH Global" ssh_network_warp_global_menu ;;
-      5) menu_run_isolated_report "WARP SSH Per-User" ssh_network_warp_user_menu ;;
+      2) menu_run_isolated_report "WARP SSH Global" ssh_network_warp_global_menu ;;
+      3) menu_run_isolated_report "WARP SSH Per-User" ssh_network_warp_user_menu ;;
       0|kembali|k|back|b) return 0 ;;
       *) invalid_choice ;;
     esac

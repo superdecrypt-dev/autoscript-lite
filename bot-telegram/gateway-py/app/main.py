@@ -12,7 +12,7 @@ from pathlib import Path
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -39,6 +39,7 @@ from .render import (
     decode_download_payload,
     main_menu_text,
     menu_text,
+    sanitize_download_attachment,
 )
 
 
@@ -66,6 +67,7 @@ SSH_USER_MENU_ID = "23"
 XRAY_QAC_MENU_ID = "24"
 SSH_QAC_MENU_ID = "25"
 BACKUP_MENU_ID = "32"
+SSH_NETWORK_MENU_IDS = {"34", "37", "38", "39", "40", "41"}
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
 QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
 ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password", "reset_credential"}
@@ -91,6 +93,12 @@ FORM_CHOICE_USERNAME_ACTIONS = {
     "set_speed_upload",
     "speed_limit",
     "set_warp_user_mode",
+    "routing_ssh_user_inherit",
+    "routing_ssh_user_direct",
+    "routing_ssh_user_warp",
+    "warp_ssh_user_enable",
+    "warp_ssh_user_disable",
+    "warp_ssh_user_inherit",
 }
 SSH_ONLY_PROTOCOL_ACTIONS = {
     "reset_password",
@@ -201,6 +209,65 @@ def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
     if not isinstance(runtime, Runtime):
         raise RuntimeError("Runtime belum terinisialisasi.")
     return runtime
+
+
+def _update_log_context(update: object) -> str:
+    if not isinstance(update, Update):
+        return "update=none"
+
+    parts: list[str] = []
+    if update.update_id is not None:
+        parts.append(f"update_id={update.update_id}")
+    if update.effective_chat is not None and update.effective_chat.id is not None:
+        parts.append(f"chat_id={update.effective_chat.id}")
+    if update.effective_user is not None and update.effective_user.id is not None:
+        parts.append(f"user_id={update.effective_user.id}")
+    if update.callback_query is not None:
+        parts.append("kind=callback")
+    elif update.message is not None:
+        parts.append("kind=message")
+    else:
+        parts.append("kind=unknown")
+    return " ".join(parts) if parts else "update=unknown"
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    err_type = err.__class__.__name__ if err is not None else "UnknownError"
+    err_text = _sanitize_log_text(str(err) if err is not None else "unknown")
+    update_ctx = _update_log_context(update)
+    exc_info = (type(err), err, err.__traceback__) if err is not None else None
+
+    if isinstance(err, NetworkError):
+        LOGGER.warning("Transient Telegram network error (%s) %s: %s", err_type, update_ctx, err_text)
+        return
+
+    LOGGER.error("Unhandled bot error (%s) %s: %s", err_type, update_ctx, err_text, exc_info=exc_info)
+
+    if not isinstance(update, Update):
+        return
+
+    chat = update.effective_chat
+    if chat is None or chat.id is None:
+        return
+
+    try:
+        if update.callback_query is not None:
+            try:
+                await update.callback_query.answer("Terjadi error sementara.", show_alert=True)
+                return
+            except Exception:
+                pass
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Terjadi error sementara di bot. Coba ulangi action atau jalankan /menu.",
+        )
+    except Exception as notify_exc:
+        LOGGER.warning(
+            "Gagal mengirim notifikasi error ke chat %s: %s",
+            chat.id,
+            _sanitize_log_text(str(notify_exc)),
+        )
 
 
 def _is_authorized(runtime: Runtime, update: Update) -> tuple[bool, str]:
@@ -552,7 +619,7 @@ def _safe_int(raw: str, default: int = 0) -> int:
 def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
     if menu_id in {XRAY_USER_MENU_ID, XRAY_QAC_MENU_ID}:
         return XRAY_PROTOCOLS
-    if menu_id in {SSH_USER_MENU_ID, SSH_QAC_MENU_ID}:
+    if menu_id in {SSH_USER_MENU_ID, SSH_QAC_MENU_ID} | SSH_NETWORK_MENU_IDS:
         return ("ssh",)
     return USER_PROTOCOLS
 
@@ -1658,6 +1725,8 @@ async def _run_action(
     filename, payload = attachment
     if not payload:
         return
+    allow_password = bool(result.data.get("allow_sensitive_output")) if isinstance(result.data, dict) else False
+    filename, payload = sanitize_download_attachment(filename, payload, allow_password=allow_password)
 
     bio = io.BytesIO(payload)
     bio.name = filename
@@ -3036,6 +3105,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(on_callback))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document_input))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_input))
+    application.add_error_handler(on_error)
 
     LOGGER.info("Starting bot-telegram-gateway")
     # Python 3.12 no longer guarantees a default loop for the main thread.

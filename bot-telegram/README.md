@@ -29,26 +29,33 @@ Dikelola di `/etc/bot-telegram/bot.env`:
 - `COMMANDS_FILE`
 
 ## Ringkasan Menu
-Menu bot Telegram tahap ini memakai kategori utama:
-- `1) Status`
-- `2) Accounts`
-- `3) QAC`
-- `4) Domain`
-- `5) Network`
-- `6) Ops`
+Menu bot Telegram sekarang mengikuti urutan `CLI Menu` di `manage.sh` untuk top-level utama:
+- `1) Xray Users`
+- `2) SSH Users`
+- `3) Xray QAC`
+- `4) SSH QAC`
+- `5) Xray Network`
+- `6) SSH Network`
+- `7) Adblocker`
+- `8) Domain Control`
+- `9) Speedtest`
+- `10) Security`
+- `11) Maintenance`
+- `12) Traffic`
+- `13) WARP Tier`
 
-Submenu internal yang dipakai di balik kategori:
-- `Accounts` -> `Xray Users`, `SSH Users`
-- `QAC` -> `Xray QAC`, `SSH QAC`
-- `Domain` -> action langsung untuk `Domain Info`, `TLS`, `Set Domain`, `Refresh Accounts`, `Renew Cert`, plus submenu `Security Tools`
-- `Ops` -> action langsung untuk status operasional, speedtest, traffic overview, restart inti, dan backup, plus submenu `Speedtest Tools`, `Traffic Tools`, `Service Tools`, dan `Backup Tools`
+Catatan parity:
+- `13) Tools` sengaja tidak dibawa ke bot Telegram; untuk bot, slot itu dipakai `WARP Tier`.
+- Domain `SSH Network` sudah muncul sebagai menu tersendiri agar susunan bot konsisten dengan CLI.
+- `SSH Network` sekarang disederhanakan menjadi `DNS for SSH`, `WARP SSH Global`, dan `WARP SSH Per-User`.
+- `WARP Tier` sekarang dibagi jadi root `Show Overall Status`, submenu `Free/Plus`, dan submenu `Zero Trust`.
 
 Catatan perilaku:
 - Callback stale untuk action sensitif tetap ditolak aman oleh gateway.
-- `Status` fokus ke ringkasan host, TLS, validasi Xray, dan status runtime inti.
-- `Network` mencakup `WARP`, `DNS`, dan `Adblock` termasuk status, source list, update, enable/disable, serta auto update.
-- `Domain` memusatkan action domain yang paling sering dipakai langsung di satu layar, sementara tool yang lebih teknis dipindah ke `Security Tools`.
-- `Ops` memusatkan aksi operasional yang paling sering dipakai langsung di satu layar, sementara tool yang lebih detail dipisah ke submenu yang lebih spesifik.
+- `Xray Network`, `Adblocker`, dan `WARP Tier` dipisah supaya domain action-nya lebih jelas seperti di CLI.
+- `Maintenance`, `Traffic`, dan `Speedtest` juga tampil sebagai domain utama tersendiri, bukan lagi digabung di `Ops`.
+- `Domain Control` dan `Security` tetap mempertahankan action sensitif yang sama, tetapi mengikuti penamaan dan urutan CLI.
+- `WARP SSH Per-User` tetap memakai state metadata SSH yang sama (`network.route_mode`) seperti di CLI.
 
 ## Backup/Restore
 Fitur `Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`. Pada struktur baru, fitur ini diakses lewat kategori `Ops`.

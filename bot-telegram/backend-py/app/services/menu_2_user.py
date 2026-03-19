@@ -173,7 +173,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             data["download_error"] = str(download_or_err)
 
         if proto == system.SSH_PROTOCOL:
-            data["allow_sensitive_output"] = True
             account_path = _extract_add_user_path(msg_add, "Account")
             quota_path = _extract_add_user_path(msg_add, "Quota")
             account_text = _decode_download_text(download_or_err) if ok_download and isinstance(download_or_err, dict) else ""
@@ -276,8 +275,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             data["download_file"] = download_or_err
         else:
             msg_reset = f"{msg_reset}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
-        if proto == "trojan":
-            data["allow_sensitive_output"] = True
         return ok_response(title, msg_reset, data=data)
 
     if action == "reset_password":
@@ -292,11 +289,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             return pw_or_err
         ok_reset, _title_reset, msg_reset = system_mutations.op_ssh_reset_password(str(user_or_err), str(pw_or_err))
         if ok_reset:
-            lines = [
-                msg_reset,
-                f"Password baru : {pw_or_err}",
-            ]
-            return ok_response(title, "\n".join(lines), data={"allow_sensitive_output": True})
+            return ok_response(title, msg_reset)
         return error_response("user_reset_password_failed", title, msg_reset)
 
     if action == "active_sshws_sessions":
@@ -326,13 +319,12 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         _title_info, msg_info = system.op_account_info(str(proto_or_err), str(user_or_err))
         ok_download, download_or_err = system_mutations.op_user_account_file_download(str(proto_or_err), str(user_or_err))
         if not ok_download or not isinstance(download_or_err, dict):
-            return error_response("account_info_failed", title, str(download_or_err))
+            msg_warn = f"{msg_info}\n\n- Warning: file account tidak bisa diunduh ({download_or_err})"
+            return ok_response(title, msg_warn)
 
         data: dict[str, object] = {
             "download_file": download_or_err,
         }
-        if str(proto_or_err) == system.SSH_PROTOCOL:
-            data["allow_sensitive_output"] = True
         return ok_response(title, msg_info, data=data)
 
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")

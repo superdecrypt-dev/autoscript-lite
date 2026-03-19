@@ -1,4 +1,5 @@
 import base64
+import ipaddress
 import json
 import re
 import shutil
@@ -21,14 +22,20 @@ ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
 ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
 ADBLOCK_DEFAULT_BLOCKLIST = Path("/etc/autoscript/ssh-adblock/blocked.domains")
 ADBLOCK_DEFAULT_URLS = Path("/etc/autoscript/ssh-adblock/source.urls")
+SSH_NETWORK_ENV_FILE = Path("/etc/autoscript/ssh-network/config.env")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
 BADVPN_RUNTIME_ENV_FILE = Path("/etc/default/badvpn-udpgw")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
+WARP_MODE_STATE_KEY = "warp_mode"
 WARP_TIER_STATE_KEY = "warp_tier_target"
 WARP_PLUS_LICENSE_STATE_KEY = "warp_plus_license_key"
+WARP_ZEROTRUST_CONFIG_FILE = Path("/etc/autoscript/warp-zerotrust/config.env")
+WARP_ZEROTRUST_MDM_FILE = Path("/var/lib/cloudflare-warp/mdm.xml")
+WARP_ZEROTRUST_SERVICE = "warp-svc"
+WARP_ZEROTRUST_PROXY_PORT = "40000"
 READONLY_GEOSITE_DOMAINS = (
     "geosite:apple",
     "geosite:meta",
@@ -1469,6 +1476,29 @@ def _adblock_status_map() -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         status[key.strip()] = value.strip()
+
+    def _looks_like_service_state(value: str) -> bool:
+        return str(value or "").strip().lower() in {
+            "active",
+            "inactive",
+            "failed",
+            "activating",
+            "deactivating",
+            "reloading",
+            "unknown",
+            "missing",
+            "not-found",
+        }
+
+    if _looks_like_service_state(status.get("dns_service", "")) and not status.get("dns_service_state"):
+        status["dns_service_state"] = status["dns_service"]
+        status["dns_service"] = "ssh-adblock-dns.service"
+    if _looks_like_service_state(status.get("sync_service", "")) and not status.get("sync_service_state"):
+        status["sync_service_state"] = status["sync_service"]
+        status["sync_service"] = "adblock-sync.service"
+    if _looks_like_service_state(status.get("auto_update_service", "")) and not status.get("auto_update_service_state"):
+        status["auto_update_service_state"] = status["auto_update_service"]
+        status["auto_update_service"] = "adblock-update.service"
     return status
 
 
@@ -1505,6 +1535,8 @@ def op_network_adblock_status() -> tuple[str, str]:
         f"URL Sources  : {st.get('source_urls', '0')}",
         f"Merged List  : {st.get('merged_domains', '0')} domain",
         f"Auto Update  : {auto_update}",
+        f"Update Svc   : {st.get('auto_update_service', '-')}",
+        f"Update State : {st.get('auto_update_service_state', '-')}",
         f"Update Timer : {st.get('auto_update_timer', '-')}",
         f"Interval     : {st.get('auto_update_days', '1')} day(s)",
         f"Schedule     : {st.get('auto_update_schedule', '-')}",
@@ -1515,7 +1547,9 @@ def op_network_adblock_status() -> tuple[str, str]:
         "Rule Entry   : ext:custom.dat:adblock",
         "",
         f"DNS Service  : {st.get('dns_service', '-')}",
+        f"DNS State    : {st.get('dns_service_state', '-')}",
         f"Sync Service : {st.get('sync_service', '-')}",
+        f"Sync State   : {st.get('sync_service_state', '-')}",
         f"NFT Table    : {st.get('nft_table', '-')}",
         f"Managed Users: {st.get('users_count', '0')}",
         f"Blocklist    : {st.get('blocklist_entries', '0')} entries",
@@ -1640,6 +1674,75 @@ def _warp_mask_license(value: str) -> str:
     if len(raw) <= 8:
         return raw
     return f"{raw[:4]}****{raw[-4:]}"
+
+
+def _warp_mode_state_get() -> str:
+    raw = _warp_state_get(WARP_MODE_STATE_KEY).strip().lower()
+    if raw in {"consumer", "zerotrust"}:
+        return raw
+    if service_exists(WARP_ZEROTRUST_SERVICE) and service_state(WARP_ZEROTRUST_SERVICE) == "active":
+        return "zerotrust"
+    return "consumer"
+
+
+def _warp_mode_display_get() -> str:
+    if _warp_mode_state_get() == "zerotrust":
+        return "Zero Trust"
+    live = _warp_live_tier()
+    if live == "plus":
+        return "Plus"
+    if live == "free":
+        return "Free"
+    target = _warp_state_get(WARP_TIER_STATE_KEY).strip().lower()
+    if target == "plus":
+        return "Plus"
+    if target == "free":
+        return "Free"
+    return "Free/Plus"
+
+
+def _warp_zero_trust_env_map() -> dict[str, str]:
+    return _read_env_map(WARP_ZEROTRUST_CONFIG_FILE)
+
+
+def _warp_zero_trust_env_value(key: str, default: str = "") -> str:
+    return _warp_zero_trust_env_map().get(key, default)
+
+
+def _warp_zero_trust_proxy_port_get() -> str:
+    port = str(_warp_zero_trust_env_value("WARP_ZEROTRUST_PROXY_PORT", WARP_ZEROTRUST_PROXY_PORT)).strip()
+    return port if port.isdigit() else WARP_ZEROTRUST_PROXY_PORT
+
+
+def _warp_zero_trust_secret_mask(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "(kosong)"
+    if len(raw) <= 8:
+        return "********"
+    return f"{raw[:4]}****{raw[-4:]}"
+
+
+def _warp_zero_trust_proxy_state_get() -> str:
+    try:
+        port = int(_warp_zero_trust_proxy_port_get())
+    except Exception:
+        return "unknown"
+    return "listening" if _listener_present(port) else "not-listening"
+
+
+def _warp_zero_trust_cli_first_line(*args: str) -> str:
+    if shutil.which("warp-cli") is None:
+        return "unknown"
+    ok, out = run_cmd(["warp-cli", *args], timeout=20)
+    if not ok:
+        last = str(out).splitlines()[-1].strip() if str(out).splitlines() else str(out).strip()
+        return last or "unknown"
+    for raw in str(out).splitlines():
+        line = raw.strip()
+        if line:
+            return line
+    return "unknown"
 
 
 def _wireproxy_socks_bind_address() -> str:
@@ -1858,14 +1961,358 @@ def op_network_warp_status_report() -> tuple[str, str]:
 
 def op_network_warp_tier_status() -> tuple[str, str]:
     title = "Network Controls - WARP Tier Status"
+    mode = _warp_mode_state_get()
+    if mode == "zerotrust":
+        team = _warp_zero_trust_env_value("WARP_ZEROTRUST_TEAM", "").strip().lower()
+        client_id = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_ID", "").strip()
+        client_secret = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_SECRET", "").strip()
+        lines = [
+            "Mode          : Zero Trust",
+            "Backend       : cloudflare-warp (Zero Trust proxy)",
+            f"Team Name     : {team or '(kosong)'}",
+            f"Client ID     : {_warp_zero_trust_secret_mask(client_id)}",
+            f"Client Secret : {_warp_zero_trust_secret_mask(client_secret)}",
+            f"Config State  : {'complete' if team and client_id and client_secret else 'incomplete'}",
+            f"{WARP_ZEROTRUST_SERVICE:<14} : {service_state(WARP_ZEROTRUST_SERVICE)}",
+            f"MDM Policy    : {'present' if WARP_ZEROTRUST_MDM_FILE.exists() else 'missing'}",
+            f"Proxy Bind    : 127.0.0.1:{_warp_zero_trust_proxy_port_get()}",
+            f"Proxy State   : {_warp_zero_trust_proxy_state_get()}",
+            f"CLI Status    : {_warp_zero_trust_cli_first_line('status')}",
+            f"Registration  : {_warp_zero_trust_cli_first_line('registration', 'show')}",
+        ]
+        return title, "\n".join(lines)
+
+    live = _warp_live_tier()
     lines = [
+        f"Mode          : {_warp_mode_display_get()}",
+        "Backend       : Free/Plus (wgcf + wireproxy)",
         f"Target Tier   : {_warp_state_get(WARP_TIER_STATE_KEY) or 'unknown'}",
-        f"Live Tier     : {_warp_live_tier()}",
+        f"Live Tier     : {live}",
         f"wireproxy     : {service_state('wireproxy')}",
+        f"SOCKS5        : {'listening' if _listener_present(_normalize_bind_address(_wireproxy_socks_bind_address())[1] or 0) else 'not-listening'}",
+        "Zero Trust    : available via cloudflare-warp backend",
         f"WARP+ License : {_warp_mask_license(_warp_state_get(WARP_PLUS_LICENSE_STATE_KEY))}",
         f"WGCF Account  : {'OK' if Path('/etc/wgcf/wgcf-account.toml').exists() else 'missing'}",
         f"WGCF Profile  : {'OK' if Path('/etc/wgcf/wgcf-profile.conf').exists() else 'missing'}",
     ]
+    return title, "\n".join(lines)
+
+
+def op_network_warp_tier_free_plus_status() -> tuple[str, str]:
+    title = "Network Controls - WARP Tier Free/Plus"
+    if _warp_mode_state_get() == "zerotrust":
+        zt_service_state = service_state(WARP_ZEROTRUST_SERVICE)
+        lines = [
+            "Current Mode  : Zero Trust (aksi di menu ini akan mengembalikan backend ke Free/Plus)",
+            "",
+            "Mode          : Free/Plus",
+            "Backend       : Free/Plus (wgcf + wireproxy)",
+            f"Free/Plus Tier: {_warp_state_get(WARP_TIER_STATE_KEY) or 'unknown'}",
+            "Free/Plus Live: standby (host in Zero Trust)",
+            f"wireproxy     : {service_state('wireproxy')}",
+            "SOCKS5        : standby (host in Zero Trust)",
+            f"Zero Trust    : {zt_service_state} on host; Free/Plus saat ini standby",
+            f"WARP+ License : {_warp_mask_license(_warp_state_get(WARP_PLUS_LICENSE_STATE_KEY))}",
+        ]
+        return title, "\n".join(lines)
+    return title, op_network_warp_tier_status()[1]
+
+
+def op_network_warp_tier_zero_trust_status() -> tuple[str, str]:
+    title = "Network Controls - WARP Tier Zero Trust"
+    team = _warp_zero_trust_env_value("WARP_ZEROTRUST_TEAM", "").strip().lower()
+    client_id = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_ID", "").strip()
+    client_secret = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_SECRET", "").strip()
+    lines = [
+        f"Mode          : {_warp_mode_display_get()}",
+        "Backend       : cloudflare-warp (Zero Trust proxy)",
+        f"Team Name     : {team or '(kosong)'}",
+        f"Client ID     : {_warp_zero_trust_secret_mask(client_id)}",
+        f"Client Secret : {_warp_zero_trust_secret_mask(client_secret)}",
+        f"Config State  : {'complete' if team and client_id and client_secret else 'incomplete'}",
+        f"{WARP_ZEROTRUST_SERVICE:<14} : {service_state(WARP_ZEROTRUST_SERVICE)}",
+        f"MDM Policy    : {'present' if WARP_ZEROTRUST_MDM_FILE.exists() else 'missing'}",
+        f"Proxy Bind    : 127.0.0.1:{_warp_zero_trust_proxy_port_get()}",
+        f"Proxy State   : {_warp_zero_trust_proxy_state_get()}",
+        f"CLI Status    : {_warp_zero_trust_cli_first_line('status')}",
+        f"Registration  : {_warp_zero_trust_cli_first_line('registration', 'show')}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_network_warp_tier_zero_trust_requirements() -> tuple[str, str]:
+    title = "Network Controls - Zero Trust Requirements"
+    body = "\n".join(
+        [
+            "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host",
+            "Requirement   : team name + service token client id/client secret harus terisi",
+            f"Requirement   : backend ini memakai proxy lokal port {_warp_zero_trust_proxy_port_get()} untuk outbound Xray",
+            "Requirement   : SSH Network yang memakai WARP aktif harus kompatibel dengan backend Local Proxy",
+        ]
+    )
+    return title, body
+
+
+def op_network_warp_tier_zero_trust_rollout_notes() -> tuple[str, str]:
+    title = "Network Controls - Zero Trust Rollout Notes"
+    body = "\n".join(
+        [
+            "Rollout Note  : Zero Trust diperlakukan sebagai mode backend baru",
+            "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy",
+            "Rollout Note  : Zero Trust difokuskan ke jalur Xray via proxy lokal",
+            "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai Local Proxy",
+            "Rollout Note  : Dedicated Interface SSH tetap fallback, tetapi tidak kompatibel dengan Zero Trust",
+        ]
+    )
+    return title, body
+
+
+def _ssh_network_config_map() -> dict[str, str]:
+    data = _read_env_map(SSH_NETWORK_ENV_FILE)
+    global_mode = str(data.get("SSH_NETWORK_ROUTE_GLOBAL") or "direct").strip().lower()
+    if global_mode not in {"direct", "warp"}:
+        global_mode = "direct"
+
+    warp_backend = str(data.get("SSH_NETWORK_WARP_BACKEND") or "auto").strip().lower()
+    if warp_backend not in {"auto", "local-proxy", "interface"}:
+        warp_backend = "auto"
+
+    warp_interface = str(data.get("SSH_NETWORK_WARP_INTERFACE") or "warp-ssh0").strip()
+    if not warp_interface or not re.fullmatch(r"[A-Za-z0-9._-]{1,15}", warp_interface):
+        warp_interface = "warp-ssh0"
+
+    return {
+        "global_mode": global_mode,
+        "warp_backend": warp_backend,
+        "warp_interface": warp_interface,
+    }
+
+
+def _ssh_network_backend_effective(configured: str) -> str:
+    backend = str(configured or "auto").strip().lower()
+    if backend in {"local-proxy", "interface"}:
+        return backend
+    if shutil.which("xray") and shutil.which("iptables"):
+        return "local-proxy"
+    return "interface"
+
+
+def _ssh_network_backend_pretty(backend: str) -> str:
+    value = str(backend or "auto").strip().lower()
+    if value == "local-proxy":
+        return "Local Proxy"
+    if value == "interface":
+        return "Dedicated Interface"
+    if value == "idle":
+        return "Idle / Not Applied"
+    return "Auto"
+
+
+def _ssh_network_apply_path_pretty(backend: str) -> str:
+    value = str(backend or "auto").strip().lower()
+    if value == "interface":
+        return "wg-quick dedicated interface"
+    return "xray redirect + local WARP SOCKS"
+
+
+def _ssh_network_global_mode_pretty(mode: str) -> str:
+    value = str(mode or "direct").strip().lower()
+    if value == "warp":
+        return "WARP"
+    return "DIRECT"
+
+
+def _ssh_network_host_mode_display() -> str:
+    return _warp_mode_display_get()
+
+
+def _ssh_network_host_backend_display() -> str:
+    host_mode = _ssh_network_host_mode_display()
+    if host_mode == "Zero Trust":
+        return "cloudflare-warp"
+    return "wireproxy"
+
+
+def _ssh_network_host_service_name() -> str:
+    if _ssh_network_host_mode_display() == "Zero Trust":
+        return "warp-svc"
+    return "wireproxy"
+
+
+def _ssh_network_host_proxy_bind() -> str:
+    bind_addr = _wireproxy_socks_bind_address()
+    host, port = _normalize_bind_address(bind_addr)
+    if port is None:
+        return bind_addr
+    return host or bind_addr
+
+
+def _ssh_network_host_proxy_state() -> str:
+    bind_addr = _wireproxy_socks_bind_address()
+    _, port = _normalize_bind_address(bind_addr)
+    if port is None:
+        return "unknown"
+    if _listener_present(port):
+        return f"listening ({bind_addr})"
+    return f"not-listening ({bind_addr})"
+
+
+def _ssh_network_xray_redir_state(port: int) -> str:
+    if _listener_present(port):
+        return "active"
+    return "standby"
+
+
+def _ssh_network_effective_rows() -> list[dict[str, str]]:
+    cfg = _ssh_network_config_map()
+    global_mode = cfg.get("global_mode", "direct")
+    rows: list[dict[str, str]] = []
+    ssh_quota_dir = QUOTA_ROOT / SSH_PROTOCOL
+
+    if not ssh_quota_dir.exists():
+        return rows
+
+    for quota_path in sorted(ssh_quota_dir.glob("*.json")):
+        ok, payload = read_json(quota_path)
+        if not ok or not isinstance(payload, dict):
+            continue
+
+        username = str(payload.get("username") or quota_path.stem.split("@", 1)[0]).strip()
+        if not username:
+            continue
+
+        network = payload.get("network")
+        override = "inherit"
+        if isinstance(network, dict):
+          candidate = str(network.get("route_mode") or "").strip().lower()
+          if candidate in {"inherit", "direct", "warp"}:
+              override = candidate
+
+        effective = global_mode if override == "inherit" else override
+        rows.append(
+            {
+                "username": username,
+                "override": override,
+                "effective": effective,
+            }
+        )
+    return rows
+
+
+def op_ssh_network_overview() -> tuple[str, str]:
+    title = "SSH Network"
+    cfg = _ssh_network_config_map()
+    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
+    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
+    lines = [
+        f"Global Mode        : {_ssh_network_global_mode_pretty(cfg.get('global_mode', 'direct'))}",
+        f"Backend Config     : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
+        f"Backend Target     : {_ssh_network_backend_pretty(backend_effective)}",
+        f"Apply Path         : {_ssh_network_apply_path_pretty(backend_effective)}",
+        f"Host WARP Mode     : {_ssh_network_host_mode_display()}",
+        f"Host Backend       : {_ssh_network_host_backend_display()}",
+        f"Host Service       : {_ssh_network_host_service_name()} ({service_state(_ssh_network_host_service_name())})",
+        f"Host SOCKS         : {_ssh_network_host_proxy_state()}",
+        f"Xray Redir IPv4    : {_ssh_network_xray_redir_state(12345)}",
+        f"Xray Redir IPv6    : {_ssh_network_xray_redir_state(12346)}",
+        f"WARP Iface         : {cfg.get('warp_interface', 'warp-ssh0')}",
+        f"Effective Warp Users : {warp_users}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_ssh_network_dns_status() -> tuple[str, str]:
+    title = "SSH Network - DNS for SSH"
+    st = _adblock_status_map()
+    enabled = st.get("enabled", "0") == "1"
+    lines = [
+        f"DNS Steering   : {'ON' if enabled else 'OFF'}",
+        f"DNS Service    : {st.get('dns_service', '-')}",
+        f"DNS State      : {st.get('dns_service_state', '-')}",
+        f"Sync Service   : {st.get('sync_service', '-')}",
+        f"Sync State     : {st.get('sync_service_state', '-')}",
+        f"NFT Table      : {st.get('nft_table', '-')}",
+        f"Managed Users  : {st.get('users_count', '0')}",
+        f"DNS Port       : {st.get('dns_port', '-')}",
+        f"Blocklist      : {st.get('blocklist_entries', '0')} entries",
+        f"Last Update    : {st.get('last_update', '-')}",
+        "",
+        "Backend DNS for SSH memakai SSH Adblock runtime yang sama seperti menu Adblocker.",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_ssh_network_routing_global_status() -> tuple[str, str]:
+    title = "SSH Network - Routing SSH Global"
+    cfg = _ssh_network_config_map()
+    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
+    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
+    lines = [
+        f"Global Routing  : {_ssh_network_global_mode_pretty(cfg.get('global_mode', 'direct'))}",
+        f"Backend Config  : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
+        f"Backend Target  : {_ssh_network_backend_pretty(backend_effective)}",
+        f"Apply Path      : {_ssh_network_apply_path_pretty(backend_effective)}",
+        f"Effective Warp Users : {warp_users}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_ssh_network_routing_user_status() -> tuple[str, str]:
+    title = "SSH Network - Routing SSH Per-User"
+    rows = _ssh_network_effective_rows()
+    if not rows:
+        return title, "Belum ada user SSH managed yang bisa dirender."
+
+    lines = [
+        "Username             Override   Effective",
+        "-------------------- ---------- ----------",
+    ]
+    for row in rows[:20]:
+        lines.append(
+            f"{row['username']:<20} {row['override']:<10} {row['effective']:<10}"
+        )
+    if len(rows) > 20:
+        lines.append(f"... {len(rows) - 20} baris lain tidak ditampilkan")
+    return title, "\n".join(lines)
+
+
+def op_ssh_network_warp_global_status() -> tuple[str, str]:
+    title = "SSH Network - WARP SSH Global"
+    cfg = _ssh_network_config_map()
+    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
+    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
+    lines = [
+        f"Global WARP      : {'ON' if cfg.get('global_mode', 'direct') == 'warp' else 'OFF'}",
+        f"Backend Config   : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
+        f"Backend Target   : {_ssh_network_backend_pretty(backend_effective)}",
+        f"Apply Path       : {_ssh_network_apply_path_pretty(backend_effective)}",
+        f"Host WARP Mode   : {_ssh_network_host_mode_display()}",
+        f"Host Backend     : {_ssh_network_host_backend_display()}",
+        f"Host Service     : {_ssh_network_host_service_name()} ({service_state(_ssh_network_host_service_name())})",
+        f"Host SOCKS       : {_ssh_network_host_proxy_state()}",
+        f"Effective Warp Users : {warp_users}",
+    ]
+    return title, "\n".join(lines)
+
+
+def op_ssh_network_warp_user_status() -> tuple[str, str]:
+    title = "SSH Network - WARP SSH Per-User"
+    rows = _ssh_network_effective_rows()
+    if not rows:
+        return title, "Belum ada user SSH managed yang bisa dirender."
+
+    lines = [
+        "State metadata SSH: network.route_mode.",
+        "",
+        "Username             Override   Effective",
+        "-------------------- ---------- ----------",
+    ]
+    for row in rows[:20]:
+        lines.append(
+            f"{row['username']:<20} {row['override']:<10} {row['effective']:<10}"
+        )
+    if len(rows) > 20:
+        lines.append(f"... {len(rows) - 20} baris lain tidak ditampilkan")
     return title, "\n".join(lines)
 
 
@@ -2606,12 +3053,13 @@ def op_badvpn_status() -> tuple[str, str]:
     ports = _badvpn_runtime_ports()
     listener_summary = "-"
     if ports:
-        missing = [str(port) for port in ports if not _udp_listener_present(port)]
+        # badvpn-udpgw accepts TCP client connections that encapsulate UDP payloads.
+        missing = [str(port) for port in ports if not _listener_present(port)]
         listener_summary = "LISTENING" if not missing else f"MISSING {', '.join(missing)}"
     lines = [
         _unit_status_line("badvpn-udpgw"),
         f"Ports         : {_badvpn_runtime_ports_label()}",
-        f"UDP Listen    : {listener_summary}",
+        f"TCP Listen    : {listener_summary}",
         f"Max Clients   : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CLIENTS', '512') or '512'}",
         f"Max Conn/User : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT', '8') or '8'}",
         f"Buffer Size   : {_badvpn_runtime_env_value('BADVPN_UDPGW_BUFFER_SIZE', '1048576') or '1048576'}",

@@ -2,51 +2,8 @@
   "menus": [
     {
       "id": "1",
-      "label": "Status",
-      "description": "Ringkasan host, validasi Xray, TLS, dan status runtime inti.",
-      "actions": [
-        {
-          "id": "overview",
-          "label": "View Status",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "xray_test",
-          "label": "Run Xray Test",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "tls_info",
-          "label": "View TLS Info",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "daemon_status",
-          "label": "Daemon Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "edge_gateway_status",
-          "label": "Edge Gateway Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "sshws_status",
-          "label": "SSH WS Status",
-          "mode": "direct",
-          "style": "secondary"
-        }
-      ]
-    },
-    {
-      "id": "2",
-      "label": "Accounts",
-      "description": "Kelola akun Xray dan SSH melalui submenu yang lebih rapi.",
+      "label": "Xray Users",
+      "description": "Kelola akun Xray dengan susunan menu yang mengikuti CLI.",
       "actions": [
         {
           "id": "open_xray_users",
@@ -54,7 +11,14 @@
           "mode": "menu",
           "style": "primary",
           "target_menu": "22"
-        },
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "label": "SSH Users",
+      "description": "Kelola akun SSH dengan susunan menu yang mengikuti CLI.",
+      "actions": [
         {
           "id": "open_ssh_users",
           "label": "SSH Users",
@@ -66,8 +30,8 @@
     },
     {
       "id": "3",
-      "label": "QAC",
-      "description": "Quota, IP/Login limit, dan speed limit untuk Xray maupun SSH.",
+      "label": "Xray QAC",
+      "description": "Quota, IP/Login limit, dan speed limit untuk akun Xray.",
       "actions": [
         {
           "id": "open_xray_qac",
@@ -75,7 +39,14 @@
           "mode": "menu",
           "style": "primary",
           "target_menu": "24"
-        },
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "label": "SSH QAC",
+      "description": "Quota, IP/Login limit, dan speed limit untuk akun SSH.",
+      "actions": [
         {
           "id": "open_ssh_qac",
           "label": "SSH QAC",
@@ -86,623 +57,128 @@
       ]
     },
     {
-      "id": "4",
-      "label": "Domain",
-      "description": "Kontrol domain aktif, sertifikat TLS, refresh account info, dan health domain.",
-      "actions": [
-        {
-          "id": "domain_info",
-          "label": "View Domain Info",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "tls_info",
-          "label": "TLS Certificate Info",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "tls_expiry",
-          "label": "TLS Expiry",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "setup_domain_custom",
-          "label": "Set Domain Manual",
-          "mode": "modal",
-          "style": "danger",
-          "confirm": true,
-          "modal": {
-            "title": "Set Domain Manual",
-            "fields": [
-              {
-                "id": "domain",
-                "label": "Domain (FQDN)",
-                "style": "short",
-                "required": true,
-                "placeholder": "vpn.example.com"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "setup_domain_cloudflare",
-          "label": "Set Domain Auto",
-          "mode": "modal",
-          "style": "primary",
-          "confirm": true,
-          "modal": {
-            "title": "Set Domain Auto (API Cloudflare)",
-            "fields": [
-              {
-                "id": "root_domain",
-                "label": "Root Domain",
-                "style": "short",
-                "required": true,
-                "placeholder": "Pilih via tombol"
-              },
-              {
-                "id": "subdomain_mode",
-                "label": "Subdomain Mode",
-                "style": "short",
-                "required": false,
-                "placeholder": "auto / manual (default: auto)"
-              },
-              {
-                "id": "subdomain",
-                "label": "Subdomain",
-                "style": "short",
-                "required": false,
-                "placeholder": "Isi jika mode manual, contoh: vpn01"
-              },
-              {
-                "id": "proxied",
-                "label": "Cloudflare Proxy",
-                "style": "short",
-                "required": false,
-                "placeholder": "on / off (default: off)"
-              },
-              {
-                "id": "allow_existing_same_ip",
-                "label": "Lanjut jika ada A record dengan IP sama?",
-                "style": "short",
-                "required": false,
-                "placeholder": "on / off (default: off)"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "refresh_account_info",
-          "label": "Refresh Accounts",
-          "mode": "direct",
-          "style": "secondary",
-          "dangerous": true
-        },
-        {
-          "id": "renew_cert",
-          "label": "Renew Cert",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "domain_guard_status",
-          "label": "View Guard Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "domain_guard_check",
-          "label": "Run Guard Check",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "domain_guard_renew",
-          "label": "Run Guard Renew",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "nginx_server_name",
-          "label": "View Nginx Name",
-          "mode": "direct",
-          "style": "secondary",
-          "dangerous": false
-        },
-        {
-          "id": "open_domain_security_tools",
-          "label": "Security Tools",
-          "mode": "menu",
-          "style": "secondary",
-          "target_menu": "27"
-        }
-      ]
-    },
-    {
       "id": "5",
-      "label": "Network",
-      "description": "WARP, DNS, Adblock, dan kontrol jaringan lain yang aktif.",
+      "label": "Xray Network",
+      "description": "Kontrol jaringan Xray: WARP, DNS, dan routing runtime.",
       "actions": [
         {
-          "id": "warp_status",
-          "label": "View WARP Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "warp_restart",
-          "label": "Restart WARP",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "set_warp_global_mode",
-          "label": "Set WARP Global",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set WARP Global Mode",
-            "fields": [
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "direct / warp"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_warp_user_mode",
-          "label": "Set WARP per User",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set WARP Per User",
-            "fields": [
-              {
-                "id": "proto",
-                "label": "Protocol",
-                "style": "short",
-                "required": true,
-                "placeholder": "vless/vmess/trojan"
-              },
-              {
-                "id": "username",
-                "label": "Username",
-                "style": "short",
-                "required": true,
-                "placeholder": "alice"
-              },
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "direct / warp / off"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_warp_inbound_mode",
-          "label": "Set WARP Inbound",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set WARP Per Inbound",
-            "fields": [
-              {
-                "id": "inbound_tag",
-                "label": "Inbound Tag",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: vless-ws-tls"
-              },
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "direct / warp / off"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_warp_domain_mode",
-          "label": "Set WARP Domain",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set WARP Per Domain",
-            "fields": [
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "direct / warp / off"
-              },
-              {
-                "id": "entry",
-                "label": "Domain/Geosite",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: domain:openai.com"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "warp_tier_status",
-          "label": "View WARP Tier",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "warp_tier_switch_free",
-          "label": "Switch Tier Free",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "warp_tier_switch_plus",
-          "label": "Switch Tier Plus",
-          "mode": "modal",
-          "style": "secondary",
-          "confirm": true,
-          "modal": {
-            "title": "Switch WARP Tier Plus",
-            "fields": [
-              {
-                "id": "license_key",
-                "label": "WARP+ License",
-                "style": "short",
-                "required": false,
-                "placeholder": "kosongkan untuk pakai key tersimpan"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "warp_tier_reconnect",
-          "label": "Reconnect WARP",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "dns_summary",
-          "label": "View DNS Summary",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "set_dns_primary",
-          "label": "Set Primary DNS",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Primary DNS",
-            "fields": [
-              {
-                "id": "dns",
-                "label": "Primary DNS",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: 1.1.1.1"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_dns_secondary",
-          "label": "Set Secondary DNS",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Secondary DNS",
-            "fields": [
-              {
-                "id": "dns",
-                "label": "Secondary DNS",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: 8.8.8.8"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "set_dns_query_strategy",
-          "label": "Set DNS Strategy",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set DNS Query Strategy",
-            "fields": [
-              {
-                "id": "strategy",
-                "label": "Query Strategy",
-                "style": "short",
-                "required": true,
-                "placeholder": "UseIP/UseIPv4/UseIPv6/PreferIPv4/PreferIPv6"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "toggle_dns_cache",
-          "label": "Toggle DNS Cache",
-          "mode": "direct",
-          "style": "secondary",
-          "dangerous": true
-        },
-        {
-          "id": "state_file",
-          "label": "State File",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "adblock_status",
-          "label": "View Adblock Status",
-          "mode": "direct",
-          "style": "primary"
-        },
-        {
-          "id": "adblock_show_bound_users",
-          "label": "Show Bound Users",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "adblock_enable",
-          "label": "Enable Adblock",
-          "mode": "direct",
-          "style": "success",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "adblock_disable",
-          "label": "Disable Adblock",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "add_adblock_domain",
-          "label": "Add Adblock Domain",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Add Adblock Domain",
-            "fields": [
-              {
-                "id": "domain",
-                "label": "Domain",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: ads.example.com"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "delete_adblock_domain",
-          "label": "Delete Adblock Domain",
-          "mode": "modal",
-          "style": "secondary",
-          "confirm": true,
-          "modal": {
-            "title": "Delete Adblock Domain",
-            "fields": [
-              {
-                "id": "domain",
-                "label": "Domain",
-                "style": "short",
-                "required": true,
-                "placeholder": "Pilih via tombol"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "add_adblock_url_source",
-          "label": "Add URL Source",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Add Adblock URL Source",
-            "fields": [
-              {
-                "id": "url",
-                "label": "URL Source",
-                "style": "short",
-                "required": true,
-                "placeholder": "https://example.com/list.txt"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "delete_adblock_url_source",
-          "label": "Delete URL Source",
-          "mode": "modal",
-          "style": "secondary",
-          "confirm": true,
-          "modal": {
-            "title": "Delete Adblock URL Source",
-            "fields": [
-              {
-                "id": "url",
-                "label": "URL Source",
-                "style": "short",
-                "required": true,
-                "placeholder": "Pilih via tombol"
-              }
-            ]
-          },
-          "dangerous": true
-        },
-        {
-          "id": "adblock_update",
-          "label": "Update Adblock",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "adblock_toggle_auto_update",
-          "label": "Toggle Auto Update",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "adblock_set_auto_update_days",
-          "label": "Set Auto Update Days",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set Adblock Auto Update Interval",
-            "fields": [
-              {
-                "id": "days",
-                "label": "Interval Hari",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: 1"
-              }
-            ]
-          },
-          "dangerous": true
+          "id": "open_xray_network",
+          "label": "Xray Network",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "33"
         }
       ]
     },
     {
       "id": "6",
-      "label": "Ops",
-      "description": "Operasi cepat untuk speedtest, traffic, restart service inti, dan backup.",
+      "label": "SSH Network",
+      "description": "Kontrol DNS for SSH dan WARP SSH mengikuti susunan CLI.",
       "actions": [
         {
-          "id": "service_status",
-          "label": "View Ops Status",
-          "mode": "direct",
-          "style": "primary",
-          "dangerous": false
-        },
-        {
-          "id": "run",
-          "label": "Run Speedtest",
-          "mode": "direct",
-          "style": "primary",
-          "dangerous": false
-        },
-        {
-          "id": "overview",
-          "label": "Traffic Overview",
-          "mode": "direct",
-          "style": "secondary",
-          "dangerous": false
-        },
-        {
-          "id": "restart_xray",
-          "label": "Restart Xray",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_nginx",
-          "label": "Restart Nginx",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "restart_edge_gateway",
-          "label": "Restart Edge Gateway",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "create_backup",
-          "label": "Create Backup",
-          "mode": "direct",
-          "style": "secondary",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "list_backups",
-          "label": "List Backups",
-          "mode": "direct",
-          "style": "secondary",
-          "dangerous": false
-        },
-        {
-          "id": "open_speedtest_tools",
-          "label": "Speedtest Tools",
+          "id": "open_ssh_network",
+          "label": "SSH Network",
           "mode": "menu",
-          "style": "secondary",
+          "style": "primary",
+          "target_menu": "34"
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "label": "Adblocker",
+      "description": "Kontrol runtime Adblocker yang sama dengan CLI.",
+      "actions": [
+        {
+          "id": "open_adblocker",
+          "label": "Adblocker",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "35"
+        }
+      ]
+    },
+    {
+      "id": "8",
+      "label": "Domain Control",
+      "description": "Kontrol domain aktif, TLS, guard, dan refresh account info.",
+      "actions": [
+        {
+          "id": "open_domain_control",
+          "label": "Domain Control",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "26"
+        }
+      ]
+    },
+    {
+      "id": "9",
+      "label": "Speedtest",
+      "description": "Jalankan dan cek tool speedtest seperti menu CLI.",
+      "actions": [
+        {
+          "id": "open_speedtest",
+          "label": "Speedtest",
+          "mode": "menu",
+          "style": "primary",
           "target_menu": "29"
-        },
+        }
+      ]
+    },
+    {
+      "id": "10",
+      "label": "Security",
+      "description": "Ringkasan TLS, Fail2ban, dan hardening host.",
+      "actions": [
         {
-          "id": "open_traffic_tools",
-          "label": "Traffic Tools",
+          "id": "open_security",
+          "label": "Security",
           "mode": "menu",
-          "style": "secondary",
-          "target_menu": "30"
-        },
+          "style": "primary",
+          "target_menu": "27"
+        }
+      ]
+    },
+    {
+      "id": "11",
+      "label": "Maintenance",
+      "description": "Status dan aksi maintenance utama yang mengikuti CLI.",
+      "actions": [
         {
-          "id": "open_service_tools",
-          "label": "Service Tools",
+          "id": "open_maintenance",
+          "label": "Maintenance",
           "mode": "menu",
-          "style": "secondary",
+          "style": "primary",
           "target_menu": "31"
-        },
+        }
+      ]
+    },
+    {
+      "id": "12",
+      "label": "Traffic",
+      "description": "Traffic overview, top users, search, dan export JSON.",
+      "actions": [
         {
-          "id": "open_backup_tools",
-          "label": "Backup Tools",
+          "id": "open_traffic",
+          "label": "Traffic",
           "mode": "menu",
-          "style": "secondary",
-          "target_menu": "32"
+          "style": "primary",
+          "target_menu": "30"
+        }
+      ]
+    },
+    {
+      "id": "13",
+      "label": "WARP Tier",
+      "description": "Kontrol tier WARP Free/Plus/Zero Trust yang dipisah dari Tools.",
+      "actions": [
+        {
+          "id": "open_warp_tier",
+          "label": "WARP Tier",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "36"
         }
       ]
     },
@@ -811,6 +287,7 @@
           "label": "Set User Expiry",
           "mode": "modal",
           "style": "primary",
+          "confirm": true,
           "modal": {
             "title": "Extend/Set Xray Expiry",
             "fields": [
@@ -924,7 +401,7 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "2"
+      "parent_menu": "1"
     },
     {
       "id": "23",
@@ -1024,6 +501,7 @@
           "label": "Set User Expiry",
           "mode": "modal",
           "style": "primary",
+          "confirm": true,
           "modal": {
             "title": "Extend/Set SSH Expiry",
             "fields": [
@@ -1057,6 +535,7 @@
           "label": "Reset SSH Password",
           "mode": "modal",
           "style": "secondary",
+          "confirm": true,
           "modal": {
             "title": "Reset SSH Password",
             "fields": [
@@ -1708,11 +1187,11 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "3"
+      "parent_menu": "4"
     },
     {
       "id": "26",
-      "label": "Domain",
+      "label": "Domain Control",
       "description": "Kontrol domain aktif, sertifikat TLS, refresh account info, dan health domain.",
       "actions": [
         {
@@ -1760,7 +1239,7 @@
           "style": "danger",
           "confirm": true,
           "modal": {
-            "title": "Set Domain Auto (API Cloudflare)",
+            "title": "Set Domain Auto",
             "fields": [
               {
                 "id": "root_domain",
@@ -1768,20 +1247,6 @@
                 "style": "short",
                 "required": true,
                 "placeholder": "Pilih via tombol"
-              },
-              {
-                "id": "subdomain_mode",
-                "label": "Subdomain Mode",
-                "style": "short",
-                "required": false,
-                "placeholder": "auto / manual (default: auto)"
-              },
-              {
-                "id": "subdomain",
-                "label": "Subdomain",
-                "style": "short",
-                "required": false,
-                "placeholder": "Isi jika mode manual, contoh: vpn01"
               },
               {
                 "id": "proxied",
@@ -1851,12 +1316,12 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "4"
+      "parent_menu": "8"
     },
     {
       "id": "27",
-      "label": "Security Tools",
-      "description": "Fail2ban, hardening system, dan maintenance keamanan yang lebih teknis.",
+      "label": "Security",
+      "description": "TLS, Fail2ban, dan hardening host.",
       "actions": [
         {
           "id": "reload_nginx",
@@ -1957,12 +1422,12 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "4"
+      "parent_menu": "10"
     },
     {
       "id": "29",
-      "label": "Speedtest Tools",
-      "description": "Pengujian kecepatan jaringan dan informasi binary speedtest.",
+      "label": "Speedtest",
+      "description": "Tool speedtest yang dipisah sebagai domain sendiri seperti CLI.",
       "actions": [
         {
           "id": "run",
@@ -1978,12 +1443,12 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "6"
+      "parent_menu": "9"
     },
     {
       "id": "30",
-      "label": "Traffic Tools",
-      "description": "Analitik traffic user: overview, top users, search, dan export JSON.",
+      "label": "Traffic",
+      "description": "Traffic analytics yang dipisah sebagai domain sendiri seperti CLI.",
       "actions": [
         {
           "id": "overview",
@@ -2035,12 +1500,12 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "6"
+      "parent_menu": "12"
     },
     {
       "id": "31",
-      "label": "Service Tools",
-      "description": "Restart service, log penting, dan diagnostik runtime yang lebih detail.",
+      "label": "Maintenance",
+      "description": "Status runtime, restart service, logs, dan akses backup tools.",
       "actions": [
         {
           "id": "restart_xray",
@@ -2147,10 +1612,17 @@
           "label": "SSHWS Combined Logs",
           "mode": "direct",
           "style": "secondary"
+        },
+        {
+          "id": "open_backup_tools",
+          "label": "Backup Tools",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "32"
         }
       ],
       "hidden": true,
-      "parent_menu": "6"
+      "parent_menu": "11"
     },
     {
       "id": "32",
@@ -2188,7 +1660,773 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "6"
+      "parent_menu": "11"
+    },
+    {
+      "id": "33",
+      "label": "Xray Network",
+      "description": "WARP, DNS, dan routing runtime Xray yang mengikuti domain menu CLI.",
+      "hidden": true,
+      "parent_menu": "5",
+      "actions": [
+        {
+          "id": "warp_status",
+          "label": "View WARP Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "warp_restart",
+          "label": "Restart WARP",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "set_warp_global_mode",
+          "label": "Set WARP Global",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set WARP Global Mode",
+            "fields": [
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "direct / warp"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_warp_user_mode",
+          "label": "Set WARP Per User",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set WARP Per User",
+            "fields": [
+              {
+                "id": "proto",
+                "label": "Protocol",
+                "style": "short",
+                "required": true,
+                "placeholder": "vless/vmess/trojan"
+              },
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "direct / warp / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_warp_inbound_mode",
+          "label": "Set WARP Inbound",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set WARP Per Inbound",
+            "fields": [
+              {
+                "id": "inbound_tag",
+                "label": "Inbound Tag",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: vless-ws-tls"
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "direct / warp / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_warp_domain_mode",
+          "label": "Set WARP Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set WARP Per Domain",
+            "fields": [
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "direct / warp / off"
+              },
+              {
+                "id": "entry",
+                "label": "Domain/Geosite",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: domain:openai.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "dns_summary",
+          "label": "View DNS Summary",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "set_dns_primary",
+          "label": "Set Primary DNS",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Primary DNS",
+            "fields": [
+              {
+                "id": "dns",
+                "label": "Primary DNS",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1.1.1.1"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_dns_secondary",
+          "label": "Set Secondary DNS",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Secondary DNS",
+            "fields": [
+              {
+                "id": "dns",
+                "label": "Secondary DNS",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 8.8.8.8"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_dns_query_strategy",
+          "label": "Set DNS Strategy",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set DNS Query Strategy",
+            "fields": [
+              {
+                "id": "strategy",
+                "label": "Query Strategy",
+                "style": "short",
+                "required": true,
+                "placeholder": "UseIP/... atau default untuk reset"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "toggle_dns_cache",
+          "label": "Toggle DNS Cache OFF/Default",
+          "mode": "direct",
+          "style": "secondary",
+          "dangerous": true
+        },
+        {
+          "id": "state_file",
+          "label": "View State File",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "34",
+      "label": "SSH Network",
+      "description": "Menu SSH Network disederhanakan menjadi DNS for SSH dan WARP SSH.",
+      "hidden": true,
+      "parent_menu": "6",
+      "actions": [
+        {
+          "id": "open_ssh_network_dns",
+          "label": "DNS for SSH",
+          "mode": "menu",
+          "style": "secondary"
+          ,
+          "target_menu": "37"
+        },
+        {
+          "id": "open_ssh_network_warp_global",
+          "label": "WARP SSH Global",
+          "mode": "menu",
+          "style": "secondary"
+          ,
+          "target_menu": "40"
+        },
+        {
+          "id": "open_ssh_network_warp_user",
+          "label": "WARP SSH Per-User",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "41"
+        }
+      ]
+    },
+    {
+      "id": "37",
+      "label": "DNS for SSH",
+      "description": "Kontrol DNS steering SSH yang memakai backend SSH Adblock runtime yang sama.",
+      "hidden": true,
+      "parent_menu": "34",
+      "actions": [
+        {
+          "id": "dns_for_ssh_status",
+          "label": "Show Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "dns_for_ssh_enable",
+          "label": "Enable DNS Steering",
+          "mode": "direct",
+          "style": "success",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "dns_for_ssh_disable",
+          "label": "Disable DNS Steering",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "dns_for_ssh_set_primary",
+          "label": "Set Primary DNS",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Set Primary DNS SSH",
+            "fields": [
+              {
+                "id": "dns",
+                "label": "Primary DNS",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1.1.1.1"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "dns_for_ssh_set_secondary",
+          "label": "Set Secondary DNS",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Set Secondary DNS SSH",
+            "fields": [
+              {
+                "id": "dns",
+                "label": "Secondary DNS",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 8.8.8.8"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "dns_for_ssh_apply",
+          "label": "Apply DNS Runtime",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "40",
+      "label": "WARP SSH Global",
+      "description": "Enable atau disable WARP global untuk trafik SSH.",
+      "hidden": true,
+      "parent_menu": "34",
+      "actions": [
+        {
+          "id": "warp_ssh_global_status",
+          "label": "Show Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "warp_ssh_global_enable",
+          "label": "Enable WARP Global",
+          "mode": "direct",
+          "style": "success",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "warp_ssh_global_disable",
+          "label": "Disable WARP Global",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "41",
+      "label": "WARP SSH Per-User",
+      "description": "Kontrol WARP SSH per-user via metadata route_mode SSH.",
+      "hidden": true,
+      "parent_menu": "34",
+      "actions": [
+        {
+          "id": "warp_ssh_per_user_status",
+          "label": "Show Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "warp_ssh_user_enable",
+          "label": "Enable WARP for User",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Enable WARP SSH for User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username SSH",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_ssh_user_disable",
+          "label": "Disable WARP for User",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Disable WARP SSH for User",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username SSH",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_ssh_user_inherit",
+          "label": "Reset User to Inherit",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Reset WARP SSH User to Inherit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username SSH",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "routing_ssh_apply",
+          "label": "Apply WARP Runtime",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "35",
+      "label": "Adblocker",
+      "description": "Kontrol runtime Adblocker yang dipisah seperti menu CLI.",
+      "hidden": true,
+      "parent_menu": "7",
+      "actions": [
+        {
+          "id": "adblock_status",
+          "label": "View Adblock Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "adblock_show_bound_users",
+          "label": "Show Bound Users",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "adblock_enable",
+          "label": "Enable Adblock",
+          "mode": "direct",
+          "style": "success",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_disable",
+          "label": "Disable Adblock",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_domain",
+          "label": "Add Adblock Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: ads.example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_domain",
+          "label": "Delete Adblock Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Delete Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_url_source",
+          "label": "Add URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL Source",
+                "style": "short",
+                "required": true,
+                "placeholder": "https://example.com/list.txt"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_url_source",
+          "label": "Delete URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Delete Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL Source",
+                "style": "short",
+                "required": true,
+                "placeholder": "Pilih via tombol"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "adblock_update",
+          "label": "Update Adblock",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_toggle_auto_update",
+          "label": "Toggle Auto Update",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_set_auto_update_days",
+          "label": "Set Auto Update Days",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Adblock Auto Update Interval",
+            "fields": [
+              {
+                "id": "days",
+                "label": "Interval Hari",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          },
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "36",
+      "label": "WARP Tier",
+      "description": "Root menu WARP Tier dengan submenu Free/Plus dan Zero Trust seperti CLI.",
+      "hidden": true,
+      "parent_menu": "13",
+      "actions": [
+        {
+          "id": "warp_tier_status",
+          "label": "Show Overall Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "open_warp_tier_free_plus",
+          "label": "Free/Plus",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "42"
+        },
+        {
+          "id": "open_warp_tier_zero_trust",
+          "label": "Zero Trust",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "43"
+        }
+      ]
+    },
+    {
+      "id": "42",
+      "label": "WARP Tier Free/Plus",
+      "description": "Kontrol WARP Free/Plus dari bot Telegram.",
+      "hidden": true,
+      "parent_menu": "36",
+      "actions": [
+        {
+          "id": "warp_tier_free_plus_status",
+          "label": "Show Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "warp_tier_switch_free",
+          "label": "Switch ke WARP Free",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_switch_plus",
+          "label": "Switch ke WARP Plus",
+          "mode": "modal",
+          "style": "secondary",
+          "confirm": true,
+          "modal": {
+            "title": "Switch WARP Tier Plus",
+            "fields": [
+              {
+                "id": "license_key",
+                "label": "WARP+ License",
+                "style": "short",
+                "required": false,
+                "placeholder": "kosongkan untuk pakai key tersimpan"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_reconnect",
+          "label": "Reconnect/Regenerate sesuai target",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "43",
+      "label": "WARP Tier Zero Trust",
+      "description": "Kontrol Zero Trust dari bot Telegram.",
+      "hidden": true,
+      "parent_menu": "36",
+      "actions": [
+        {
+          "id": "warp_tier_zero_trust_status",
+          "label": "Show Status",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "warp_tier_zero_trust_set_team",
+          "label": "Set Team Name",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Zero Trust Team Name",
+            "fields": [
+              {
+                "id": "team",
+                "label": "Team Name",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: superdecrypt"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_set_client_id",
+          "label": "Set Service Token Client ID",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Zero Trust Client ID",
+            "fields": [
+              {
+                "id": "client_id",
+                "label": "Client ID",
+                "style": "short",
+                "required": true,
+                "placeholder": "tempel client id"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_set_client_secret",
+          "label": "Set Service Token Client Secret",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Zero Trust Client Secret",
+            "fields": [
+              {
+                "id": "client_secret",
+                "label": "Client Secret",
+                "style": "short",
+                "required": true,
+                "placeholder": "tempel client secret"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_apply",
+          "label": "Apply / Connect Zero Trust",
+          "mode": "direct",
+          "style": "success",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_disconnect",
+          "label": "Disconnect Zero Trust",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_return_free_plus",
+          "label": "Return to Free/Plus",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "warp_tier_zero_trust_requirements",
+          "label": "Requirements",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "warp_tier_zero_trust_rollout_notes",
+          "label": "Rollout Notes",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
     }
   ]
 }
