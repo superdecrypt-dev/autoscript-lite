@@ -211,8 +211,8 @@ ssh_network_warp_backend_pretty_get() {
   case "${backend}" in
     local-proxy) printf 'Local Proxy\n' ;;
     local-proxy-drift) printf 'Local Proxy (Drift)\n' ;;
-    interface) printf 'Interface (Legacy)\n' ;;
-    interface-drift) printf 'Interface (Legacy, Drift)\n' ;;
+    interface) printf 'Dedicated Interface\n' ;;
+    interface-drift) printf 'Dedicated Interface (Drift)\n' ;;
     idle) printf 'Idle / Not Applied\n' ;;
     *) printf 'Auto\n' ;;
   esac
@@ -321,10 +321,10 @@ ssh_network_xray_redir_chain_v6_get() {
 }
 
 ssh_network_host_warp_mode_get() {
-  if declare -F warp_mode_state_get >/dev/null 2>&1; then
-    warp_mode_state_get 2>/dev/null || printf 'consumer\n'
+  if declare -F warp_mode_display_get >/dev/null 2>&1; then
+    warp_mode_display_get 2>/dev/null || printf 'Free/Plus\n'
   else
-    printf 'consumer\n'
+    printf 'Free/Plus\n'
   fi
 }
 
@@ -1729,7 +1729,7 @@ ssh_network_route_global_menu() {
     printf "%-18s : %s\n" "Backend Applied" "$(ssh_network_warp_backend_pretty_get "${warp_backend_applied:-idle}")"
     printf "%-18s : %s\n" "Apply Path" "$(ssh_network_warp_apply_path_pretty_get "${warp_backend_effective:-auto}")"
     printf "%-18s : %s\n" "Global Mode" "${global_mode}"
-    printf "%-18s : %s\n" "Legacy Iface" "${warp_iface}"
+    printf "%-18s : %s\n" "WARP Iface" "${warp_iface}"
     printf "%-18s : %s\n" "Host WARP Mode" "${host_warp_mode}"
     printf "%-18s : %s\n" "Host WARP Svc" "${host_warp_service_state}"
     printf "%-18s : %s\n" "Host WARP SOCKS" "${host_warp_proxy_state} (127.0.0.1:${host_warp_proxy_port:-40000})"
@@ -1870,18 +1870,14 @@ ssh_network_route_user_menu() {
 
 ssh_network_warp_global_menu() {
   while true; do
-    local st global_mode warp_iface warp_backend warp_backend_effective warp_backend_applied effective_warp_users
-    local iface_state warp_conf_state warp_service_state xray_redir_v4_state xray_redir_v6_state
+    local st global_mode warp_backend warp_backend_effective warp_backend_applied effective_warp_users
+    local xray_redir_v4_state xray_redir_v6_state
     local iptables_state ip6tables_state host_warp_mode host_warp_backend host_warp_service_state host_warp_proxy_state host_warp_proxy_port
     st="$(ssh_network_runtime_status_get)"
     global_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
     warp_backend="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
     warp_backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
     warp_backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
-    warp_iface="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
-    iface_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface_state=/{print $2; exit}')"
-    warp_conf_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_config_state=/{print $2; exit}')"
-    warp_service_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_service_state=/{print $2; exit}')"
     xray_redir_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^xray_redir_v4_state=/{print $2; exit}')"
     xray_redir_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^xray_redir_v6_state=/{print $2; exit}')"
     iptables_state="$(printf '%s\n' "${st}" | awk -F'=' '/^iptables_state=/{print $2; exit}')"
@@ -1908,18 +1904,10 @@ ssh_network_warp_global_menu() {
     printf "%-18s : %s\n" "Xray Redir IPv6" "${xray_redir_v6_state}"
     printf "%-18s : %s\n" "iptables IPv4" "${iptables_state}"
     printf "%-18s : %s\n" "ip6tables IPv6" "${ip6tables_state}"
-    printf "%-18s : %s\n" "Legacy Iface" "${warp_iface}"
-    printf "%-18s : %s\n" "Legacy State" "${iface_state} / ${warp_service_state}"
-    printf "%-18s : %s\n" "Legacy Config" "${warp_conf_state}"
     printf "%-18s : %s\n" "Effective Warp Users" "${effective_warp_users}"
     hr
     echo "  1) Enable WARP Global"
     echo "  2) Disable WARP Global"
-    echo "  3) Set Backend: Auto"
-    echo "  4) Set Backend: Local Proxy"
-    echo "  5) Set Backend: Interface (Legacy)"
-    echo "  6) Set Legacy Interface"
-    echo "  7) Apply Runtime"
     echo "  0) Back"
     hr
     if ! read -r -p "Pilih: " c; then
@@ -1928,76 +1916,28 @@ ssh_network_warp_global_menu() {
     fi
     case "${c}" in
       1)
-        local prev_mode="${global_mode}"
+        local prev_mode="${global_mode}" prev_backend="${warp_backend:-auto}"
         if ! confirm_yn_or_back "Aktifkan WARP global untuk trafik SSH sekarang?"; then
           warn "Enable WARP SSH global dibatalkan."
-        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+        elif ssh_network_warp_backend_set auto && ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
           log "WARP SSH global diaktifkan."
         else
+          ssh_network_warp_backend_set "${prev_backend}" >/dev/null 2>&1 || true
           ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal diaktifkan."
         fi
         pause
         ;;
       2)
-        local prev_mode="${global_mode}"
+        local prev_mode="${global_mode}" prev_backend="${warp_backend:-auto}"
         if ! confirm_yn_or_back "Matikan WARP global untuk trafik SSH sekarang?"; then
           warn "Disable WARP SSH global dibatalkan."
-        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+        elif ssh_network_warp_backend_set auto && ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
           log "WARP SSH global dimatikan."
         else
+          ssh_network_warp_backend_set "${prev_backend}" >/dev/null 2>&1 || true
           ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal dimatikan."
-        fi
-        pause
-        ;;
-      3)
-        if ssh_network_warp_backend_set auto && ssh_network_runtime_apply_now; then
-          log "Backend WARP SSH diset ke AUTO."
-        else
-          warn "Backend WARP SSH gagal diset ke AUTO."
-        fi
-        pause
-        ;;
-      4)
-        if ssh_network_warp_backend_set local-proxy && ssh_network_runtime_apply_now; then
-          log "Backend WARP SSH diset ke LOCAL PROXY."
-        else
-          warn "Backend WARP SSH gagal diset ke LOCAL PROXY."
-        fi
-        pause
-        ;;
-      5)
-        if ssh_network_warp_backend_set interface && ssh_network_runtime_apply_now; then
-          log "Backend WARP SSH diset ke INTERFACE (legacy)."
-        else
-          warn "Backend WARP SSH gagal diset ke INTERFACE."
-        fi
-        pause
-        ;;
-      6)
-        local new_iface=""
-        if ! read -r -p "Nama interface WARP SSH (atau kembali): " new_iface; then
-          echo
-          return 0
-        fi
-        if is_back_choice "${new_iface}"; then
-          continue
-        fi
-        if ! confirm_yn_or_back "Set interface WARP SSH ke ${new_iface} sekarang?"; then
-          warn "Set interface WARP SSH dibatalkan."
-        elif ssh_network_warp_interface_set "${new_iface}"; then
-          log "Interface WARP SSH disimpan: ${new_iface}"
-        else
-          warn "Interface WARP SSH gagal diganti."
-        fi
-        pause
-        ;;
-      7)
-        if ssh_network_runtime_apply_now; then
-          log "Runtime WARP SSH berhasil disinkronkan."
-        else
-          warn "Runtime WARP SSH gagal disinkronkan."
         fi
         pause
         ;;
@@ -2173,4 +2113,3 @@ ssh_menu() {
 }
 
 # -------------------------
-

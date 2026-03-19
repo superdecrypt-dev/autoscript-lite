@@ -115,7 +115,7 @@ Kriteria lulus:
 - Timer enforcer `SSH QAC` aktif (`sshws-qac-enforcer.timer`).
 - Jika Edge Gateway aktif, `edge-mux` harus `active` dan listener publik tetap ada di `:80/:443`.
 - Jika BadVPN dipasang, `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`.
-- Jika backend Zero Trust dipasang, `warp-svc` harus terdeteksi; status `inactive` tetap valid selama mode runtime masih `consumer`.
+- Jika backend Zero Trust dipasang, `warp-svc` harus terdeteksi; status `inactive` tetap valid selama mode runtime masih `Free/Plus`.
 
 Khusus SSH WS (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.

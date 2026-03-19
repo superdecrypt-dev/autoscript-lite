@@ -29,10 +29,10 @@ warp_tier_menu_title() {
   fi
 }
 
-warp_tier_consumer_menu_title() {
+warp_tier_free_plus_menu_title() {
   local suffix="${1:-}"
   local base
-  base="$(warp_tier_menu_title "Consumer")"
+  base="$(warp_tier_menu_title "Free/Plus")"
   if [[ -n "${suffix}" ]]; then
     printf '%s > %s\n' "${base}" "${suffix}"
   else
@@ -53,6 +53,43 @@ warp_tier_zero_trust_menu_title() {
 
 warp_mode_cli_get() {
   warp_mode_state_get
+}
+
+warp_mode_display_get() {
+  local mode="" live="" target=""
+  mode="$(warp_mode_state_get 2>/dev/null || true)"
+  case "${mode}" in
+    zerotrust)
+      printf 'Zero Trust\n'
+      return 0
+      ;;
+  esac
+
+  live="$(warp_live_tier_get 2>/dev/null || true)"
+  case "${live}" in
+    free)
+      printf 'Free\n'
+      return 0
+      ;;
+    plus)
+      printf 'Plus\n'
+      return 0
+      ;;
+  esac
+
+  target="$(warp_tier_target_effective_get 2>/dev/null || true)"
+  case "${target}" in
+    free)
+      printf 'Free\n'
+      return 0
+      ;;
+    plus)
+      printf 'Plus\n'
+      return 0
+      ;;
+  esac
+
+  printf 'Free/Plus\n'
 }
 
 adblock_menu_title() {
@@ -2577,9 +2614,10 @@ PY
 }
 
 warp_tier_show_status() {
-  local mode target live live_display svc_state license_raw license_masked socks_state="unknown"
+  local mode mode_display target live live_display svc_state license_raw license_masked socks_state="unknown"
   local last_verified="" last_verified_at="" last_verified_age=""
   mode="$(warp_mode_cli_get)"
+  mode_display="$(warp_mode_display_get 2>/dev/null || true)"
   if [[ "${mode}" == "zerotrust" ]]; then
     warp_tier_zero_trust_show_status
     return 0
@@ -2621,10 +2659,10 @@ warp_tier_show_status() {
     socks_state="not-listening"
   fi
 
-  printf "Mode          : %s\n" "${mode}"
-  printf "Backend       : consumer (wgcf + wireproxy)\n"
-  printf "Consumer Tier : %s\n" "${target}"
-  printf "Consumer Live : %s\n" "${live_display}"
+  printf "Mode          : %s\n" "${mode_display:-Free/Plus}"
+  printf "Backend       : Free/Plus (wgcf + wireproxy)\n"
+  printf "Free/Plus Tier: %s\n" "${target}"
+  printf "Free/Plus Live: %s\n" "${live_display}"
   printf "wireproxy     : %s\n" "${svc_state}"
   printf "SOCKS5        : %s\n" "${socks_state}"
   printf "Zero Trust    : available via cloudflare-warp backend\n"
@@ -2649,11 +2687,12 @@ warp_tier_show_status() {
 }
 
 warp_tier_zero_trust_show_status() {
-  local cfg team client_id client_secret proxy_port config_state="" active_mode=""
+  local cfg team client_id client_secret proxy_port config_state="" active_mode="" active_mode_display=""
   local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
   local cli_status="unknown" reg_status="unknown" ssh_guard="unknown"
   cfg="$(warp_zero_trust_config_get)"
   active_mode="$(warp_mode_state_get)"
+  active_mode_display="$(warp_mode_display_get 2>/dev/null || true)"
   team="$(printf '%s\n' "${cfg}" | awk -F'=' '/^team=/{print $2; exit}')"
   client_id="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_id=/{print substr($0,11); exit}')"
   client_secret="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_secret=/{print substr($0,15); exit}')"
@@ -2671,7 +2710,7 @@ warp_tier_zero_trust_show_status() {
   fi
   ssh_guard="$(warp_zero_trust_ssh_guard_state_get)"
 
-  printf "Mode          : %s\n" "${active_mode}"
+  printf "Mode          : %s\n" "${active_mode_display:-Zero Trust}"
   printf "Backend       : cloudflare-warp (Zero Trust proxy)\n"
   printf "Team Name     : %s\n" "${team:-"(kosong)"}"
   printf "Client ID     : %s\n" "$(warp_zero_trust_secret_mask "${client_id}")"
@@ -2697,13 +2736,13 @@ warp_tier_zero_trust_show_requirements() {
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
-  printf "Rollout Note  : Consumer tetap memakai wgcf + wireproxy untuk Free/Plus\n"
+  printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
   printf "Rollout Note  : Zero Trust sekarang difokuskan ke jalur Xray via proxy lokal\n"
   printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
   printf "Rollout Note  : Backend interface legacy SSH tetap dipertahankan sebagai fallback, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
-warp_consumer_backend_prepare_activate_unlocked() {
+warp_free_plus_backend_prepare_activate_unlocked() {
   if svc_exists "${WARP_ZEROTRUST_SERVICE}" && svc_is_active "${WARP_ZEROTRUST_SERVICE}"; then
     warp_zero_trust_cli_run disconnect >/dev/null 2>&1 || true
     svc_stop_checked "${WARP_ZEROTRUST_SERVICE}" 30 || return 1
@@ -2868,17 +2907,17 @@ warp_zero_trust_disconnect() {
   return "${rc}"
 }
 
-warp_zero_trust_return_to_consumer() {
+warp_zero_trust_return_to_free_plus() {
   local rc
   title
-  echo "$(warp_tier_zero_trust_menu_title "Return to Consumer")"
+  echo "$(warp_tier_zero_trust_menu_title "Return to Free/Plus")"
   hr
 
   local confirm_rc=0
-  if ! confirm_yn_or_back "Kembalikan backend WARP ke Consumer sekarang?"; then
+  if ! confirm_yn_or_back "Kembalikan backend WARP ke Free/Plus sekarang?"; then
     confirm_rc=$?
     if (( confirm_rc == 1 || confirm_rc == 2 )); then
-      warn "Kembali ke Consumer dibatalkan."
+      warn "Kembali ke Free/Plus dibatalkan."
       hr
       pause
       return 0
@@ -2896,11 +2935,11 @@ warp_zero_trust_return_to_consumer() {
       exit 1
     fi
 
-    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-back-consumer.XXXXXX" 2>/dev/null || true)"
-    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-back-consumer.$$"
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-back-freeplus.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-back-freeplus.$$"
     mkdir -p "${snap_dir}" 2>/dev/null || true
     if ! warp_runtime_snapshot_capture "${snap_dir}"; then
-      warn "Gagal membuat snapshot sebelum kembali ke Consumer."
+      warn "Gagal membuat snapshot sebelum kembali ke Free/Plus."
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       hr
       pause
@@ -2909,13 +2948,13 @@ warp_zero_trust_return_to_consumer() {
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
 
     if ! warp_zero_trust_disconnect_backend_unlocked; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menghentikan backend Zero Trust sebelum kembali ke Consumer."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menghentikan backend Zero Trust sebelum kembali ke Free/Plus."
     fi
     if ! warp_wireproxy_post_restart_health_check; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak sehat sesudah kembali ke Consumer."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak sehat sesudah kembali ke Free/Plus."
     fi
     if ! warp_mode_state_set consumer; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan state mode Consumer."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan state mode Free/Plus."
     fi
 
     warp_txn_success="true"
@@ -2932,7 +2971,7 @@ warp_zero_trust_return_to_consumer() {
 
 warp_tier_switch_free() {
   title
-  echo "$(warp_tier_consumer_menu_title "Switch ke WARP Free")"
+  echo "$(warp_tier_free_plus_menu_title "Switch ke WARP Free")"
   hr
 
   local confirm_rc=0
@@ -2976,7 +3015,7 @@ warp_tier_switch_free() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
-    if ! warp_consumer_backend_prepare_activate_unlocked; then
+    if ! warp_free_plus_backend_prepare_activate_unlocked; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum switch ke WARP free."
     fi
     stage_dir="$(mktemp -d "${WORK_DIR}/.warp-free-stage.XXXXXX" 2>/dev/null || true)"
@@ -3033,7 +3072,7 @@ warp_tier_switch_free() {
 warp_tier_switch_plus() {
   local rc
   title
-  echo "$(warp_tier_consumer_menu_title "Switch ke WARP Plus")"
+  echo "$(warp_tier_free_plus_menu_title "Switch ke WARP Plus")"
   hr
 
   local confirm_rc=0
@@ -3100,7 +3139,7 @@ warp_tier_switch_plus() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
-    if ! warp_consumer_backend_prepare_activate_unlocked; then
+    if ! warp_free_plus_backend_prepare_activate_unlocked; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum switch ke WARP plus."
     fi
 
@@ -3163,7 +3202,7 @@ warp_tier_switch_plus() {
 warp_tier_reconnect_regenerate() {
   local rc
   title
-  echo "$(warp_tier_consumer_menu_title "Reconnect/Regenerate")"
+  echo "$(warp_tier_free_plus_menu_title "Reconnect/Regenerate")"
   hr
 
   local confirm_rc=0
@@ -3210,8 +3249,8 @@ warp_tier_reconnect_regenerate() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
-    if ! warp_consumer_backend_prepare_activate_unlocked; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum reconnect/regenerate Consumer."
+    if ! warp_free_plus_backend_prepare_activate_unlocked; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum reconnect/regenerate Free/Plus."
     fi
     stage_dir="$(mktemp -d "${WORK_DIR}/.warp-reconnect-stage.XXXXXX" 2>/dev/null || true)"
     [[ -n "${stage_dir}" ]] || stage_dir="${WORK_DIR}/.warp-reconnect-stage.$$"
@@ -3291,7 +3330,7 @@ warp_tier_menu() {
     warp_tier_show_status
     hr
     echo "  1) Show overall status"
-    echo "  2) Consumer (Free/Plus)"
+    echo "  2) Free/Plus"
     echo "  3) Zero Trust"
     echo "  0) Back"
     hr
@@ -3305,7 +3344,7 @@ warp_tier_menu() {
         hr
         pause
         ;;
-      2) warp_tier_consumer_menu ;;
+      2) warp_tier_free_plus_menu ;;
       3) warp_tier_zero_trust_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
@@ -3313,15 +3352,15 @@ warp_tier_menu() {
   done
 }
 
-warp_tier_consumer_menu() {
+warp_tier_free_plus_menu() {
   while true; do
     local active_mode
     active_mode="$(warp_mode_state_get)"
     title
-    echo "$(warp_tier_consumer_menu_title)"
+    echo "$(warp_tier_free_plus_menu_title)"
     hr
     if [[ "${active_mode}" == "zerotrust" ]]; then
-      printf "Current Mode  : zerotrust (aksi di menu ini akan mengembalikan backend ke Consumer)\n"
+      printf "Current Mode  : Zero Trust (aksi di menu ini akan mengembalikan backend ke Free/Plus)\n"
       hr
     fi
     warp_tier_show_status
@@ -3336,7 +3375,7 @@ warp_tier_consumer_menu() {
     case "${c}" in
       1)
         title
-        echo "$(warp_tier_consumer_menu_title "Status")"
+        echo "$(warp_tier_free_plus_menu_title "Status")"
         hr
         warp_tier_show_status
         hr
@@ -3376,7 +3415,7 @@ warp_tier_zero_trust_menu() {
     echo "  4) Set Service Token Client Secret"
     echo "  5) Apply / Connect Zero Trust"
     echo "  6) Disconnect Zero Trust"
-    echo "  7) Return to Consumer"
+    echo "  7) Return to Free/Plus"
     echo "  8) Requirements"
     echo "  9) Rollout notes"
     echo "  0) Back"
@@ -3453,7 +3492,7 @@ warp_tier_zero_trust_menu() {
         fi
         ;;
       7)
-        if ! warp_zero_trust_return_to_consumer; then
+        if ! warp_zero_trust_return_to_free_plus; then
           :
         fi
         ;;
@@ -3733,6 +3772,3 @@ PY
     esac
   done
 }
-
-
-

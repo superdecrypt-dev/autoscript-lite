@@ -342,7 +342,7 @@ PY
   fi
 }
 
-cloudflare_warp_seed_consumer_free_state_if_missing() {
+cloudflare_warp_seed_free_plus_state_if_missing() {
   local mode="" tier="" tmp="" now=""
   mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
   [[ "${mode}" == "zerotrust" ]] && return 0
@@ -613,10 +613,10 @@ EOF
   fi
 
   service_enable_restart_checked wireproxy || die "wireproxy gagal diaktifkan. Cek: journalctl -u wireproxy -n 100 --no-pager"
-  if cloudflare_warp_seed_consumer_free_state_if_missing; then
-    ok "state WARP consumer disiapkan: Free."
+  if cloudflare_warp_seed_free_plus_state_if_missing; then
+    ok "state WARP Free/Plus disiapkan: Free."
   else
-    warn "Gagal inisialisasi state WARP consumer; main menu mungkin sementara hanya menampilkan Active."
+    warn "Gagal inisialisasi state WARP Free/Plus; main menu mungkin sementara hanya menampilkan Active."
   fi
   ok "wireproxy aktif."
 }
