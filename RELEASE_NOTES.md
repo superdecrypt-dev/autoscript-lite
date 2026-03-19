@@ -27,7 +27,8 @@ Rilis ini merapikan surface user-facing `manage.sh` agar menu utama lebih seimba
   - `Telegram Bot`
   - `Discord Bot`
   - `WARP Tier`
-- `WARP Tier` kini menampilkan status utama berbasis mode, submenu `Consumer (Free/Plus)`, dan slot `Zero Trust` yang masih placeholder CLI.
+- `WARP Tier` kini menampilkan status utama berbasis mode, submenu `Consumer (Free/Plus)`, dan submenu `Zero Trust`.
+- `Zero Trust` sudah punya backend engine di `manage`; yang dirapikan pada working tree ini adalah fondasi installer/runtime `cloudflare-warp` dan health path-nya.
 
 3. Surface operasional dipertegas
 - `6) SSH Network` sekarang muncul sebagai menu utama sendiri.

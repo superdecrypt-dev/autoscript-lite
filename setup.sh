@@ -38,6 +38,14 @@ WIREPROXY_CONF="/etc/wireproxy/config.conf"
 WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
 SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
 SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
+WARP_ZEROTRUST_ROOT="${WARP_ZEROTRUST_ROOT:-/etc/autoscript/warp-zerotrust}"
+WARP_ZEROTRUST_CONFIG_FILE="${WARP_ZEROTRUST_ROOT}/config.env"
+WARP_ZEROTRUST_MDM_FILE="${WARP_ZEROTRUST_MDM_FILE:-/var/lib/cloudflare-warp/mdm.xml}"
+WARP_ZEROTRUST_SERVICE="${WARP_ZEROTRUST_SERVICE:-warp-svc}"
+WARP_ZEROTRUST_PROXY_PORT="${WARP_ZEROTRUST_PROXY_PORT:-40000}"
+WARP_STATE_FILE="${WARP_STATE_FILE:-/var/lib/xray-manage/network_state.json}"
+CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
+CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
 SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
 SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
 SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
@@ -247,6 +255,18 @@ sanity_check() {
     failed=1
   fi
 
+  if command -v warp-cli >/dev/null 2>&1 || systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1; then
+    ok "check: Zero Trust backend tersedia (cloudflare-warp)"
+    if systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
+      warn "check: ${WARP_ZEROTRUST_SERVICE} active"
+      warn "check: backend Zero Trust aktif; pastikan ini memang state runtime yang diinginkan."
+    else
+      ok "check: ${WARP_ZEROTRUST_SERVICE} idle"
+    fi
+  else
+    warn "check: Zero Trust backend belum terpasang (opsional)"
+  fi
+
   if systemctl is-active --quiet sshws-dropbear; then
     ok "check: sshws-dropbear active"
   else
@@ -446,8 +466,10 @@ setup_post_domain_main() {
   setup_run_step "Atur ulimit" tune_ulimit
   setup_run_step "Install wgcf" install_wgcf
   setup_run_step "Install wireproxy" install_wireproxy
+  setup_run_step "Install Cloudflare WARP" install_cloudflare_warp
   setup_run_step "Siapkan wgcf" setup_wgcf
   setup_run_step "Siapkan wireproxy" setup_wireproxy
+  setup_run_step "Siapkan backend Zero Trust" setup_warp_zero_trust_backend
   setup_run_step "Siapkan SSH WARP" setup_ssh_warp_interface
   setup_run_step "Bersihkan file wgcf" cleanup_wgcf_files
   setup_run_step "Install repo nginx" install_nginx_official_repo

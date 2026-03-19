@@ -50,7 +50,8 @@ Catatan penting:
 - `Recover Pending Txn` di `Xray Users` dan `SSH Users` adalah menu repair untuk journal transaksi yang putus di tengah, bukan menu harian. Jika `pending = 0`, menu itu bisa diabaikan.
 - `5) Xray Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Xray Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
 - `13) Tools > WARP Tier` sekarang menampilkan `mode`, status `consumer tier`, dan bisa tetap menunjukkan `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
-- `13) Tools > WARP Tier > Zero Trust` saat ini baru slot CLI; backend runtime-nya belum diaktifkan.
+- `13) Tools > WARP Tier > Zero Trust` sekarang memakai backend `cloudflare-warp` + `warp-cli` untuk proxy lokal `127.0.0.1:40000`, tetapi `SSH Network` masih belum kompatibel dengan mode ini.
+- `setup.sh` sekarang ikut menyiapkan fondasi backend `cloudflare-warp` dalam state idle; mode `Zero Trust` baru aktif saat dipilih eksplisit dari `manage.sh`.
 - `9) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
 
 ## Menu Utama
@@ -98,7 +99,8 @@ Catatan penting:
   Ringkasan analytics/traffic dan utilitas operasional terkait pemakaian runtime.
 - `13) Tools`
   Submenu utilitas yang sekarang memuat `Telegram Bot`, `Discord Bot`, dan `WARP Tier`.
-  `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Consumer (Free/Plus)` yang aktif, plus slot `Zero Trust` yang masih placeholder CLI.
+  `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Consumer (Free/Plus)`, dan submenu `Zero Trust`.
+  `Zero Trust` memakai backend `cloudflare-warp` untuk jalur `Xray` via proxy lokal, sementara `SSH Network` tetap khusus backend consumer.
 
 ## Fitur Installer dan Runtime
 - `run.sh`

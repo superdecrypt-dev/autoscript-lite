@@ -65,9 +65,12 @@ adblock_menu_title() {
 }
 
 warp_status() {
-  local summary_ready="true"
+  local summary_ready="true" backend_svc backend_label mode
+  mode="$(warp_mode_state_get)"
+  backend_svc="$(warp_backend_service_name_get)"
+  backend_label="$(warp_backend_display_name_get)"
   title
-  echo "WARP (wireproxy) status"
+  echo "WARP status (${backend_label})"
   hr
   if ! xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
     summary_ready="false"
@@ -82,10 +85,17 @@ warp_status() {
     warn "Ringkasan routing WARP dilewati karena konfigurasi Xray tidak valid."
     hr
   fi
-  if svc_exists wireproxy; then
-    systemctl status wireproxy --no-pager || true
+  warp_tier_show_status
+  hr
+  if svc_exists "${backend_svc}"; then
+    systemctl status "${backend_svc}" --no-pager || true
+    if [[ "${mode}" == "zerotrust" ]] && have_cmd warp-cli; then
+      hr
+      printf 'warp-cli status      : %s\n' "$(warp_zero_trust_cli_status_line_get)"
+      printf 'warp-cli registration: %s\n' "$(warp_zero_trust_cli_registration_line_get)"
+    fi
   else
-    warn "wireproxy.service tidak terdeteksi"
+    warn "${backend_svc} tidak terdeteksi"
   fi
   hr
   pause
@@ -206,7 +216,7 @@ warp_proxy_bind_address_get() {
   local mode bind_addr
   mode="$(warp_mode_state_get)"
   if [[ "${mode}" == "zerotrust" ]]; then
-    printf '127.0.0.1:%s\n' "${WARP_ZEROTRUST_PROXY_PORT}"
+    printf '127.0.0.1:%s\n' "$(warp_zero_trust_proxy_port_get)"
     return 0
   fi
   bind_addr="$(awk -F'=' '
@@ -232,15 +242,16 @@ warp_proxy_port_get() {
   fi
 }
 
-warp_proxy_port_is_listening() {
-  local port
-  port="$(warp_proxy_port_get)"
+warp_port_is_listening() {
+  local port="${1:-}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
   have_cmd ss || return 1
   ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"
 }
 
-warp_proxy_wait_listening() {
-  local timeout="${1:-20}" wait_i=0
+warp_port_wait_listening() {
+  local port="${1:-}" timeout="${2:-20}" wait_i=0
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
   if ! [[ "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
     timeout=20
   fi
@@ -248,12 +259,39 @@ warp_proxy_wait_listening() {
     return 0
   fi
   for (( wait_i=0; wait_i<timeout; wait_i++ )); do
-    if warp_proxy_port_is_listening; then
+    if warp_port_is_listening "${port}"; then
       return 0
     fi
     sleep 1
   done
   return 1
+}
+
+warp_proxy_port_is_listening() {
+  warp_port_is_listening "$(warp_proxy_port_get)"
+}
+
+warp_proxy_wait_listening() {
+  warp_port_wait_listening "$(warp_proxy_port_get)" "${1:-20}"
+}
+
+warp_zero_trust_proxy_port_get() {
+  local cfg="" proxy_port=""
+  cfg="$(warp_zero_trust_config_get 2>/dev/null || true)"
+  proxy_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^proxy_port=/{print $2; exit}')"
+  if [[ "${proxy_port}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${proxy_port}"
+  else
+    printf '%s\n' "${WARP_ZEROTRUST_PROXY_PORT}"
+  fi
+}
+
+warp_zero_trust_proxy_port_is_listening() {
+  warp_port_is_listening "$(warp_zero_trust_proxy_port_get)"
+}
+
+warp_zero_trust_proxy_wait_listening() {
+  warp_port_wait_listening "$(warp_zero_trust_proxy_port_get)" "${1:-20}"
 }
 
 warp_zero_trust_config_get() {
@@ -704,8 +742,8 @@ warp_zero_trust_service_restart_checked() {
     warn "Restart ${WARP_ZEROTRUST_SERVICE} gagal."
     return 1
   fi
-  if ! warp_proxy_wait_listening 25; then
-    warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port $(warp_proxy_port_get) belum listening."
+  if ! warp_zero_trust_proxy_wait_listening 25; then
+    warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port $(warp_zero_trust_proxy_port_get) belum listening."
     return 1
   fi
   return 0
@@ -1753,10 +1791,11 @@ network_show_summary() {
     warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
   fi
 
-  if svc_exists wireproxy; then
-    svc_status_line wireproxy
+  echo "WARP mode: $(warp_mode_state_get)"
+  if svc_exists "$(warp_backend_service_name_get)"; then
+    svc_status_line "$(warp_backend_service_name_get)"
   else
-    echo "wireproxy: (tidak terpasang)"
+    echo "$(warp_backend_display_name_get): (tidak terpasang)"
   fi
   hr
   pause
@@ -2423,10 +2462,13 @@ PY
 }
 
 warp_controls_summary() {
-  local global wire_state
+  local global wire_state backend_svc backend_name mode
   global="$(warp_global_mode_pretty_get)"
-  if svc_exists wireproxy; then
-    if svc_is_active wireproxy; then
+  mode="$(warp_mode_state_get)"
+  backend_svc="$(warp_backend_service_name_get)"
+  backend_name="$(warp_backend_display_name_get)"
+  if svc_exists "${backend_svc}"; then
+    if svc_is_active "${backend_svc}"; then
       wire_state="active"
     else
       wire_state="inactive"
@@ -2470,8 +2512,9 @@ warp_controls_summary() {
     [[ -n "${direct_inbound_set[${entry}]:-}" ]] && ((inbound_conflicts+=1))
   done
 
+  echo "WARP Mode   : ${mode}"
   echo "WARP Global : ${global}"
-  echo "wireproxy   : ${wire_state}"
+  echo "${backend_name} : ${wire_state}"
   echo "Override    : user warp=${wu}, user direct=${du} | inbound warp=${wi}, inbound direct=${di}"
   echo "Conflict    : user=${user_conflicts}, inbound=${inbound_conflicts}"
   echo "Domain list : direct=${dd}, warp=${wd}"
@@ -6197,9 +6240,8 @@ warp_zero_trust_render_mdm_file() {
   team="$(printf '%s\n' "${cfg}" | awk -F'=' '/^team=/{print $2; exit}')"
   client_id="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_id=/{print substr($0,11); exit}')"
   client_secret="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_secret=/{print substr($0,15); exit}')"
-  proxy_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^proxy_port=/{print $2; exit}')"
+  proxy_port="$(warp_zero_trust_proxy_port_get)"
   [[ -n "${team}" && -n "${client_id}" && -n "${client_secret}" ]] || return 1
-  [[ "${proxy_port}" =~ ^[0-9]+$ ]] || proxy_port="${WARP_ZEROTRUST_PROXY_PORT}"
 
   mkdir -p "$(dirname "${WARP_ZEROTRUST_MDM_FILE}")" "${WARP_ZEROTRUST_ROOT}" 2>/dev/null || true
   tmp="$(mktemp "${WORK_DIR}/.warp-zerotrust-mdm.XXXXXX" 2>/dev/null || true)"
@@ -6211,29 +6253,22 @@ from xml.sax.saxutils import escape
 dst, team, client_id, client_secret, proxy_port = sys.argv[1:6]
 xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <dict>
-  <key>configs</key>
-  <array>
-    <dict>
-      <key>organization</key>
-      <string>{escape(team)}</string>
-      <key>display_name</key>
-      <string>Autoscript Zero Trust</string>
-      <key>auth_client_id</key>
-      <string>{escape(client_id)}</string>
-      <key>auth_client_secret</key>
-      <string>{escape(client_secret)}</string>
-      <key>service_mode</key>
-      <string>proxy</string>
-      <key>proxy_port</key>
-      <integer>{escape(proxy_port)}</integer>
-      <key>auto_connect</key>
-      <integer>0</integer>
-      <key>switch_locked</key>
-      <false/>
-      <key>warp_tunnel_protocol</key>
-      <string>MASQUE</string>
-    </dict>
-  </array>
+  <key>organization</key>
+  <string>{escape(team)}</string>
+  <key>display_name</key>
+  <string>Autoscript Zero Trust</string>
+  <key>auth_client_id</key>
+  <string>{escape(client_id)}</string>
+  <key>auth_client_secret</key>
+  <string>{escape(client_secret)}</string>
+  <key>onboarding</key>
+  <false/>
+  <key>auto_connect</key>
+  <true/>
+  <key>service_mode</key>
+  <string>proxy</string>
+  <key>proxy_port</key>
+  <integer>{proxy_port}</integer>
 </dict>
 """
 with open(dst, "w", encoding="utf-8") as fh:
@@ -6320,10 +6355,11 @@ warp_tier_show_status() {
 }
 
 warp_tier_zero_trust_show_status() {
-  local cfg team client_id client_secret proxy_port config_state=""
+  local cfg team client_id client_secret proxy_port config_state="" active_mode=""
   local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
   local cli_status="unknown" reg_status="unknown" ssh_guard="unknown"
   cfg="$(warp_zero_trust_config_get)"
+  active_mode="$(warp_mode_state_get)"
   team="$(printf '%s\n' "${cfg}" | awk -F'=' '/^team=/{print $2; exit}')"
   client_id="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_id=/{print substr($0,11); exit}')"
   client_secret="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_secret=/{print substr($0,15); exit}')"
@@ -6334,8 +6370,18 @@ warp_tier_zero_trust_show_status() {
     svc_state="$(svc_state "${WARP_ZEROTRUST_SERVICE}")"
   fi
   [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && mdm_state="present"
-  if warp_proxy_port_is_listening; then
-    proxy_state="listening"
+  if [[ "${svc_state}" == "active" ]]; then
+    if warp_zero_trust_proxy_port_is_listening; then
+      proxy_state="listening"
+    else
+      proxy_state="not-listening"
+    fi
+  elif warp_zero_trust_proxy_port_is_listening; then
+    if svc_exists wireproxy && svc_is_active wireproxy; then
+      proxy_state="occupied-by-wireproxy"
+    else
+      proxy_state="busy-other-process"
+    fi
   fi
   if have_cmd warp-cli; then
     cli_status="$(warp_zero_trust_cli_status_line_get)"
@@ -6343,7 +6389,7 @@ warp_tier_zero_trust_show_status() {
   fi
   ssh_guard="$(warp_zero_trust_ssh_guard_state_get)"
 
-  printf "Mode          : zerotrust\n"
+  printf "Mode          : %s\n" "${active_mode}"
   printf "Backend       : cloudflare-warp (Zero Trust proxy)\n"
   printf "Team Name     : %s\n" "${team:-"(kosong)"}"
   printf "Client ID     : %s\n" "$(warp_zero_trust_secret_mask "${client_id}")"
@@ -6359,9 +6405,11 @@ warp_tier_zero_trust_show_status() {
 }
 
 warp_tier_zero_trust_show_requirements() {
+  local proxy_port=""
+  proxy_port="$(warp_zero_trust_proxy_port_get)"
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
-  printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${WARP_ZEROTRUST_PROXY_PORT}"
+  printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
   printf "Requirement   : SSH Network tidak boleh punya effective WARP users saat Zero Trust diaktifkan\n"
 }
 
@@ -6370,6 +6418,233 @@ warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Consumer tetap memakai wgcf + wireproxy untuk Free/Plus\n"
   printf "Rollout Note  : Zero Trust sekarang difokuskan ke jalur Xray via proxy lokal\n"
   printf "Rollout Note  : SSH Network belum kompatibel karena masih berbasis wg-quick dari wireproxy profile\n"
+}
+
+warp_consumer_backend_prepare_activate_unlocked() {
+  if svc_exists "${WARP_ZEROTRUST_SERVICE}" && svc_is_active "${WARP_ZEROTRUST_SERVICE}"; then
+    warp_zero_trust_cli_run disconnect >/dev/null 2>&1 || true
+    svc_stop_checked "${WARP_ZEROTRUST_SERVICE}" 30 || return 1
+  fi
+  return 0
+}
+
+warp_zero_trust_disconnect_backend_unlocked() {
+  if have_cmd warp-cli; then
+    warp_zero_trust_cli_run disconnect >/dev/null 2>&1 || true
+  fi
+  if svc_exists "${WARP_ZEROTRUST_SERVICE}" && svc_is_active "${WARP_ZEROTRUST_SERVICE}"; then
+    svc_stop_checked "${WARP_ZEROTRUST_SERVICE}" 30 || return 1
+  fi
+  return 0
+}
+
+warp_zero_trust_team_set() {
+  local team="${1:-}"
+  team="$(printf '%s' "${team}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  [[ -n "${team}" ]] || return 1
+  [[ "${team}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 1
+  warp_zero_trust_config_set_values WARP_ZEROTRUST_TEAM "${team}"
+}
+
+warp_zero_trust_client_id_set() {
+  local value="${1:-}"
+  value="$(printf '%s' "${value}" | tr -d '[:space:]')"
+  [[ -n "${value}" ]] || return 1
+  warp_zero_trust_config_set_values WARP_ZEROTRUST_CLIENT_ID "${value}"
+}
+
+warp_zero_trust_client_secret_set() {
+  local value="${1:-}"
+  value="$(printf '%s' "${value}" | tr -d '[:space:]')"
+  [[ -n "${value}" ]] || return 1
+  warp_zero_trust_config_set_values WARP_ZEROTRUST_CLIENT_SECRET "${value}"
+}
+
+warp_zero_trust_apply_connect() {
+  local rc
+  title
+  echo "$(warp_tier_zero_trust_menu_title "Apply / Connect")"
+  hr
+
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Aktifkan backend Zero Trust sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Aktivasi Zero Trust dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  (
+    local cfg config_state snap_dir warp_txn_success="false"
+    flock -x 200
+
+    if ! have_cmd warp-cli; then
+      warn "warp-cli tidak ditemukan. Install Cloudflare WARP client dulu di host ini."
+      hr
+      pause
+      exit 1
+    fi
+    if ! svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
+      warn "Service ${WARP_ZEROTRUST_SERVICE} tidak ditemukan."
+      hr
+      pause
+      exit 1
+    fi
+    if ! warp_zero_trust_require_ssh_compatible; then
+      hr
+      pause
+      exit 1
+    fi
+
+    cfg="$(warp_zero_trust_config_get)"
+    config_state="$(printf '%s\n' "${cfg}" | awk -F'=' '/^config_state=/{print $2; exit}')"
+    if [[ "${config_state}" != "complete" ]]; then
+      warn "Config Zero Trust belum lengkap. Isi team name, client id, dan client secret dulu."
+      hr
+      pause
+      exit 1
+    fi
+
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-zerotrust.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-zerotrust.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    if ! warp_runtime_snapshot_capture "${snap_dir}"; then
+      warn "Gagal membuat snapshot sebelum aktivasi Zero Trust."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
+    fi
+    trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
+
+    if svc_exists wireproxy && svc_is_active wireproxy; then
+      svc_stop_checked wireproxy 30 || warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menghentikan wireproxy sebelum aktivasi Zero Trust."
+    fi
+    if ! warp_zero_trust_render_mdm_file; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal merender mdm.xml Zero Trust."
+    fi
+    if ! warp_zero_trust_post_restart_health_check; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Backend Zero Trust tidak sehat sesudah start."
+    fi
+    if ! warp_mode_state_set zerotrust; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan state mode Zero Trust."
+    fi
+
+    warp_txn_success="true"
+    trap - EXIT
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    hr
+    warp_tier_show_status
+    hr
+    pause
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
+}
+
+warp_zero_trust_disconnect() {
+  local rc
+  title
+  echo "$(warp_tier_zero_trust_menu_title "Disconnect")"
+  hr
+
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Putuskan backend Zero Trust sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Disconnect Zero Trust dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  (
+    flock -x 200
+    if ! warp_zero_trust_disconnect_backend_unlocked; then
+      warn "Gagal menghentikan backend Zero Trust."
+      hr
+      pause
+      exit 1
+    fi
+    if ! warp_mode_state_set zerotrust; then
+      warn "Gagal mempertahankan state mode Zero Trust."
+      hr
+      pause
+      exit 1
+    fi
+    hr
+    warp_tier_show_status
+    hr
+    pause
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
+}
+
+warp_zero_trust_return_to_consumer() {
+  local rc
+  title
+  echo "$(warp_tier_zero_trust_menu_title "Return to Consumer")"
+  hr
+
+  local confirm_rc=0
+  if ! confirm_yn_or_back "Kembalikan backend WARP ke Consumer sekarang?"; then
+    confirm_rc=$?
+    if (( confirm_rc == 1 || confirm_rc == 2 )); then
+      warn "Kembali ke Consumer dibatalkan."
+      hr
+      pause
+      return 0
+    fi
+  fi
+
+  (
+    local snap_dir warp_txn_success="false"
+    flock -x 200
+
+    if ! have_cmd wireproxy; then
+      warn "wireproxy tidak ditemukan. Jalankan setup.sh atau pasang wireproxy dulu."
+      hr
+      pause
+      exit 1
+    fi
+
+    snap_dir="$(mktemp -d "${WORK_DIR}/.warp-back-consumer.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.warp-back-consumer.$$"
+    mkdir -p "${snap_dir}" 2>/dev/null || true
+    if ! warp_runtime_snapshot_capture "${snap_dir}"; then
+      warn "Gagal membuat snapshot sebelum kembali ke Consumer."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      hr
+      pause
+      exit 1
+    fi
+    trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
+
+    if ! warp_zero_trust_disconnect_backend_unlocked; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menghentikan backend Zero Trust sebelum kembali ke Consumer."
+    fi
+    if ! warp_wireproxy_post_restart_health_check; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "wireproxy tidak sehat sesudah kembali ke Consumer."
+    fi
+    if ! warp_mode_state_set consumer; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan state mode Consumer."
+    fi
+
+    warp_txn_success="true"
+    trap - EXIT
+    rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+    hr
+    warp_tier_show_status
+    hr
+    pause
+  ) 200>"${WARP_LOCK_FILE}"
+  rc=$?
+  return "${rc}"
 }
 
 warp_tier_switch_free() {
@@ -6418,6 +6693,9 @@ warp_tier_switch_free() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
+    if ! warp_consumer_backend_prepare_activate_unlocked; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum switch ke WARP free."
+    fi
     stage_dir="$(mktemp -d "${WORK_DIR}/.warp-free-stage.XXXXXX" 2>/dev/null || true)"
     [[ -n "${stage_dir}" ]] || stage_dir="${WORK_DIR}/.warp-free-stage.$$"
     mkdir -p "${stage_dir}" 2>/dev/null || true
@@ -6450,7 +6728,7 @@ warp_tier_switch_free() {
     elif (( tier_wait_rc == 2 )); then
       warn "Probe tier WARP free belum memberi jawaban pasti; mempertahankan hasil switch tanpa rollback keras."
     fi
-    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "free" "warp_tier_last_verified" "free" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
+    if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "free" "warp_tier_last_verified" "free" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
     if ! warp_runtime_refresh_ssh_network_after_profile_change; then
@@ -6539,6 +6817,9 @@ warp_tier_switch_plus() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
+    if ! warp_consumer_backend_prepare_activate_unlocked; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum switch ke WARP plus."
+    fi
 
     stage_dir="$(mktemp -d "${WORK_DIR}/.warp-plus-stage.XXXXXX" 2>/dev/null || true)"
     [[ -n "${stage_dir}" ]] || stage_dir="${WORK_DIR}/.warp-plus-stage.$$"
@@ -6573,6 +6854,7 @@ warp_tier_switch_plus() {
       warn "Probe tier WARP plus belum memberi jawaban pasti; mempertahankan hasil switch tanpa rollback keras."
     fi
     if ! network_state_set_many \
+      "${WARP_MODE_STATE_KEY}" "consumer" \
       "${WARP_TIER_STATE_KEY}" "plus" \
       "${WARP_PLUS_LICENSE_STATE_KEY}" "${key}" \
       "warp_tier_last_verified" "plus" \
@@ -6645,6 +6927,9 @@ warp_tier_reconnect_regenerate() {
       exit 1
     fi
     trap 'if [[ "${warp_txn_success}" != "true" ]]; then warp_runtime_snapshot_restore_on_abort "${snap_dir}"; fi' EXIT
+    if ! warp_consumer_backend_prepare_activate_unlocked; then
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menonaktifkan backend Zero Trust sebelum reconnect/regenerate Consumer."
+    fi
     stage_dir="$(mktemp -d "${WORK_DIR}/.warp-reconnect-stage.XXXXXX" 2>/dev/null || true)"
     [[ -n "${stage_dir}" ]] || stage_dir="${WORK_DIR}/.warp-reconnect-stage.$$"
     mkdir -p "${stage_dir}" 2>/dev/null || true
@@ -6696,7 +6981,7 @@ warp_tier_reconnect_regenerate() {
       warn "Probe tier WARP belum memberi jawaban pasti setelah reconnect/regenerate; mempertahankan hasil reconnect tanpa rollback keras."
     fi
 
-    if ! network_state_set_many "${WARP_TIER_STATE_KEY}" "${target}" "warp_tier_last_verified" "${target}" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')" >/dev/null 2>&1; then
+    if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "${target}" "warp_tier_last_verified" "${target}" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')" >/dev/null 2>&1; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
     if ! warp_runtime_refresh_ssh_network_after_profile_change; then
@@ -6747,9 +7032,15 @@ warp_tier_menu() {
 
 warp_tier_consumer_menu() {
   while true; do
+    local active_mode
+    active_mode="$(warp_mode_state_get)"
     title
     echo "$(warp_tier_consumer_menu_title)"
     hr
+    if [[ "${active_mode}" == "zerotrust" ]]; then
+      printf "Current Mode  : zerotrust (aksi di menu ini akan mengembalikan backend ke Consumer)\n"
+      hr
+    fi
     warp_tier_show_status
     hr
     echo "  1) Show status"
@@ -6797,9 +7088,14 @@ warp_tier_zero_trust_menu() {
     warp_tier_zero_trust_show_status
     hr
     echo "  1) Show status"
-    echo "  2) Requirements"
-    echo "  3) Planned CLI fields"
-    echo "  4) Rollout notes"
+    echo "  2) Set Team Name"
+    echo "  3) Set Service Token Client ID"
+    echo "  4) Set Service Token Client Secret"
+    echo "  5) Apply / Connect Zero Trust"
+    echo "  6) Disconnect Zero Trust"
+    echo "  7) Return to Consumer"
+    echo "  8) Requirements"
+    echo "  9) Rollout notes"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
@@ -6813,6 +7109,72 @@ warp_tier_zero_trust_menu() {
         pause
         ;;
       2)
+        local team=""
+        read -r -p "Team name Zero Trust (atau kembali): " team
+        if is_back_choice "${team}"; then
+          continue
+        fi
+        team="$(printf '%s' "${team}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        if ! warp_zero_trust_team_set "${team}"; then
+          warn "Team name Zero Trust tidak valid."
+          hr
+          pause
+          continue
+        fi
+        log "Team name Zero Trust disimpan: ${team}"
+        hr
+        pause
+        ;;
+      3)
+        local client_id=""
+        read -r -p "Service token client id (atau kembali): " client_id
+        if is_back_choice "${client_id}"; then
+          continue
+        fi
+        client_id="$(printf '%s' "${client_id}" | tr -d '[:space:]')"
+        if ! warp_zero_trust_client_id_set "${client_id}"; then
+          warn "Client ID Zero Trust tidak valid."
+          hr
+          pause
+          continue
+        fi
+        log "Client ID Zero Trust disimpan."
+        hr
+        pause
+        ;;
+      4)
+        local client_secret=""
+        read -r -p "Service token client secret (atau kembali): " client_secret
+        if is_back_choice "${client_secret}"; then
+          continue
+        fi
+        client_secret="$(printf '%s' "${client_secret}" | tr -d '[:space:]')"
+        if ! warp_zero_trust_client_secret_set "${client_secret}"; then
+          warn "Client secret Zero Trust tidak valid."
+          hr
+          pause
+          continue
+        fi
+        log "Client secret Zero Trust disimpan."
+        hr
+        pause
+        ;;
+      5)
+        if ! warp_zero_trust_apply_connect; then
+          :
+        fi
+        ;;
+      6)
+        if ! warp_zero_trust_disconnect; then
+          :
+        fi
+        ;;
+      7)
+        if ! warp_zero_trust_return_to_consumer; then
+          :
+        fi
+        ;;
+      8)
         title
         echo "$(warp_tier_zero_trust_menu_title "Requirements")"
         hr
@@ -6820,15 +7182,7 @@ warp_tier_zero_trust_menu() {
         hr
         pause
         ;;
-      3)
-        title
-        echo "$(warp_tier_zero_trust_menu_title "Planned CLI Fields")"
-        hr
-        warp_tier_zero_trust_show_planned_fields
-        hr
-        pause
-        ;;
-      4)
+      9)
         title
         echo "$(warp_tier_zero_trust_menu_title "Rollout Notes")"
         hr
@@ -6860,24 +7214,27 @@ warp_controls_menu() {
     case "${c}" in
       1) warp_status ;;
       2)
+        local backend_svc backend_name
+        backend_svc="$(warp_backend_service_name_get)"
+        backend_name="$(warp_backend_display_name_get)"
         title
-        echo "Restart wireproxy"
+        echo "Restart ${backend_name}"
         hr
-        if ! confirm_yn_or_back "Restart wireproxy sekarang?"; then
-          warn "Restart wireproxy dibatalkan."
+        if ! confirm_yn_or_back "Restart ${backend_name} sekarang?"; then
+          warn "Restart ${backend_name} dibatalkan."
           hr
           pause
           continue
         fi
-        if svc_exists wireproxy; then
-          if ! warp_wireproxy_post_restart_health_check; then
-            warn "Restart wireproxy gagal."
+        if svc_exists "${backend_svc}"; then
+          if ! warp_backend_post_restart_health_check; then
+            warn "Restart ${backend_name} gagal."
             hr
             pause
             continue
           fi
         else
-          warn "wireproxy.service tidak terdeteksi"
+          warn "${backend_svc} tidak terdeteksi"
         fi
         hr
         pause

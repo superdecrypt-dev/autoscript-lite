@@ -32,6 +32,7 @@ Prinsip:
 - `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
 - `install/adblock.sh` sekarang sudah dipakai untuk jalur `Shared Adblock`.
 - `install/badvpn.sh` sekarang sudah dipakai untuk jalur `BadVPN UDPGW`.
+- `install/network.sh` sekarang juga memegang fondasi backend `Zero Trust` berbasis `cloudflare-warp`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
 - Validasi minimum yang sudah lolos:
   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
@@ -78,6 +79,7 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
    `setup_swap_2gb`, `tune_ulimit`, `install_fail2ban_aggressive`
    - target modul: `install/network.sh`
 5. `install_wgcf`, `setup_wgcf`, `install_wireproxy`, `setup_wireproxy`,
+   `install_cloudflare_warp`, `setup_warp_zero_trust_backend`,
    `setup_ssh_warp_interface`
    - target modul: `install/network.sh`
 6. `domain_menu_v2`, Cloudflare helpers, `install_acme_and_issue_cert`

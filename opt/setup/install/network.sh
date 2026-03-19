@@ -4,6 +4,11 @@
 WGCF_RELEASE_TAG="${WGCF_RELEASE_TAG:-v2.2.30}"
 WGCF_RELEASE_VERSION="${WGCF_RELEASE_VERSION:-2.2.30}"
 WIREPROXY_RELEASE_TAG="${WIREPROXY_RELEASE_TAG:-v1.1.2}"
+CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
+CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
+CLOUDFLARE_WARP_KEYRING="${CLOUDFLARE_WARP_KEYRING:-/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg}"
+CLOUDFLARE_WARP_LIST_FILE="${CLOUDFLARE_WARP_LIST_FILE:-/etc/apt/sources.list.d/cloudflare-client.list}"
+WARP_STATE_FILE="${WARP_STATE_FILE:-/var/lib/xray-manage/network_state.json}"
 
 install_fail2ban_aggressive() {
   ok "Aktifkan fail2ban..."
@@ -239,6 +244,143 @@ wireproxy_asset_url() {
   printf 'https://github.com/windtf/wireproxy/releases/download/%s/%s\n' "${WIREPROXY_RELEASE_TAG}" "${asset}"
 }
 
+cloudflare_warp_repo_codename_get() {
+  local codename=""
+  if command -v lsb_release >/dev/null 2>&1; then
+    codename="$(lsb_release -cs 2>/dev/null || true)"
+  fi
+  if [[ -z "${codename}" && -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    codename="${VERSION_CODENAME:-}"
+  fi
+  printf '%s\n' "${codename}"
+}
+
+cloudflare_warp_repo_arch_get() {
+  local arch=""
+  arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  case "${arch}" in
+    amd64|arm64)
+      printf '%s\n' "${arch}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+cloudflare_warp_repo_supported() {
+  local distro_id="" codename="" arch=""
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    distro_id="${ID:-}"
+  fi
+  codename="$(cloudflare_warp_repo_codename_get)"
+  arch="$(cloudflare_warp_repo_arch_get 2>/dev/null || true)"
+
+  case "${distro_id}:${codename}" in
+    ubuntu:focal|ubuntu:jammy|ubuntu:noble|debian:bullseye|debian:bookworm|debian:trixie) ;;
+    *) return 1 ;;
+  esac
+  [[ "${arch}" == "amd64" || "${arch}" == "arm64" ]]
+}
+
+cloudflare_warp_mode_state_get() {
+  local mode=""
+  if [[ ! -f "${WARP_STATE_FILE}" ]]; then
+    printf 'consumer\n'
+    return 0
+  fi
+  mode="$(python3 - <<'PY' "${WARP_STATE_FILE}" 2>/dev/null || true
+import json
+import sys
+
+path = sys.argv[1]
+try:
+  with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh) or {}
+except Exception:
+  data = {}
+value = str(data.get("warp_mode") or "").strip().lower()
+if value in {"consumer", "zerotrust"}:
+  print(value)
+PY
+)"
+  if [[ "${mode}" == "consumer" || "${mode}" == "zerotrust" ]]; then
+    printf '%s\n' "${mode}"
+  else
+    printf 'consumer\n'
+  fi
+}
+
+cloudflare_warp_repo_configure() {
+  local codename="" arch="" key_tmp="" key_gpg_tmp=""
+  codename="$(cloudflare_warp_repo_codename_get)"
+  arch="$(cloudflare_warp_repo_arch_get)" || return 1
+  [[ -n "${codename}" ]] || return 1
+
+  install -d -m 755 /usr/share/keyrings /etc/apt/sources.list.d
+  key_tmp="$(mktemp)" || return 1
+  key_gpg_tmp="$(mktemp)" || {
+    rm -f "${key_tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  if ! download_file_checked "${CLOUDFLARE_WARP_KEY_URL}" "${key_tmp}" "Cloudflare WARP signing key"; then
+    rm -f "${key_tmp}" "${key_gpg_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! gpg --yes --dearmor <"${key_tmp}" >"${key_gpg_tmp}"; then
+    rm -f "${key_tmp}" "${key_gpg_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  install -m 0644 "${key_gpg_tmp}" "${CLOUDFLARE_WARP_KEYRING}"
+  cat > "${CLOUDFLARE_WARP_LIST_FILE}" <<EOF
+deb [arch=${arch} signed-by=${CLOUDFLARE_WARP_KEYRING}] ${CLOUDFLARE_WARP_REPO_URL} ${codename} main
+EOF
+
+  rm -f "${key_tmp}" "${key_gpg_tmp}" >/dev/null 2>&1 || true
+  return 0
+}
+
+install_cloudflare_warp() {
+  local active_mode=""
+  ok "Pasang Cloudflare WARP client..."
+
+  if ! cloudflare_warp_repo_supported; then
+    warn "Repo Cloudflare WARP tidak didukung pada host ini. Backend Zero Trust dilewati tanpa menggagalkan setup."
+    return 0
+  fi
+
+  export DEBIAN_FRONTEND=noninteractive
+  ensure_dpkg_consistent
+  apt_get_with_lock_retry install -y ca-certificates curl gpg lsb-release >/dev/null 2>&1 || true
+
+  if ! cloudflare_warp_repo_configure; then
+    warn "Gagal menyiapkan repo Cloudflare WARP. Backend Zero Trust dilewati untuk sesi setup ini."
+    return 0
+  fi
+  if ! apt_get_with_lock_retry update -y; then
+    warn "APT update untuk repo Cloudflare WARP gagal. Backend Zero Trust dilewati untuk sesi setup ini."
+    return 0
+  fi
+  if ! apt_get_with_lock_retry install -y cloudflare-warp; then
+    warn "Paket cloudflare-warp gagal dipasang. Backend Zero Trust tetap opsional dan setup dilanjutkan."
+    return 0
+  fi
+
+  active_mode="$(cloudflare_warp_mode_state_get)"
+  if [[ "${active_mode}" != "zerotrust" ]]; then
+    warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    systemctl disable --now "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 || true
+    ok "cloudflare-warp terpasang. ${WARP_ZEROTRUST_SERVICE} disiapkan dalam keadaan idle sampai mode Zero Trust diaktifkan."
+  else
+    ok "cloudflare-warp terpasang. Mode Zero Trust sudah tercatat aktif; ${WARP_ZEROTRUST_SERVICE} dibiarkan mengikuti state runtime."
+  fi
+}
+
 install_wgcf() {
   if command -v wgcf >/dev/null 2>&1; then
     ok "wgcf sudah ada."
@@ -374,6 +516,91 @@ EOF
   systemctl daemon-reload
   service_enable_restart_checked wireproxy || die "wireproxy gagal diaktifkan. Cek: journalctl -u wireproxy -n 100 --no-pager"
   ok "wireproxy aktif."
+}
+
+warp_zero_trust_config_upsert_key() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp=""
+  tmp="$(mktemp)" || return 1
+  python3 - <<'PY' "${file}" "${tmp}" "${key}" "${value}" || {
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+target_key = sys.argv[3]
+target_value = sys.argv[4]
+
+lines = []
+if src.exists():
+  try:
+    lines = src.read_text(encoding="utf-8").splitlines()
+  except Exception:
+    lines = []
+
+out = []
+seen = False
+for line in lines:
+  stripped = line.strip()
+  if not stripped or stripped.startswith("#") or "=" not in line:
+    out.append(line)
+    continue
+  key, _ = line.split("=", 1)
+  key = key.strip()
+  if key == target_key:
+    out.append(f"{target_key}={target_value}")
+    seen = True
+  else:
+    out.append(line)
+
+if not seen:
+  out.append(f"{target_key}={target_value}")
+
+dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+PY
+    rm -f "${tmp}" >/dev/null 2>&1 || true
+    return 1
+  }
+  install -m 0600 "${tmp}" "${file}"
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  return 0
+}
+
+setup_warp_zero_trust_backend() {
+  ok "Siapkan backend Zero Trust..."
+
+  install -d -m 700 "${WARP_ZEROTRUST_ROOT}" "$(dirname "${WARP_ZEROTRUST_MDM_FILE}")"
+  if [[ ! -f "${WARP_ZEROTRUST_CONFIG_FILE}" ]]; then
+    render_setup_template_or_die \
+      "config/warp-zerotrust.env" \
+      "${WARP_ZEROTRUST_CONFIG_FILE}" \
+      0600 \
+      "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
+  fi
+
+  chmod 600 "${WARP_ZEROTRUST_CONFIG_FILE}" >/dev/null 2>&1 || true
+  warp_zero_trust_config_upsert_key "${WARP_ZEROTRUST_CONFIG_FILE}" "WARP_ZEROTRUST_PROXY_PORT" "${WARP_ZEROTRUST_PROXY_PORT}" \
+    || die "Gagal menormalkan config Zero Trust: ${WARP_ZEROTRUST_CONFIG_FILE}"
+
+  if ! grep -q '^WARP_ZEROTRUST_TEAM=' "${WARP_ZEROTRUST_CONFIG_FILE}" 2>/dev/null; then
+    printf 'WARP_ZEROTRUST_TEAM=\n' >> "${WARP_ZEROTRUST_CONFIG_FILE}"
+  fi
+  if ! grep -q '^WARP_ZEROTRUST_CLIENT_ID=' "${WARP_ZEROTRUST_CONFIG_FILE}" 2>/dev/null; then
+    printf 'WARP_ZEROTRUST_CLIENT_ID=\n' >> "${WARP_ZEROTRUST_CONFIG_FILE}"
+  fi
+  if ! grep -q '^WARP_ZEROTRUST_CLIENT_SECRET=' "${WARP_ZEROTRUST_CONFIG_FILE}" 2>/dev/null; then
+    printf 'WARP_ZEROTRUST_CLIENT_SECRET=\n' >> "${WARP_ZEROTRUST_CONFIG_FILE}"
+  fi
+  chmod 600 "${WARP_ZEROTRUST_CONFIG_FILE}" >/dev/null 2>&1 || true
+  [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && chmod 600 "${WARP_ZEROTRUST_MDM_FILE}" >/dev/null 2>&1 || true
+
+  if command -v warp-cli >/dev/null 2>&1; then
+    ok "Backend Zero Trust siap. Isi credential di ${WARP_ZEROTRUST_CONFIG_FILE} lalu aktifkan lewat menu manage bila diperlukan."
+  else
+    warn "warp-cli belum tersedia. Skeleton backend Zero Trust sudah dibuat, tetapi paket cloudflare-warp belum terpasang."
+  fi
 }
 
 ssh_warp_interface_name_default() {

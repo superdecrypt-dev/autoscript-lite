@@ -56,7 +56,9 @@ ternyata belum memegang logic live.
   Analytics dan ringkasan traffic runtime.
 - `13) Tools`
   Telegram Bot, Discord Bot, dan WARP Tier.
-  `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Consumer (Free/Plus)`, dan slot `Zero Trust` yang masih placeholder CLI.
+  `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Consumer (Free/Plus)`, dan submenu `Zero Trust`.
+  `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; `SSH Network` masih tetap bergantung ke backend consumer.
+  Fondasi paket/runtime `cloudflare-warp` sekarang dipersiapkan dari `setup.sh`, tetapi mode ini tetap idle sampai diaktifkan operator.
 
 ## Guardrail Maintainer
 

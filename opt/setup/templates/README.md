@@ -18,6 +18,7 @@ Yang sudah dipindah pada tahap awal:
 - `systemd/xray-domain-guard.service`
 - `systemd/xray-domain-guard.timer`
 - `config/sshws-stunnel.conf`
+- `config/warp-zerotrust.env`
 - `config/xray-speed-config.json`
 - `nginx/nginx.conf`
 
