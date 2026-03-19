@@ -156,7 +156,10 @@ SSH_NETWORK_NFT_TABLE="${SSH_NETWORK_NFT_TABLE:-autoscript_ssh_network}"
 SSH_NETWORK_FWMARK="${SSH_NETWORK_FWMARK:-42042}"
 SSH_NETWORK_ROUTE_TABLE="${SSH_NETWORK_ROUTE_TABLE:-42042}"
 SSH_NETWORK_RULE_PREF="${SSH_NETWORK_RULE_PREF:-14200}"
+SSH_NETWORK_WARP_BACKEND="${SSH_NETWORK_WARP_BACKEND:-auto}"
 SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
+SSH_NETWORK_XRAY_REDIR_PORT="${SSH_NETWORK_XRAY_REDIR_PORT:-12345}"
+SSH_NETWORK_XRAY_REDIR_PORT_V6="${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}"
 SSH_NETWORK_LOCK_FILE="${SSH_NETWORK_LOCK_FILE:-/run/autoscript/locks/ssh-network.lock}"
 ADBLOCK_AUTO_UPDATE_SERVICE="${ADBLOCK_AUTO_UPDATE_SERVICE:-adblock-update.service}"
 ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
@@ -180,7 +183,9 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
   "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}" \
   "${SSH_NETWORK_ROOT}" "${SSH_NETWORK_CONFIG_FILE}" "${SSH_NETWORK_NFT_TABLE}" \
   "${SSH_NETWORK_FWMARK}" "${SSH_NETWORK_ROUTE_TABLE}" "${SSH_NETWORK_RULE_PREF}" \
-  "${SSH_NETWORK_WARP_INTERFACE}" "${SSH_NETWORK_LOCK_FILE}" \
+  "${SSH_NETWORK_WARP_BACKEND}" "${SSH_NETWORK_WARP_INTERFACE}" \
+  "${SSH_NETWORK_XRAY_REDIR_PORT}" "${SSH_NETWORK_XRAY_REDIR_PORT_V6}" \
+  "${SSH_NETWORK_LOCK_FILE}" \
   "${ADBLOCK_AUTO_UPDATE_SERVICE}" "${ADBLOCK_AUTO_UPDATE_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
@@ -1975,7 +1980,31 @@ main_info_tls_expired_get() {
 }
 
 main_info_warp_status_get() {
-  local target
+  local target mode cli_state
+  if declare -F warp_mode_state_get >/dev/null 2>&1; then
+    mode="$(warp_mode_state_get 2>/dev/null || true)"
+    if [[ "${mode}" == "zerotrust" ]]; then
+      if ! svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
+        echo "Zero Trust Missing"
+        return 0
+      fi
+      if ! svc_is_active "${WARP_ZEROTRUST_SERVICE}"; then
+        echo "Zero Trust Inactive"
+        return 0
+      fi
+      if declare -F warp_zero_trust_cli_status_line_get >/dev/null 2>&1; then
+        cli_state="$(warp_zero_trust_cli_status_line_get 2>/dev/null || true)"
+        case "$(printf '%s' "${cli_state}" | tr '[:upper:]' '[:lower:]')" in
+          *connected*|*proxying*|*healthy*)
+            echo "Active (ZT)"
+            return 0
+            ;;
+        esac
+      fi
+      echo "Zero Trust Ready"
+      return 0
+    fi
+  fi
   if ! svc_exists wireproxy; then
     echo "Not Installed"
     return 0

@@ -7354,7 +7354,10 @@ ssh_network_config_get() {
     "${SSH_NETWORK_FWMARK}" \
     "${SSH_NETWORK_ROUTE_TABLE}" \
     "${SSH_NETWORK_RULE_PREF}" \
-    "${SSH_NETWORK_WARP_INTERFACE}"
+    "${SSH_NETWORK_WARP_INTERFACE}" \
+    "${SSH_NETWORK_WARP_BACKEND}" \
+    "${SSH_NETWORK_XRAY_REDIR_PORT}" \
+    "${SSH_NETWORK_XRAY_REDIR_PORT_V6}"
 import pathlib
 import re
 import sys
@@ -7367,6 +7370,9 @@ defaults = {
   "route_table": str(sys.argv[4] or "42042").strip() or "42042",
   "rule_pref": str(sys.argv[5] or "14200").strip() or "14200",
   "warp_interface": str(sys.argv[6] or "warp-ssh0").strip() or "warp-ssh0",
+  "warp_backend": str(sys.argv[7] or "auto").strip().lower() or "auto",
+  "xray_redir_port": str(sys.argv[8] or "12345").strip() or "12345",
+  "xray_redir_port_v6": str(sys.argv[9] or "12346").strip() or "12346",
 }
 data = {}
 if cfg_path.exists():
@@ -7384,6 +7390,10 @@ global_mode = str(data.get("SSH_NETWORK_ROUTE_GLOBAL", defaults["global_mode"]))
 if global_mode not in ("direct", "warp"):
   global_mode = defaults["global_mode"]
 
+warp_backend = str(data.get("SSH_NETWORK_WARP_BACKEND", defaults["warp_backend"])).strip().lower()
+if warp_backend not in ("auto", "local-proxy", "interface"):
+  warp_backend = defaults["warp_backend"]
+
 def read_num(key, fallback):
   raw = str(data.get(key, fallback)).strip()
   try:
@@ -7400,7 +7410,10 @@ print(f"nft_table={str(data.get('SSH_NETWORK_NFT_TABLE', defaults['nft_table']))
 print(f"fwmark={read_num('SSH_NETWORK_FWMARK', defaults['fwmark'])}")
 print(f"route_table={read_num('SSH_NETWORK_ROUTE_TABLE', defaults['route_table'])}")
 print(f"rule_pref={read_num('SSH_NETWORK_RULE_PREF', defaults['rule_pref'])}")
+print(f"warp_backend={warp_backend}")
 print(f"warp_interface={warp_interface}")
+print(f"xray_redir_port={read_num('SSH_NETWORK_XRAY_REDIR_PORT', defaults['xray_redir_port'])}")
+print(f"xray_redir_port_v6={read_num('SSH_NETWORK_XRAY_REDIR_PORT_V6', defaults['xray_redir_port_v6'])}")
 PY
 }
 
@@ -7473,6 +7486,169 @@ ssh_network_global_mode_set() {
     *) return 1 ;;
   esac
   ssh_network_config_set_values SSH_NETWORK_ROUTE_GLOBAL "${mode}"
+}
+
+ssh_network_warp_backend_set() {
+  local backend="${1:-}"
+  case "${backend}" in
+    auto|local-proxy|interface) ;;
+    *) return 1 ;;
+  esac
+  ssh_network_config_set_values SSH_NETWORK_WARP_BACKEND "${backend}"
+}
+
+ssh_network_warp_backend_effective_get_from_value() {
+  local backend="${1:-auto}"
+  case "${backend}" in
+    local-proxy|interface)
+      printf '%s\n' "${backend}"
+      ;;
+    *)
+      if have_cmd xray && have_cmd iptables; then
+        printf 'local-proxy\n'
+      else
+        printf 'interface\n'
+      fi
+      ;;
+  esac
+}
+
+ssh_network_warp_backend_effective_get() {
+  local cfg backend=""
+  cfg="$(ssh_network_config_get)"
+  backend="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
+  ssh_network_warp_backend_effective_get_from_value "${backend:-auto}"
+}
+
+ssh_network_warp_backend_pretty_get() {
+  local backend="${1:-auto}"
+  case "${backend}" in
+    local-proxy) printf 'Local Proxy\n' ;;
+    interface) printf 'Interface (Legacy)\n' ;;
+    idle) printf 'Idle / Not Applied\n' ;;
+    *) printf 'Auto\n' ;;
+  esac
+}
+
+ssh_network_warp_apply_path_pretty_get() {
+  local backend="${1:-auto}"
+  case "${backend}" in
+    idle) printf 'not applied\n' ;;
+    local-proxy) printf 'xray redirect + local WARP SOCKS\n' ;;
+    interface) printf 'wg-quick interface + nft/ip rule\n' ;;
+    *)
+      backend="$(ssh_network_warp_backend_effective_get_from_value "${backend}")"
+      case "${backend}" in
+        local-proxy) printf 'xray redirect + local WARP SOCKS\n' ;;
+        *) printf 'wg-quick interface + nft/ip rule\n' ;;
+      esac
+      ;;
+  esac
+}
+
+ssh_network_runtime_backend_applied_get() {
+  local iptables_state="${1:-absent}" ip6tables_state="${2:-absent}" nft_state="${3:-absent}"
+  local ip_rule_state="${4:-absent}" ip_rule_v6_state="${5:-absent}" route_table_v4_state="${6:-absent}"
+  local route_table_v6_state="${7:-absent}" iface_state="${8:-missing}" warp_service_state="${9:-inactive}"
+
+  if [[ "${iptables_state}" == "present" || "${ip6tables_state}" == "present" ]]; then
+    printf 'local-proxy\n'
+    return 0
+  fi
+  if [[ "${nft_state}" == "present" || "${ip_rule_state}" == "present" || "${ip_rule_v6_state}" == "present" ]]; then
+    printf 'interface\n'
+    return 0
+  fi
+  if [[ "${route_table_v4_state}" == "present" || "${route_table_v6_state}" == "present" ]]; then
+    printf 'interface\n'
+    return 0
+  fi
+  if [[ "${iface_state}" == "present" && "${warp_service_state}" == "active" ]]; then
+    printf 'interface\n'
+    return 0
+  fi
+  printf 'idle\n'
+}
+
+ssh_network_xray_redir_runtime_state_get() {
+  local listener_state="${1:-not-listening}" apply_state="${2:-absent}"
+  case "${listener_state}:${apply_state}" in
+    listening:present) printf 'active\n' ;;
+    listening:absent) printf 'standby\n' ;;
+    missing:*) printf 'missing\n' ;;
+    not-listening:present) printf 'drift-no-listener\n' ;;
+    *) printf 'not-listening\n' ;;
+  esac
+}
+
+ssh_network_xray_redir_port_get() {
+  local cfg=""
+  cfg="$(ssh_network_config_get)"
+  printf '%s\n' "${cfg}" | awk -F'=' '/^xray_redir_port=/{print $2; exit}'
+}
+
+ssh_network_xray_redir_port_v6_get() {
+  local cfg=""
+  cfg="$(ssh_network_config_get)"
+  printf '%s\n' "${cfg}" | awk -F'=' '/^xray_redir_port_v6=/{print $2; exit}'
+}
+
+ssh_network_xray_redir_inbound_tag_v4_get() {
+  printf 'ssh-network-warp-redir-v4\n'
+}
+
+ssh_network_xray_redir_inbound_tag_v6_get() {
+  printf 'ssh-network-warp-redir-v6\n'
+}
+
+ssh_network_xray_redir_chain_v4_get() {
+  printf 'AUTOSCRIPT_SSH_WARP_V4\n'
+}
+
+ssh_network_xray_redir_chain_v6_get() {
+  printf 'AUTOSCRIPT_SSH_WARP_V6\n'
+}
+
+ssh_network_host_warp_mode_get() {
+  if declare -F warp_mode_state_get >/dev/null 2>&1; then
+    warp_mode_state_get 2>/dev/null || printf 'consumer\n'
+  else
+    printf 'consumer\n'
+  fi
+}
+
+ssh_network_host_warp_backend_display_get() {
+  if declare -F warp_backend_display_name_get >/dev/null 2>&1; then
+    warp_backend_display_name_get 2>/dev/null || printf 'WARP Backend\n'
+  else
+    printf 'wireproxy\n'
+  fi
+}
+
+ssh_network_host_warp_service_name_get() {
+  if declare -F warp_backend_service_name_get >/dev/null 2>&1; then
+    warp_backend_service_name_get 2>/dev/null || printf 'wireproxy\n'
+  else
+    printf 'wireproxy\n'
+  fi
+}
+
+ssh_network_host_warp_service_state_get() {
+  local svc=""
+  svc="$(ssh_network_host_warp_service_name_get)"
+  if [[ -n "${svc}" ]] && svc_exists "${svc}"; then
+    svc_state "${svc}"
+  else
+    printf 'missing\n'
+  fi
+}
+
+ssh_network_host_warp_proxy_port_get() {
+  if declare -F warp_proxy_port_get >/dev/null 2>&1; then
+    warp_proxy_port_get 2>/dev/null || printf '%s\n' "${WARP_ZEROTRUST_PROXY_PORT:-40000}"
+  else
+    printf '%s\n' "${WARP_ZEROTRUST_PROXY_PORT:-40000}"
+  fi
 }
 
 ssh_network_warp_interface_set() {
@@ -7898,6 +8074,391 @@ ssh_network_effective_rows() {
   done < <(ssh_collect_candidate_users false)
 }
 
+ssh_network_port_is_listening() {
+  local port="${1:-}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  have_cmd ss || return 1
+  ss -lnt "( sport = :${port} )" 2>/dev/null | awk -v want=":${port}" 'index($0, want) {found=1} END{exit found ? 0 : 1}'
+}
+
+ssh_network_wait_port_listening() {
+  local port="${1:-}" timeout="${2:-20}" i=0
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${timeout}" =~ ^[0-9]+$ ]] || timeout=20
+  while (( i < timeout )); do
+    if ssh_network_port_is_listening "${port}"; then
+      return 0
+    fi
+    sleep 1
+    ((i++))
+  done
+  return 1
+}
+
+ssh_network_host_warp_proxy_state_get() {
+  local port="" svc_name="" listener_name=""
+  port="$(ssh_network_host_warp_proxy_port_get)"
+  svc_name="$(ssh_network_host_warp_service_name_get)"
+  if declare -F warp_port_listener_name_get >/dev/null 2>&1; then
+    listener_name="$(warp_port_listener_name_get "${port}" 2>/dev/null || true)"
+    case "${listener_name}" in
+      "${svc_name}") printf 'listening\n' ;;
+      wireproxy) printf 'occupied-by-wireproxy\n' ;;
+      "") printf 'not-listening\n' ;;
+      *) printf 'busy-other-process\n' ;;
+    esac
+    return 0
+  fi
+  if ssh_network_port_is_listening "${port}"; then
+    printf 'listening\n'
+  else
+    printf 'not-listening\n'
+  fi
+}
+
+ssh_network_xray_redir_listener_state_get() {
+  local family="${1:-ipv4}" port=""
+  case "${family}" in
+    ipv6) port="$(ssh_network_xray_redir_port_v6_get)" ;;
+    *) port="$(ssh_network_xray_redir_port_get)" ;;
+  esac
+  if ssh_network_port_is_listening "${port}"; then
+    printf 'listening\n'
+  else
+    printf 'not-listening\n'
+  fi
+}
+
+ssh_network_xray_redir_runtime_clear_unlocked() {
+  local chain_v4="" chain_v6=""
+  chain_v4="$(ssh_network_xray_redir_chain_v4_get)"
+  chain_v6="$(ssh_network_xray_redir_chain_v6_get)"
+
+  if have_cmd iptables; then
+    while iptables -t nat -D OUTPUT -p tcp -j "${chain_v4}" >/dev/null 2>&1; do :; done
+    iptables -t nat -F "${chain_v4}" >/dev/null 2>&1 || true
+    iptables -t nat -X "${chain_v4}" >/dev/null 2>&1 || true
+  fi
+  if have_cmd ip6tables; then
+    while ip6tables -t nat -D OUTPUT -p tcp -j "${chain_v6}" >/dev/null 2>&1; do :; done
+    ip6tables -t nat -F "${chain_v6}" >/dev/null 2>&1 || true
+    ip6tables -t nat -X "${chain_v6}" >/dev/null 2>&1 || true
+  fi
+}
+
+ssh_network_host_warp_proxy_prepare_unlocked() {
+  local port=""
+  port="$(ssh_network_host_warp_proxy_port_get)"
+  if declare -F warp_backend_post_restart_health_check >/dev/null 2>&1; then
+    warp_backend_post_restart_health_check || return 1
+  else
+    local svc=""
+    svc="$(ssh_network_host_warp_service_name_get)"
+    if [[ -n "${svc}" && "${svc}" != "missing" ]] && svc_exists "${svc}" && ! svc_is_active "${svc}"; then
+      svc_restart_checked "${svc}" 30 || return 1
+    fi
+  fi
+  if ! ssh_network_port_is_listening "${port}"; then
+    warn "Proxy lokal WARP host port ${port} belum listening."
+    return 1
+  fi
+  return 0
+}
+
+ssh_network_xray_transparent_prepare_unlocked() {
+  local inb_conf="${XRAY_INBOUNDS_CONF}" rt_conf="${XRAY_ROUTING_CONF}"
+  local svc_conf="/etc/systemd/system/xray.service.d/10-confdir.conf"
+  local tmp_inb="" tmp_rt="" tmp_svc=""
+  local backup_inb="" backup_rt="" backup_svc=""
+  local port4="" port6="" tag4="" tag6="" rc=0
+
+  [[ -f "${inb_conf}" ]] || {
+    warn "Xray inbounds conf tidak ditemukan: ${inb_conf}"
+    return 1
+  }
+  [[ -f "${rt_conf}" ]] || {
+    warn "Xray routing conf tidak ditemukan: ${rt_conf}"
+    return 1
+  }
+  [[ -f "${svc_conf}" ]] || {
+    warn "Drop-in xray.service tidak ditemukan: ${svc_conf}"
+    return 1
+  }
+
+  ensure_path_writable "${inb_conf}"
+  ensure_path_writable "${rt_conf}"
+  ensure_path_writable "${svc_conf}"
+
+  port4="$(ssh_network_xray_redir_port_get)"
+  port6="$(ssh_network_xray_redir_port_v6_get)"
+  tag4="$(ssh_network_xray_redir_inbound_tag_v4_get)"
+  tag6="$(ssh_network_xray_redir_inbound_tag_v6_get)"
+  backup_inb="$(xray_backup_path_prepare "${inb_conf}")"
+  backup_rt="$(xray_backup_path_prepare "${rt_conf}")"
+  backup_svc="$(xray_backup_path_prepare "${svc_conf}")"
+  tmp_inb="$(mktemp "${WORK_DIR}/10-inbounds.sshnet.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp_inb}" ]] || tmp_inb="${WORK_DIR}/10-inbounds.sshnet.$$"
+  tmp_rt="$(mktemp "${WORK_DIR}/30-routing.sshnet.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp_rt}" ]] || tmp_rt="${WORK_DIR}/30-routing.sshnet.$$"
+  tmp_svc="$(mktemp "${WORK_DIR}/10-confdir.sshnet.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp_svc}" ]] || tmp_svc="${WORK_DIR}/10-confdir.sshnet.$$"
+
+  set +e
+  (
+    flock -x 200
+    cp -a "${inb_conf}" "${backup_inb}" || exit 1
+    cp -a "${rt_conf}" "${backup_rt}" || exit 1
+    cp -a "${svc_conf}" "${backup_svc}" || exit 1
+
+    python3 - <<'PY' "${svc_conf}" "${tmp_svc}" || exit 1
+import pathlib
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+wanted = {
+    "AmbientCapabilities": "CAP_NET_ADMIN",
+    "CapabilityBoundingSet": "CAP_NET_ADMIN",
+    "NoNewPrivileges": "no",
+}
+
+lines = []
+if src.exists():
+    lines = src.read_text(encoding="utf-8").splitlines()
+
+out = []
+seen = set()
+for line in lines:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
+        out.append(line)
+        continue
+    key, _ = line.split("=", 1)
+    key = key.strip()
+    if key in wanted:
+        out.append(f"{key}={wanted[key]}")
+        seen.add(key)
+    else:
+        out.append(line)
+
+for key, value in wanted.items():
+    if key not in seen:
+        out.append(f"{key}={value}")
+
+dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+PY
+
+    python3 - <<'PY' "${inb_conf}" "${rt_conf}" "${tmp_inb}" "${tmp_rt}" "${port4}" "${port6}" "${tag4}" "${tag6}" || exit 1
+import json
+import pathlib
+import sys
+
+inb_src, rt_src, inb_dst, rt_dst, port4_raw, port6_raw, tag4, tag6 = sys.argv[1:9]
+port4 = int(port4_raw)
+port6 = int(port6_raw)
+
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+def dump_json(path, payload):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+inb_cfg = load_json(inb_src)
+inbounds = inb_cfg.get("inbounds")
+if not isinstance(inbounds, list):
+    raise SystemExit("Invalid Xray inbounds config")
+
+canonical_inbounds = [
+    {
+        "listen": "127.0.0.1",
+        "port": port4,
+        "protocol": "dokodemo-door",
+        "tag": tag4,
+        "settings": {
+            "network": "tcp",
+            "followRedirect": True,
+        },
+        "streamSettings": {
+            "sockopt": {
+                "tproxy": "redirect",
+            }
+        },
+    },
+    {
+        "listen": "::1",
+        "port": port6,
+        "protocol": "dokodemo-door",
+        "tag": tag6,
+        "settings": {
+            "network": "tcp",
+            "followRedirect": True,
+        },
+        "streamSettings": {
+            "sockopt": {
+                "tproxy": "redirect",
+            }
+        },
+    },
+]
+
+filtered_inbounds = []
+inserted = False
+for inbound in inbounds:
+    if not isinstance(inbound, dict):
+        filtered_inbounds.append(inbound)
+        continue
+    tag = str(inbound.get("tag") or "").strip()
+    if tag in (tag4, tag6):
+        continue
+    filtered_inbounds.append(inbound)
+    if not inserted and tag == "api":
+        filtered_inbounds.extend(canonical_inbounds)
+        inserted = True
+if not inserted:
+    filtered_inbounds = canonical_inbounds + filtered_inbounds
+inb_cfg["inbounds"] = filtered_inbounds
+dump_json(inb_dst, inb_cfg)
+
+rt_cfg = load_json(rt_src)
+routing = rt_cfg.get("routing") or {}
+rules = routing.get("rules")
+if not isinstance(rules, list):
+    raise SystemExit("Invalid Xray routing config")
+
+canonical_rule = {
+    "type": "field",
+    "inboundTag": [tag4, tag6],
+    "outboundTag": "warp",
+}
+
+filtered_rules = []
+inserted = False
+for rule in rules:
+    if not isinstance(rule, dict):
+        filtered_rules.append(rule)
+        continue
+    inbound_tags = rule.get("inboundTag")
+    if isinstance(inbound_tags, list) and any(item in (tag4, tag6) for item in inbound_tags if isinstance(item, str)):
+        continue
+    filtered_rules.append(rule)
+    if not inserted and rule.get("type") == "field" and isinstance(inbound_tags, list) and "api" in inbound_tags:
+      filtered_rules.append(canonical_rule)
+      inserted = True
+if not inserted:
+    filtered_rules.insert(0, canonical_rule)
+routing["rules"] = filtered_rules
+rt_cfg["routing"] = routing
+dump_json(rt_dst, rt_cfg)
+PY
+
+    xray_write_file_atomic "${svc_conf}" "${tmp_svc}" || exit 1
+    xray_write_file_atomic "${inb_conf}" "${tmp_inb}" || exit 1
+    xray_write_file_atomic "${rt_conf}" "${tmp_rt}" || exit 1
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if ! xray_restart_checked; then
+      restore_file_if_exists "${backup_svc}" "${svc_conf}"
+      restore_file_if_exists "${backup_inb}" "${inb_conf}"
+      restore_file_if_exists "${backup_rt}" "${rt_conf}"
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      xray_restart_checked >/dev/null 2>&1 || true
+      exit 86
+    fi
+    if ! ssh_network_wait_port_listening "${port4}" 20; then
+      restore_file_if_exists "${backup_svc}" "${svc_conf}"
+      restore_file_if_exists "${backup_inb}" "${inb_conf}"
+      restore_file_if_exists "${backup_rt}" "${rt_conf}"
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      xray_restart_checked >/dev/null 2>&1 || true
+      exit 1
+    fi
+    if have_cmd ip6tables && ! ssh_network_wait_port_listening "${port6}" 20; then
+      restore_file_if_exists "${backup_svc}" "${svc_conf}"
+      restore_file_if_exists "${backup_inb}" "${inb_conf}"
+      restore_file_if_exists "${backup_rt}" "${rt_conf}"
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      xray_restart_checked >/dev/null 2>&1 || true
+      exit 1
+    fi
+    exit 0
+  ) 200>"${ROUTING_LOCK_FILE}"
+  rc=$?
+  set -e
+
+  rm -f "${tmp_inb}" "${tmp_rt}" "${tmp_svc}" >/dev/null 2>&1 || true
+  return "${rc}"
+}
+
+ssh_network_runtime_apply_local_proxy_uids_unlocked() {
+  local port4="" port6="" chain_v4="" chain_v6=""
+  local uid="" rc=0
+
+  have_cmd iptables || {
+    warn "iptables tidak tersedia. Backend local proxy SSH tidak bisa di-apply."
+    return 1
+  }
+  have_cmd xray || {
+    warn "xray tidak tersedia. Backend local proxy SSH tidak bisa di-apply."
+    return 1
+  }
+
+  if ! ssh_network_host_warp_proxy_prepare_unlocked; then
+    warn "Backend WARP host belum sehat untuk SSH local proxy."
+    return 1
+  fi
+  if ! ssh_network_xray_transparent_prepare_unlocked; then
+    warn "Runtime Xray redirect untuk SSH belum siap."
+    return 1
+  fi
+
+  port4="$(ssh_network_xray_redir_port_get)"
+  port6="$(ssh_network_xray_redir_port_v6_get)"
+  chain_v4="$(ssh_network_xray_redir_chain_v4_get)"
+  chain_v6="$(ssh_network_xray_redir_chain_v6_get)"
+
+  ssh_network_runtime_clear_unlocked
+
+  iptables -t nat -N "${chain_v4}" >/dev/null 2>&1 || rc=1
+  (( rc == 0 )) || { ssh_network_xray_redir_runtime_clear_unlocked; return 1; }
+  iptables -t nat -A "${chain_v4}" -m addrtype --dst-type LOCAL -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 0.0.0.0/8 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 10.0.0.0/8 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 100.64.0.0/10 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 127.0.0.0/8 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 169.254.0.0/16 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 172.16.0.0/12 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 192.168.0.0/16 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 224.0.0.0/4 -j RETURN >/dev/null 2>&1 || rc=1
+  iptables -t nat -A "${chain_v4}" -d 240.0.0.0/4 -j RETURN >/dev/null 2>&1 || rc=1
+  for uid in "$@"; do
+    iptables -t nat -A "${chain_v4}" -m owner --uid-owner "${uid}" -p tcp -j REDIRECT --to-ports "${port4}" >/dev/null 2>&1 || rc=1
+  done
+  iptables -t nat -A OUTPUT -p tcp -j "${chain_v4}" >/dev/null 2>&1 || rc=1
+
+  if have_cmd ip6tables; then
+    ip6tables -t nat -N "${chain_v6}" >/dev/null 2>&1 || rc=1
+    ip6tables -t nat -A "${chain_v6}" -m addrtype --dst-type LOCAL -j RETURN >/dev/null 2>&1 || rc=1
+    ip6tables -t nat -A "${chain_v6}" -d ::1/128 -j RETURN >/dev/null 2>&1 || rc=1
+    ip6tables -t nat -A "${chain_v6}" -d fc00::/7 -j RETURN >/dev/null 2>&1 || rc=1
+    ip6tables -t nat -A "${chain_v6}" -d fe80::/10 -j RETURN >/dev/null 2>&1 || rc=1
+    ip6tables -t nat -A "${chain_v6}" -d ff00::/8 -j RETURN >/dev/null 2>&1 || rc=1
+    for uid in "$@"; do
+      ip6tables -t nat -A "${chain_v6}" -m owner --uid-owner "${uid}" -p tcp -j REDIRECT --to-ports "${port6}" >/dev/null 2>&1 || rc=1
+    done
+    ip6tables -t nat -A OUTPUT -p tcp -j "${chain_v6}" >/dev/null 2>&1 || rc=1
+  fi
+
+  if (( rc != 0 )); then
+    ssh_network_xray_redir_runtime_clear_unlocked
+    warn "Gagal menerapkan iptables redirect untuk SSH local proxy."
+    return 1
+  fi
+  return 0
+}
+
 ssh_network_runtime_clear_unlocked() {
   local nft_table mark route_table rule_pref mark_hex=""
   local cfg
@@ -7912,6 +8473,7 @@ ssh_network_runtime_clear_unlocked() {
   if have_cmd nft && [[ -n "${nft_table}" ]]; then
     nft delete table inet "${nft_table}" >/dev/null 2>&1 || true
   fi
+  ssh_network_xray_redir_runtime_clear_unlocked
   if have_cmd ip; then
     while ip rule del pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1; do :; done
     while ip rule del pref "${rule_pref}" fwmark "${mark}" table "${route_table}" >/dev/null 2>&1; do :; done
@@ -7923,7 +8485,7 @@ ssh_network_runtime_clear_unlocked() {
 }
 
 ssh_network_runtime_apply_unlocked() {
-  local cfg nft_table mark route_table rule_pref warp_iface mark_hex=""
+  local cfg nft_table mark route_table rule_pref warp_iface warp_backend backend_effective mark_hex=""
   local -a warp_uids=()
   local -a endpoint_v4=() endpoint_v6=()
   local username uid override effective
@@ -7934,7 +8496,9 @@ ssh_network_runtime_apply_unlocked() {
   mark="$(printf '%s\n' "${cfg}" | awk -F'=' '/^fwmark=/{print $2; exit}')"
   route_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^route_table=/{print $2; exit}')"
   rule_pref="$(printf '%s\n' "${cfg}" | awk -F'=' '/^rule_pref=/{print $2; exit}')"
+  warp_backend="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
   warp_iface="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+  backend_effective="$(ssh_network_warp_backend_effective_get_from_value "${warp_backend:-auto}")"
   if [[ "${mark}" =~ ^[0-9]+$ ]]; then
     printf -v mark_hex '0x%x' "${mark}"
   fi
@@ -7953,6 +8517,16 @@ ssh_network_runtime_apply_unlocked() {
         warn "Runtime routing SSH sudah dibersihkan, tetapi interface WARP '${warp_iface}' gagal dihentikan."
         return 1
       fi
+    fi
+    return 0
+  fi
+
+  if [[ "${backend_effective}" == "local-proxy" ]]; then
+    if ! ssh_network_runtime_apply_local_proxy_uids_unlocked "${warp_uids[@]}"; then
+      return 1
+    fi
+    if [[ -n "${warp_iface}" ]] && ssh_network_interface_name_is_valid "${warp_iface}"; then
+      ssh_network_warp_runtime_deactivate_unlocked "${warp_iface}" >/dev/null 2>&1 || true
     fi
     return 0
   fi
@@ -8080,7 +8654,12 @@ ssh_network_runtime_refresh_if_available() {
 }
 
 ssh_network_runtime_status_get() {
-  local cfg global_mode nft_table mark route_table rule_pref warp_iface mark_hex=""
+  local cfg global_mode nft_table mark route_table rule_pref warp_iface warp_backend xray_redir_port xray_redir_port_v6 mark_hex=""
+  local backend_effective="" backend_applied="idle" xray_redir_v4_state="not-listening" xray_redir_v6_state="not-listening"
+  local xray_redir_v4_listener_state="not-listening" xray_redir_v6_listener_state="not-listening"
+  local iptables_state="absent" ip6tables_state="absent" host_warp_mode="" host_warp_backend="" host_warp_service=""
+  local host_warp_service_state="missing" host_warp_proxy_port="" host_warp_proxy_state="not-listening"
+  local chain_v4="" chain_v6=""
   local nft_state="absent" ip_rule_state="absent" ip_rule_v6_state="absent" iface_state="missing"
   local route_table_v4_state="absent" route_table_v6_state="absent"
   local effective_warp_users="0" warp_conf_state="missing" warp_service_state="missing"
@@ -8091,7 +8670,13 @@ ssh_network_runtime_status_get() {
   mark="$(printf '%s\n' "${cfg}" | awk -F'=' '/^fwmark=/{print $2; exit}')"
   route_table="$(printf '%s\n' "${cfg}" | awk -F'=' '/^route_table=/{print $2; exit}')"
   rule_pref="$(printf '%s\n' "${cfg}" | awk -F'=' '/^rule_pref=/{print $2; exit}')"
+  warp_backend="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
   warp_iface="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
+  xray_redir_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^xray_redir_port=/{print $2; exit}')"
+  xray_redir_port_v6="$(printf '%s\n' "${cfg}" | awk -F'=' '/^xray_redir_port_v6=/{print $2; exit}')"
+  backend_effective="$(ssh_network_warp_backend_effective_get_from_value "${warp_backend:-auto}")"
+  chain_v4="$(ssh_network_xray_redir_chain_v4_get)"
+  chain_v6="$(ssh_network_xray_redir_chain_v6_get)"
   if [[ "${mark}" =~ ^[0-9]+$ ]]; then
     printf -v mark_hex '0x%x' "${mark}"
   fi
@@ -8134,16 +8719,58 @@ ssh_network_runtime_status_get() {
       [[ -n "${warp_service_state}" ]] || warp_service_state="inactive"
     fi
   fi
+  if have_cmd iptables; then
+    if iptables -t nat -S OUTPUT 2>/dev/null | grep -Fq -- "-A OUTPUT -p tcp -j ${chain_v4}"; then
+      iptables_state="present"
+    fi
+  fi
+  if have_cmd ip6tables; then
+    if ip6tables -t nat -S OUTPUT 2>/dev/null | grep -Fq -- "-A OUTPUT -p tcp -j ${chain_v6}"; then
+      ip6tables_state="present"
+    fi
+  fi
+  xray_redir_v4_listener_state="$(ssh_network_xray_redir_listener_state_get ipv4)"
+  if have_cmd ip6tables; then
+    xray_redir_v6_listener_state="$(ssh_network_xray_redir_listener_state_get ipv6)"
+  else
+    xray_redir_v6_listener_state="missing"
+  fi
+  xray_redir_v4_state="$(ssh_network_xray_redir_runtime_state_get "${xray_redir_v4_listener_state}" "${iptables_state}")"
+  xray_redir_v6_state="$(ssh_network_xray_redir_runtime_state_get "${xray_redir_v6_listener_state}" "${ip6tables_state}")"
+  host_warp_mode="$(ssh_network_host_warp_mode_get)"
+  host_warp_backend="$(ssh_network_host_warp_backend_display_get)"
+  host_warp_service="$(ssh_network_host_warp_service_name_get)"
+  host_warp_service_state="$(ssh_network_host_warp_service_state_get)"
+  host_warp_proxy_port="$(ssh_network_host_warp_proxy_port_get)"
+  host_warp_proxy_state="$(ssh_network_host_warp_proxy_state_get)"
   effective_warp_users="$(ssh_network_effective_rows | awk -F'|' '$4=="warp"{c++} END{print c+0}')"
+  backend_applied="$(ssh_network_runtime_backend_applied_get \
+    "${iptables_state}" "${ip6tables_state}" "${nft_state}" "${ip_rule_state}" "${ip_rule_v6_state}" \
+    "${route_table_v4_state}" "${route_table_v6_state}" "${iface_state}" "${warp_service_state}")"
   printf 'global_mode=%s\n' "${global_mode}"
   printf 'nft_table=%s\n' "${nft_table}"
   printf 'fwmark=%s\n' "${mark}"
   printf 'route_table=%s\n' "${route_table}"
   printf 'rule_pref=%s\n' "${rule_pref}"
+  printf 'warp_backend=%s\n' "${warp_backend:-auto}"
+  printf 'warp_backend_effective=%s\n' "${backend_effective}"
+  printf 'warp_backend_applied=%s\n' "${backend_applied}"
   printf 'warp_interface=%s\n' "${warp_iface}"
   printf 'warp_interface_state=%s\n' "${iface_state}"
   printf 'warp_config_state=%s\n' "${warp_conf_state}"
   printf 'warp_service_state=%s\n' "${warp_service_state}"
+  printf 'xray_redir_port=%s\n' "${xray_redir_port}"
+  printf 'xray_redir_port_v6=%s\n' "${xray_redir_port_v6}"
+  printf 'xray_redir_v4_state=%s\n' "${xray_redir_v4_state}"
+  printf 'xray_redir_v6_state=%s\n' "${xray_redir_v6_state}"
+  printf 'iptables_state=%s\n' "${iptables_state}"
+  printf 'ip6tables_state=%s\n' "${ip6tables_state}"
+  printf 'host_warp_mode=%s\n' "${host_warp_mode}"
+  printf 'host_warp_backend=%s\n' "${host_warp_backend}"
+  printf 'host_warp_service=%s\n' "${host_warp_service}"
+  printf 'host_warp_service_state=%s\n' "${host_warp_service_state}"
+  printf 'host_warp_proxy_port=%s\n' "${host_warp_proxy_port}"
+  printf 'host_warp_proxy_state=%s\n' "${host_warp_proxy_state}"
   printf 'nft_state=%s\n' "${nft_state}"
   printf 'ip_rule_state=%s\n' "${ip_rule_state}"
   printf 'ip_rule_v6_state=%s\n' "${ip_rule_v6_state}"
@@ -8368,38 +8995,39 @@ ssh_network_dns_menu() {
 
 ssh_network_route_global_menu() {
   while true; do
-    local st global_mode warp_iface iface_state nft_state ip_rule_state ip_rule_v6_state
-    local route_table_v4_state route_table_v6_state effective_warp_users
+    local st global_mode warp_iface warp_backend warp_backend_effective warp_backend_applied host_warp_mode host_warp_service_state
+    local host_warp_proxy_state host_warp_proxy_port effective_warp_users
     st="$(ssh_network_runtime_status_get)"
     global_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+    warp_backend="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
+    warp_backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
+    warp_backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
     warp_iface="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
-    iface_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface_state=/{print $2; exit}')"
-    nft_state="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_state=/{print $2; exit}')"
-    ip_rule_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_state=/{print $2; exit}')"
-    ip_rule_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_v6_state=/{print $2; exit}')"
-    route_table_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v4_state=/{print $2; exit}')"
-    route_table_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v6_state=/{print $2; exit}')"
+    host_warp_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_mode=/{print $2; exit}')"
+    host_warp_service_state="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_service_state=/{print $2; exit}')"
+    host_warp_proxy_port="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_proxy_port=/{print $2; exit}')"
+    host_warp_proxy_state="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_proxy_state=/{print $2; exit}')"
     effective_warp_users="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
 
     title
     echo "$(ssh_network_menu_title "Routing SSH Global")"
     hr
-    printf "%-18s : %s\n" "Backend" "nftables mark + ip rule + route table"
+    printf "%-18s : %s\n" "Backend Config" "$(ssh_network_warp_backend_pretty_get "${warp_backend:-auto}")"
+    printf "%-18s : %s\n" "Backend Target" "$(ssh_network_warp_backend_pretty_get "${warp_backend_effective:-auto}")"
+    printf "%-18s : %s\n" "Backend Applied" "$(ssh_network_warp_backend_pretty_get "${warp_backend_applied:-idle}")"
+    printf "%-18s : %s\n" "Apply Path" "$(ssh_network_warp_apply_path_pretty_get "${warp_backend_effective:-auto}")"
     printf "%-18s : %s\n" "Global Mode" "${global_mode}"
-    printf "%-18s : %s\n" "WARP Interface" "${warp_iface}"
-    printf "%-18s : %s\n" "Interface State" "${iface_state}"
-    printf "%-18s : %s\n" "NFT Runtime" "${nft_state}"
-    printf "%-18s : %s\n" "IP Rule IPv4" "${ip_rule_state}"
-    printf "%-18s : %s\n" "IP Rule IPv6" "${ip_rule_v6_state}"
-    printf "%-18s : %s\n" "Route Table IPv4" "${route_table_v4_state}"
-    printf "%-18s : %s\n" "Route Table IPv6" "${route_table_v6_state}"
+    printf "%-18s : %s\n" "Legacy Iface" "${warp_iface}"
+    printf "%-18s : %s\n" "Host WARP Mode" "${host_warp_mode}"
+    printf "%-18s : %s\n" "Host WARP Svc" "${host_warp_service_state}"
+    printf "%-18s : %s\n" "Host WARP SOCKS" "${host_warp_proxy_state} (127.0.0.1:${host_warp_proxy_port:-40000})"
     printf "%-18s : %s\n" "Effective Warp Users" "${effective_warp_users}"
     hr
     ssh_network_effective_rows_print
     hr
     echo "  1) Set Global Mode: Direct"
     echo "  2) Set Global Mode: WARP"
-    echo "  3) Set WARP Interface"
+    echo "  3) Save WARP Backend (config only)"
     echo "  4) Apply Routing Runtime"
     echo "  0) Back"
     hr
@@ -8433,20 +9061,20 @@ ssh_network_route_global_menu() {
         pause
         ;;
       3)
-        local new_iface=""
-        if ! read -r -p "Nama interface WARP SSH (contoh warp-ssh0) (atau kembali): " new_iface; then
+        local backend_pick=""
+        if ! read -r -p "Backend WARP SSH (auto/local-proxy/interface) (atau kembali): " backend_pick; then
           echo
           return 0
         fi
-        if is_back_choice "${new_iface}"; then
+        if is_back_choice "${backend_pick}"; then
           continue
         fi
-        if ! confirm_yn_or_back "Set interface WARP SSH ke ${new_iface} sekarang?"; then
-          warn "Set interface WARP SSH dibatalkan."
-        elif ssh_network_warp_interface_change_now "${new_iface}"; then
-          log "Interface WARP SSH disimpan dan runtime direkonsiliasi: ${new_iface}"
+        if ! confirm_yn_or_back "Set backend WARP SSH ke ${backend_pick} sekarang?"; then
+          warn "Set backend WARP SSH dibatalkan."
+        elif ssh_network_warp_backend_set "${backend_pick}"; then
+          log "Backend WARP SSH disimpan: ${backend_pick}. Jalankan Apply Routing Runtime untuk merekonsiliasi runtime."
         else
-          warn "Interface WARP SSH gagal diganti."
+          warn "Backend WARP SSH gagal diubah."
         fi
         pause
         ;;
@@ -8466,11 +9094,16 @@ ssh_network_route_global_menu() {
 
 ssh_network_route_user_menu() {
   while true; do
+    local st="" backend_effective="" backend_applied=""
+    st="$(ssh_network_runtime_status_get)"
+    backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
+    backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
     title
     echo "$(ssh_network_menu_title "Routing SSH Per-User")"
     hr
     printf "%-18s : %s\n" "Backend" "Per-user override di metadata SSH"
-    printf "%-18s : %s\n" "Enforcement" "meta skuid -> fwmark -> ip rule"
+    printf "%-18s : %s\n" "Target Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_effective}")"
+    printf "%-18s : %s\n" "Applied Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_applied}")"
     printf "%-18s : %s\n" "Target" "inherit / direct / warp"
     hr
     ssh_network_effective_rows_print
@@ -8525,47 +9158,55 @@ ssh_network_route_user_menu() {
 
 ssh_network_warp_global_menu() {
   while true; do
-    local st global_mode warp_iface iface_state warp_conf_state warp_service_state
-    local nft_state ip_rule_state ip_rule_v6_state route_table_v4_state route_table_v6_state effective_warp_users
-    local wire_state="missing"
+    local st global_mode warp_iface warp_backend warp_backend_effective warp_backend_applied effective_warp_users
+    local iface_state warp_conf_state warp_service_state xray_redir_v4_state xray_redir_v6_state
+    local iptables_state ip6tables_state host_warp_mode host_warp_backend host_warp_service_state host_warp_proxy_state host_warp_proxy_port
     st="$(ssh_network_runtime_status_get)"
     global_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^global_mode=/{print $2; exit}')"
+    warp_backend="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
+    warp_backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
+    warp_backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
     warp_iface="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface=/{print $2; exit}')"
     iface_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_interface_state=/{print $2; exit}')"
     warp_conf_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_config_state=/{print $2; exit}')"
     warp_service_state="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_service_state=/{print $2; exit}')"
-    nft_state="$(printf '%s\n' "${st}" | awk -F'=' '/^nft_state=/{print $2; exit}')"
-    ip_rule_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_state=/{print $2; exit}')"
-    ip_rule_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip_rule_v6_state=/{print $2; exit}')"
-    route_table_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v4_state=/{print $2; exit}')"
-    route_table_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^route_table_v6_state=/{print $2; exit}')"
+    xray_redir_v4_state="$(printf '%s\n' "${st}" | awk -F'=' '/^xray_redir_v4_state=/{print $2; exit}')"
+    xray_redir_v6_state="$(printf '%s\n' "${st}" | awk -F'=' '/^xray_redir_v6_state=/{print $2; exit}')"
+    iptables_state="$(printf '%s\n' "${st}" | awk -F'=' '/^iptables_state=/{print $2; exit}')"
+    ip6tables_state="$(printf '%s\n' "${st}" | awk -F'=' '/^ip6tables_state=/{print $2; exit}')"
+    host_warp_mode="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_mode=/{print $2; exit}')"
+    host_warp_backend="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_backend=/{print $2; exit}')"
+    host_warp_service_state="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_service_state=/{print $2; exit}')"
+    host_warp_proxy_state="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_proxy_state=/{print $2; exit}')"
+    host_warp_proxy_port="$(printf '%s\n' "${st}" | awk -F'=' '/^host_warp_proxy_port=/{print $2; exit}')"
     effective_warp_users="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
-    if svc_exists wireproxy; then
-      wire_state="$(svc_state wireproxy)"
-    fi
     title
     echo "$(ssh_network_menu_title "WARP SSH Global")"
     hr
     printf "%-18s : %s\n" "Global WARP" "$([[ "${global_mode}" == "warp" ]] && echo "ON" || echo "OFF")"
-    printf "%-18s : %s\n" "Backend" "Interface route + fwmark"
-    printf "%-18s : %s\n" "Target Interface" "${warp_iface}"
-    printf "%-18s : %s\n" "Interface State" "${iface_state}"
-    printf "%-18s : %s\n" "Config State" "${warp_conf_state}"
-    printf "%-18s : %s\n" "Service State" "${warp_service_state}"
-    printf "%-18s : %s\n" "NFT Runtime" "${nft_state}"
-    printf "%-18s : %s\n" "IP Rule IPv4" "${ip_rule_state}"
-    printf "%-18s : %s\n" "IP Rule IPv6" "${ip_rule_v6_state}"
-    printf "%-18s : %s\n" "Route Table IPv4" "${route_table_v4_state}"
-    printf "%-18s : %s\n" "Route Table IPv6" "${route_table_v6_state}"
+    printf "%-18s : %s\n" "Backend Config" "$(ssh_network_warp_backend_pretty_get "${warp_backend:-auto}")"
+    printf "%-18s : %s\n" "Backend Target" "$(ssh_network_warp_backend_pretty_get "${warp_backend_effective:-auto}")"
+    printf "%-18s : %s\n" "Backend Applied" "$(ssh_network_warp_backend_pretty_get "${warp_backend_applied:-idle}")"
+    printf "%-18s : %s\n" "Apply Path" "$(ssh_network_warp_apply_path_pretty_get "${warp_backend_effective:-auto}")"
+    printf "%-18s : %s\n" "Host WARP Mode" "${host_warp_mode}"
+    printf "%-18s : %s\n" "Host Backend" "${host_warp_backend}"
+    printf "%-18s : %s\n" "Host Service" "${host_warp_service_state}"
+    printf "%-18s : %s\n" "Host SOCKS" "${host_warp_proxy_state} (127.0.0.1:${host_warp_proxy_port:-40000})"
+    printf "%-18s : %s\n" "Xray Redir IPv4" "${xray_redir_v4_state}"
+    printf "%-18s : %s\n" "Xray Redir IPv6" "${xray_redir_v6_state}"
+    printf "%-18s : %s\n" "iptables IPv4" "${iptables_state}"
+    printf "%-18s : %s\n" "ip6tables IPv6" "${ip6tables_state}"
+    printf "%-18s : %s\n" "Legacy Iface" "${warp_iface}"
+    printf "%-18s : %s\n" "Legacy State" "${iface_state} / ${warp_service_state}"
+    printf "%-18s : %s\n" "Legacy Config" "${warp_conf_state}"
     printf "%-18s : %s\n" "Effective Warp Users" "${effective_warp_users}"
-    printf "%-18s : %s\n" "Host WARP" "wireproxy=${wire_state}"
     hr
     echo "  1) Enable WARP Global"
     echo "  2) Disable WARP Global"
-    echo "  3) Provision/Refresh Interface"
-    echo "  4) Start WARP Interface"
-    echo "  5) Stop WARP Interface"
-    echo "  6) Set WARP Interface"
+    echo "  3) Set Backend: Auto"
+    echo "  4) Set Backend: Local Proxy"
+    echo "  5) Set Backend: Interface (Legacy)"
+    echo "  6) Set Legacy Interface"
     echo "  7) Apply Runtime"
     echo "  0) Back"
     hr
@@ -8599,28 +9240,26 @@ ssh_network_warp_global_menu() {
         pause
         ;;
       3)
-        if ssh_network_warp_sync_config_now "${warp_iface}"; then
-          log "Config interface WARP SSH berhasil disegarkan."
+        if ssh_network_warp_backend_set auto && ssh_network_runtime_apply_now; then
+          log "Backend WARP SSH diset ke AUTO."
         else
-          warn "Config interface WARP SSH gagal disegarkan."
+          warn "Backend WARP SSH gagal diset ke AUTO."
         fi
         pause
         ;;
       4)
-        if ssh_network_warp_runtime_start_now "${warp_iface}"; then
-          log "Interface WARP SSH berhasil diaktifkan."
+        if ssh_network_warp_backend_set local-proxy && ssh_network_runtime_apply_now; then
+          log "Backend WARP SSH diset ke LOCAL PROXY."
         else
-          warn "Interface WARP SSH gagal diaktifkan."
+          warn "Backend WARP SSH gagal diset ke LOCAL PROXY."
         fi
         pause
         ;;
       5)
-        if ! confirm_yn_or_back "Matikan interface WARP SSH ${warp_iface} sekarang?"; then
-          warn "Stop interface WARP SSH dibatalkan."
-        elif ssh_network_warp_runtime_stop_now "${warp_iface}"; then
-          log "Interface WARP SSH dihentikan."
+        if ssh_network_warp_backend_set interface && ssh_network_runtime_apply_now; then
+          log "Backend WARP SSH diset ke INTERFACE (legacy)."
         else
-          warn "Interface WARP SSH gagal dihentikan."
+          warn "Backend WARP SSH gagal diset ke INTERFACE."
         fi
         pause
         ;;
@@ -8635,8 +9274,8 @@ ssh_network_warp_global_menu() {
         fi
         if ! confirm_yn_or_back "Set interface WARP SSH ke ${new_iface} sekarang?"; then
           warn "Set interface WARP SSH dibatalkan."
-        elif ssh_network_warp_interface_change_now "${new_iface}"; then
-          log "Interface WARP SSH disimpan dan runtime direkonsiliasi: ${new_iface}"
+        elif ssh_network_warp_interface_set "${new_iface}"; then
+          log "Interface WARP SSH disimpan: ${new_iface}"
         else
           warn "Interface WARP SSH gagal diganti."
         fi
@@ -8658,12 +9297,17 @@ ssh_network_warp_global_menu() {
 
 ssh_network_warp_user_menu() {
   while true; do
+    local st="" backend_effective="" backend_applied=""
+    st="$(ssh_network_runtime_status_get)"
+    backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
+    backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
     title
     echo "$(ssh_network_menu_title "WARP SSH Per-User")"
     hr
     printf "%-18s : %s\n" "Backend" "Per-user WARP override"
     printf "%-18s : %s\n" "State" "network.route_mode"
-    printf "%-18s : %s\n" "Apply Path" "nft mark + ip rule"
+    printf "%-18s : %s\n" "Target Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_effective}")"
+    printf "%-18s : %s\n" "Applied Path" "$(ssh_network_warp_apply_path_pretty_get "${backend_applied}")"
     hr
     ssh_network_effective_rows_print
     hr

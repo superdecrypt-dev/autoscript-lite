@@ -794,7 +794,7 @@ warp_wireproxy_restart_checked() {
 }
 
 warp_zero_trust_service_restart_checked() {
-  local proxy_port="" proxy_state=""
+  local cli_state=""
   if ! svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
     warn "${WARP_ZEROTRUST_SERVICE} tidak terdeteksi"
     return 1
@@ -804,14 +804,45 @@ warp_zero_trust_service_restart_checked() {
     warn "Restart ${WARP_ZEROTRUST_SERVICE} gagal."
     return 1
   fi
-  proxy_port="$(warp_zero_trust_proxy_port_get)"
-  if ! warp_zero_trust_proxy_wait_ready 25; then
-    proxy_state="$(warp_zero_trust_proxy_state_get)"
-    warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port ${proxy_port} belum dipegang backend Zero Trust."
-    warn "Proxy state: ${proxy_state}"
-    return 1
+  if have_cmd warp-cli; then
+    cli_state="$(warp_zero_trust_cli_first_line status 2>/dev/null || true)"
+    [[ -n "${cli_state}" ]] && log "Status awal ${WARP_ZEROTRUST_SERVICE}: ${cli_state}"
   fi
   return 0
+}
+
+warp_zero_trust_proxy_wait_connected() {
+  local timeout="${1:-30}" wait_i=0 cli_state="" proxy_port="" proxy_state=""
+  if ! [[ "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
+    timeout=30
+  fi
+  proxy_port="$(warp_zero_trust_proxy_port_get)"
+  for (( wait_i=0; wait_i<timeout; wait_i++ )); do
+    if have_cmd warp-cli; then
+      warp_zero_trust_cli_run connect >/dev/null 2>&1 || true
+    fi
+    if warp_zero_trust_proxy_wait_ready 2; then
+      return 0
+    fi
+    if have_cmd warp-cli; then
+      cli_state="$(warp_zero_trust_cli_first_line status 2>/dev/null || true)"
+      case "$(printf '%s' "${cli_state}" | tr '[:upper:]' '[:lower:]')" in
+        *connected*|*proxying*|*success*)
+          if warp_zero_trust_proxy_wait_ready 2; then
+            return 0
+          fi
+          ;;
+      esac
+    fi
+    sleep 1
+  done
+  proxy_state="$(warp_zero_trust_proxy_state_get)"
+  warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port ${proxy_port} belum dipegang backend Zero Trust."
+  warn "Proxy state: ${proxy_state}"
+  if [[ -n "${cli_state}" ]]; then
+    warn "CLI status terakhir: ${cli_state}"
+  fi
+  return 1
 }
 
 warp_wireproxy_post_restart_health_check() {
@@ -885,8 +916,10 @@ warp_zero_trust_post_restart_health_check() {
   if ! warp_zero_trust_service_restart_checked; then
     return 1
   fi
+  if ! warp_zero_trust_proxy_wait_connected 30; then
+    return 1
+  fi
   if have_cmd warp-cli; then
-    warp_zero_trust_cli_run connect >/dev/null 2>&1 || true
     cli_state="$(warp_zero_trust_cli_first_line status 2>/dev/null || true)"
     if [[ -n "${cli_state}" ]]; then
       case "$(printf '%s' "${cli_state}" | tr '[:upper:]' '[:lower:]')" in
@@ -6273,15 +6306,18 @@ warp_zero_trust_cli_registration_line_get() {
 }
 
 warp_zero_trust_ssh_guard_state_get() {
-  local st="" effective="0"
+  local st="" effective="0" backend_applied="" backend_effective=""
   if ! declare -F ssh_network_runtime_status_get >/dev/null 2>&1; then
     printf 'unknown\n'
     return 0
   fi
   st="$(ssh_network_runtime_status_get 2>/dev/null || true)"
   effective="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
-  if [[ "${effective}" =~ ^[0-9]+$ ]] && (( effective > 0 )); then
-    printf 'blocked (%s effective warp users)\n' "${effective}"
+  backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
+  backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
+  [[ -n "${backend_applied}" ]] || backend_applied="${backend_effective:-idle}"
+  if [[ "${effective}" =~ ^[0-9]+$ ]] && (( effective > 0 )) && [[ "${backend_applied}" != "local-proxy" ]]; then
+    printf 'blocked (%s effective warp users, backend applied=%s)\n' "${effective}" "${backend_applied}"
   else
     printf 'ok\n'
   fi
@@ -6293,8 +6329,8 @@ warp_zero_trust_require_ssh_compatible() {
   case "${guard}" in
     ok|unknown) return 0 ;;
   esac
-  warn "Zero Trust belum kompatibel dengan SSH Network yang masih memakai WARP aktif."
-  warn "Matikan routing WARP SSH dulu sebelum mengaktifkan Zero Trust."
+  warn "Zero Trust belum kompatibel dengan SSH Network yang masih memakai backend interface legacy."
+  warn "Pindahkan backend WARP SSH ke Local Proxy atau matikan routing WARP SSH dulu."
   warn "Status guard: ${guard}"
   return 1
 }
@@ -6329,7 +6365,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-8"?>
   <key>onboarding</key>
   <false/>
   <key>auto_connect</key>
-  <true/>
+  <integer>1</integer>
   <key>service_mode</key>
   <string>proxy</string>
   <key>proxy_port</key>
@@ -6463,14 +6499,15 @@ warp_tier_zero_trust_show_requirements() {
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
   printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
-  printf "Requirement   : SSH Network tidak boleh punya effective WARP users saat Zero Trust diaktifkan\n"
+  printf "Requirement   : SSH Network yang masih memakai backend interface legacy harus direct saat Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
   printf "Rollout Note  : Consumer tetap memakai wgcf + wireproxy untuk Free/Plus\n"
   printf "Rollout Note  : Zero Trust sekarang difokuskan ke jalur Xray via proxy lokal\n"
-  printf "Rollout Note  : SSH Network belum kompatibel karena masih berbasis wg-quick dari wireproxy profile\n"
+  printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
+  printf "Rollout Note  : Backend interface legacy SSH tetap dipertahankan sebagai fallback, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_consumer_backend_prepare_activate_unlocked() {
