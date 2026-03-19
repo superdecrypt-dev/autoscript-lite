@@ -249,6 +249,37 @@ warp_port_is_listening() {
   ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"
 }
 
+warp_port_listener_names_get() {
+  local port="${1:-}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  have_cmd ss || return 1
+  ss -lntp "sport = :${port}" 2>/dev/null | awk '
+    NR <= 1 { next }
+    {
+      line = $0
+      while (match(line, /\("[^"]+"/)) {
+        name = substr(line, RSTART + 2, RLENGTH - 3)
+        if (!(name in seen)) {
+          print name
+          seen[name] = 1
+        }
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  '
+}
+
+warp_port_listener_name_get() {
+  local port="${1:-}"
+  warp_port_listener_names_get "${port}" 2>/dev/null | awk 'NR == 1 { print; exit }'
+}
+
+warp_port_has_listener_name() {
+  local port="${1:-}" name="${2:-}"
+  [[ -n "${name}" ]] || return 1
+  warp_port_listener_names_get "${port}" 2>/dev/null | grep -Fxq "${name}"
+}
+
 warp_port_wait_listening() {
   local port="${1:-}" timeout="${2:-20}" wait_i=0
   [[ "${port}" =~ ^[0-9]+$ ]] || return 1
@@ -260,6 +291,25 @@ warp_port_wait_listening() {
   fi
   for (( wait_i=0; wait_i<timeout; wait_i++ )); do
     if warp_port_is_listening "${port}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+warp_port_wait_owned_by() {
+  local port="${1:-}" name="${2:-}" timeout="${3:-20}" wait_i=0
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  [[ -n "${name}" ]] || return 1
+  if ! [[ "${timeout}" =~ ^[0-9]+$ ]] || (( timeout <= 0 )); then
+    timeout=20
+  fi
+  if ! have_cmd ss; then
+    return 0
+  fi
+  for (( wait_i=0; wait_i<timeout; wait_i++ )); do
+    if warp_port_has_listener_name "${port}" "${name}"; then
       return 0
     fi
     sleep 1
@@ -286,12 +336,23 @@ warp_zero_trust_proxy_port_get() {
   fi
 }
 
-warp_zero_trust_proxy_port_is_listening() {
-  warp_port_is_listening "$(warp_zero_trust_proxy_port_get)"
+warp_zero_trust_proxy_listener_name_get() {
+  warp_port_listener_name_get "$(warp_zero_trust_proxy_port_get)"
 }
 
-warp_zero_trust_proxy_wait_listening() {
-  warp_port_wait_listening "$(warp_zero_trust_proxy_port_get)" "${1:-20}"
+warp_zero_trust_proxy_state_get() {
+  local listener=""
+  listener="$(warp_zero_trust_proxy_listener_name_get 2>/dev/null || true)"
+  case "${listener}" in
+    "${WARP_ZEROTRUST_SERVICE}") printf 'listening\n' ;;
+    wireproxy) printf 'occupied-by-wireproxy\n' ;;
+    "") printf 'not-listening\n' ;;
+    *) printf 'busy-other-process\n' ;;
+  esac
+}
+
+warp_zero_trust_proxy_wait_ready() {
+  warp_port_wait_owned_by "$(warp_zero_trust_proxy_port_get)" "${WARP_ZEROTRUST_SERVICE}" "${1:-20}"
 }
 
 warp_zero_trust_config_get() {
@@ -733,6 +794,7 @@ warp_wireproxy_restart_checked() {
 }
 
 warp_zero_trust_service_restart_checked() {
+  local proxy_port="" proxy_state=""
   if ! svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
     warn "${WARP_ZEROTRUST_SERVICE} tidak terdeteksi"
     return 1
@@ -742,8 +804,11 @@ warp_zero_trust_service_restart_checked() {
     warn "Restart ${WARP_ZEROTRUST_SERVICE} gagal."
     return 1
   fi
-  if ! warp_zero_trust_proxy_wait_listening 25; then
-    warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port $(warp_zero_trust_proxy_port_get) belum listening."
+  proxy_port="$(warp_zero_trust_proxy_port_get)"
+  if ! warp_zero_trust_proxy_wait_ready 25; then
+    proxy_state="$(warp_zero_trust_proxy_state_get)"
+    warn "${WARP_ZEROTRUST_SERVICE} aktif, tetapi proxy lokal port ${proxy_port} belum dipegang backend Zero Trust."
+    warn "Proxy state: ${proxy_state}"
     return 1
   fi
   return 0
@@ -6370,19 +6435,7 @@ warp_tier_zero_trust_show_status() {
     svc_state="$(svc_state "${WARP_ZEROTRUST_SERVICE}")"
   fi
   [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && mdm_state="present"
-  if [[ "${svc_state}" == "active" ]]; then
-    if warp_zero_trust_proxy_port_is_listening; then
-      proxy_state="listening"
-    else
-      proxy_state="not-listening"
-    fi
-  elif warp_zero_trust_proxy_port_is_listening; then
-    if svc_exists wireproxy && svc_is_active wireproxy; then
-      proxy_state="occupied-by-wireproxy"
-    else
-      proxy_state="busy-other-process"
-    fi
-  fi
+  proxy_state="$(warp_zero_trust_proxy_state_get)"
   if have_cmd warp-cli; then
     cli_status="$(warp_zero_trust_cli_status_line_get)"
     reg_status="$(warp_zero_trust_cli_registration_line_get)"
