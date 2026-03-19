@@ -373,7 +373,8 @@ cf_prepare_subdomain_a_record() {
 
   ok "Cek DNS A: ${fqdn}"
 
-  local json rec_ips any_same any_diff
+  local json rec_ips any_same any_diff target_ready
+  target_ready="0"
   json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" || true)"
   if [[ -n "${json:-}" ]] && echo "${json}" | jq -e '.success == true' >/dev/null 2>&1; then
     mapfile -t rec_ips < <(echo "${json}" | jq -r '.result[].content' 2>/dev/null || true)
@@ -400,11 +401,18 @@ cf_prepare_subdomain_a_record() {
             die "Gagal menyelaraskan proxy state untuk record Cloudflare existing ${fqdn}."
           fi
           ok "Lanjut."
-          return 0
+          target_ready="1"
+        else
+          die "Dibatalkan oleh pengguna."
         fi
-        die "Dibatalkan oleh pengguna."
       fi
     fi
+  fi
+
+  if [[ "${target_ready}" != "1" ]]; then
+    ok "Buat A record: ${fqdn} -> ${ip}"
+    cf_create_a_record "${zone_id}" "${fqdn}" "${ip}" "${proxied}"
+    target_ready="1"
   fi
 
   local same_ip=()
@@ -412,16 +420,15 @@ cf_prepare_subdomain_a_record() {
   if [[ ${#same_ip[@]} -gt 0 ]]; then
     local line
     for line in "${same_ip[@]}"; do
+      local rid="${line%%$'\t'*}"
       local rname="${line#*$'\t'}"
-      if [[ "${rname}" != "${fqdn}" ]]; then
+      if [[ -n "${rid}" && "${rname}" != "${fqdn}" ]]; then
         warn "Ditemukan A record lain dengan IP sama (${ip}): ${rname} -> ${ip}"
-        warn "Record lain dipertahankan; cleanup lintas domain tidak dilakukan otomatis."
+        warn "Menghapus A record: ${rname}"
+        cf_delete_record "${zone_id}" "${rid}"
       fi
     done
   fi
-
-  ok "Buat A record: ${fqdn} -> ${ip}"
-  cf_create_a_record "${zone_id}" "${fqdn}" "${ip}" "${proxied}"
 }
 
 domain_menu_v2() {

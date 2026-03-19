@@ -1996,7 +1996,7 @@ main_info_warp_status_get() {
         cli_state="$(warp_zero_trust_cli_status_line_get 2>/dev/null || true)"
         case "$(printf '%s' "${cli_state}" | tr '[:upper:]' '[:lower:]')" in
           *connected*|*proxying*|*healthy*)
-            echo "Active (ZT)"
+            echo "Active (Zero Trust)"
             return 0
             ;;
         esac
@@ -2566,10 +2566,14 @@ cf_prepare_subdomain_a_record() {
   if [[ ${#same_ip[@]} -gt 0 ]]; then
     local line
     for line in "${same_ip[@]}"; do
+      local rid="${line%%$'\t'*}"
       local rname="${line#*$'\t'}"
-      if [[ "$rname" != "$fqdn" ]]; then
+      if [[ -n "${rid}" && "$rname" != "$fqdn" ]]; then
         warn "Ditemukan A record lain dengan IP sama ($ip): $rname -> $ip"
-        warn "Record lain dipertahankan; cleanup lintas domain tidak dilakukan otomatis."
+        warn "Menghapus A record: $rname"
+        if ! cf_delete_record "$zone_id" "$rid"; then
+          return 1
+        fi
       fi
     done
   fi
