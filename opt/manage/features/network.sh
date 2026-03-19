@@ -6329,8 +6329,8 @@ warp_zero_trust_require_ssh_compatible() {
   case "${guard}" in
     ok|unknown) return 0 ;;
   esac
-  warn "Zero Trust belum kompatibel dengan SSH Network yang masih memakai backend interface legacy."
-  warn "Pindahkan backend WARP SSH ke Local Proxy atau matikan routing WARP SSH dulu."
+  warn "Zero Trust belum kompatibel dengan SSH Network yang backend applied-nya belum sehat untuk Local Proxy."
+  warn "Pastikan WARP SSH memakai Local Proxy yang sudah applied, atau matikan routing WARP SSH dulu."
   warn "Status guard: ${guard}"
   return 1
 }
@@ -6499,7 +6499,7 @@ warp_tier_zero_trust_show_requirements() {
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
   printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
-  printf "Requirement   : SSH Network yang masih memakai backend interface legacy harus direct saat Zero Trust diaktifkan\n"
+  printf "Requirement   : SSH Network yang belum applied sehat di backend Local Proxy harus direct saat Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {

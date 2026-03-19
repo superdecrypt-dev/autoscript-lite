@@ -7524,7 +7524,9 @@ ssh_network_warp_backend_pretty_get() {
   local backend="${1:-auto}"
   case "${backend}" in
     local-proxy) printf 'Local Proxy\n' ;;
+    local-proxy-drift) printf 'Local Proxy (Drift)\n' ;;
     interface) printf 'Interface (Legacy)\n' ;;
+    interface-drift) printf 'Interface (Legacy, Drift)\n' ;;
     idle) printf 'Idle / Not Applied\n' ;;
     *) printf 'Auto\n' ;;
   esac
@@ -7535,7 +7537,9 @@ ssh_network_warp_apply_path_pretty_get() {
   case "${backend}" in
     idle) printf 'not applied\n' ;;
     local-proxy) printf 'xray redirect + local WARP SOCKS\n' ;;
+    local-proxy-drift) printf 'xray redirect + local WARP SOCKS (drift)\n' ;;
     interface) printf 'wg-quick interface + nft/ip rule\n' ;;
+    interface-drift) printf 'wg-quick interface + nft/ip rule (drift)\n' ;;
     *)
       backend="$(ssh_network_warp_backend_effective_get_from_value "${backend}")"
       case "${backend}" in
@@ -7550,17 +7554,38 @@ ssh_network_runtime_backend_applied_get() {
   local iptables_state="${1:-absent}" ip6tables_state="${2:-absent}" nft_state="${3:-absent}"
   local ip_rule_state="${4:-absent}" ip_rule_v6_state="${5:-absent}" route_table_v4_state="${6:-absent}"
   local route_table_v6_state="${7:-absent}" iface_state="${8:-missing}" warp_service_state="${9:-inactive}"
+  local xray_redir_v4_state="${10:-not-listening}" xray_redir_v6_state="${11:-not-listening}" host_warp_proxy_state="${12:-not-listening}"
 
   if [[ "${iptables_state}" == "present" || "${ip6tables_state}" == "present" ]]; then
+    if [[ "${host_warp_proxy_state}" != "listening" ]]; then
+      printf 'local-proxy-drift\n'
+      return 0
+    fi
+    if [[ "${iptables_state}" == "present" && "${xray_redir_v4_state}" != "active" ]]; then
+      printf 'local-proxy-drift\n'
+      return 0
+    fi
+    if [[ "${ip6tables_state}" == "present" && "${xray_redir_v6_state}" != "active" ]]; then
+      printf 'local-proxy-drift\n'
+      return 0
+    fi
     printf 'local-proxy\n'
     return 0
   fi
   if [[ "${nft_state}" == "present" || "${ip_rule_state}" == "present" || "${ip_rule_v6_state}" == "present" ]]; then
-    printf 'interface\n'
+    if [[ "${iface_state}" == "present" && "${warp_service_state}" == "active" ]]; then
+      printf 'interface\n'
+    else
+      printf 'interface-drift\n'
+    fi
     return 0
   fi
   if [[ "${route_table_v4_state}" == "present" || "${route_table_v6_state}" == "present" ]]; then
-    printf 'interface\n'
+    if [[ "${iface_state}" == "present" && "${warp_service_state}" == "active" ]]; then
+      printf 'interface\n'
+    else
+      printf 'interface-drift\n'
+    fi
     return 0
   fi
   if [[ "${iface_state}" == "present" && "${warp_service_state}" == "active" ]]; then
@@ -8746,7 +8771,8 @@ ssh_network_runtime_status_get() {
   effective_warp_users="$(ssh_network_effective_rows | awk -F'|' '$4=="warp"{c++} END{print c+0}')"
   backend_applied="$(ssh_network_runtime_backend_applied_get \
     "${iptables_state}" "${ip6tables_state}" "${nft_state}" "${ip_rule_state}" "${ip_rule_v6_state}" \
-    "${route_table_v4_state}" "${route_table_v6_state}" "${iface_state}" "${warp_service_state}")"
+    "${route_table_v4_state}" "${route_table_v6_state}" "${iface_state}" "${warp_service_state}" \
+    "${xray_redir_v4_state}" "${xray_redir_v6_state}" "${host_warp_proxy_state}")"
   printf 'global_mode=%s\n' "${global_mode}"
   printf 'nft_table=%s\n' "${nft_table}"
   printf 'fwmark=%s\n' "${mark}"
