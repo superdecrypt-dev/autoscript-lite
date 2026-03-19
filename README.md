@@ -72,6 +72,17 @@ Catatan penting:
 0) Keluar
 ```
 
+## Struktur CLI Modular
+- Loader utama tetap di `manage.sh`, tetapi source modular live sekarang berada di `opt/manage/`.
+- Top-level `opt/manage/features/*.sh` sekarang berfungsi sebagai aggregator tipis.
+- Source of truth menu besar ada di child module:
+  - `opt/manage/features/users/`
+  - `opt/manage/features/domain/`
+  - `opt/manage/features/maintenance/`
+  - `opt/manage/features/analytics/`
+  - `opt/manage/features/network/`
+- Peta internal yang lebih detail ada di `opt/manage/README.md`.
+
 ## Fitur CLI Per Menu
 - `1) Xray Users`
   Add user, delete user, set expiry, reset `UUID/password`, list users, dan `Recover Pending Txn` untuk journal `add/delete/reset` yang putus di tengah.

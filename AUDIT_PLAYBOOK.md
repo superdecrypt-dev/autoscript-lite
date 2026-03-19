@@ -57,7 +57,7 @@ Fokus:
 - `opt/setup/bin/sshws-proxy.py`
 - `opt/setup/bin/sshws-qac-enforcer.py`
 - `opt/edge/go/*`
-- `opt/manage/features/analytics.sh`
+- `opt/manage/features/analytics/*.sh`
 
 Fokus:
 - token path
@@ -89,6 +89,7 @@ Fokus:
 - `opt/manage/app/*.sh`
 - `opt/manage/core/*.sh`
 - `opt/manage/features/*.sh`
+- `opt/manage/features/*/*.sh`
 - `opt/manage/menus/*.sh`
 
 Fokus:
@@ -96,6 +97,7 @@ Fokus:
 - refresh account info
 - domain sync
 - trusted module source
+- load order aggregator -> child module
 - menu/back flow
 
 ### Prioritas 6: Bot
@@ -119,8 +121,8 @@ bash -n run.sh setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh
 shellcheck -x -S warning run.sh setup.sh manage.sh
 bash -n opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
-bash -n opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
-shellcheck -x -S warning opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh
+find opt/manage -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning
 shellcheck -x -S warning opt/setup/bin/xray-domain-guard
 python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
 go -C opt/edge/go build ./...
@@ -162,14 +164,14 @@ PY
 
 ### 6.2 Cek source/load yang sensitif
 ```bash
-rg -n "source |trusted|resolve_manage_modules_dir|RUN_USE_LOCAL_SOURCE|KEEP_REPO_AFTER_INSTALL" run.sh setup.sh manage.sh opt/setup opt/manage
+rg -n "source |trusted|resolve_manage_modules_dir|manage_source_relative|RUN_USE_LOCAL_SOURCE|KEEP_REPO_AFTER_INSTALL" run.sh setup.sh manage.sh opt/setup opt/manage
 ```
 
 ### 6.3 Cek jalur runtime SSH WS
 ```bash
 rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|updated_at|SSH Direct|SSH SSL/TLS" \
   setup.sh opt/setup/install/sshws.sh opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py \
-  opt/edge/go opt/manage/features/analytics.sh
+  opt/edge/go opt/manage/features/analytics opt/manage/features/maintenance
 ```
 
 ### 6.4 Cek drift account info/domain sync

@@ -10,23 +10,67 @@ Direktori ini adalah source modular untuk runtime `manage`.
 
 Modularisasi CLI masih berjalan bertahap.
 
-- Loader, menu utama, dan beberapa feature sudah hidup dari `opt/manage/...`
-- Sejumlah action besar masih tetap diimplementasikan di `manage.sh`
-- Karena itu, `opt/manage/...` belum sepenuhnya menjadi single source of truth
+- Loader `manage.sh` sekarang me-load module `core/`, aggregator `features/*.sh`,
+  router `menus/`, dan entrypoint `app/main.sh`
+- File besar `analytics.sh`, `network.sh`, serta area `users/domain/maintenance`
+  kini dipecah ke child module per domain menu
+- `manage.sh` masih memegang helper runtime inti lintas-domain, tetapi bukan lagi
+  source of truth untuk menu `1`, `3`, `8`, `10`, `11`, `12`, `13`, dan area
+  besar di `5`
 
-Ini disengaja sebagai fase transisi yang aman. Jangan asumsikan file placeholder di
-`opt/manage/features/` sudah memegang logic runtime hanya karena namanya ada.
+## Tree Singkat
+
+```text
+opt/manage/
+├── app/
+├── core/
+├── features/
+│   ├── analytics.sh
+│   ├── analytics/
+│   ├── domain.sh
+│   ├── domain/
+│   ├── maintenance.sh
+│   ├── maintenance/
+│   ├── network.sh
+│   ├── network/
+│   ├── users.sh
+│   └── users/
+└── menus/
+```
 
 ## Peta Source of Truth
 
-- `opt/manage/features/network.sh`: menu `5) Xray Network`, `7) Adblocker`, `9) Speedtest`, dan flow `WARP Tier` yang kini muncul via `13) Tools`
-- `opt/manage/features/analytics.sh`: menu `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, dan flow TLS/renew
-- `manage.sh`: menu `1) Xray Users`, `3) Xray QAC`, `8) Domain Control`, dan banyak helper runtime inti
-- `opt/manage/features/analytics.sh`: juga memegang `10) Security`, `12) Traffic`, serta layar `Telegram Bot`/`Discord Bot` yang kini diroute dari `13) Tools`
-- `opt/manage/menus/maintenance_menu.sh`: router menu `11) Maintenance`, dengan helper runtime tersebar di `analytics.sh`, `network.sh`, dan `manage.sh`
+- `opt/manage/features/users.sh`: aggregator live untuk `1) Xray Users` dan `3) Xray QAC`
+- `opt/manage/features/users/xray_users.sh`: source of truth `Xray Users`
+- `opt/manage/features/users/xray_qac.sh`: source of truth `Xray QAC`
+- `opt/manage/features/domain.sh`: aggregator live untuk `8) Domain Control`
+- `opt/manage/features/domain/cloudflare.sh`: helper Cloudflare/DNS domain
+- `opt/manage/features/domain/control.sh`: source of truth `Domain Control`
+- `opt/manage/features/network.sh`: aggregator live untuk `5) Xray Network`, `7) Adblocker`, `9) Speedtest`, dan flow `WARP Tier`
+- `opt/manage/features/network/warp.sh`: WARP/Tier/runtime WARP
+- `opt/manage/features/network/routing.sh`: routing Xray untuk WARP/domain/geosite
+- `opt/manage/features/network/adblock.sh`: adblock Xray + SSH
+- `opt/manage/features/network/dns.sh`: DNS settings dan DNS add-ons
+- `opt/manage/features/network/diagnostics.sh`: checks/menu network
+- `opt/manage/features/network/speedtest.sh`: speedtest
+- `opt/manage/features/analytics.sh`: aggregator live untuk `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, `10) Security`, `12) Traffic`, dan layar bot di `13) Tools`
+- `opt/manage/features/analytics/traffic.sh`: `12) Traffic`
+- `opt/manage/features/analytics/security.sh`: `10) Security`
+- `opt/manage/features/analytics/runtime_services.sh`: helper runtime SSH/SSHWS
+- `opt/manage/features/analytics/ssh_users.sh`: `2) SSH Users`
+- `opt/manage/features/analytics/ssh_network.sh`: `6) SSH Network`
+- `opt/manage/features/analytics/ssh_qac.sh`: `4) SSH QAC`
+- `opt/manage/features/analytics/tools.sh`: `13) Tools > Telegram/Discord Bot`
+- `opt/manage/features/maintenance.sh`: aggregator live untuk helper `11) Maintenance`
+- `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, BadVPN, daemon status
+- `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
+- `opt/manage/features/maintenance/diagnostics.sh`: diagnostic menu tambahan maintenance
+- `opt/manage/menus/main_menu.sh`: router menu utama
+- `opt/manage/menus/maintenance_menu.sh`: router menu `11) Maintenance`
+- `manage.sh`: helper runtime inti lintas-domain, trusted loader, konstanta, dan bootstrap
 
-Gunakan peta ini saat audit atau patch agar tidak salah mengubah file modular yang
-ternyata belum memegang logic live.
+Gunakan peta ini saat audit atau patch agar perubahan masuk ke child module yang
+tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 
 ## Ringkasan Fitur Manage
 
@@ -62,11 +106,11 @@ ternyata belum memegang logic live.
 
 ## Guardrail Maintainer
 
-- Jika sebuah menu/action masih dipanggil dari `manage.sh`, anggap `manage.sh`
-  sebagai source of truth sampai logic-nya benar-benar dipindah.
-- Jangan menghapus function lama di `manage.sh` hanya karena ada file modular dengan
-  nama mirip.
-- Lakukan pemindahan per action/menu kecil, bukan sekaligus.
+- Simpan top-level `features/*.sh` tetap tipis sebagai aggregator.
+- Tambahan logic baru harus masuk ke child module domain yang relevan.
+- Jika ada helper lintas-domain baru, pertimbangkan pindah ke `core/` atau helper
+  bersama di `manage.sh`, jangan duplikasi antar child module.
+- Lakukan pemindahan per action/menu kecil, bukan menggabungkan kembali monolith.
 - Setelah memindah logic ke modul, sinkronkan:
   - router / menu entry
   - validasi runtime
@@ -90,13 +134,9 @@ RUN_USE_LOCAL_SOURCE=1 bash run.sh
 Ini penting supaya hasil audit/live test tidak keliru membaca perilaku copy lama di
 `/opt/manage/...` sebagai perilaku source repo terbaru.
 
-## Placeholder Saat Ini
+## Catatan Transisi
 
-Beberapa file modular masih placeholder/guardrail:
-
-- `features/users.sh`
-- `features/domain.sh`
-- `features/maintenance.sh`
-
-Logic live untuk area itu masih berada di `manage.sh` sampai refactor lanjutan
-selesai.
+- `manage.sh` masih menyimpan helper runtime inti yang dipakai lintas banyak menu.
+- Refactor selanjutnya sebaiknya melanjutkan ekstraksi helper bersama ke `core/`
+  bila benar-benar lintas-domain, bukan memindahkan ulang source of truth menu
+  yang sudah ada di child module.

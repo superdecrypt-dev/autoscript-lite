@@ -10,6 +10,11 @@
 
 ## Struktur Proyek & Organisasi Modul
 Repositori ini memiliki area root untuk skrip operasional server: `setup.sh` (provisioning awal), `manage.sh` (menu harian), `run.sh` (bootstrap installer), `install-discord-bot.sh`, dan `install-telegram-bot.sh`. Source modular `manage.sh` berada di `opt/manage/` (sinkron ke `/opt/manage` di VPS).  
+Struktur modular `manage` saat ini:
+- `opt/manage/core/` untuk helper shared loader/UI/runtime
+- `opt/manage/menus/` untuk router/render menu
+- `opt/manage/features/*.sh` sebagai aggregator tipis per domain
+- `opt/manage/features/*/*.sh` sebagai source of truth live per domain menu
 Source modular `setup.sh` sekarang berada di `opt/setup/`:
 - `opt/setup/core/` untuk helper umum
 - `opt/setup/install/` untuk langkah provisioning per domain tanggung jawab
@@ -21,8 +26,10 @@ Area `bot-telegram/` adalah stack bot Telegram standalone (`gateway-py/`, `backe
 ## Build, Test, dan Command Pengembangan
 - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh`: validasi syntax skrip shell.
 - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`: validasi syntax modular installer.
+- `find opt/manage -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n`: validasi syntax seluruh modul CLI `manage`, termasuk child module nested.
 - `shellcheck *.sh`: lint shell di root.
 - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`: lint modular installer.
+- `find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning`: lint seluruh modul CLI `manage`, termasuk child module nested.
 - `sudo bash run.sh`: instalasi cepat (pasang `manage` + `install-discord-bot` ke `/usr/local/bin` lalu jalankan setup).
 - `sudo manage`: buka menu operasional utama.
 - `sudo /usr/local/bin/install-discord-bot menu`: buka installer bot Discord.
@@ -92,6 +99,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
   - active session dibaca dari runtime session files SSH WS
   - runtime session memakai heartbeat `updated_at` dan stale session dibersihkan saat discan
 - Loader modul `manage.sh` kini memilih source modul hanya jika `trusted + lengkap`.
+- Top-level `opt/manage/features/*.sh` sekarang aggregator; logic live baru sebaiknya masuk ke `opt/manage/features/*/*.sh`.
 - Full E2E modular installer (`run.sh` dengan source lokal repo) sudah lolos live pada `2026-03-08`.
 - Rilis dilakukan lewat staging terlebih dulu; production hanya setelah validasi gate/smoke selesai.
 - SOP validasi lintas shell+bot terpusat di `TESTING_PLAYBOOK.md`.

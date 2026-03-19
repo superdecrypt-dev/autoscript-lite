@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# Guardrail:
-# Logic live untuk Domain Control masih berada di manage.sh (mis. domain_control_menu()).
-# File ini sengaja placeholder sampai refactor modular area domain benar-benar dipindah.
-
-manage_feature_domain_ready() {
-  return 0
-}
+for _rel in \
+  "features/domain/cloudflare.sh" \
+  "features/domain/control.sh"; do
+  manage_source_relative "${_rel}"
+done
+unset _rel

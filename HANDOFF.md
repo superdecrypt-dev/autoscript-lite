@@ -13,20 +13,16 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - Discord: `/opt/bot-discord`
   - Telegram: `/opt/bot-telegram`
 
-## Status Operasional Terkini (2026-03-16)
+## Status Operasional Terkini (refresh 2026-03-19)
 - Commit terbaru di `main`:
-  - `e1d827e` — `fix(bot-discord): tighten domain modal validation`
-  - `7737dd9` — `fix(bot-discord): avoid duplicate menu custom ids`
-  - `faab408` — `fix(bot-discord): improve hybrid picker and purge flows`
-  - `87de35f` — `refactor(bot-discord): adopt hybrid menu workflow`
-  - `3c85652` — `refactor(bot-telegram): streamline menu-first flows`
-  - `478a081` — `refactor(bot-discord): migrate to slash-native actions`
-  - `dcc93ce` — `refactor(bot): remove xray legacy naming`
-  - `5865052` — `fix(bot-discord): stabilize backend startup`
-  - `203ae87` — `feat(bot-discord): expand parity and fix account refresh`
-  - `56e7768` — `refine(bot-telegram): improve parity and startup flow`
-  - `0b9f6ea` — `refine(bot-telegram): align account info with cli`
-  - `c9149d6` — `refactor(bot-telegram): remove dangerous actions flag`
+  - `e1c198c` — `Seed WARP tier state on setup`
+  - `5f52520` — `Restore same-IP DNS cleanup and expand Zero Trust label`
+  - `ae4272b` — `fix(ssh): harden WARP runtime status and Zero Trust guard`
+  - `4347a22` — `feat(ssh): add Zero Trust-aware WARP routing backend`
+  - `9b7d704` — `fix(warp): report Zero Trust proxy ownership accurately`
+  - `b9d46ae` — `feat(warp): provision Zero Trust backend foundation`
+  - `b5343e0` — `refactor(manage): rebalance main menu and tools flow`
+  - `24a2c40` — `Restore embedded Cloudflare token flow`
 - Baseline runtime live:
   - provider edge aktif: `go`
   - `edge-mux` memegang publik `:80/:443`
@@ -55,8 +51,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `systemctl list-unit-files 'bot-discord*' 'bot-telegram*'` -> `0 unit files listed`
 
 ## Update Refactor Menu Manage (2026-03-19)
-- Working tree saat ini sedang memuat refactor surface `manage.sh` dan modul `opt/manage/...`; cek `git status --short` sebelum melanjutkan.
-- Main menu terbaru yang sedang disiapkan:
+- Working tree saat ini memuat modular split CLI `manage` yang belum di-commit; cek `git status --short` sebelum melanjutkan.
+- Main menu user-facing yang aktif:
   - `1) Xray Users`
   - `2) SSH Users`
   - `3) Xray QAC`
@@ -70,22 +66,33 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
   - `11) Maintenance`
   - `12) Traffic`
   - `13) Tools`
-- `13) Tools` sekarang menjadi rumah untuk:
-  - `Telegram Bot`
-  - `Discord Bot`
-  - `WARP Tier`
-- `WARP Tier` sekarang diroute dari `Tools`; judul user-facing yang diharapkan adalah `13) Tools > WARP Tier`.
+- Split source of truth terbaru:
+  - `opt/manage/features/users/xray_users.sh` -> `1) Xray Users`
+  - `opt/manage/features/users/xray_qac.sh` -> `3) Xray QAC`
+  - `opt/manage/features/domain/control.sh` + `domain/cloudflare.sh` -> `8) Domain Control`
+  - `opt/manage/features/maintenance/*` -> helper live `11) Maintenance`
+  - `opt/manage/features/analytics/*` -> `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, `10) Security`, `12) Traffic`, `13) Tools` bot installers
+  - `opt/manage/features/network/*` -> `5) Xray Network`, `7) Adblocker`, `9) Speedtest`, `13) Tools > WARP Tier`
+- Top-level `opt/manage/features/*.sh` sekarang aggregator tipis; jangan menambah logic baru ke sana jika child module domain yang tepat sudah ada.
+- `13) Tools` sekarang menjadi rumah untuk `Telegram Bot`, `Discord Bot`, dan `WARP Tier`.
+- `WARP Tier` diroute dari `Tools`; judul user-facing yang diharapkan adalah `13) Tools > WARP Tier`.
 - `WARP Tier > Zero Trust` sudah punya engine runtime di `manage`, termasuk config state, apply/connect, disconnect, dan return-to-consumer.
 - Fondasi install/runtime `cloudflare-warp` + `warp-cli` sedang dirapikan di working tree ini agar setup host tidak lagi bergantung pada instalasi manual untuk backend Zero Trust.
 - `SSH Network` tetap belum kompatibel dengan mode `Zero Trust`; guard SSH masih sengaja memblok aktivasi jika effective SSH WARP users masih ada.
 - `11) Maintenance` tidak lagi menampilkan `Normalize Quota Dates` pada surface user-facing terbaru.
 - Smoke test live terbaru pada `2026-03-19` yang sudah lolos:
   - `printf '0\n' | bash manage.sh`
-  - `printf '13\n3\n0\n0\n' | bash manage.sh`
-  - `printf '11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n' | bash manage.sh`
+  - `printf '1\n0\n0\n' | bash manage.sh`
+  - `printf '3\n0\n0\n' | bash manage.sh`
+  - `printf '5\n0\n0\n' | bash manage.sh`
+  - `printf '8\n0\n0\n' | bash manage.sh`
+  - `printf '10\n0\n0\n' | bash manage.sh`
+  - `printf '11\n0\n0\n' | bash manage.sh`
+  - `printf '12\n0\n0\n' | bash manage.sh`
+  - `printf '13\n3\n0\n0\n0\n' | bash manage.sh`
 - Runtime yang terlihat saat smoke test:
-  - domain aktif: `d77bq.vyxara2.web.id`
-  - `WARP Status` ringkas: `Active (FREE)`
+  - domain aktif: `wtlnj.vyxara2.web.id`
+  - `WARP Status` ringkas: `Active (Zero Trust)`
   - ringkasan service utama di header menu: `Edge Mux ✅`, `Nginx ✅`, `Xray ✅`, `SSH ✅`
 
 ## Riwayat Aktivitas Yang Sudah Dilalui (Ringkas)
@@ -123,7 +130,8 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 3. Jalankan `git status --short` dan pastikan baseline jelas.
 4. Validasi minimum sebelum perubahan lanjutan:
    - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh`
-   - `shellcheck -x -S warning run.sh setup.sh manage.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/manage/app/*.sh opt/manage/core/*.sh opt/manage/features/*.sh opt/manage/menus/*.sh`
+   - `find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning`
+   - `shellcheck -x -S warning run.sh setup.sh manage.sh opt/setup/core/*.sh opt/setup/install/*.sh`
    - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')`
    - `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')`
    - `bash bot-telegram/scripts/gate-all.sh`

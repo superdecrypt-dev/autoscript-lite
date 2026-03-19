@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# Guardrail:
-# Logic live untuk Xray Users masih berada di manage.sh (mis. user_menu()).
-# File ini sengaja placeholder sampai refactor per-action dipindah dengan aman.
-
-manage_feature_users_ready() {
-  return 0
-}
+for _rel in \
+  "features/users/xray_users.sh" \
+  "features/users/xray_qac.sh"; do
+  manage_source_relative "${_rel}"
+done
+unset _rel

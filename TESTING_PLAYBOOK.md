@@ -19,16 +19,17 @@ bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh
 shellcheck *.sh \
   opt/setup/core/*.sh \
   opt/setup/install/*.sh \
-  opt/manage/app/*.sh \
-  opt/manage/core/*.sh \
-  opt/manage/features/*.sh \
-  opt/manage/menus/*.sh \
   opt/setup/bin/xray-domain-guard
+find opt/manage -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning
 python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
 (cd bot-discord/gateway-ts && npm run build)
 bash bot-telegram/scripts/gate-all.sh
 ```
+
+Catatan:
+- Top-level `opt/manage/features/*.sh` sekarang aggregator tipis; child module live berada di `opt/manage/features/*/*.sh`, jadi lint/syntax check harus rekursif.
 
 Kriteria lulus:
 - Tidak ada syntax error.
@@ -44,10 +45,16 @@ Sudah tercakup di bagian preflight.
 
 ```bash
 printf "0\n" | timeout 20 bash manage.sh
+printf "1\n0\n0\n" | timeout 30 bash manage.sh
 printf "2\n5\n0\n0\n" | timeout 30 bash manage.sh
+printf "3\n0\n0\n" | timeout 30 bash manage.sh
 printf "4\n0\n0\n" | timeout 30 bash manage.sh
+printf "5\n0\n0\n" | timeout 30 bash manage.sh
+printf "8\n0\n0\n" | timeout 30 bash manage.sh
+printf "10\n0\n0\n" | timeout 30 bash manage.sh
+printf "11\n0\n0\n" | timeout 30 bash manage.sh
+printf "12\n0\n0\n" | timeout 30 bash manage.sh
 printf "13\n3\n0\n0\n" | timeout 30 bash manage.sh
-printf "11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n" | timeout 60 bash manage.sh
 bash install-discord-bot.sh status
 printf "0\n" | timeout 20 bash install-discord-bot.sh menu
 bash install-telegram-bot.sh status
@@ -57,8 +64,11 @@ printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 Kriteria lulus:
 - Menu bisa terbuka dan keluar normal via `0/back`.
 - Command `status` berjalan tanpa crash.
+- Menu `Xray Users` (`1)`) bisa dibuka dan kembali normal.
 - Menu `SSH Users` (`2)`) bisa dibuka, `List Users` tampil aman walau data kosong.
+- Menu `Xray QAC` (`3)`) bisa dibuka walau data user masih kosong.
 - Menu `SSH QAC` (`4)`) bisa dibuka walau data user masih kosong.
+- Menu `Xray Network` (`5)`) dan `Domain Control` (`8)`) bisa dibuka lalu kembali normal tanpa crash.
 - `13) Tools > WARP Tier` bisa dibuka dan kembali normal.
 - Menu hasil rebalance (`11) Maintenance`, `12) Traffic`, `6) SSH Network`, `7) Adblocker`, `9) Speedtest`, `10) Security`) bisa dibuka lalu kembali normal tanpa crash.
 
