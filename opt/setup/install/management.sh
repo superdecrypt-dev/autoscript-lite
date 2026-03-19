@@ -1689,87 +1689,87 @@ sync_manage_modules_layout() {
 import os
 import sys
 import zipfile
+from pathlib import PurePosixPath
 
 zip_path, dst_root, manage_bin, local_root = sys.argv[1:5]
-mapping = {
-  "env.sh": "core/env.sh",
-  "router.sh": "core/router.sh",
-  "ui.sh": "core/ui.sh",
-  "analytics.sh": "features/analytics.sh",
-  "backup.sh": "features/backup.sh",
-  "domain.sh": "features/domain.sh",
-  "maintenance.sh": "features/maintenance.sh",
-  "network.sh": "features/network.sh",
-  "users.sh": "features/users.sh",
-  "domain_menu.sh": "menus/domain_menu.sh",
-  "main_menu.sh": "menus/main_menu.sh",
-  "maintenance_menu.sh": "menus/maintenance_menu.sh",
-  "network_menu.sh": "menus/network_menu.sh",
-  "user_menu.sh": "menus/user_menu.sh",
-  "main.sh": "app/main.sh",
-}
+MODULE_PREFIX = "opt/manage/"
 
 os.makedirs(dst_root, exist_ok=True)
 
-def basename_index(names):
-  idx = {}
-  dup = set()
-  for n in names:
-    base = os.path.basename(n)
-    if base in idx:
-      dup.add(base)
-    else:
-      idx[base] = n
-  return idx, dup
 
 def read_file(path):
   with open(path, "rb") as fh:
     return fh.read()
 
-with zipfile.ZipFile(zip_path, "r") as zf:
-  members = [n for n in zf.namelist() if not n.endswith("/")]
-  base_map, duplicates = basename_index(members)
-  if duplicates:
-    print("duplicate entries in zip: " + ", ".join(sorted(duplicates)), file=sys.stderr)
-    raise SystemExit(2)
 
-  missing = [name for name in mapping if name not in base_map]
-  if missing:
-    print("missing module files in zip: " + ", ".join(sorted(missing)), file=sys.stderr)
-    raise SystemExit(3)
-  if "manage.sh" not in base_map:
+def normalize_member(name: str) -> str:
+  if "\x00" in name:
+    raise ValueError("zip entry contains NUL byte")
+  posix = PurePosixPath(name)
+  if posix.is_absolute() or ".." in posix.parts:
+    raise ValueError(f"unsafe zip entry path: {name}")
+  return posix.as_posix()
+
+
+def local_manage_members(root: str) -> list[str]:
+  base = os.path.join(root, "opt", "manage")
+  if not os.path.isdir(base):
+    return []
+  members: list[str] = []
+  for walk_root, dirs, files in os.walk(base):
+    dirs.sort()
+    files.sort()
+    for filename in files:
+      full = os.path.join(walk_root, filename)
+      rel = os.path.relpath(full, root).replace(os.sep, "/")
+      members.append(rel)
+  return members
+
+
+with zipfile.ZipFile(zip_path, "r") as zf:
+  members = [normalize_member(name) for name in zf.namelist() if not name.endswith("/")]
+  if "manage.sh" not in members:
     print("missing manage.sh in zip bundle", file=sys.stderr)
     raise SystemExit(3)
 
-  payload = {}
-  for src_name, dst_rel in mapping.items():
-    src_member = base_map[src_name]
-    data = zf.read(src_member)
-    payload[src_name] = data
+  module_members = sorted(name for name in members if name.startswith(MODULE_PREFIX))
+  if not module_members:
+    print("missing opt/manage payload in zip bundle", file=sys.stderr)
+    raise SystemExit(3)
 
-  manage_data = zf.read(base_map["manage.sh"])
+  manage_data = zf.read("manage.sh")
+  payload = {member: zf.read(member) for member in module_members}
 
   # Guard anti bundle stale: jika setup dijalankan dari repo yang punya source lokal,
   # pastikan isi bundle identik. Jika tidak, paksa fallback ke source lokal.
   local_manage = os.path.join(local_root, "manage.sh")
-  local_modules_root = os.path.join(local_root, "opt", "manage")
   mismatch = []
-  if os.path.isfile(local_manage):
-    if read_file(local_manage) != manage_data:
-      mismatch.append("manage.sh")
-  for src_name, dst_rel in mapping.items():
-    local_path = os.path.join(local_modules_root, dst_rel)
-    if os.path.isfile(local_path) and read_file(local_path) != payload[src_name]:
-      mismatch.append(src_name)
+  if os.path.isfile(local_manage) and read_file(local_manage) != manage_data:
+    mismatch.append("manage.sh")
+
+  local_members = local_manage_members(local_root)
+  missing_from_bundle = sorted(set(local_members) - set(module_members))
+  extra_in_bundle = sorted(set(module_members) - set(local_members))
+  if missing_from_bundle:
+    mismatch.extend(missing_from_bundle)
+  if extra_in_bundle:
+    mismatch.extend(extra_in_bundle)
+
+  for member in sorted(set(local_members) & set(module_members)):
+    local_path = os.path.join(local_root, member.replace("/", os.sep))
+    if os.path.isfile(local_path) and read_file(local_path) != payload[member]:
+      mismatch.append(member)
+
   if mismatch:
-    print("bundle differs from local source: " + ", ".join(sorted(mismatch)), file=sys.stderr)
+    print("bundle differs from local source: " + ", ".join(sorted(set(mismatch))), file=sys.stderr)
     raise SystemExit(4)
 
-  for src_name, dst_rel in mapping.items():
+  for member, data in payload.items():
+    dst_rel = member[len(MODULE_PREFIX):]
     dst_path = os.path.join(dst_root, dst_rel)
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     with open(dst_path, "wb") as fh:
-      fh.write(payload[src_name])
+      fh.write(data)
     os.chmod(dst_path, 0o644)
 
   manage_dir = os.path.dirname(manage_bin)
@@ -1779,10 +1779,10 @@ with zipfile.ZipFile(zip_path, "r") as zf:
     fh.write(manage_data)
   os.chmod(manage_bin, 0o755)
 
-for sub in ("core", "features", "menus", "app"):
-  path = os.path.join(dst_root, sub)
-  if os.path.isdir(path):
-    os.chmod(path, 0o755)
+for walk_root, dirs, _files in os.walk(dst_root):
+  os.chmod(walk_root, 0o755)
+  for dirname in dirs:
+    os.chmod(os.path.join(walk_root, dirname), 0o755)
 os.chmod(dst_root, 0o755)
 PY
     then
