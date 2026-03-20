@@ -23,8 +23,6 @@ def rows_from_buttons(buttons: list[InlineKeyboardButton], per_row: int) -> list
 
 
 def action_visible(runtime: Any, action: ActionSpec) -> bool:
-    if action.dangerous and not runtime.config.mutations_enabled:
-        return False
     return True
 
 

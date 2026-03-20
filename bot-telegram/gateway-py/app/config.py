@@ -25,7 +25,6 @@ class AppConfig:
     admin_user_ids: set[str]
     bot_username: str
     allow_unrestricted_access: bool
-    mutations_enabled: bool
     action_cooldown_seconds: float
     cleanup_cooldown_seconds: float
     max_manual_input_len: int
@@ -158,7 +157,6 @@ def load_config() -> AppConfig:
         admin_user_ids=admin_user_ids,
         bot_username=(os.getenv("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@"),
         allow_unrestricted_access=allow_unrestricted_access,
-        mutations_enabled=True,
         action_cooldown_seconds=_parse_float("TELEGRAM_ACTION_COOLDOWN_SECONDS", 1.0, 0.0, 30.0),
         cleanup_cooldown_seconds=_parse_float("TELEGRAM_CLEANUP_COOLDOWN_SECONDS", 30.0, 0.0, 600.0),
         max_manual_input_len=_parse_int("TELEGRAM_MAX_INPUT_LENGTH", 128, 32, 4096),

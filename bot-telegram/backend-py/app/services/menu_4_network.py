@@ -9,16 +9,12 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "warp_restart":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_warp_restart()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_warp_restart_failed", title, msg)
 
     if action == "set_warp_global_mode":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_m, mode_or_err = require_param(params, "mode", "Network Controls - WARP Global Mode")
         if not ok_m:
             return mode_or_err
@@ -28,8 +24,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_warp_global_mode_failed", title, msg)
 
     if action == "set_warp_user_mode":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         title = "Network Controls - WARP per-user"
         ok_p, proto_or_err = require_protocol(params, title)
         if not ok_p:
@@ -46,8 +40,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_warp_user_mode_failed", t, m)
 
     if action == "set_warp_inbound_mode":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_t, tag_or_err = require_param(params, "inbound_tag", "Network Controls - WARP per-inbound")
         if not ok_t:
             return tag_or_err
@@ -60,8 +52,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_warp_inbound_mode_failed", title, msg)
 
     if action == "set_warp_domain_mode":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_m, mode_or_err = require_param(params, "mode", "Network Controls - WARP per-domain")
         if not ok_m:
             return mode_or_err
@@ -78,16 +68,12 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "warp_tier_switch_free":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_warp_tier_switch_free()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_warp_tier_switch_failed", title, msg)
 
     if action == "warp_tier_switch_plus":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         license_key = str(params.get("license_key", "")).strip()
         ok_op, title, msg = system_mutations.op_network_warp_tier_switch_plus(license_key)
         if ok_op:
@@ -95,8 +81,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_warp_tier_switch_failed", title, msg)
 
     if action == "warp_tier_reconnect":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_warp_tier_reconnect()
         if ok_op:
             return ok_response(title, msg)
@@ -107,8 +91,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "set_dns_primary":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_d, dns_or_err = require_param(params, "dns", "Network Controls - Set Primary DNS")
         if not ok_d:
             return dns_or_err
@@ -118,8 +100,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_dns_primary_failed", title, msg)
 
     if action == "set_dns_secondary":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_d, dns_or_err = require_param(params, "dns", "Network Controls - Set Secondary DNS")
         if not ok_d:
             return dns_or_err
@@ -129,8 +109,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_dns_secondary_failed", title, msg)
 
     if action == "set_dns_query_strategy":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_q, query_or_err = require_param(params, "strategy", "Network Controls - Set DNS Query Strategy")
         if not ok_q:
             return query_or_err
@@ -140,8 +118,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_dns_query_strategy_failed", title, msg)
 
     if action == "toggle_dns_cache":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network Controls", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_toggle_dns_cache()
         if ok_op:
             return ok_response(title, msg)
@@ -160,24 +136,18 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "adblock_enable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_adblock_enable()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_adblock_enable_failed", title, msg)
 
     if action == "adblock_disable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_adblock_disable()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_adblock_disable_failed", title, msg)
 
     if action == "add_adblock_domain":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_d, domain_or_err = require_param(params, "domain", "Network - Adblock Add Domain")
         if not ok_d:
             return domain_or_err
@@ -187,8 +157,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_adblock_add_domain_failed", title, msg)
 
     if action == "delete_adblock_domain":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_d, domain_or_err = require_param(params, "domain", "Network - Adblock Delete Domain")
         if not ok_d:
             return domain_or_err
@@ -198,8 +166,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_adblock_delete_domain_failed", title, msg)
 
     if action == "add_adblock_url_source":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_u, url_or_err = require_param(params, "url", "Network - Adblock Add URL Source")
         if not ok_u:
             return url_or_err
@@ -209,8 +175,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_adblock_add_url_failed", title, msg)
 
     if action == "delete_adblock_url_source":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_u, url_or_err = require_param(params, "url", "Network - Adblock Delete URL Source")
         if not ok_u:
             return url_or_err
@@ -220,24 +184,18 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("network_adblock_delete_url_failed", title, msg)
 
     if action == "adblock_update":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_adblock_update()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_adblock_update_failed", title, msg)
 
     if action == "adblock_toggle_auto_update":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_network_adblock_toggle_auto_update()
         if ok_op:
             return ok_response(title, msg)
         return error_response("network_adblock_toggle_auto_update_failed", title, msg)
 
     if action == "adblock_set_auto_update_days":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "Network", "Dangerous actions dinonaktifkan via env.")
         ok_d, days_or_err = require_positive_int_param(params, "days", "Network - Adblock Set Auto Update Interval", minimum=1)
         if not ok_d:
             return days_or_err

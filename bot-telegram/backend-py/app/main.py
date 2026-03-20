@@ -31,9 +31,7 @@ def startup_account_info_compat_refresh() -> None:
 
 @app.get("/health", dependencies=[Depends(verify_shared_secret)])
 def health() -> dict:
-    settings = get_settings()
     return {
         "status": "ok",
         "service": "backend-py",
-        "mutations_enabled": settings.mutations_enabled,
     }

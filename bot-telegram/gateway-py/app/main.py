@@ -2679,9 +2679,8 @@ def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
                 raise RuntimeError("payload menus tidak valid")
             catalog = CommandCatalog.from_payload({"menus": menus})
             LOGGER.info(
-                "Backend menu sync complete: menus=%s mutations_enabled=%s attempts=%s",
+                "Backend menu sync complete: menus=%s attempts=%s",
                 len(catalog.menus),
-                bool(main_menu.get("mutations_enabled")) if isinstance(main_menu, dict) else False,
                 attempt,
             )
             return catalog

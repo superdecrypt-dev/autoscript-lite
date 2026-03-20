@@ -38,7 +38,6 @@ class Settings:
     backend_host: str
     backend_port: int
     commands_file: str
-    mutations_enabled: bool
 
 
 _SETTINGS: Settings | None = None
@@ -63,6 +62,5 @@ def get_settings() -> Settings:
             backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
             backend_port=_get_port("BACKEND_PORT", 7081),
             commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
-            mutations_enabled=True,
         )
     return _SETTINGS

@@ -83,7 +83,6 @@ def get_main_menu_overview() -> dict:
     data = _filter_commands_payload(_load_commands_file(settings.commands_file))
     return {
         "mode": "standalone",
-        "mutations_enabled": settings.mutations_enabled,
         "menu_count": _visible_menu_count(data),
         "menus": data.get("menus", []),
     }

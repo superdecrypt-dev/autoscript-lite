@@ -95,4 +95,4 @@ Catatan penting:
 
 ## Hardening Tambahan
 - Gateway menyensor token sensitif pada log startup/runtime agar URL Bot API tidak tercatat mentah di journal baru.
-- `Wireproxy Status` dibuat lebih defensif terhadap `BindAddress` yang diberi komentar atau format tidak rapi, sehingga action read-only tidak mudah berubah menjadi error backend.
+- `Wireproxy Status` dibuat lebih defensif terhadap `BindAddress` yang diberi komentar atau format tidak rapi, sehingga action observability tidak mudah berubah menjadi error backend.

@@ -29,24 +29,18 @@ def handle(action: str, params: dict, settings) -> dict:
         return ok_response(title, msg)
 
     if action == "dns_for_ssh_enable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_dns_set_enabled(True)
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_dns_enable_failed", title, msg)
 
     if action == "dns_for_ssh_disable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_dns_set_enabled(False)
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_dns_disable_failed", title, msg)
 
     if action == "dns_for_ssh_set_primary":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_v, value_or_err = require_param(params, "dns", "SSH Network - Set Primary DNS")
         if not ok_v:
             return value_or_err
@@ -56,8 +50,6 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("ssh_network_dns_primary_failed", title, msg)
 
     if action == "dns_for_ssh_set_secondary":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_v, value_or_err = require_param(params, "dns", "SSH Network - Set Secondary DNS")
         if not ok_v:
             return value_or_err
@@ -67,64 +59,48 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("ssh_network_dns_secondary_failed", title, msg)
 
     if action == "dns_for_ssh_apply":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_dns_apply_runtime()
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_dns_apply_failed", title, msg)
 
     if action == "routing_ssh_global_direct":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_global_mode("direct")
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_global_direct_failed", title, msg)
 
     if action == "routing_ssh_global_warp":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_global_mode("warp")
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_global_warp_failed", title, msg)
 
     if action == "routing_ssh_backend_auto":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_backend("auto")
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_backend_auto_failed", title, msg)
 
     if action == "routing_ssh_backend_local_proxy":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_backend("local-proxy")
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_backend_local_proxy_failed", title, msg)
 
     if action == "routing_ssh_backend_interface":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_backend("interface")
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_backend_interface_failed", title, msg)
 
     if action == "routing_ssh_apply":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_apply_runtime()
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_apply_failed", title, msg)
 
     if action in {"routing_ssh_user_inherit", "routing_ssh_user_direct", "routing_ssh_user_warp"}:
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_u, user_or_err = require_param(params, "username", "SSH Network - Routing SSH Per-User")
         if not ok_u:
             return user_or_err
@@ -139,24 +115,18 @@ def handle(action: str, params: dict, settings) -> dict:
         return error_response("ssh_network_user_route_failed", title, msg)
 
     if action == "warp_ssh_global_enable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_warp_global(True)
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_warp_global_enable_failed", title, msg)
 
     if action == "warp_ssh_global_disable":
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_op, title, msg = system_mutations.op_ssh_network_set_warp_global(False)
         if ok_op:
             return ok_response(title, msg)
         return error_response("ssh_network_warp_global_disable_failed", title, msg)
 
     if action in {"warp_ssh_user_enable", "warp_ssh_user_disable", "warp_ssh_user_inherit"}:
-        if not settings.mutations_enabled:
-            return error_response("forbidden", "SSH Network", "Dangerous actions dinonaktifkan via env.")
         ok_u, user_or_err = require_param(params, "username", "SSH Network - WARP SSH Per-User")
         if not ok_u:
             return user_or_err
