@@ -1,6 +1,12 @@
 # Autoscript
 
-> Installer dan panel operasional harian untuk Xray-core di VPS Linux.
+> Installer, runtime, dan panel operasional harian untuk stack `Xray-core`, `SSH WS`, `Edge Gateway`, `WARP`, dan bot `Telegram` di VPS Linux.
+
+Autoscript dirancang untuk operator yang ingin satu repo untuk:
+- bootstrap server dari nol
+- mengelola user `Xray` dan `SSH` dari CLI modular
+- menjalankan ingress publik berbasis `Go edge-mux`
+- mengoperasikan `WARP`, `BadVPN`, `Domain Guard`, dan bot `Telegram`
 
 ## Quick Install
 ```bash
@@ -11,48 +17,87 @@ Catatan penting:
 - Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
 - Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
 
-## Inti Install
-- `Xray-core`
-- `Edge Gateway` provider `go` sebagai ingress utama `80/443`
-- `nginx` backend internal `127.0.0.1:18080`
-- `SSH WS`, `SSH SSL/TLS`, dan `SSH Direct`
-- `VLESS TCP+TLS` dan `Trojan TCP+TLS` via `Edge Gateway`
-- `WARP`, `BadVPN UDPGW`, TLS, dan `xray-domain-guard`
-- `manage.sh` untuk operasional harian
-- installer bot `Telegram`
+## Arsitektur Singkat
+```text
+Internet / Cloudflare
+        |
+        v
+  edge-mux (Go)
+  :80, :8080, :8880, :2052, :2082, :2086, :2095
+  :443, :2053, :2083, :2087, :2096, :8443
+        |
+        +--> nginx            127.0.0.1:18080
+        +--> SSH Dropbear     127.0.0.1:22022
+        +--> SSH Stunnel      127.0.0.1:22443
+        +--> SSH WS Proxy     127.0.0.1:10015
+        +--> Xray-core        via inbound runtime
+```
 
-## Protokol
+## Layanan Utama
+
+| Komponen | Peran | Status Runtime |
+| --- | --- | --- |
+| `edge-mux` | ingress publik untuk `Xray` dan `SSH` | frontend utama |
+| `xray` | core proxy untuk `VLESS`, `VMess`, `Trojan` | backend utama |
+| `nginx` | HTTP backend internal dan TLS/web support | internal |
+| `sshws-dropbear` | backend SSH direct/dropbear | internal |
+| `sshws-stunnel` | backend SSH SSL/TLS | internal |
+| `sshws-proxy` | backend SSH WebSocket | internal |
+| `badvpn-udpgw` | UDPGW lokal untuk payload/game tertentu | internal |
+| `wireproxy` / `warp-svc` | runtime `WARP Free/Plus` atau `Zero Trust` | sesuai mode aktif |
+| `xray-domain-guard` | guardrail domain, TLS, dan health check | maintenance |
+| `bot-telegram-backend` | API internal bot Telegram | opsional |
+| `bot-telegram-gateway` | gateway Telegram menu-first | opsional |
+
+## Layanan dan Protokol
 - `VLESS`, `VMess`, `Trojan`
-- transport `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS` (khusus `VLESS` dan `Trojan`)
+- transport `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS`
 - `SSH WS`, `SSH SSL/TLS`, `SSH Direct`
+- `WARP Free/Plus`, `WARP Zero Trust`, `BadVPN UDPGW`
 
-## Port Utama
-- publik `80/443`: ditangani `edge-mux` untuk `Xray` dan `SSH`
-- `nginx` backend: `127.0.0.1:18080`
-- `SSH dropbear`: `127.0.0.1:22022`
-- `SSH stunnel`: `127.0.0.1:22443`
-- `SSH WS proxy`: `127.0.0.1:10015`
-- `BadVPN UDPGW`: `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`
+## Port Publik
 
-## Service Utama
-- `edge-mux`
-- `nginx`
-- `xray`
-- `sshws-dropbear`
-- `sshws-stunnel`
-- `sshws-proxy`
-- `badvpn-udpgw`
-- `xray-domain-guard`
+### Front Door Edge Gateway
 
-## Catatan Operasional
-- Pergantian domain lewat `8) Domain Control > Set Domain` akan me-refresh `XRAY ACCOUNT INFO` dan `SSH ACCOUNT INFO` ke domain baru.
-- `SSH QAC` mengatur `quota`, `IP/Login limit`, `speed limit`, dan `expiry` khusus untuk SSH.
-- `Recover Pending Txn` di `Xray Users` dan `SSH Users` adalah menu repair untuk journal transaksi yang putus di tengah, bukan menu harian. Jika `pending = 0`, menu itu bisa diabaikan.
-- `5) Xray Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Xray Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
-- `13) Tools > WARP Tier` sekarang menampilkan `mode`, status tier `Free/Plus`, dan bisa tetap menunjukkan `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
-- `13) Tools > WARP Tier > Zero Trust` sekarang memakai backend `cloudflare-warp` + `warp-cli` untuk proxy lokal `127.0.0.1:40000`; `SSH Network` kompatibel bila backend WARP SSH memakai `Local Proxy`, sedangkan `Dedicated Interface` tetap tidak kompatibel.
-- `setup.sh` sekarang ikut menyiapkan fondasi backend `cloudflare-warp` dalam state idle; mode `Zero Trust` baru aktif saat dipilih eksplisit dari `manage.sh`.
-- `9) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
+| Kategori | Port | Keterangan |
+| --- | --- | --- |
+| `HTTP primary` | `80` | ingress utama |
+| `HTTP alternate` | `8080, 8880, 2052, 2082, 2086, 2095` | port alternatif kompatibel Cloudflare |
+| `HTTPS primary` | `443` | ingress utama TLS |
+| `HTTPS alternate` | `2053, 2083, 2087, 2096, 8443` | port alternatif kompatibel Cloudflare |
+
+### Service Exposure
+
+| Layanan | Jalur / Port User-Facing |
+| --- | --- |
+| `SSH WS` | `443, 80` + alt port Cloudflare |
+| `SSH SSL/TLS` | `443, 80` + alt port Cloudflare |
+| `SSH Direct` | `443, 80` + alt port Cloudflare |
+| `VLESS WS` | `443, 80` + alt port Cloudflare |
+| `VLESS HUP` | `443, 80` + alt port Cloudflare |
+| `VLESS gRPC` | `443, 80` + alt port Cloudflare |
+| `VLESS TCP+TLS` | `443, 80` + alt port Cloudflare |
+| `Trojan TCP+TLS` | `443, 80` + alt port Cloudflare |
+
+## Port Internal
+
+| Komponen | Bind | Keterangan |
+| --- | --- | --- |
+| `nginx` | `127.0.0.1:18080` | backend web internal |
+| `sshws-dropbear` | `127.0.0.1:22022` | backend SSH direct |
+| `sshws-stunnel` | `127.0.0.1:22443` | backend SSH TLS |
+| `sshws-proxy` | `127.0.0.1:10015` | backend SSH WebSocket |
+| `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot Telegram |
+| `edge-mux metrics` | `127.0.0.1:9910` | metrics dan status edge |
+| `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |
+| `BadVPN UDPGW` | `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` | UDPGW lokal |
+
+## Service Highlights
+- `manage.sh` adalah panel CLI modular untuk operasi harian.
+- `run.sh` dan `setup.sh` menangani bootstrap host, install runtime, dan sinkronisasi service.
+- `bot-telegram/` menyediakan backend + gateway menu-first untuk operasi dari Telegram.
+- `opt/edge/go/` memuat source `edge-mux` dan artefak distribusi ada di `opt/edge/dist/`.
+- `manage_bundle.zip` dan `bot_telegram.zip` dipakai sebagai release artifact untuk installer.
 
 ## Menu Utama
 ```text
@@ -72,88 +117,9 @@ Catatan penting:
 0) Keluar
 ```
 
-## Struktur CLI Modular
-- Loader utama tetap di `manage.sh`, tetapi source modular live sekarang berada di `opt/manage/`.
-- Top-level `opt/manage/features/*.sh` sekarang berfungsi sebagai aggregator tipis.
-- Source of truth menu besar ada di child module:
-  - `opt/manage/features/users/`
-  - `opt/manage/features/domain/`
-  - `opt/manage/features/maintenance/`
-  - `opt/manage/features/analytics/`
-  - `opt/manage/features/network/`
-- Peta internal yang lebih detail ada di `opt/manage/README.md`.
-
-## Fitur CLI Per Menu
-- `1) Xray Users`
-  Add user, delete user, set expiry, reset `UUID/password`, list users, dan `Recover Pending Txn` untuk journal `add/delete/reset` yang putus di tengah.
-- `2) SSH Users`
-  Add user, delete user, set expiry, reset password, list users, `SSH WS Status`, `Restart SSH WS`, `Active Sessions`, dan `Recover Pending Txn` untuk journal `add/delete`.
-- `3) Xray QAC`
-  View JSON, set/reset quota, toggle block, toggle/set/unlock IP limit, set speed download/upload, dan enforcement metadata user Xray.
-- `4) SSH QAC`
-  View JSON, set/reset quota, toggle block, toggle/set/unlock login limit, set speed download/upload, dan sinkronisasi/enforcement metadata SSH.
-- `5) Xray Network`
-  `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`), `DNS Settings` staged, `DNS Add-ons` advanced editor, dan `Checks` routing/config/service.
-- `6) SSH Network`
-  DNS steering user SSH (`dnsmasq` + `nftables`) dan routing `WARP` SSH global/per-user via `Local Proxy` (`xray redirect` + proxy lokal WARP host) atau `Dedicated Interface` (`fwmark`, `ip rule`, `wg-quick`).
-- `7) Adblocker`
-  Source adblock gabungan untuk `Xray` dan `SSH`: enable/disable runtime, manual domain, URL source, bound users, auto update, dan rebuild artifact.
-- `8) Domain Control`
-  `Set Domain`, `Current Domain`, `Guard Check`, `Guard Renew`, `Refresh Account Info`, `Repair Compat Domain Drift`, dan `Repair Target DNS Record`.
-- `9) Speedtest`
-  Jalankan speedtest live dan lihat versi binary `speedtest`.
-- `10) Security`
-  TLS/certificate (`cert info`, `check expiry`, `renew`, `reload nginx`, `recover pending renew`), `Fail2ban`, dan tuning sistem seperti `BBR`, `swap`, `ulimit`, dan `chrony`.
-- `11) Maintenance`
-  `Core Check`, restart service utama (`xray`, `nginx`, `core`, `WARP`, `SSH WS`, `Edge`, `BadVPN`), log service, status runtime, dan status daemon Xray.
-- `12) Traffic`
-  Ringkasan analytics/traffic dan utilitas operasional terkait pemakaian runtime.
-- `13) Tools`
-  Submenu utilitas yang sekarang memuat `Telegram Bot` dan `WARP Tier`.
-  `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
-  `Zero Trust` memakai backend `cloudflare-warp` via proxy lokal host; `SSH Network` ikut kompatibel bila backend WARP SSH memakai `Local Proxy`, sedangkan `Dedicated Interface` tetap khusus `Free/Plus`.
-
-## Fitur Installer dan Runtime
-- `run.sh`
-  Bootstrap host, memilih source lokal atau remote, lalu meneruskan ke `setup.sh`.
-- `setup.sh`
-  Install/update komponen inti, deploy runtime, sinkronisasi cert/domain, dan menyiapkan service operasional harian.
-- `manage`
-  Entry point panel CLI untuk operasi harian setelah install selesai.
-- `edge-mux`
-  Ingress utama `80/443` untuk trafik `Xray` dan `SSH`.
-- `xray-domain-guard`
-  Guardrail untuk health check domain/TLS dan renew helper.
-- `wireproxy` + `wgcf`
-  Runtime WARP untuk route global/per-user/per-inbound/per-domain dan tier `free/plus`.
-- `BadVPN UDPGW`
-  UDPGW lokal untuk kebutuhan payload/game tertentu.
-
-## Flow Live Tervalidasi
-- `run.sh` dan `setup.sh` sudah berhasil di-rerun live di host produksi dengan domain aktif baru.
-- CRUD `Xray Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset UUID/Password`, `Delete`, dan `Recover Pending Txn`.
-- CRUD `SSH Users` sudah diuji live: `Add`, `List`, `Set Expiry`, `Reset Password`, `Delete`, `SSH WS Status`, `Restart SSH WS`, `Active Sessions`, dan `Recover Pending Txn`.
-- `Xray QAC` dan `SSH QAC` sudah diuji live untuk flow `view/detail`, `quota`, `block`, `IP/login limit`, `speed limit`, dan `sync/enforcement`.
-- `5) Xray Network`, `6) SSH Network`, `7) Adblocker`, `8) Domain Control`, dan `9) Speedtest` sudah disweep live sampai seluruh submenu utama terpilih. Jalur mutasi berisiko tinggi seperti edit DNS full-replace atau ganti domain diuji sampai prompt dan dibatalkan dengan sadar bila tidak dibutuhkan.
-
 ## Bot
 ### Telegram
 - Entry point: `/menu`, `/cleanup`, `/start`
 - UX sekarang menu-first dengan kategori `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops`
 - Action mutasi dikendalikan lewat ACL admin Telegram, bukan lagi flag dangerous terpisah
 - Detail: `bot-telegram/README.md`
-
-## Command Cepat
-```bash
-bash run.sh
-RUN_USE_LOCAL_SOURCE=1 bash run.sh
-manage
-install-telegram-bot
-edge-provider-switch go
-edge-provider-switch nginx-stream
-```
-
-## Dokumen Lanjutan
-- `TESTING_PLAYBOOK.md`: SOP pengujian
-- `AUDIT_PLAYBOOK.md`: SOP audit dan prioritas review
-- `EDGE_PROVIDER_DESIGN.md`: desain teknis Edge Gateway
