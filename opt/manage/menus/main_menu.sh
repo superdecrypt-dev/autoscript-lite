@@ -17,8 +17,7 @@ tools_warp_tier_menu() {
 tools_menu() {
   local -a items=(
     "1|Telegram Bot"
-    "2|Discord Bot"
-    "3|WARP Tier"
+    "2|WARP Tier"
     "0|Back"
   )
   while true; do
@@ -31,8 +30,7 @@ tools_menu() {
     fi
     case "${c}" in
       1) run_action "Telegram Bot" install_telegram_bot_menu ;;
-      2) run_action "Discord Bot" install_discord_bot_menu ;;
-      3) tools_warp_tier_menu ;;
+      2) tools_warp_tier_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
@@ -40,6 +38,7 @@ tools_menu() {
 }
 
 main_menu_render_options() {
+  # shellcheck disable=SC2034
   local -a items=(
     "1|Xray Users"
     "2|SSH Users"

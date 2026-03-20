@@ -15,16 +15,14 @@ AUTO_SCRIPT_ROOT="${AUTO_SCRIPT_ROOT:-/opt/autoscript}"
 cd "${AUTO_SCRIPT_ROOT}"
 
 git status --short
-bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh
+bash -n setup.sh manage.sh run.sh install-telegram-bot.sh
 shellcheck *.sh \
   opt/setup/core/*.sh \
   opt/setup/install/*.sh \
   opt/setup/bin/xray-domain-guard
 find opt/manage -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning
-python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
-(cd bot-discord/gateway-ts && npm run build)
 bash bot-telegram/scripts/gate-all.sh
 ```
 
@@ -34,7 +32,7 @@ Catatan:
 Kriteria lulus:
 - Tidak ada syntax error.
 - `shellcheck` tidak menghasilkan error kritikal.
-- Build TypeScript dan compile Python sukses.
+- Compile Python sukses.
 
 ## 3. Pengujian 4 File Shell
 
@@ -54,9 +52,7 @@ printf "8\n0\n0\n" | timeout 30 bash manage.sh
 printf "10\n0\n0\n" | timeout 30 bash manage.sh
 printf "11\n0\n0\n" | timeout 30 bash manage.sh
 printf "12\n0\n0\n" | timeout 30 bash manage.sh
-printf "13\n3\n0\n0\n" | timeout 30 bash manage.sh
-bash install-discord-bot.sh status
-printf "0\n" | timeout 20 bash install-discord-bot.sh menu
+printf "13\n2\n0\n0\n" | timeout 30 bash manage.sh
 bash install-telegram-bot.sh status
 printf "0\n" | timeout 20 bash install-telegram-bot.sh menu
 ```
@@ -88,7 +84,6 @@ Uji input invalid:
 
 ```bash
 printf "xyz\n0\n" | timeout 20 bash manage.sh
-printf "xyz\n0\n" | timeout 20 bash install-discord-bot.sh menu
 printf "xyz\n0\n" | timeout 20 bash install-telegram-bot.sh menu
 ```
 
@@ -239,113 +234,19 @@ Kriteria lulus:
 - Smoke test Telegram PASS.
 - Endpoint main menu backend tetap bisa diakses dengan header secret internal.
 
-## 4. Pengujian Bot Discord
-
-Gunakan harness resmi:
-
-```bash
-bot-discord/scripts/gate-all.sh local
-bot-discord/scripts/gate-all.sh prod
-bot-discord/scripts/gate-all.sh all
-```
-
-Catatan:
-- `local` = Gate 1,2,3
-- `prod` = Gate 3.1,5,6
-- `all` = Gate 1-6 (Gate 4 via `STAGING_INSTANCE`)
-
-### 4.1 Gate Wajib
-1. Gate 1: Static & Build.
-2. Gate 2: API Smoke (domain/service actions).
-3. Gate 3/3.1: Integration endpoint + auth guard.
-4. Gate 4: Negative/Failure (invalid param, unauthorized).
-5. Gate 5: Discord E2E server-side check (`/menu`, `/status`, `/notify` terdaftar).
-6. Gate 6: Regression hybrid `/menu` untuk `Accounts`, `QAC`, `Domain`, `Network`, dan `Ops`.
-
-### 4.2 E2E Manual di Discord (staging)
-1. Jalankan `/menu`.
-2. Pastikan dashboard utama menampilkan kategori `Accounts`, `QAC`, `Domain`, `Network`, dan `Ops`.
-3. Uji minimal satu flow button/select/modal pada `Accounts` atau `QAC`.
-4. Uji minimal satu flow aman pada `Domain`, `Network`, atau `Ops`.
-5. Pastikan response private dan tidak spam output panjang.
-6. Jalankan `/status` dan `/notify status` untuk memastikan slash tipis tetap sehat.
-
-### 4.3 Checklist Manual /menu (Rekomendasi Terbaru)
-Gunakan checklist ini saat regresi fitur bot terbaru:
-
-1. Accounts
-- `Add User`
-- `Account Info`
-- `Delete User`
-- `Extend Expiry`
-- `Reset Password` (SSH)
-
-2. QAC
-- pilih user lalu buka panel aksi
-- `Detail`
-- `Set Quota`
-- `Reset Used`
-
-3. Domain
-- `View Domain Info`
-- `View Nginx Name`
-- `Set Domain Manual`
-- `Set Domain Auto` (pilih root domain saja)
-- `Refresh Accounts`
-
-4. Network
-- `DNS Summary`
-- `Set DNS Strategy`
-- `Domain Guard Status`
-- `Domain Guard Check`
-
-5. Ops
-- `Speedtest`
-- `Service Status`
-- `Traffic Overview`
-- `Traffic Top`
-- `Traffic Search`
-- `Export JSON`
-- `Restart Service`
-- `Purge Messages`
-
-Kriteria lulus:
-- Semua action mengembalikan respons dengan schema `ok/code/title/message`.
-- Action export analytics menyertakan `download_file` valid.
-- Tidak ada crash service gateway/backend selama uji.
-
-### 4.4 Format Rekap PASS/FAIL Per Action
-Contoh format ringkas:
-
-```text
-Tanggal:
-Environment: staging
-Checklist: /menu manual (accounts, qac, domain, network, ops)
-
-accounts.add_user: PASS
-qac.detail: PASS
-...
-ops.export_json: PASS
-
-Total PASS:
-Total FAIL:
-Catatan:
-```
-
-## 5. Checklist Rilis
+## 4. Checklist Rilis
 Sebelum promote ke production:
 
 1. Semua preflight PASS.
 2. Smoke + negative 4 file shell PASS.
-3. Gate bot Discord sesuai target PASS.
-4. Gate bot Telegram (`bash bot-telegram/scripts/gate-all.sh`) PASS.
-5. Smoke runtime Telegram (`/opt/bot-telegram/scripts/smoke-test.sh`) PASS.
-6. Manual `/menu` Telegram minimal untuk `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops` PASS.
-7. Journal baru tidak membocorkan token bot.
-8. Bukti uji tersimpan (log/screenshot ringkas).
-9. Snapshot rollback tersedia.
+3. Gate bot Telegram (`bash bot-telegram/scripts/gate-all.sh`) PASS.
+4. Smoke runtime Telegram (`/opt/bot-telegram/scripts/smoke-test.sh`) PASS.
+5. Manual `/menu` Telegram minimal untuk `Status`, `Accounts`, `QAC`, `Domain`, `Network`, `Ops` PASS.
+6. Journal baru tidak membocorkan token bot.
+7. Bukti uji tersimpan (log/screenshot ringkas).
+8. Snapshot rollback tersedia.
 
-## 6. Pengujian Bot Telegram
+## 5. Pengujian Bot Telegram
 
 Gunakan harness resmi:
 
@@ -366,7 +267,6 @@ curl -fsS --max-time 8 \
 
 Catatan:
 - Endpoint `/health` backend Telegram wajib header secret internal.
-- Entry point utama Telegram sekarang `/menu`; `/panel` tidak dipakai lagi.
 - Action mutasi dikendalikan lewat ACL admin Telegram, bukan lagi flag dangerous terpisah.
 - Action menu network tetap perlu diuji untuk regresi WARP parity.
 
@@ -483,14 +383,6 @@ Shell:
 - Smoke: PASS/FAIL
 - Negative: PASS/FAIL
 - Integration: PASS/FAIL
-
-Bot Discord:
-- Gate 1: PASS/FAIL
-- Gate 2: PASS/FAIL
-- Gate 3/3.1: PASS/FAIL
-- Gate 4: PASS/FAIL
-- Gate 5: PASS/FAIL
-- Gate 6: PASS/FAIL
 
 Bot Telegram:
 - Gate all: PASS/FAIL

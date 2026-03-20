@@ -53,14 +53,14 @@ opt/manage/
 - `opt/manage/features/network/dns.sh`: DNS settings dan DNS add-ons
 - `opt/manage/features/network/diagnostics.sh`: checks/menu network
 - `opt/manage/features/network/speedtest.sh`: speedtest
-- `opt/manage/features/analytics.sh`: aggregator live untuk `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, `10) Security`, `12) Traffic`, dan layar bot di `13) Tools`
+- `opt/manage/features/analytics.sh`: aggregator live untuk `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, `10) Security`, `12) Traffic`, dan layar utilitas di `13) Tools`
 - `opt/manage/features/analytics/traffic.sh`: `12) Traffic`
 - `opt/manage/features/analytics/security.sh`: `10) Security`
 - `opt/manage/features/analytics/runtime_services.sh`: helper runtime SSH/SSHWS
 - `opt/manage/features/analytics/ssh_users.sh`: `2) SSH Users`
 - `opt/manage/features/analytics/ssh_network.sh`: `6) SSH Network`
 - `opt/manage/features/analytics/ssh_qac.sh`: `4) SSH QAC`
-- `opt/manage/features/analytics/tools.sh`: `13) Tools > Telegram/Discord Bot`
+- `opt/manage/features/analytics/tools.sh`: `13) Tools > Telegram Bot`
 - `opt/manage/features/maintenance.sh`: aggregator live untuk helper `11) Maintenance`
 - `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, BadVPN, daemon status
 - `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
@@ -99,9 +99,9 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `12) Traffic`
   Analytics dan ringkasan traffic runtime.
 - `13) Tools`
-  Telegram Bot, Discord Bot, dan WARP Tier.
+  Telegram Bot dan WARP Tier.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
-  `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; `SSH Network` masih tetap bergantung ke backend `Free/Plus`.
+  `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; `SSH Network` kompatibel bila backend WARP SSH memakai `Local Proxy`.
   Fondasi paket/runtime `cloudflare-warp` sekarang dipersiapkan dari `setup.sh`, tetapi mode ini tetap idle sampai diaktifkan operator.
 
 ## Guardrail Maintainer

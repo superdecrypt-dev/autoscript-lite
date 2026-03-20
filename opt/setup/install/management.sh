@@ -1653,7 +1653,6 @@ sync_manage_modules_layout() {
     chown root:root "${MANAGE_BIN}" 2>/dev/null || true
     install_ssh_network_restore_service
     ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
-    install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
     ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
     ok "Fallback modular manage siap di: ${fallback_modules_dir} (source lokal)"
@@ -1793,7 +1792,6 @@ PY
       install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
       install_ssh_network_restore_service
-      install_bot_installer_if_present "${SCRIPT_DIR}/install-discord-bot.sh" "/usr/local/bin/install-discord-bot" "Discord"
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
       ok "Fallback modular manage siap di: ${fallback_modules_dir}"

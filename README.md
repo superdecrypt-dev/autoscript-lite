@@ -19,7 +19,7 @@ Catatan penting:
 - `VLESS TCP+TLS` dan `Trojan TCP+TLS` via `Edge Gateway`
 - `WARP`, `BadVPN UDPGW`, TLS, dan `xray-domain-guard`
 - `manage.sh` untuk operasional harian
-- installer bot `Discord` dan `Telegram`
+- installer bot `Telegram`
 
 ## Protokol
 - `VLESS`, `VMess`, `Trojan`
@@ -109,7 +109,7 @@ Catatan penting:
 - `12) Traffic`
   Ringkasan analytics/traffic dan utilitas operasional terkait pemakaian runtime.
 - `13) Tools`
-  Submenu utilitas yang sekarang memuat `Telegram Bot`, `Discord Bot`, dan `WARP Tier`.
+  Submenu utilitas yang sekarang memuat `Telegram Bot` dan `WARP Tier`.
   `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
   `Zero Trust` memakai backend `cloudflare-warp` via proxy lokal host; `SSH Network` ikut kompatibel bila backend WARP SSH memakai `Local Proxy`, sedangkan `Dedicated Interface` tetap khusus `Free/Plus`.
 
@@ -143,18 +143,11 @@ Catatan penting:
 - Action mutasi dikendalikan lewat ACL admin Telegram, bukan lagi flag dangerous terpisah
 - Detail: `bot-telegram/README.md`
 
-### Discord
-- Entry point utama: `/menu`
-- Slash publik ringkas: `/menu`, `/status`, `/notify`
-- Flow utama hybrid lewat button, select menu, modal, dan konfirmasi
-- Pelengkap CLI, bukan pengganti penuh
-
 ## Command Cepat
 ```bash
 bash run.sh
 RUN_USE_LOCAL_SOURCE=1 bash run.sh
 manage
-install-discord-bot
 install-telegram-bot
 edge-provider-switch go
 edge-provider-switch nginx-stream

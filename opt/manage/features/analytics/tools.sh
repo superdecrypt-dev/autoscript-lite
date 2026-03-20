@@ -1,68 +1,64 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-install_discord_bot_menu() {
-  local installer_cmd="/usr/local/bin/install-discord-bot"
-  ui_menu_screen_begin "13) Tools > Discord Bot"
+tools_external_installer_require_cmd() {
+  local installer_cmd="$1"
+  local label="$2"
 
-  if [[ ! -x "${installer_cmd}" ]]; then
-    warn "Installer bot Discord tidak ditemukan / tidak executable:"
-    echo "  ${installer_cmd}"
-    echo
-    echo "Hint: jalankan ulang run.sh agar installer ikut dipasang."
-    hr
-    pause
+  if [[ -x "${installer_cmd}" ]]; then
     return 0
   fi
 
-  echo "Menjalankan installer:"
-  echo "  ${installer_cmd} menu"
+  warn "Installer ${label} tidak ditemukan / tidak executable:"
+  echo "  ${installer_cmd}"
+  echo
+  echo "Hint: jalankan ulang run.sh agar installer ikut dipasang."
+  hr
+  pause
+  return 1
+}
+
+tools_external_installer_exec() {
+  local menu_title="$1"
+  local label="$2"
+  local installer_cmd="$3"
+  local confirm_prompt="${4:-}"
+  shift 4 || true
+  local -a cmd=( "${installer_cmd}" "$@" )
+
+  ui_menu_screen_begin "${menu_title}"
+  tools_external_installer_require_cmd "${installer_cmd}" "${label}" || return 0
+
+  echo "Menjalankan command:"
+  printf '  %q' "${cmd[@]}"
+  printf '\n'
   echo "Boundary:"
   echo "  - kontrol akan diserahkan ke installer eksternal"
-  echo "  - installer dapat mengubah file/env/service bot di luar menu manage ini"
+  echo "  - installer dapat mengubah file/env/service di luar menu manage ini"
   hr
-  if ! confirm_menu_apply_now "Serahkan kontrol ke installer bot Discord eksternal sekarang?"; then
-    pause
-    return 0
+
+  if [[ -n "${confirm_prompt}" ]]; then
+    if ! confirm_menu_apply_now "${confirm_prompt}"; then
+      pause
+      return 0
+    fi
   fi
-  if ! "${installer_cmd}" menu; then
-    warn "Installer bot Discord keluar dengan status error."
-    hr
-    pause
+
+  if ! "${cmd[@]}"; then
+    warn "Installer ${label} keluar dengan status error."
   fi
+  hr
+  pause
   return 0
 }
 
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
-  ui_menu_screen_begin "13) Tools > Telegram Bot"
-
-  if [[ ! -x "${installer_cmd}" ]]; then
-    warn "Installer bot Telegram tidak ditemukan / tidak executable:"
-    echo "  ${installer_cmd}"
-    echo
-    echo "Hint: jalankan ulang run.sh agar installer ikut dipasang."
-    hr
-    pause
-    return 0
-  fi
-
-  echo "Menjalankan installer:"
-  echo "  ${installer_cmd} menu"
-  echo "Boundary:"
-  echo "  - kontrol akan diserahkan ke installer eksternal"
-  echo "  - installer dapat mengubah file/env/service bot di luar menu manage ini"
-  hr
-  if ! confirm_menu_apply_now "Serahkan kontrol ke installer bot Telegram eksternal sekarang?"; then
-    pause
-    return 0
-  fi
-  if ! "${installer_cmd}" menu; then
-    warn "Installer bot Telegram keluar dengan status error."
-    hr
-    pause
-  fi
+  tools_external_installer_exec \
+    "13) Tools > Telegram Bot" \
+    "bot Telegram" \
+    "${installer_cmd}" \
+    "Serahkan kontrol ke installer bot Telegram eksternal sekarang?" \
+    "menu"
   return 0
 }
-
-

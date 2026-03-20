@@ -9,10 +9,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_ZIP_DT = (2026, 1, 1, 0, 0, 0)
 
 BOT_CONFIGS = {
-    "bot-discord": {
-        "archive": REPO_ROOT / "bot_discord.zip",
-        "extra_skip_roots": {("gateway-ts", "dist")},
-    },
     "bot-telegram": {
         "archive": REPO_ROOT / "bot_telegram.zip",
         "extra_skip_roots": set(),

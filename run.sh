@@ -29,16 +29,12 @@ MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
 MANAGE_FALLBACK_MODULES_DST_DIR="/usr/local/lib/autoscript-manage/opt/manage"
-BOT_INSTALLER_BIN="/usr/local/bin/install-discord-bot"
 TELEGRAM_INSTALLER_BIN="/usr/local/bin/install-telegram-bot"
-DISCORD_BOT_HOME="/opt/bot-discord"
-DISCORD_BOT_SRC_DIR="${REPO_DIR}/bot-discord"
 TELEGRAM_BOT_HOME="/opt/bot-telegram"
 TELEGRAM_BOT_SRC_DIR="${REPO_DIR}/bot-telegram"
 RUN_FALLBACK_REQUIRED_FILES=(
   "setup.sh"
   "manage.sh"
-  "install-discord-bot.sh"
   "install-telegram-bot.sh"
   "opt/setup/core/logging.sh"
   "opt/setup/core/helpers.sh"
@@ -248,7 +244,7 @@ preflight_repo_layout() {
   while IFS= read -r rel; do
     [[ -n "${rel}" ]] || continue
     missing+=("${rel}")
-  done < <(repo_layout_missing_files "${root}" setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh opt/setup opt/manage)
+  done < <(repo_layout_missing_files "${root}" setup.sh manage.sh install-telegram-bot.sh opt/setup opt/manage)
 
   arch_suffix="$(run_prebuilt_arch_suffix 2>/dev/null || true)"
   if [[ -n "${arch_suffix}" ]]; then
@@ -464,12 +460,10 @@ clone_repo() {
 
 install_manage() {
   local src="${REPO_DIR}/manage.sh"
-  local bot_installer_src="${REPO_DIR}/install-discord-bot.sh"
   local telegram_installer_src="${REPO_DIR}/install-telegram-bot.sh"
   local restore_service_src="${REPO_DIR}/opt/setup/templates/systemd/ssh-network-restore.service"
 
   [[ -f "${src}" ]] || die "File manage.sh tidak ditemukan di repositori."
-  [[ -f "${bot_installer_src}" ]] || die "File install-discord-bot.sh tidak ditemukan di repositori."
   [[ -f "${telegram_installer_src}" ]] || die "File install-telegram-bot.sh tidak ditemukan di repositori."
   [[ -f "${restore_service_src}" ]] || die "Template ssh-network-restore.service tidak ditemukan di repositori."
   preflight_repo_layout "${REPO_DIR}"
@@ -511,31 +505,9 @@ install_manage() {
   fi
   ok "ssh-network-restore.service aktif."
 
-  log "Pasang installer Discord -> ${BOT_INSTALLER_BIN} ..."
-  install -m 0755 "${bot_installer_src}" "${BOT_INSTALLER_BIN}"
-  ok "Installer Discord siap."
-
   log "Pasang installer Telegram -> ${TELEGRAM_INSTALLER_BIN} ..."
   install -m 0755 "${telegram_installer_src}" "${TELEGRAM_INSTALLER_BIN}"
   ok "Installer Telegram siap."
-}
-
-seed_discord_bot_home() {
-  if [[ ! -d "${DISCORD_BOT_SRC_DIR}" ]]; then
-    warn "Source bot Discord tidak ditemukan di repo (${DISCORD_BOT_SRC_DIR}); lewati bootstrap /opt/bot-discord."
-    return 0
-  fi
-
-  if [[ -d "${DISCORD_BOT_HOME}" ]] && [[ -n "$(find "${DISCORD_BOT_HOME}" -mindepth 1 -maxdepth 1 2>/dev/null || true)" ]]; then
-    ok "Discord home sudah ada."
-    return 0
-  fi
-
-  log "Siapkan source Discord -> ${DISCORD_BOT_HOME} ..."
-  mkdir -p "${DISCORD_BOT_HOME}"
-  cp -a "${DISCORD_BOT_SRC_DIR}/." "${DISCORD_BOT_HOME}/"
-  chown -R root:root "${DISCORD_BOT_HOME}" 2>/dev/null || true
-  ok "Discord source siap."
 }
 
 seed_telegram_bot_home() {
@@ -618,7 +590,6 @@ main() {
   run_step_with_spinner "Menyiapkan source repo" clone_repo
   run_setup
   run_step_with_spinner "Memasang panel manage" install_manage
-  run_step_with_spinner "Menyiapkan source Discord" seed_discord_bot_home
   run_step_with_spinner "Menyiapkan source Telegram" seed_telegram_bot_home
   run_step_with_spinner "Membersihkan source installer" cleanup_repo_after_success
 

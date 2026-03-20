@@ -48,7 +48,7 @@ Hanya **satu provider** yang memegang port publik `80/443` pada satu waktu.
 
 ### Out of scope
 
-- Surface bot Discord/Telegram untuk fitur edge baru.
+- Surface bot Telegram untuk fitur edge baru.
 - Kompatibilitas penuh semua client exotic tanpa validasi bertahap.
 
 ## Baseline Saat Ini

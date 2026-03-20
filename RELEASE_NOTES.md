@@ -25,7 +25,6 @@ Rilis ini merapikan surface user-facing `manage.sh` agar menu utama lebih seimba
 2. Tools menu baru untuk utilitas non-core
 - `13) Tools` sekarang memuat:
   - `Telegram Bot`
-  - `Discord Bot`
   - `WARP Tier`
 - `WARP Tier` kini menampilkan status utama berbasis mode, submenu `Consumer (Free/Plus)`, dan submenu `Zero Trust`.
 - `Zero Trust` sudah punya backend engine di `manage`; yang dirapikan pada working tree ini adalah fondasi installer/runtime `cloudflare-warp` dan health path-nya.
@@ -38,7 +37,7 @@ Rilis ini merapikan surface user-facing `manage.sh` agar menu utama lebih seimba
 ### Hasil Validasi
 - `bash -n manage.sh opt/manage/app/main.sh opt/manage/features/network.sh opt/manage/features/analytics.sh opt/manage/menus/main_menu.sh opt/manage/menus/maintenance_menu.sh` -> PASS
 - smoke `printf '0\n' | bash manage.sh` -> PASS
-- smoke `printf '13\n3\n0\n0\n' | bash manage.sh` -> PASS
+- smoke `printf '13\n2\n0\n0\n' | bash manage.sh` -> PASS
 - smoke `printf '11\n0\n12\n0\n6\n0\n7\n0\n9\n0\n10\n0\n0\n' | bash manage.sh` -> PASS
 - judul live `WARP Tier` saat diakses dari menu baru -> `13) Tools > WARP Tier`
 - runtime header saat validasi:
@@ -49,7 +48,7 @@ Rilis ini merapikan surface user-facing `manage.sh` agar menu utama lebih seimba
 ## Rilis 2026-03-16 (Bot UX Refresh + Live E2E Revalidation)
 
 ### Ringkasan
-Rilis ini merapikan peran dua bot agar lebih masuk akal untuk operasional harian: Telegram menjadi menu-first, sedangkan Discord menjadi hybrid menu interaktif dengan slash tipis. Setelah itu, `run.sh` divalidasi ulang penuh di host live memakai source lokal repo.
+Rilis ini merapikan peran bot Telegram agar lebih masuk akal untuk operasional harian: Telegram menjadi menu-first, lalu `run.sh` divalidasi ulang penuh di host live memakai source lokal repo.
 
 ### Perubahan Utama
 1. Telegram kini menu-first
@@ -66,29 +65,13 @@ Rilis ini merapikan peran dua bot agar lebih masuk akal untuk operasional harian
 - flow `QAC` kini user-first dengan summary per-user
 - `Domain` dan `Ops` diringkas agar lebih enak dipakai dari HP
 
-2. Discord kini hybrid
-- slash publik Discord kini ringkas:
-  - `/menu`
-  - `/status`
-  - `/notify`
-- flow utama dipindah ke button, select menu, modal, dan konfirmasi
-- `/panel` dan slash publik lama untuk `/user`, `/qac`, `/domain`, `/network`, `/ops` sudah dipensiunkan
-- hybrid picker user kini mendukung paging
-- flow `Purge Messages` kembali mendukung target channel opsional dengan konfirmasi
-
-3. Naming dan hardening bot
-- naming legacy `xray-telegram-*` dan `xray-discord-*` sudah dibersihkan ke:
+2. Naming dan hardening bot
+- naming legacy `xray-telegram-*` sudah dibersihkan ke:
   - `bot-telegram-*`
-  - `bot-discord-*`
 - flag dangerous actions sudah dihapus dari desain Telegram
-- validasi `Domain -> Set Auto` di Discord kini menolak input invalid secara tegas
 
 ### Commit
 - `3c85652` — `refactor(bot-telegram): streamline menu-first flows`
-- `87de35f` — `refactor(bot-discord): adopt hybrid menu workflow`
-- `faab408` — `fix(bot-discord): improve hybrid picker and purge flows`
-- `7737dd9` — `fix(bot-discord): avoid duplicate menu custom ids`
-- `e1d827e` — `fix(bot-discord): tighten domain modal validation`
 
 ### Hasil Validasi
 - Full E2E live `run.sh` pada `2026-03-16` -> PASS
@@ -496,36 +479,25 @@ Rilis ini menambahkan SSH WS TLS/non-TLS dengan model port share `80/443` tanpa 
 - Runtime dropbear untuk SSH WS kini password-enabled (flag disable password dihapus).
 
 ### Hasil Validasi
-- `bash -n setup.sh manage.sh run.sh install-discord-bot.sh install-telegram-bot.sh` -> PASS
-- `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')` -> PASS
+- `bash -n setup.sh manage.sh run.sh install-telegram-bot.sh` -> PASS
 - `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')` -> PASS
 
 ## Rilis 2026-03-02 (Bot Auth Hardening + Installer Validation Guard)
 
 ### Ringkasan
-Rilis ini memfokuskan hardening akses admin bot Discord/Telegram dan memastikan flow installer fail-closed saat konfigurasi env belum valid.
+Rilis ini memfokuskan hardening akses admin bot Telegram dan memastikan flow installer fail-closed saat konfigurasi env belum valid.
 
 ### Perubahan Utama
-1. Hardening authz gateway Discord
-- Gateway sekarang fail-closed bila `DISCORD_ADMIN_ROLE_IDS` dan `DISCORD_ADMIN_USER_IDS` sama-sama kosong.
-- Fallback otorisasi berbasis permission `Administrator` saat ACL kosong dihapus.
-- Handler auth di interaction Discord diperkuat agar aman terhadap variasi bentuk `interaction.member` (termasuk member partial/API object), tanpa cast `as any`.
-
-2. Hardening backend secret check
+1. Hardening backend secret check
 - Verifikasi shared secret backend memakai `hmac.compare_digest`.
-- Endpoint health backend bot Discord/Telegram kini tetap berada di jalur ber-auth secret.
+- Endpoint health backend bot Telegram kini tetap berada di jalur ber-auth secret.
 
-3. Guard installer Discord/Telegram (env validation)
-- Default `ENABLE_DANGEROUS_ACTIONS` diset ke `false`.
-- `configure-env` sekarang mengembalikan gagal jika env belum valid (tidak lagi menampilkan sukses palsu).
-- `start/restart services` sekarang hard-block jika env belum valid.
+2. Guard installer Telegram (env validation)
 - Installer Telegram kini fail-closed saat ACL admin kosong (kecuali `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true`).
 
 ### Hasil Validasi
-- `bash -n manage.sh setup.sh install-discord-bot.sh install-telegram-bot.sh` -> PASS
-- `python3 -m py_compile` backend/gateway bot Discord/Telegram -> PASS
-- `cd bot-discord/gateway-ts && npm run -s build` -> PASS
-- `bot-discord/scripts/gate-all.sh local` -> PASS
+- `bash -n manage.sh setup.sh install-telegram-bot.sh` -> PASS
+- `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')` -> PASS
 - `bot-telegram/scripts/gate-all.sh` -> PASS
 
 ## Rilis 2026-03-02 (Hysteria2 UDP 443 Integration)
@@ -561,14 +533,10 @@ Rilis ini memindahkan Hysteria2 menjadi fitur terintegrasi di jalur CLI (`setup.
 - `bash -n setup.sh manage.sh run.sh` -> PASS
 - Hasil patch memastikan setup memanggil `install_hysteria2_integrated()` dan `sanity_check` memverifikasi `hysteria-server` + `xray-hy2-sync`.
 
-- Deploy bot Discord:
-  - `bot-discord-backend` -> `active`
-  - `bot-discord-gateway` -> `active`
 - Deploy bot Telegram:
   - `bot-telegram-backend` -> `active`
   - `bot-telegram-gateway` -> `active`
 - Health backend:
-  - `http://127.0.0.1:8080/health` -> `200` (Discord)
   - `http://127.0.0.1:8081/health` + `X-Internal-Shared-Secret` -> `200` (Telegram)
 
 ## Rilis 2026-02-25 (Telegram WARP Parity + Hardening)
@@ -642,7 +610,7 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 - `manage.sh`:
   - generator link account tidak lagi membuat link transport terdepresiasi
   - compat checker account info diperbarui (basis validasi ke baris `gRPC`)
-- Bot backend (`bot-discord` + `bot-telegram`):
+- Bot backend (`bot-telegram`):
   - generator link account tidak lagi memasukkan transport terdepresiasi
   - output account info tidak lagi menampilkan baris transport terdepresiasi
 - `opt/manage/features/network.sh`:
@@ -663,187 +631,10 @@ Update ini menutup dua pekerjaan besar: penyempurnaan UX bot Telegram untuk oper
 
 ### Hasil Validasi
 - Shell:
-  - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh` -> PASS
+  - `bash -n setup.sh manage.sh run.sh install-telegram-bot.sh` -> PASS
   - `shellcheck setup.sh manage.sh opt/manage/features/network.sh` -> PASS
 - Python:
-  - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py') $(find bot-telegram/backend-py/app -name '*.py')` -> PASS
+  - `python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')` -> PASS
 - Runtime:
   - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> PASS
   - `nginx -t` -> PASS
-
-## Rilis 2026-02-25
-
-### Ringkasan
-Rilis ini memfinalkan integrasi fitur baru bot Discord untuk operasional staging, sekaligus menyiapkan dokumentasi handoff agar agent berikutnya dapat melanjutkan aktivitas tanpa kehilangan konteks.
-
-### Perubahan Utama
-1. Integrasi Fitur Bot (menu 1, 5, 12)
-- Menu `1) Status & Diagnostics` ditambah action:
-  - `overview`
-  - `xray_test`
-  - `tls_info`
-- Menu `5) Domain Control` ditambah action:
-  - `domain_guard_check`
-  - `domain_guard_status`
-  - `domain_guard_renew`
-- Menu baru `12) Traffic Analytics`:
-  - `overview`
-  - `top_users`
-  - `search_user`
-  - `export_json` (attachment file JSON)
-
-2. Standardisasi Label UX Bot
-- Label tombol pada menu gateway diseragamkan dengan pola:
-  - `View ...`
-  - `Run ...`
-  - `Set ...`
-  - `Toggle ...`
-- Sinkronisasi label juga diterapkan ke `shared/commands.json`.
-
-3. Penguatan Gate Testing Bot
-- `bot-discord/scripts/gate-all.sh` diperbarui agar:
-  - mengenali kehadiran menu `12`
-  - menambah smoke check `tls_info` dan `menu12.overview`
-  - memperluas regression read-only smoke hingga menu `12`.
-
-4. Dokumentasi Continuity Agent
-- Dokumen handoff/arsitektur/testing/release diperbarui dengan status aktivitas terbaru, ringkasan jalur uji, dan panduan kelanjutan untuk agent baru.
-
-### Commit
-- Commit ter-push: `fec6834`
-- Pesan: `feat(bot): add menu 12 analytics and observability/domain-guard controls`
-
-### Hasil Validasi
-- Validasi lokal:
-  - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')` -> PASS
-  - `(cd bot-discord/gateway-ts && npm run build)` -> PASS
-  - `bash -n bot-discord/scripts/gate-all.sh` -> PASS
-- Validasi staging:
-  - service `bot-discord-backend` dan `bot-discord-gateway` -> active
-  - checklist action `/panel` untuk menu `1`, `5`, `12` -> PASS semua (18/18 action).
-
-## Rilis 2026-02-24
-
-### Ringkasan
-Rilis ini memfokuskan finalisasi bot Discord untuk penggunaan produksi dan hardening operasional shell di staging: konsistensi mode select, output hasil yang lebih ringkas, sinkronisasi domain control, serta penguatan runtime quota watcher.
-
-### Perubahan Utama
-1. Konsistensi UX Select di Bot Discord
-- Alur yang membutuhkan pemilihan protokol/user dipindahkan ke mode select agar minim typo.
-- Alur ini mencakup `Add User`, `Extend/Set Expiry`, `Account Info`, dan aksi select-based di `Network Controls`.
-
-2. Output User Management Lebih Ringkas
-- `Add User` sukses kini menampilkan embed ringkasan + lampiran `username@protokol.txt`.
-- `Account Info` menampilkan embed ringkasan + lampiran `username@protokol.txt`.
-- `Account Info` ditingkatkan dengan fallback summary dari file account ketika file quota tidak tersedia.
-
-3. Penyederhanaan Domain Control
-- Nama aksi diperjelas menjadi:
-  - `Set Domain Manual`
-  - `Set Domain Auto (API Cloudflare)`
-- Root domain Cloudflare dipilih via select (`vyxara1.web.id`, `vyxara2.web.id`, `vyxara1.qzz.io`, `vyxara2.qzz.io`).
-- Perilaku boolean invalid di wizard Cloudflare tidak lagi silent: tetap fallback aman, tetapi sekarang memberi warning eksplisit.
-
-4. Hardening Shell Runtime & Staging
-- `run.sh` menambah kompatibilitas path canonical `/opt/autoscript` dengan alias kompatibilitas historis `/root/xray-core_discord`.
-- `install-discord-bot.sh` merapikan source archive URL agar konsisten memakai `BOT_SOURCE_OWNER/BOT_SOURCE_REPO/BOT_SOURCE_REF`.
-- Generator `xray-quota` di `setup.sh` sekarang mendukung fallback endpoint API (`127.0.0.1:10080` dan `127.0.0.1:10085`) untuk mengurangi warning transien `statsquery`.
-
-### Hasil Validasi
-- Validasi lokal:
-  - `bash -n setup.sh manage.sh run.sh install-discord-bot.sh` -> PASS
-  - `python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')` -> PASS
-  - `(cd bot-discord/gateway-ts && npm run build)` -> PASS
-  - `bot-discord/scripts/gate-all.sh local` -> PASS
-- Validasi staging (24 Februari 2026):
-  - smoke + negative untuk `manage.sh`/`install-discord-bot.sh` -> PASS
-  - `xray run -test -confdir /usr/local/etc/xray/conf.d` -> `Configuration OK`
-  - setelah update `xray-quota`, audit `journalctl -u xray-quota -p warning` pada window uji tidak menemukan warning baru.
-
-## Update Handoff 2026-02-23
-
-### Ringkasan
-Update ini mencatat perubahan identitas proyek ke `autoscript`, pembaruan source path installer, dan perapihan UX bot Discord agar lebih profesional dan minim spam output.
-
-### Perubahan Utama
-1. Rebranding Proyek ke Autoscript
-- Remote/identitas repo dipindah ke `superdecrypt-dev/autoscript`.
-- Referensi URL source pada `run.sh`, `install-discord-bot.sh`, dan `README.md` disesuaikan.
-
-2. Perubahan Source Working Directory Installer
-- `run.sh` kini memakai source kerja persist di `/opt/autoscript`.
-- Pola clone/update source diperbarui untuk mode deploy server yang lebih konsisten.
-
-3. Perapihan UX Bot Discord
-- Gateway interaction memakai `flags: MessageFlags.Ephemeral` (mengganti opsi sebelumnya yang deprecated).
-- Output result dipotong agar tidak spam panjang di Discord mobile.
-- Copywriting menu/error dipoles agar lebih profesional dan ringkas.
-
-4. Dokumentasi SOP Testing
-- Ditambahkan `TESTING_PLAYBOOK.md` sebagai panduan tunggal pengujian:
-  preflight, smoke, negative/failure, integration, dan gate bot Discord.
-- Dokumen ini dijadikan referensi utama untuk proses handoff agent baru.
-
-### Validasi Tambahan
-- `bash -n run.sh install-discord-bot.sh`: PASS.
-- Build gateway TypeScript: PASS.
-- Gate staging yang terakhir dijalankan:
-  - Gate 4 (Negative/Failure): PASS
-  - Gate 5 (Discord command check): PASS
-  - Gate 6 (Regression read-only menu smoke): PASS
-
-### Catatan Operasional
-- Baseline handoff saat ini mengacu pada repo `autoscript`.
-- Deploy bot tetap di `/opt/bot-discord`; env di `/etc/bot-discord/bot.env`.
-
-## Rilis 2026-02-23
-
-### Ringkasan
-Rilis ini memfinalkan paket stabilisasi bot Discord standalone dan alur operasional installer. Fokus utama: penguatan keamanan token, rollback safety, otomasi pengujian gate, dan monitoring runtime ringan.
-
-### Perubahan Utama
-1. Rotasi Token Discord (Security)
-- Token bot produksi telah diganti (regenerate) dan diverifikasi aktif.
-- Ditambahkan script rotasi aman: `bot-discord/scripts/rotate-discord-token.sh`.
-- Token tetap disimpan di env file deploy: `/etc/bot-discord/bot.env`.
-
-2. Snapshot Rollback
-- Snapshot pra-perubahan dibuat untuk rollback cepat:
-  `xray-itg-1771777921/pre-gate123-20260224-011832`.
-
-3. Otomasi Pengujian Gate
-- Ditambahkan script orkestrasi test gate:
-  `bot-discord/scripts/gate-all.sh`.
-- Profil yang tersedia:
-  - `local` -> Gate 1,2,3
-  - `prod` -> Gate 3.1,5,6
-  - `all` -> Gate 1-6 (Gate 4 via `STAGING_INSTANCE`)
-
-4. Monitoring Ringan
-- Ditambahkan health monitor:
-  `bot-discord/scripts/monitor-lite.sh`.
-- Ditambahkan unit systemd:
-  - `bot-discord-monitor.service`
-  - `bot-discord-monitor.timer` (interval 5 menit)
-- Log monitor:
-  `/var/log/bot-discord/monitor-lite.log`.
-
-### Hasil Validasi
-- `bash -n` dan `shellcheck` untuk script terkait: lulus.
-- Gate produksi (`gate-all.sh prod`) pada 2026-02-23:
-  - Gate 3.1: PASS
-  - Gate 5: PASS
-  - Gate 6: PASS
-- Status runtime produksi:
-  - `bot-discord-backend`: active
-  - `bot-discord-gateway`: active
-  - `bot-discord-monitor.timer`: active
-
-### Risiko Diketahui (Accepted Risk)
-- Hardcoded Cloudflare token di lokasi historis diperlakukan sebagai by design/accepted risk sesuai kebijakan proyek saat ini.
-- Logika penghapusan A record lain pada IP yang sama tetap dipertahankan sesuai desain operasional.
-
-### Catatan Operasional
-- Lokasi deploy bot: `/opt/bot-discord`.
-- Installer: `/usr/local/bin/install-discord-bot`.
-- Untuk rollback darurat, gunakan snapshot LXC yang disebutkan pada bagian Snapshot Rollback.

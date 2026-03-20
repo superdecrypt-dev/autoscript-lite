@@ -101,10 +101,8 @@ Fokus:
 - menu/back flow
 
 ### Prioritas 6: Bot
-- `install-telegram-bot.sh`
 - `bot-telegram/*`
-- `install-discord-bot.sh`
-- `bot-discord/*`
+- `install-telegram-bot.sh`
 
 Fokus:
 - parity bot vs CLI
@@ -117,7 +115,7 @@ Fokus:
 ```bash
 cd /root/project/autoscript
 git status --short
-bash -n run.sh setup.sh manage.sh install-discord-bot.sh install-telegram-bot.sh
+bash -n run.sh setup.sh manage.sh install-telegram-bot.sh
 shellcheck -x -S warning run.sh setup.sh manage.sh
 bash -n opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
@@ -136,7 +134,6 @@ Jika fokus bot:
 
 ```bash
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
-python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 ```
 
 ## 6. Command Audit Cepat
@@ -179,12 +176,11 @@ rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|upd
 rg -n "detect_domain|sync_xray_domain_file|account_refresh_all_info_files|ssh_account_info" manage.sh opt/manage
 ```
 
-### 6.5 Cek bot Telegram/Discord
+### 6.5 Cek bot Telegram
 ```bash
-rg -n "unknown_action|api\\.telegram\\.org/bot|commands\\.json|COMMANDS_FILE|/api/main-menu|/api/menu/|bot_telegram\\.zip|bot_discord\\.zip|rebuild_bot_archives" \
-  install-telegram-bot.sh install-discord-bot.sh bot-telegram bot-discord
+rg -n "unknown_action|api\\.telegram\\.org/bot|commands\\.json|COMMANDS_FILE|/api/main-menu|/api/menu/|bot_telegram\\.zip|rebuild_bot_archives" \
+  install-telegram-bot.sh bot-telegram
 python3 -m py_compile $(find bot-telegram/backend-py/app -name '*.py') $(find bot-telegram/gateway-py/app -name '*.py')
-python3 -m py_compile $(find bot-discord/backend-py/app -name '*.py')
 ```
 
 ### 6.6 Cek Edge Gateway dan BadVPN
