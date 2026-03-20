@@ -1263,7 +1263,7 @@ def _ssh_network_user_route_mode_set(username: str, mode: str) -> tuple[bool, st
         ok_state, target_or_err, payload_or_err = _ssh_load_state(
             username_n,
             create_missing=True,
-            created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+            created_at=_local_now().strftime("%Y-%m-%d %H:%M"),
             expired_at="-",
         )
         if not ok_state:
@@ -2257,10 +2257,14 @@ def _proto_display_label(proto: str) -> str:
     return mapping.get(str(proto or "").strip().lower(), str(proto or "").strip().title() or "Xray")
 
 
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
 def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     value = str(raw or "").strip()
     if not value:
-        return datetime.utcnow().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
+        return _local_now().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
     normalized = value.replace("T", " ").strip()
     if normalized.endswith("Z"):
         normalized = normalized[:-1]
@@ -2276,7 +2280,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         if date_only:
             return normalized[:10]
         return normalized[:16] if len(normalized) >= 16 and normalized[13:14] == ":" else normalized[:10]
-    return datetime.utcnow().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
+    return _local_now().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
 
 
 def _ssh_traffic_enforcement_ready() -> bool:
@@ -2315,7 +2319,7 @@ def _ssh_normalize_state_payload(
         "managed_by": "autoscript-manage",
         "username": str(username or "").strip(),
         "protocol": SSH_PROTOCOL,
-        "created_at": str(created_at or existing.get("created_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "created_at": str(created_at or existing.get("created_at") or "").strip() or _local_now().strftime("%Y-%m-%d %H:%M"),
         "expired_at": (str(expired_at or existing.get("expired_at") or "-").strip() or "-")[:10],
         "quota_limit": quota_limit,
         "quota_unit": quota_unit,
@@ -2395,7 +2399,7 @@ def _ssh_expired_display(expired_at: str) -> str:
         return "unlimited"
     try:
         expiry = datetime.strptime(value, "%Y-%m-%d").date()
-        days = max(0, (expiry - datetime.now(timezone.utc).date()).days)
+        days = max(0, (expiry - date.today()).days)
         return f"{days} days"
     except Exception:
         return "unknown"
@@ -2423,7 +2427,7 @@ def _ssh_write_account_info(
 ) -> tuple[bool, str]:
     status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
     account_file = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
-    created_at = str(quota_payload.get("created_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    created_at = str(quota_payload.get("created_at") or "").strip() or _local_now().strftime("%Y-%m-%d %H:%M")
     created_disp = _normalize_created_display(created_at, date_only=True)
     expired_at = str(quota_payload.get("expired_at") or "-").strip()[:10] or "-"
     quota_limit = max(0, _to_int(quota_payload.get("quota_limit"), 0))
@@ -4058,7 +4062,7 @@ def _write_account_artifacts(
 ) -> tuple[Path, Path]:
     _ensure_runtime_dirs()
 
-    created_dt = datetime.now(timezone.utc)
+    created_dt = _local_now()
     created_date = created_dt.date()
     expired_date = created_date + timedelta(days=max(1, int(days)))
     created_at = created_dt.strftime("%Y-%m-%d %H:%M")
@@ -5036,7 +5040,7 @@ def op_user_add(
             return False, "User Management - Add User", "Password SSH tidak boleh sama dengan username."
 
         expiry = (date.today() + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
-        created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        created_at = _local_now().strftime("%Y-%m-%d %H:%M")
         quota_bytes = int(round(quota_gb * (1024**3)))
         quota_path = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
         account_path = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
@@ -5252,6 +5256,23 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
         raw = account_file.read_bytes()
     except Exception as exc:
         return False, f"Gagal membaca file account: {exc}"
+
+    if proto == SSH_PROTOCOL:
+        try:
+            text = raw.decode("utf-8", errors="ignore")
+            text = re.sub(
+                r"(?m)^(ZIVPN Password)\s*:\s*",
+                f"{'ZIVPN Password':<16} : ",
+                text,
+            )
+            text = re.sub(
+                r"(ZIVPN Password\s*:\s*[^\n]+?)\s*=== STANDARD PAYLOAD ===",
+                r"\1\n\n=== STANDARD PAYLOAD ===",
+                text,
+            )
+            raw = text.encode("utf-8")
+        except Exception:
+            pass
 
     return True, {
         "filename": f"{username}@{proto}.txt",

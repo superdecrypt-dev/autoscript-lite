@@ -14,7 +14,7 @@ SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|license|api[_-]?key|autho
 NON_PASSWORD_SENSITIVE_KEY_RE = re.compile(r"(token|secret|license|api[_-]?key|authorization)", re.IGNORECASE)
 PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
 KV_SECRET_RE = re.compile(
-    r"(?i)\b([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)\s*([:=])\s*([^\s]+)"
+    r"(?im)^([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)(\s*)([:=])(\s*)([^\n]*)$"
 )
 
 
@@ -39,11 +39,13 @@ def _sanitize_output_text(value: str, *, allow_password: bool = False) -> str:
 
     def _mask_kv(match: re.Match[str]) -> str:
         key = match.group(1)
-        sep = match.group(2)
-        val = match.group(3)
+        key_gap = match.group(2)
+        sep = match.group(3)
+        value_gap = match.group(4)
+        val = match.group(5)
         if allow_password and PASSWORD_KEY_RE.search(key) and not NON_PASSWORD_SENSITIVE_KEY_RE.search(key):
-            return f"{key}{sep}{val}"
-        return f"{key}{sep}{mask_secret(val)}"
+            return f"{key}{key_gap}{sep}{value_gap}{val}"
+        return f"{key}{key_gap}{sep}{value_gap}{mask_secret(val)}"
 
     return KV_SECRET_RE.sub(_mask_kv, text)
 
