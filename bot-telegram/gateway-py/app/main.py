@@ -50,6 +50,7 @@ from .session_state import (
     set_qac_selection as session_set_qac_selection,
     store_pending_state as session_store_pending_state,
 )
+from .user_entries import load_menu_user_entries
 from .pickers_ui import (
     account_pick_keyboard as picker_account_pick_keyboard,
     account_pick_text as picker_account_pick_text,
@@ -579,27 +580,7 @@ def _qac_pick_text(menu_id: str, page: int, users: list[dict[str, str]]) -> str:
 
 
 async def _load_qac_user_entries(runtime: Runtime, menu_id: str) -> list[dict[str, str]]:
-    proto_filter = None
-    protocols = _menu_protocol_scope(menu_id)
-    if len(protocols) == 1:
-        proto_filter = protocols[0]
-
-    options = await runtime.backend.list_user_options(proto=proto_filter)
-    users: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for option in options:
-        proto = str(option.proto or "").strip().lower()
-        username = str(option.username or "").strip()
-        if proto not in protocols or not username:
-            continue
-        key = (proto, username)
-        if key in seen:
-            continue
-        seen.add(key)
-        users.append({"proto": proto, "username": username})
-
-    users.sort(key=lambda item: (str(item.get("username") or "").lower(), str(item.get("proto") or "").lower()))
-    return users
+    return await load_menu_user_entries(runtime.backend, protocols=_menu_protocol_scope(menu_id))
 
 
 def _delete_picker_title(menu_id: str) -> str:
@@ -659,27 +640,7 @@ def _account_pick_text(menu_id: str, action_label: str, page: int, users: list[d
 
 
 async def _load_account_user_entries(runtime: Runtime, menu_id: str) -> list[dict[str, str]]:
-    proto_filter = None
-    protocols = _menu_protocol_scope(menu_id)
-    if len(protocols) == 1:
-        proto_filter = protocols[0]
-
-    options = await runtime.backend.list_user_options(proto=proto_filter)
-    users: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for option in options:
-        proto = str(option.proto or "").strip().lower()
-        username = str(option.username or "").strip()
-        if proto not in protocols or not username:
-            continue
-        key = (proto, username)
-        if key in seen:
-            continue
-        seen.add(key)
-        users.append({"proto": proto, "username": username})
-
-    users.sort(key=lambda item: (str(item.get("username") or "").lower(), str(item.get("proto") or "").lower()))
-    return users
+    return await load_menu_user_entries(runtime.backend, protocols=_menu_protocol_scope(menu_id))
 
 
 async def _show_account_user_picker(
