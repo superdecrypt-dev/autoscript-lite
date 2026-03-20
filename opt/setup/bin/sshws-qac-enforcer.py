@@ -8,6 +8,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -199,6 +200,8 @@ def active_sessions_from_runtime(username):
 
 _DROPBEAR_ROWS_CACHE = None
 _DROPBEAR_AUTH_CACHE = None
+SSH_NETWORK_SYNC_RETRY_ATTEMPTS = 6
+SSH_NETWORK_SYNC_RETRY_DELAY_SEC = 0.5
 
 
 def dropbear_backend_process_rows():
@@ -619,7 +622,28 @@ def run_once(target_user):
         enforce_user(path)
     finally:
       fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+  refresh_ssh_network_session_targets()
   return 0
+
+def refresh_ssh_network_session_targets():
+  manage_bin = shutil.which("manage") or "/usr/local/bin/manage"
+  if not manage_bin:
+    return
+  attempts = int(max(1, SSH_NETWORK_SYNC_RETRY_ATTEMPTS))
+  for idx in range(attempts):
+    try:
+      subprocess.run(
+        [manage_bin, "__sync-ssh-network-session-targets"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=45,
+      )
+    except Exception:
+      pass
+    if idx >= attempts - 1:
+      break
+    time.sleep(float(SSH_NETWORK_SYNC_RETRY_DELAY_SEC))
 
 def parse_args():
   p = argparse.ArgumentParser(description="SSH WS quota/access enforcer")

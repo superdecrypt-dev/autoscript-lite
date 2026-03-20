@@ -2872,7 +2872,7 @@ warp_tier_zero_trust_show_status() {
   printf "Client ID     : %s\n" "$(warp_zero_trust_secret_mask "${client_id}")"
   printf "Client Secret : %s\n" "$(warp_zero_trust_secret_mask "${client_secret}")"
   printf "Config State  : %s\n" "${config_state:-incomplete}"
-  printf "%-14s : %s\n" "${WARP_ZEROTRUST_SERVICE}" "${svc_state}"
+  printf "%-14s: %s\n" "${WARP_ZEROTRUST_SERVICE}" "${svc_state}"
   printf "MDM Policy    : %s\n" "${mdm_state}"
   printf "Proxy Bind    : 127.0.0.1:%s\n" "${proxy_port:-${WARP_ZEROTRUST_PROXY_PORT}}"
   printf "Proxy State   : %s\n" "${proxy_state}"

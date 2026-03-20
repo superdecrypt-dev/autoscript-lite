@@ -618,21 +618,11 @@ configure_env_interactive() {
     final_token="${current_token}"
   fi
 
-  bot_username="$(prompt_with_default_or_back "TELEGRAM_BOT_USERNAME (opsional, tanpa @)" "${current_bot_username}")"
-  if [[ "${bot_username}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
-  fi
-  default_chat_id="$(prompt_with_default_or_back "TELEGRAM_DEFAULT_CHAT_ID (opsional)" "${current_default_chat_id}")"
-  if [[ "${default_chat_id}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
-  fi
-  admin_chat_ids="$(prompt_with_default_or_back "TELEGRAM_ADMIN_CHAT_IDS (opsional, pisahkan koma)" "${current_admin_chat_ids}")"
-  if [[ "${admin_chat_ids}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
-  fi
+  # Variabel ini tetap disimpan di env bila sudah ada, tetapi tidak lagi
+  # diminta dari installer interaktif.
+  bot_username="${current_bot_username}"
+  default_chat_id="${current_default_chat_id}"
+  admin_chat_ids="${current_admin_chat_ids}"
   admin_user_ids="$(prompt_with_default_or_back "TELEGRAM_ADMIN_USER_IDS (opsional, pisahkan koma)" "${current_admin_user_ids}")"
   if [[ "${admin_user_ids}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
@@ -1102,7 +1092,7 @@ wait_for_backend_ready() {
   need_root
   command_exists curl || die "curl tidak tersedia di host ini."
 
-  local secret_url secret_value url attempts
+  local secret_url secret_value attempts
   secret_value="$(get_env_value INTERNAL_SHARED_SECRET "${BOT_ENV_FILE}")"
   [[ -n "${secret_value}" ]] || die "INTERNAL_SHARED_SECRET belum diisi di ${BOT_ENV_FILE}."
 

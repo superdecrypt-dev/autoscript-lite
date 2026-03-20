@@ -343,7 +343,7 @@ PY
 }
 
 cloudflare_warp_seed_free_plus_state_if_missing() {
-  local mode="" tier="" tmp="" now=""
+  local mode="" tier="" tmp="" now="" state_dir=""
   mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
   [[ "${mode}" == "zerotrust" ]] && return 0
 
@@ -352,7 +352,12 @@ cloudflare_warp_seed_free_plus_state_if_missing() {
     return 0
   fi
 
-  tmp="$(mktemp)" || return 1
+  state_dir="$(dirname -- "${WARP_STATE_FILE}")"
+  install -d -m 700 "${state_dir}" >/dev/null 2>&1 || return 1
+  tmp="$(mktemp "${state_dir}/.network_state.json.tmp.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "${tmp}" ]]; then
+    tmp="${state_dir}/.network_state.json.tmp.$$"
+  fi
   now="$(date '+%Y-%m-%d %H:%M:%S')"
   python3 - <<'PY' "${WARP_STATE_FILE}" "${tmp}" "${now}" || {
 import json
@@ -370,6 +375,8 @@ try:
     data = {}
 except Exception:
   data = {}
+
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 tier = str(data.get("warp_tier_target") or "").strip().lower()
 if tier not in {"free", "plus"}:

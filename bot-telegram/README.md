@@ -19,6 +19,8 @@ Bot Telegram ini adalah pelengkap CLI `manage.sh`, berjalan standalone di `/opt/
 Dikelola di `/etc/bot-telegram/bot.env`:
 - `INTERNAL_SHARED_SECRET`
 - `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_BOT_USERNAME` (opsional, advanced)
+- `TELEGRAM_DEFAULT_CHAT_ID` (opsional, advanced)
 - `TELEGRAM_ADMIN_CHAT_IDS` (opsional, CSV)
 - `TELEGRAM_ADMIN_USER_IDS` (opsional, CSV)
 - `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS` (default `false`, tidak direkomendasikan)
@@ -27,6 +29,10 @@ Dikelola di `/etc/bot-telegram/bot.env`:
 - `TELEGRAM_MAX_INPUT_LENGTH` (default `128`)
 - `BACKEND_BASE_URL`
 - `COMMANDS_FILE`
+
+Catatan installer:
+- Menu `Configure Bot (.env)` sekarang hanya meminta `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_USER_IDS`, dan `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS`.
+- `TELEGRAM_BOT_USERNAME`, `TELEGRAM_DEFAULT_CHAT_ID`, dan `TELEGRAM_ADMIN_CHAT_IDS` tetap didukung di env/runtime, tetapi tidak lagi ditanyakan saat setup interaktif. Ubah manual di `bot.env` jika memang dibutuhkan.
 
 ## Ringkasan Menu
 Menu bot Telegram sekarang mengikuti urutan `CLI Menu` di `manage.sh` untuk top-level utama:

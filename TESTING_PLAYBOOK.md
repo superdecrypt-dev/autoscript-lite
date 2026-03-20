@@ -117,6 +117,22 @@ Kriteria lulus:
 - Jika BadVPN dipasang, `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`.
 - Jika backend Zero Trust dipasang, `warp-svc` harus terdeteksi; status `inactive` tetap valid selama mode runtime masih `Free/Plus`.
 
+Khusus `SSH Network -> WARP SSH` backend `Local Proxy` (`Free/Plus`):
+- Jangan berhenti di status menu `Backend Applied: Local Proxy`; status itu belum membuktikan trafik SSH benar-benar masuk WARP.
+- Siapkan 1 akun SSH yang effective `warp`, buka tunnel SOCKS lewat surface publik SSH yang relevan (`SSH Direct :443` direkomendasikan; bila perubahan menyentuh jalur WS, ulangi juga lewat `SSH WS` token path).
+- Verifikasi egress dari tunnel dengan:
+
+```bash
+curl --max-time 20 \
+  --socks5-hostname 127.0.0.1:<local_socks_port> \
+  https://www.cloudflare.com/cdn-cgi/trace
+```
+
+- Kriteria lulus tambahan:
+  - output trace memuat `warp=on`
+  - counter `iptables -t mangle -vnL AUTOSCRIPT_SSH_WARP_MARK_V4` atau `ip6tables -t mangle -vnL AUTOSCRIPT_SSH_WARP_MARK_V6` benar-benar naik
+  - menu status saja tidak boleh dijadikan bukti lulus
+
 Khusus SSH WS (staging):
 - Implementasi target adalah konsep autoscript-stream: tanpa hybrid framing, cukup `Upgrade: websocket`, lalu raw stream.
 - Saat audit/review, konsep ini dianggap baseline tetap; referensi konsep perilaku: `https://github.com/nanotechid/supreme`.

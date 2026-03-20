@@ -320,6 +320,14 @@ ssh_network_xray_redir_chain_v6_get() {
   printf 'AUTOSCRIPT_SSH_WARP_V6\n'
 }
 
+ssh_network_xray_redir_mark_chain_v4_get() {
+  printf 'AUTOSCRIPT_SSH_WARP_MARK_V4\n'
+}
+
+ssh_network_xray_redir_mark_chain_v6_get() {
+  printf 'AUTOSCRIPT_SSH_WARP_MARK_V6\n'
+}
+
 ssh_network_host_warp_mode_get() {
   if declare -F warp_mode_display_cached_get >/dev/null 2>&1; then
     warp_mode_display_cached_get 2>/dev/null || printf 'Free/Plus\n'
@@ -821,6 +829,206 @@ ssh_network_wait_port_listening() {
   return 1
 }
 
+ssh_network_warp_cgroup_root_get() {
+  printf '%s\n' "${SSH_NETWORK_WARP_CGROUP_ROOT:-/sys/fs/cgroup/autoscript-ssh-network}"
+}
+
+ssh_network_warp_cgroup_path_get() {
+  local root
+  root="$(ssh_network_warp_cgroup_root_get)"
+  printf '%s/%s\n' "${root}" "${SSH_NETWORK_WARP_CGROUP_NAME:-warp}"
+}
+
+ssh_network_warp_cgroup_relpath_get() {
+  local path root="/sys/fs/cgroup"
+  path="$(ssh_network_warp_cgroup_path_get)"
+  case "${path}" in
+    "${root}")
+      return 1
+      ;;
+    "${root}/"*)
+      printf '%s\n' "${path#${root}/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ssh_network_warp_cgroup_supported() {
+  local root="/sys/fs/cgroup" fs_type=""
+  [[ -d "${root}" && -w "${root}" ]] || return 1
+  have_cmd iptables || return 1
+  fs_type="$(stat -fc %T "${root}" 2>/dev/null || true)"
+  [[ "${fs_type}" == "cgroup2fs" ]] || return 1
+  iptables -m cgroup -h >/dev/null 2>&1 || return 1
+  return 0
+}
+
+ssh_network_warp_cgroup_clear_unlocked() {
+  local root="/sys/fs/cgroup" path="" parent="" pid=""
+  path="$(ssh_network_warp_cgroup_path_get)"
+  [[ -n "${path}" && -d "${path}" ]] || return 0
+
+  if [[ -r "${path}/cgroup.procs" && -w "${root}/cgroup.procs" ]]; then
+    while IFS= read -r pid; do
+      [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+      printf '%s\n' "${pid}" > "${root}/cgroup.procs" 2>/dev/null || true
+    done < "${path}/cgroup.procs"
+  fi
+
+  rmdir "${path}" >/dev/null 2>&1 || true
+  parent="$(dirname "${path}")"
+  if [[ -n "${parent}" && "${parent}" != "${root}" ]]; then
+    rmdir "${parent}" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+ssh_network_dropbear_session_pids_for_users() {
+  (( $# > 0 )) || return 0
+  need_python3
+  python3 - <<'PY' "${SSHWS_DROPBEAR_PORT}" "$@"
+import re
+import subprocess
+import sys
+
+try:
+  DROPBEAR_PORT = int(float(sys.argv[1] or 22022))
+except Exception:
+  DROPBEAR_PORT = 22022
+
+def norm_user(value):
+  text = str(value or "").strip()
+  if text.endswith("@ssh"):
+    text = text[:-4]
+  if "@" in text:
+    text = text.split("@", 1)[0]
+  return text
+
+targets = {norm_user(item) for item in sys.argv[2:] if norm_user(item)}
+if not targets:
+  raise SystemExit(0)
+
+rows = []
+try:
+  res = subprocess.run(
+    ["ps", "-eo", "pid=,ppid=,user=,comm=,args="],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+    check=False,
+    timeout=2.0,
+  )
+except Exception:
+  res = None
+
+if res is None or res.returncode != 0:
+  raise SystemExit(0)
+
+for line in (res.stdout or "").splitlines():
+  raw = line.strip()
+  if not raw:
+    continue
+  parts = raw.split(None, 4)
+  if len(parts) < 5:
+    continue
+  try:
+    pid = int(parts[0])
+    ppid = int(parts[1])
+  except ValueError:
+    continue
+  rows.append({
+    "pid": pid,
+    "ppid": ppid,
+    "comm": parts[3],
+    "args": parts[4],
+  })
+
+master_pids = set()
+for row in rows:
+  if row.get("comm") == "dropbear" and f"-p 127.0.0.1:{DROPBEAR_PORT}" in str(row.get("args") or ""):
+    master_pids.add(int(row.get("pid") or 0))
+
+if not master_pids:
+  raise SystemExit(0)
+
+session_pids = []
+for row in rows:
+  if row.get("comm") != "dropbear":
+    continue
+  if int(row.get("ppid") or 0) in master_pids:
+    session_pids.append(int(row.get("pid") or 0))
+
+if not session_pids:
+  raise SystemExit(0)
+
+mapping = {}
+pat = re.compile(r"dropbear\[(\d+)\]: .*auth succeeded for '([^']+)'", re.IGNORECASE)
+
+def parse_lines(lines):
+  for line in lines:
+    match = pat.search(str(line or ""))
+    if not match:
+      continue
+    try:
+      pid = int(match.group(1))
+    except Exception:
+      continue
+    username = norm_user(match.group(2))
+    if username:
+      mapping[pid] = username
+
+try:
+  res = subprocess.run(
+    ["journalctl", "-u", "sshws-dropbear", "--no-pager", "-n", "2000"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+    check=False,
+    timeout=2.0,
+  )
+  parse_lines((res.stdout or "").splitlines())
+except Exception:
+  pass
+
+if not mapping:
+  try:
+    res = subprocess.run(
+      ["tail", "-n", "5000", "/var/log/auth.log"],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.DEVNULL,
+      text=True,
+      check=False,
+      timeout=2.0,
+    )
+    parse_lines((res.stdout or "").splitlines())
+  except Exception:
+    pass
+
+for pid in sorted(set(session_pids)):
+  username = mapping.get(pid)
+  if username in targets:
+    print(f"{pid}|{username}")
+PY
+}
+
+ssh_network_warp_cgroup_sync_dropbear_users_unlocked() {
+  local parent="" path="" pid="" username=""
+  (( $# > 0 )) || return 0
+  ssh_network_warp_cgroup_supported || return 0
+
+  parent="$(ssh_network_warp_cgroup_root_get)"
+  path="$(ssh_network_warp_cgroup_path_get)"
+  mkdir -p "${parent}" "${path}" >/dev/null 2>&1 || return 1
+
+  while IFS='|' read -r pid username; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    printf '%s\n' "${pid}" > "${path}/cgroup.procs" 2>/dev/null || true
+  done < <(ssh_network_dropbear_session_pids_for_users "$@")
+  return 0
+}
+
 ssh_network_host_warp_proxy_state_get() {
   local port="" svc_name="" listener_name=""
   port="$(ssh_network_host_warp_proxy_port_get)"
@@ -856,19 +1064,27 @@ ssh_network_xray_redir_listener_state_get() {
 }
 
 ssh_network_xray_redir_runtime_clear_unlocked() {
-  local chain_v4="" chain_v6=""
+  local chain_v4="" chain_v6="" chain_mark_v4="" chain_mark_v6=""
   chain_v4="$(ssh_network_xray_redir_chain_v4_get)"
   chain_v6="$(ssh_network_xray_redir_chain_v6_get)"
+  chain_mark_v4="$(ssh_network_xray_redir_mark_chain_v4_get)"
+  chain_mark_v6="$(ssh_network_xray_redir_mark_chain_v6_get)"
 
   if have_cmd iptables; then
     while iptables -t nat -D OUTPUT -p tcp -j "${chain_v4}" >/dev/null 2>&1; do :; done
     iptables -t nat -F "${chain_v4}" >/dev/null 2>&1 || true
     iptables -t nat -X "${chain_v4}" >/dev/null 2>&1 || true
+    while iptables -t mangle -D OUTPUT -p tcp -j "${chain_mark_v4}" >/dev/null 2>&1; do :; done
+    iptables -t mangle -F "${chain_mark_v4}" >/dev/null 2>&1 || true
+    iptables -t mangle -X "${chain_mark_v4}" >/dev/null 2>&1 || true
   fi
   if have_cmd ip6tables; then
     while ip6tables -t nat -D OUTPUT -p tcp -j "${chain_v6}" >/dev/null 2>&1; do :; done
     ip6tables -t nat -F "${chain_v6}" >/dev/null 2>&1 || true
     ip6tables -t nat -X "${chain_v6}" >/dev/null 2>&1 || true
+    while ip6tables -t mangle -D OUTPUT -p tcp -j "${chain_mark_v6}" >/dev/null 2>&1; do :; done
+    ip6tables -t mangle -F "${chain_mark_v6}" >/dev/null 2>&1 || true
+    ip6tables -t mangle -X "${chain_mark_v6}" >/dev/null 2>&1 || true
   fi
 }
 
@@ -1119,8 +1335,21 @@ PY
 }
 
 ssh_network_runtime_apply_local_proxy_uids_unlocked() {
-  local port4="" port6="" chain_v4="" chain_v6=""
-  local uid="" rc=0
+  local port4="" port6="" chain_v4="" chain_v6="" chain_mark_v4="" chain_mark_v6="" fwmark=""
+  local uid="" rc=0 arg="" mode="uids" cgroup_rel=""
+  local -a warp_uids=() warp_users=()
+
+  for arg in "$@"; do
+    if [[ "${arg}" == "--users" ]]; then
+      mode="users"
+      continue
+    fi
+    if [[ "${mode}" == "users" ]]; then
+      warp_users+=("${arg}")
+    else
+      warp_uids+=("${arg}")
+    fi
+  done
 
   have_cmd iptables || {
     warn "iptables tidak tersedia. Backend local proxy SSH tidak bisa di-apply."
@@ -1144,8 +1373,17 @@ ssh_network_runtime_apply_local_proxy_uids_unlocked() {
   port6="$(ssh_network_xray_redir_port_v6_get)"
   chain_v4="$(ssh_network_xray_redir_chain_v4_get)"
   chain_v6="$(ssh_network_xray_redir_chain_v6_get)"
+  chain_mark_v4="$(ssh_network_xray_redir_mark_chain_v4_get)"
+  chain_mark_v6="$(ssh_network_xray_redir_mark_chain_v6_get)"
+  fwmark="$(ssh_network_config_get | awk -F'=' '/^fwmark=/{print $2; exit}')"
 
   ssh_network_runtime_clear_unlocked
+
+  if ! ssh_network_warp_cgroup_sync_dropbear_users_unlocked "${warp_users[@]}"; then
+    warn "Sinkron cgroup sesi dropbear untuk WARP SSH gagal."
+  else
+    cgroup_rel="$(ssh_network_warp_cgroup_relpath_get 2>/dev/null || true)"
+  fi
 
   iptables -t nat -N "${chain_v4}" >/dev/null 2>&1 || rc=1
   (( rc == 0 )) || { ssh_network_xray_redir_runtime_clear_unlocked; return 1; }
@@ -1159,7 +1397,13 @@ ssh_network_runtime_apply_local_proxy_uids_unlocked() {
   iptables -t nat -A "${chain_v4}" -d 192.168.0.0/16 -j RETURN >/dev/null 2>&1 || rc=1
   iptables -t nat -A "${chain_v4}" -d 224.0.0.0/4 -j RETURN >/dev/null 2>&1 || rc=1
   iptables -t nat -A "${chain_v4}" -d 240.0.0.0/4 -j RETURN >/dev/null 2>&1 || rc=1
-  for uid in "$@"; do
+  if [[ -n "${cgroup_rel}" && "${fwmark}" =~ ^[0-9]+$ ]]; then
+    iptables -t mangle -N "${chain_mark_v4}" >/dev/null 2>&1 || rc=1
+    iptables -t mangle -A "${chain_mark_v4}" -m cgroup --path "${cgroup_rel}" -p tcp -j MARK --set-mark "${fwmark}" >/dev/null 2>&1 || rc=1
+    iptables -t mangle -A OUTPUT -p tcp -j "${chain_mark_v4}" >/dev/null 2>&1 || rc=1
+    iptables -t nat -A "${chain_v4}" -m mark --mark "${fwmark}" -p tcp -j REDIRECT --to-ports "${port4}" >/dev/null 2>&1 || rc=1
+  fi
+  for uid in "${warp_uids[@]}"; do
     iptables -t nat -A "${chain_v4}" -m owner --uid-owner "${uid}" -p tcp -j REDIRECT --to-ports "${port4}" >/dev/null 2>&1 || rc=1
   done
   iptables -t nat -A OUTPUT -p tcp -j "${chain_v4}" >/dev/null 2>&1 || rc=1
@@ -1171,7 +1415,13 @@ ssh_network_runtime_apply_local_proxy_uids_unlocked() {
     ip6tables -t nat -A "${chain_v6}" -d fc00::/7 -j RETURN >/dev/null 2>&1 || rc=1
     ip6tables -t nat -A "${chain_v6}" -d fe80::/10 -j RETURN >/dev/null 2>&1 || rc=1
     ip6tables -t nat -A "${chain_v6}" -d ff00::/8 -j RETURN >/dev/null 2>&1 || rc=1
-    for uid in "$@"; do
+    if [[ -n "${cgroup_rel}" && "${fwmark}" =~ ^[0-9]+$ ]]; then
+      ip6tables -t mangle -N "${chain_mark_v6}" >/dev/null 2>&1 || rc=1
+      ip6tables -t mangle -A "${chain_mark_v6}" -m cgroup --path "${cgroup_rel}" -p tcp -j MARK --set-mark "${fwmark}" >/dev/null 2>&1 || rc=1
+      ip6tables -t mangle -A OUTPUT -p tcp -j "${chain_mark_v6}" >/dev/null 2>&1 || rc=1
+      ip6tables -t nat -A "${chain_v6}" -m mark --mark "${fwmark}" -p tcp -j REDIRECT --to-ports "${port6}" >/dev/null 2>&1 || rc=1
+    fi
+    for uid in "${warp_uids[@]}"; do
       ip6tables -t nat -A "${chain_v6}" -m owner --uid-owner "${uid}" -p tcp -j REDIRECT --to-ports "${port6}" >/dev/null 2>&1 || rc=1
     done
     ip6tables -t nat -A OUTPUT -p tcp -j "${chain_v6}" >/dev/null 2>&1 || rc=1
@@ -1199,6 +1449,7 @@ ssh_network_runtime_clear_unlocked() {
   if have_cmd nft && [[ -n "${nft_table}" ]]; then
     nft delete table inet "${nft_table}" >/dev/null 2>&1 || true
   fi
+  ssh_network_warp_cgroup_clear_unlocked
   ssh_network_xray_redir_runtime_clear_unlocked
   if have_cmd ip; then
     while ip rule del pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1; do :; done
@@ -1212,7 +1463,7 @@ ssh_network_runtime_clear_unlocked() {
 
 ssh_network_runtime_apply_unlocked() {
   local cfg nft_table mark route_table rule_pref warp_iface warp_backend backend_effective mark_hex=""
-  local -a warp_uids=()
+  local -a warp_uids=() warp_users=()
   local -a endpoint_v4=() endpoint_v6=()
   local username uid override effective
   local tmp="" warp_conf_path="" warp_conf_before="" warp_conf_after="" warp_cfg_changed="false"
@@ -1233,6 +1484,7 @@ ssh_network_runtime_apply_unlocked() {
     [[ -n "${username}" ]] || continue
     [[ "${uid}" =~ ^[0-9]+$ ]] || continue
     [[ "${effective}" == "warp" ]] || continue
+    warp_users+=("${username}")
     warp_uids+=("${uid}")
   done < <(ssh_network_effective_rows)
 
@@ -1248,7 +1500,7 @@ ssh_network_runtime_apply_unlocked() {
   fi
 
   if [[ "${backend_effective}" == "local-proxy" ]]; then
-    if ! ssh_network_runtime_apply_local_proxy_uids_unlocked "${warp_uids[@]}"; then
+    if ! ssh_network_runtime_apply_local_proxy_uids_unlocked "${warp_uids[@]}" --users "${warp_users[@]}"; then
       return 1
     fi
     if [[ -n "${warp_iface}" ]] && ssh_network_interface_name_is_valid "${warp_iface}"; then
@@ -1364,6 +1616,49 @@ ssh_network_runtime_apply_unlocked() {
   }
   ip -6 rule add pref "${rule_pref}" fwmark "${mark_hex:-${mark}}" table "${route_table}" >/dev/null 2>&1 || true
   return 0
+}
+
+ssh_network_runtime_sync_session_targets_unlocked() {
+  local cfg warp_backend backend_effective="" username="" uid="" override="" effective=""
+  local -a warp_users=()
+
+  cfg="$(ssh_network_config_get)"
+  warp_backend="$(printf '%s\n' "${cfg}" | awk -F'=' '/^warp_backend=/{print $2; exit}')"
+  backend_effective="$(ssh_network_warp_backend_effective_get_from_value "${warp_backend:-auto}")"
+
+  if [[ "${backend_effective}" != "local-proxy" ]]; then
+    ssh_network_warp_cgroup_clear_unlocked
+    return 0
+  fi
+
+  while IFS='|' read -r username uid override effective; do
+    [[ -n "${username}" ]] || continue
+    [[ "${effective}" == "warp" ]] || continue
+    warp_users+=("${username}")
+  done < <(ssh_network_effective_rows)
+
+  if (( ${#warp_users[@]} == 0 )); then
+    ssh_network_warp_cgroup_clear_unlocked
+    return 0
+  fi
+
+  if ! ssh_network_warp_cgroup_sync_dropbear_users_unlocked "${warp_users[@]}"; then
+    warn "Sinkron target sesi dropbear WARP SSH gagal."
+    return 1
+  fi
+  return 0
+}
+
+ssh_network_runtime_sync_session_targets_now() {
+  if [[ "${SSH_NETWORK_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_network_run_locked ssh_network_runtime_sync_session_targets_now
+    return $?
+  fi
+  if [[ "${SSH_QAC_LOCK_HELD:-0}" != "1" ]]; then
+    ssh_qac_run_locked ssh_network_runtime_sync_session_targets_now
+    return $?
+  fi
+  ssh_network_runtime_sync_session_targets_unlocked
 }
 
 ssh_network_runtime_apply_now() {
@@ -1532,8 +1827,7 @@ ssh_network_pick_routable_user() {
   done < <(ssh_network_effective_rows)
 
   if (( ${#users[@]} > 1 )); then
-    IFS=$'\n' users=($(printf '%s\n' "${users[@]}" | sort -u))
-    unset IFS
+    mapfile -t users < <(printf '%s\n' "${users[@]}" | sort -u)
   fi
 
   if (( ${#users[@]} == 0 )); then
@@ -2025,6 +2319,7 @@ ssh_network_warp_user_menu() {
 }
 
 ssh_network_menu() {
+  # shellcheck disable=SC2034 # used by ui_menu_render_options via nameref
   local -a items=(
     "1|DNS for SSH"
     "2|WARP SSH Global"
@@ -2051,18 +2346,6 @@ ssh_network_menu() {
 
 ssh_menu() {
   local pending_count=0
-  local -a items=(
-    "1|Add User"
-    "2|Delete User"
-    "3|Set Expiry"
-    "4|Reset Password"
-    "5|List Users"
-    "6|SSH WS Status"
-    "7|Restart SSH WS"
-    "8|Active Sessions"
-    "9|Recover Pending Txn"
-    "0|Back"
-  )
   while true; do
     pending_count="$(ssh_pending_recovery_count)"
     [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0

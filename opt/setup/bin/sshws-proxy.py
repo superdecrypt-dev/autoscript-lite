@@ -1131,6 +1131,7 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
   resolver_task = None
   heartbeat_stop = None
   heartbeat_task = None
+  initial_enforcer_task = None
   try:
     backend_reader, backend_writer = await asyncio.open_connection(
       args.backend_host,
@@ -1141,10 +1142,6 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     ctx = ConnectionContext(backend_local_port, quota_mgr, args.qac_session_root, client_ip)
     await registry.finalize_admission(reservation, ctx)
     reservation_active = False
-    try:
-      await quota_mgr.enforce_now(username)
-    except Exception:
-      pass
     heartbeat_stop = asyncio.Event()
     heartbeat_task = asyncio.create_task(_runtime_session_heartbeat(heartbeat_stop, ctx))
   except Exception:
@@ -1171,7 +1168,11 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
     return
 
   try:
+    # Admission, token validation, and backend dial already succeeded.
+    # Kirim 101 secepat mungkin supaya klien SSH WS tidak menunggu sinkronisasi
+    # QAC awal yang bisa memakan beberapa detik.
     await _send_handshake_ok(ws_writer)
+    initial_enforcer_task = asyncio.create_task(quota_mgr.enforce_now(username))
     if not await ctx.username():
       # Fallback ini hanya untuk kompatibilitas jika ada sesi tanpa token teratribusi,
       # tetapi jalur normal SSHWS sekarang sudah menetapkan username dari token sejak awal.
@@ -1207,6 +1208,13 @@ async def _handle_client(ws_reader, ws_writer, args, registry, quota_mgr, limite
       heartbeat_task.cancel()
       try:
         await heartbeat_task
+      except BaseException:
+        pass
+    if initial_enforcer_task is not None:
+      if not initial_enforcer_task.done():
+        initial_enforcer_task.cancel()
+      try:
+        await initial_enforcer_task
       except BaseException:
         pass
     if resolver_task is not None and not resolver_task.done():

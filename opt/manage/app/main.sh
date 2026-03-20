@@ -17,6 +17,17 @@ main() {
       fi
       return 0
       ;;
+    __sync-ssh-network-session-targets)
+      if ! declare -F ssh_network_runtime_sync_session_targets_now >/dev/null 2>&1; then
+        warn "Hidden sync target sesi SSH Network tidak tersedia."
+        return 1
+      fi
+      if ! ssh_network_runtime_sync_session_targets_now; then
+        warn "Sinkron target sesi SSH Network gagal."
+        return 1
+      fi
+      return 0
+      ;;
     __refresh-account-info)
       warn "Hidden bulk refresh ACCOUNT INFO dinonaktifkan."
       warn "Gunakan menu Domain Control > Refresh Account Info."
