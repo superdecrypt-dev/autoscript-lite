@@ -8,7 +8,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 ## Baseline Saat Ini
 - Repo utama: `https://github.com/superdecrypt-dev/autoscript`
 - Workspace aktif (Codex): `/root/project/autoscript`
-- Source kerja installer `run.sh`: `/opt/autoscript` (alias kompatibilitas historis: `/root/xray-core_discord`)
+- Source kerja installer `run.sh`: `/opt/autoscript`
 - Path deploy bot default jika diinstal:
   - Telegram: `/opt/bot-telegram`
 

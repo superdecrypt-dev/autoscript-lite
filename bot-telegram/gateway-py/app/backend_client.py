@@ -83,7 +83,7 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
 }
 
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
+THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 
 
 def _mask_secret(raw: str) -> str:
@@ -98,7 +98,7 @@ def _mask_secret(raw: str) -> str:
 def _sanitize_text(raw: str) -> str:
     text = str(raw or "")
     text = TELEGRAM_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    text = DISCORD_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
+    text = THREE_SEGMENT_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
     return text
 
 

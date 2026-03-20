@@ -13,7 +13,7 @@ SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|license|api[_-]?key|autho
 NON_PASSWORD_SENSITIVE_KEY_RE = re.compile(r"(token|secret|license|api[_-]?key|authorization)", re.IGNORECASE)
 PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
+THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 KV_SECRET_RE = re.compile(
     r"(?i)\b([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)\s*([:=])\s*([^\s]+)"
 )
@@ -48,7 +48,7 @@ def _mask_secret(value: str) -> str:
 def _sanitize_output_text(value: str, *, allow_password: bool = False) -> str:
     text = str(value or "")
     text = TELEGRAM_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    text = DISCORD_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
+    text = THREE_SEGMENT_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
     text = BEARER_RE.sub(lambda m: f"Bearer {_mask_secret(m.group(1))}", text)
 
     def _mask_kv(match: re.Match[str]) -> str:

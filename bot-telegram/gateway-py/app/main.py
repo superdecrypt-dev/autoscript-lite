@@ -47,7 +47,7 @@ LOGGER = logging.getLogger("bot-telegram-gateway")
 BACKEND_MENU_SYNC_TIMEOUT_SECONDS = 30.0
 BACKEND_MENU_SYNC_RETRY_INTERVAL_SECONDS = 1.0
 TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-DISCORD_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
+THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
 CALLBACK_SEP = "|"
 ACTIONS_PER_PAGE = 6
@@ -156,7 +156,7 @@ def _mask_secret(value: str) -> str:
 def _sanitize_log_text(value: str) -> str:
     text = str(value or "")
     text = TELEGRAM_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
-    text = DISCORD_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
+    text = THREE_SEGMENT_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
     text = BEARER_RE.sub(lambda match: f"Bearer {_mask_secret(match.group(1))}", text)
     return text
 
