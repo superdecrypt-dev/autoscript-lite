@@ -1219,7 +1219,7 @@ PY
     else
       printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "not synced to runtime"
     fi
-    zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"
+    zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"$'\n'
   fi
   local tmp_acc_file=""
   mkdir -p "$(dirname "${acc_file}")" 2>/dev/null || return 1

@@ -52,7 +52,18 @@ def _decode_download_text(download_payload: dict[str, object]) -> str:
     if not raw:
         return ""
     try:
-        return base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
+        text = base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
+        # Repair legacy SSH ACCOUNT INFO payloads that accidentally glued
+        # the ZIVPN line and the next section header into a single line.
+        text = text.replace(
+            "same as SSH password=== STANDARD PAYLOAD ===",
+            "same as SSH password\n\n=== STANDARD PAYLOAD ===",
+        )
+        text = text.replace(
+            "not synced to runtime=== STANDARD PAYLOAD ===",
+            "not synced to runtime\n\n=== STANDARD PAYLOAD ===",
+        )
+        return text
     except Exception:
         return ""
 

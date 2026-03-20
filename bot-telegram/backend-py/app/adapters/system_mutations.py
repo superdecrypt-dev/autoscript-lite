@@ -2483,11 +2483,11 @@ def _ssh_write_account_info(
                 "",
                 "=== ZIVPN UDP ===",
                 f"{'ZIVPN Password':<{running_label_width}} : {zivpn_password_state}",
+                "",
             ]
         )
     lines.extend(
         [
-            "",
             "=== STANDARD PAYLOAD ===",
             "Payload WS:",
             f"    GET {sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
