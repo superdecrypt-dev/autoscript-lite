@@ -7,17 +7,15 @@ from datetime import datetime, timezone
 
 from .backend_client import BackendActionResponse
 from .commands_loader import ActionSpec, FieldSpec, MenuSpec
+from .redaction import mask_secret, sanitize_secret_text
 
 
 SENSITIVE_KEY_RE = re.compile(r"(token|secret|password|license|api[_-]?key|authorization)", re.IGNORECASE)
 NON_PASSWORD_SENSITIVE_KEY_RE = re.compile(r"(token|secret|license|api[_-]?key|authorization)", re.IGNORECASE)
 PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
-TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
 KV_SECRET_RE = re.compile(
     r"(?i)\b([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)\s*([:=])\s*([^\s]+)"
 )
-BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
 
 
 def now_utc_text() -> str:
@@ -36,20 +34,8 @@ def as_pre(text: str, max_len: int = 3300) -> str:
     return f"<pre>{html.escape(_trim(text, max_len))}</pre>"
 
 
-def _mask_secret(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return raw
-    if len(raw) <= 8:
-        return "********"
-    return f"{raw[:4]}****{raw[-4:]}"
-
-
 def _sanitize_output_text(value: str, *, allow_password: bool = False) -> str:
-    text = str(value or "")
-    text = TELEGRAM_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    text = THREE_SEGMENT_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    text = BEARER_RE.sub(lambda m: f"Bearer {_mask_secret(m.group(1))}", text)
+    text = sanitize_secret_text(value)
 
     def _mask_kv(match: re.Match[str]) -> str:
         key = match.group(1)
@@ -57,7 +43,7 @@ def _sanitize_output_text(value: str, *, allow_password: bool = False) -> str:
         val = match.group(3)
         if allow_password and PASSWORD_KEY_RE.search(key) and not NON_PASSWORD_SENSITIVE_KEY_RE.search(key):
             return f"{key}{sep}{val}"
-        return f"{key}{sep}{_mask_secret(val)}"
+        return f"{key}{sep}{mask_secret(val)}"
 
     return KV_SECRET_RE.sub(_mask_kv, text)
 
@@ -66,7 +52,7 @@ def _mask_param_if_sensitive(key: str, value: str, *, allow_password: bool = Fal
     if allow_password and PASSWORD_KEY_RE.search(key) and not NON_PASSWORD_SENSITIVE_KEY_RE.search(key):
         return _sanitize_output_text(value, allow_password=allow_password)
     if SENSITIVE_KEY_RE.search(key):
-        return _mask_secret(value)
+        return mask_secret(value)
     return _sanitize_output_text(value, allow_password=allow_password)
 
 

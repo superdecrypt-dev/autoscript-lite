@@ -3,7 +3,6 @@ import asyncio
 import io
 import logging
 import os
-import re
 import socket
 import time
 from dataclasses import dataclass
@@ -32,6 +31,50 @@ from .backend_client import (
 )
 from .commands_loader import ActionSpec, CommandCatalog, MenuSpec
 from .config import AppConfig, load_config
+from .file_transfer import (
+    cleanup_uploaded_archive,
+    format_size,
+    resolve_local_download,
+    resolve_restore_upload_dir,
+)
+from .redaction import configure_masked_logging, sanitize_secret_text
+from .session_state import (
+    chat_scope_id,
+    clear_pending_states,
+    clear_qac_selection as session_clear_qac_selection,
+    get_menu_parent_page as session_get_menu_parent_page,
+    get_pending_state as session_get_pending_state,
+    get_qac_selection as session_get_qac_selection,
+    has_pending_state_in_other_chat as session_has_pending_state_in_other_chat,
+    set_menu_parent_page as session_set_menu_parent_page,
+    set_qac_selection as session_set_qac_selection,
+    store_pending_state as session_store_pending_state,
+)
+from .pickers_ui import (
+    account_pick_keyboard as picker_account_pick_keyboard,
+    account_pick_text as picker_account_pick_text,
+    account_picker_return_keyboard as picker_account_picker_return_keyboard,
+    account_picker_title as picker_account_picker_title,
+    delete_pick_proto_keyboard as picker_delete_pick_proto_keyboard,
+    delete_pick_return_keyboard as picker_delete_pick_return_keyboard,
+    delete_pick_text_proto as picker_delete_pick_text_proto,
+    delete_pick_text_users as picker_delete_pick_text_users,
+    delete_pick_users_keyboard as picker_delete_pick_users_keyboard,
+    delete_picker_title as picker_delete_picker_title,
+    protocol_choices_for_action as picker_protocol_choices_for_action,
+)
+from .ui_helpers import (
+    action_visible as ui_action_visible,
+    confirm_keyboard as ui_confirm_keyboard,
+    main_menu_keyboard as ui_main_menu_keyboard,
+    menu_keyboard as ui_menu_keyboard,
+    menu_pages as ui_menu_pages,
+    result_keyboard as ui_result_keyboard,
+    rows_from_buttons as ui_rows_from_buttons,
+    short_button_label as ui_short_button_label,
+    visible_actions as ui_visible_actions,
+    visible_main_menus as ui_visible_main_menus,
+)
 from .render import (
     action_form_prompt,
     action_result_text,
@@ -46,9 +89,6 @@ from .render import (
 LOGGER = logging.getLogger("bot-telegram-gateway")
 BACKEND_MENU_SYNC_TIMEOUT_SECONDS = 30.0
 BACKEND_MENU_SYNC_RETRY_INTERVAL_SECONDS = 1.0
-TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
-BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._~-]{16,})")
 CALLBACK_SEP = "|"
 ACTIONS_PER_PAGE = 6
 BUTTONS_PER_ROW = 2
@@ -144,66 +184,6 @@ class Runtime:
     hostname: str
 
 
-def _mask_secret(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return raw
-    if len(raw) <= 8:
-        return "********"
-    return f"{raw[:4]}****{raw[-4:]}"
-
-
-def _sanitize_log_text(value: str) -> str:
-    text = str(value or "")
-    text = TELEGRAM_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
-    text = THREE_SEGMENT_TOKEN_RE.sub(lambda match: _mask_secret(match.group(0)), text)
-    text = BEARER_RE.sub(lambda match: f"Bearer {_mask_secret(match.group(1))}", text)
-    return text
-
-
-def _sanitize_log_value(value):
-    if isinstance(value, str):
-        return _sanitize_log_text(value)
-    if isinstance(value, tuple):
-        return tuple(_sanitize_log_value(item) for item in value)
-    if isinstance(value, list):
-        return [_sanitize_log_value(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _sanitize_log_value(item) for key, item in value.items()}
-    return value
-
-
-class SecretMaskingFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            if isinstance(record.msg, str):
-                record.msg = _sanitize_log_text(record.msg)
-            record.args = _sanitize_log_value(record.args)
-            if isinstance(record.exc_text, str):
-                record.exc_text = _sanitize_log_text(record.exc_text)
-            if isinstance(record.stack_info, str):
-                record.stack_info = _sanitize_log_text(record.stack_info)
-        except Exception:
-            pass
-        return True
-
-
-def _configure_logging() -> None:
-    logging.basicConfig(
-        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-        level=logging.INFO,
-    )
-
-    root_logger = logging.getLogger()
-    masking_filter = SecretMaskingFilter()
-    for handler in root_logger.handlers:
-        handler.addFilter(masking_filter)
-
-    # Suppress low-value request logs that include full Telegram URLs.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
 def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
     runtime = context.application.bot_data.get("runtime")
     if not isinstance(runtime, Runtime):
@@ -234,7 +214,7 @@ def _update_log_context(update: object) -> str:
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     err_type = err.__class__.__name__ if err is not None else "UnknownError"
-    err_text = _sanitize_log_text(str(err) if err is not None else "unknown")
+    err_text = sanitize_secret_text(str(err) if err is not None else "unknown")
     update_ctx = _update_log_context(update)
     exc_info = (type(err), err, err.__traceback__) if err is not None else None
 
@@ -266,7 +246,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         LOGGER.warning(
             "Gagal mengirim notifikasi error ke chat %s: %s",
             chat.id,
-            _sanitize_log_text(str(notify_exc)),
+            sanitize_secret_text(str(notify_exc)),
         )
 
 
@@ -292,16 +272,21 @@ def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
         action_id = str(pending_confirm.get("action_id") or "").strip()
         params = pending_confirm.get("params") if isinstance(pending_confirm.get("params"), dict) else {}
         if action_id == "restore_from_upload" and isinstance(params, dict):
-            _cleanup_uploaded_archive(str(params.get("upload_path") or ""))
-    context.user_data.pop(KEY_PENDING_FORM, None)
-    context.user_data.pop(KEY_PENDING_CONFIRM, None)
-    context.user_data.pop(KEY_PENDING_DELETE_PICK, None)
-    context.user_data.pop(KEY_PENDING_ACCOUNT_PICK, None)
-    context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
+            cleanup_uploaded_archive(str(params.get("upload_path") or ""), UPLOAD_RESTORE_DIRS)
+    clear_pending_states(
+        context.user_data,
+        (
+            KEY_PENDING_FORM,
+            KEY_PENDING_CONFIRM,
+            KEY_PENDING_DELETE_PICK,
+            KEY_PENDING_ACCOUNT_PICK,
+            KEY_PENDING_UPLOAD_RESTORE,
+        ),
+    )
 
 
 def _chat_scope_id(chat_id: int | str | None) -> str:
-    return str(chat_id or "").strip()
+    return chat_scope_id(chat_id)
 
 
 def _store_pending_state(
@@ -310,10 +295,7 @@ def _store_pending_state(
     pending: dict,
     chat_id: int | str | None,
 ) -> dict:
-    state = dict(pending)
-    state["origin_chat_id"] = _chat_scope_id(chat_id)
-    context.user_data[key] = state
-    return state
+    return session_store_pending_state(context.user_data, key, pending, chat_id)
 
 
 def _get_pending_state(
@@ -321,27 +303,12 @@ def _get_pending_state(
     key: str,
     chat_id: int | str | None,
 ) -> tuple[dict | None, str]:
-    pending = context.user_data.get(key)
-    if not isinstance(pending, dict):
-        return None, ""
-
-    current_chat_id = _chat_scope_id(chat_id)
-    origin_chat_id = _chat_scope_id(pending.get("origin_chat_id"))
-    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
-        return None, PENDING_OTHER_CHAT_TEXT
-
-    if current_chat_id and not origin_chat_id:
-        pending = _store_pending_state(context, key, pending, current_chat_id)
-    return pending, ""
-
-
-def _menu_parent_page_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
-    raw = context.user_data.get(KEY_MENU_PARENT_PAGES)
-    if isinstance(raw, dict):
-        return raw
-    store: dict[str, dict] = {}
-    context.user_data[KEY_MENU_PARENT_PAGES] = store
-    return store
+    return session_get_pending_state(
+        context.user_data,
+        key,
+        chat_id,
+        other_chat_text=PENDING_OTHER_CHAT_TEXT,
+    )
 
 
 def _set_menu_parent_page(
@@ -351,11 +318,13 @@ def _set_menu_parent_page(
     chat_id: int | str | None,
     parent_page: int,
 ) -> None:
-    store = _menu_parent_page_store(context)
-    store[menu_id] = {
-        "origin_chat_id": _chat_scope_id(chat_id),
-        "page": max(0, int(parent_page)),
-    }
+    session_set_menu_parent_page(
+        context.user_data,
+        KEY_MENU_PARENT_PAGES,
+        menu_id,
+        chat_id=chat_id,
+        parent_page=parent_page,
+    )
 
 
 def _get_menu_parent_page(
@@ -364,92 +333,17 @@ def _get_menu_parent_page(
     *,
     chat_id: int | str | None,
 ) -> int:
-    raw = _menu_parent_page_store(context).get(menu_id)
-    if not isinstance(raw, dict):
-        return 0
-    current_chat_id = _chat_scope_id(chat_id)
-    origin_chat_id = _chat_scope_id(raw.get("origin_chat_id"))
-    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
-        return 0
-    return max(0, _safe_int(str(raw.get("page") or "0"), default=0))
+    return session_get_menu_parent_page(
+        context.user_data,
+        KEY_MENU_PARENT_PAGES,
+        menu_id,
+        chat_id=chat_id,
+        safe_int=_safe_int,
+    )
 
 
 def _has_pending_state_in_other_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int | str | None) -> bool:
-    current_chat_id = _chat_scope_id(chat_id)
-    if not current_chat_id:
-        return False
-
-    for key in PENDING_STATE_KEYS:
-        pending = context.user_data.get(key)
-        if not isinstance(pending, dict):
-            continue
-        origin_chat_id = _chat_scope_id(pending.get("origin_chat_id"))
-        if origin_chat_id and origin_chat_id != current_chat_id:
-            return True
-    return False
-
-
-def _fmt_size(num: int) -> str:
-    n = max(0, int(num))
-    if n >= 1024**3:
-        return f"{n / (1024**3):.2f} GiB"
-    if n >= 1024**2:
-        return f"{n / (1024**2):.2f} MiB"
-    if n >= 1024:
-        return f"{n / 1024:.2f} KiB"
-    return f"{n} B"
-
-
-def _is_subpath(path: Path, base: Path) -> bool:
-    try:
-        rp = path.resolve()
-        rb = base.resolve()
-    except Exception:
-        return False
-    return rp == rb or rb in rp.parents
-
-
-def _resolve_restore_upload_dir() -> Path:
-    for candidate in UPLOAD_RESTORE_DIRS:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except Exception:
-            continue
-    return UPLOAD_RESTORE_DIRS[0]
-
-
-def _cleanup_uploaded_archive(raw_path: str) -> None:
-    path_text = str(raw_path or "").strip()
-    if not path_text:
-        return
-    try:
-        resolved = Path(path_text).resolve()
-    except Exception:
-        return
-    if not any(_is_subpath(resolved, root) for root in UPLOAD_RESTORE_DIRS):
-        return
-    try:
-        resolved.unlink(missing_ok=True)
-    except Exception:
-        pass
-
-
-def _resolve_local_download(data: dict) -> tuple[str, Path] | None:
-    raw_path = str(data.get("download_local_path") or "").strip()
-    if not raw_path:
-        return None
-    try:
-        resolved = Path(raw_path).resolve()
-    except Exception:
-        return None
-    if not resolved.exists() or not resolved.is_file():
-        return None
-    if not any(_is_subpath(resolved, root) for root in DOWNLOAD_LOCAL_ALLOW_DIRS):
-        return None
-
-    filename = str(data.get("download_filename") or "").strip() or resolved.name
-    return filename, resolved
+    return session_has_pending_state_in_other_chat(context.user_data, PENDING_STATE_KEYS, chat_id)
 
 
 def _cooldown_remaining(
@@ -485,111 +379,23 @@ def _throttle_message(seconds_left: float) -> str:
 
 
 def _short_button_label(text: str, max_len: int = BUTTON_LABEL_MAX) -> str:
-    if len(text) <= max_len:
-        return text
-    if max_len < 4:
-        return text[:max_len]
-    return text[: max_len - 3] + "..."
+    return ui_short_button_label(text, max_len)
 
 
 def _rows_from_buttons(buttons: list[InlineKeyboardButton], per_row: int = BUTTONS_PER_ROW) -> list[list[InlineKeyboardButton]]:
-    rows: list[list[InlineKeyboardButton]] = []
-    for idx in range(0, len(buttons), per_row):
-        rows.append(buttons[idx : idx + per_row])
-    return rows
-
-
-def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
-    buttons: list[InlineKeyboardButton] = []
-    for menu in _visible_main_menus(runtime):
-        if not _visible_actions(runtime, menu):
-            continue
-        buttons.append(
-            InlineKeyboardButton(
-                _short_button_label(menu.label),
-                callback_data=f"m{CALLBACK_SEP}{menu.id}",
-            )
-        )
-
-    rows = _rows_from_buttons(buttons)
-    rows.append([InlineKeyboardButton("🔄 Refresh", callback_data="h")])
-    return InlineKeyboardMarkup(rows)
+    return ui_rows_from_buttons(buttons, per_row)
 
 
 def _action_visible(runtime: Runtime, action: ActionSpec) -> bool:
-    if action.dangerous and not runtime.config.mutations_enabled:
-        return False
-    return True
+    return ui_action_visible(runtime, action)
 
 
 def _visible_actions(runtime: Runtime, menu: MenuSpec) -> list[ActionSpec]:
-    return [action for action in menu.actions if _action_visible(runtime, action)]
+    return ui_visible_actions(runtime, menu)
 
 
 def _visible_main_menus(runtime: Runtime) -> list[MenuSpec]:
-    return [
-        menu
-        for menu in runtime.catalog.menus
-        if not menu.hidden and _visible_actions(runtime, menu)
-    ]
-
-
-def _menu_pages(runtime: Runtime, menu: MenuSpec) -> int:
-    total = len(_visible_actions(runtime, menu))
-    if total <= 0:
-        return 1
-    return ((total - 1) // ACTIONS_PER_PAGE) + 1
-
-
-def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_page: int = 0) -> InlineKeyboardMarkup:
-    visible_actions = _visible_actions(runtime, menu)
-    total_pages = _menu_pages(runtime, menu)
-    page = max(0, min(page, total_pages - 1))
-
-    start = page * ACTIONS_PER_PAGE
-    chunk = visible_actions[start : start + ACTIONS_PER_PAGE]
-
-    buttons: list[InlineKeyboardButton] = []
-    for action in chunk:
-        buttons.append(
-            InlineKeyboardButton(
-                _short_button_label(action.label),
-                callback_data=f"a{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}{CALLBACK_SEP}{action.id}",
-            )
-        )
-
-    rows = _rows_from_buttons(buttons)
-
-    if total_pages > 1:
-        nav: list[InlineKeyboardButton] = []
-        if page > 0:
-            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"p{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page - 1}"))
-        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
-        if page + 1 < total_pages:
-            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"p{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page + 1}"))
-        rows.append(nav)
-
-    footer: list[InlineKeyboardButton] = []
-    if menu.parent_menu:
-        footer.append(
-            InlineKeyboardButton(
-                "⬅️ Kembali",
-                callback_data=f"m{CALLBACK_SEP}{menu.parent_menu}{CALLBACK_SEP}{max(parent_page, 0)}",
-            )
-        )
-    footer.append(InlineKeyboardButton("🏠 Main Menu", callback_data="h"))
-    rows.append(footer)
-    return InlineKeyboardMarkup(rows)
-
-
-def _result_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
-    back_label = "⬅️ Kembali ke Panel QAC" if menu_id in QAC_MENU_IDS else "⬅️ Kembali ke Action"
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(back_label, callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(page, 0)}")],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="h")],
-        ]
-    )
+    return ui_visible_main_menus(runtime)
 
 
 def _callback_chat_id(update: Update) -> int:
@@ -601,12 +407,38 @@ def _callback_chat_id(update: Update) -> int:
     raise RuntimeError("Chat ID callback tidak tersedia.")
 
 
-def _confirm_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("✅ Jalankan", callback_data="rc"), InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(page, 0)}")],
-        ]
+def _main_menu_keyboard(runtime: Runtime) -> InlineKeyboardMarkup:
+    return ui_main_menu_keyboard(
+        runtime,
+        callback_sep=CALLBACK_SEP,
+        buttons_per_row=BUTTONS_PER_ROW,
+        button_label_max=BUTTON_LABEL_MAX,
     )
+
+
+def _menu_pages(runtime: Runtime, menu: MenuSpec) -> int:
+    return ui_menu_pages(runtime, menu, actions_per_page=ACTIONS_PER_PAGE)
+
+
+def _menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_page: int = 0) -> InlineKeyboardMarkup:
+    return ui_menu_keyboard(
+        runtime,
+        menu,
+        page,
+        parent_page=parent_page,
+        actions_per_page=ACTIONS_PER_PAGE,
+        buttons_per_row=BUTTONS_PER_ROW,
+        button_label_max=BUTTON_LABEL_MAX,
+        callback_sep=CALLBACK_SEP,
+    )
+
+
+def _result_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
+    return ui_result_keyboard(menu_id, page, callback_sep=CALLBACK_SEP, qac_menu_ids=QAC_MENU_IDS)
+
+
+def _confirm_keyboard(menu_id: str, page: int = 0) -> InlineKeyboardMarkup:
+    return ui_confirm_keyboard(menu_id, page, callback_sep=CALLBACK_SEP)
 
 
 def _safe_int(raw: str, default: int = 0) -> int:
@@ -632,15 +464,6 @@ def _qac_picker_title(menu_id: str) -> str:
     return "Quota & Access Control"
 
 
-def _qac_selection_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
-    raw = context.user_data.get(KEY_QAC_SELECTIONS)
-    if isinstance(raw, dict):
-        return raw
-    store: dict[str, dict] = {}
-    context.user_data[KEY_QAC_SELECTIONS] = store
-    return store
-
-
 def _set_qac_selection(
     context: ContextTypes.DEFAULT_TYPE,
     menu_id: str,
@@ -649,17 +472,18 @@ def _set_qac_selection(
     proto: str,
     username: str,
 ) -> None:
-    store = _qac_selection_store(context)
-    store[menu_id] = {
-        "origin_chat_id": _chat_scope_id(chat_id),
-        "proto": str(proto or "").strip().lower(),
-        "username": str(username or "").strip(),
-    }
+    session_set_qac_selection(
+        context.user_data,
+        KEY_QAC_SELECTIONS,
+        menu_id,
+        chat_id=chat_id,
+        proto=proto,
+        username=username,
+    )
 
 
 def _clear_qac_selection(context: ContextTypes.DEFAULT_TYPE, menu_id: str) -> None:
-    store = _qac_selection_store(context)
-    store.pop(menu_id, None)
+    session_clear_qac_selection(context.user_data, KEY_QAC_SELECTIONS, menu_id)
 
 
 def _get_qac_selection(
@@ -668,20 +492,13 @@ def _get_qac_selection(
     *,
     chat_id: int | str | None,
 ) -> dict | None:
-    raw = _qac_selection_store(context).get(menu_id)
-    if not isinstance(raw, dict):
-        return None
-    current_chat_id = _chat_scope_id(chat_id)
-    origin_chat_id = _chat_scope_id(raw.get("origin_chat_id"))
-    if origin_chat_id and current_chat_id and origin_chat_id != current_chat_id:
-        return None
-    proto = str(raw.get("proto") or "").strip().lower()
-    username = str(raw.get("username") or "").strip()
-    if not proto or not username:
-        return None
-    if proto not in _menu_protocol_scope(menu_id):
-        return None
-    return {"proto": proto, "username": username}
+    return session_get_qac_selection(
+        context.user_data,
+        KEY_QAC_SELECTIONS,
+        menu_id,
+        chat_id=chat_id,
+        allowed_protocols=_menu_protocol_scope(menu_id),
+    )
 
 
 def _qac_selection_params(menu_id: str, selection: dict | None) -> dict[str, str]:
@@ -884,19 +701,19 @@ async def _load_qac_user_entries(runtime: Runtime, menu_id: str) -> list[dict[st
 
 
 def _delete_picker_title(menu_id: str) -> str:
-    if menu_id == XRAY_USER_MENU_ID:
-        return "Xray Users"
-    if menu_id == SSH_USER_MENU_ID:
-        return "SSH Users"
-    return "User Management"
+    return picker_delete_picker_title(
+        menu_id,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+        ssh_user_menu_id=SSH_USER_MENU_ID,
+    )
 
 
 def _account_picker_title(menu_id: str) -> str:
-    if menu_id == XRAY_USER_MENU_ID:
-        return "Xray Users"
-    if menu_id == SSH_USER_MENU_ID:
-        return "SSH Users"
-    return "Accounts"
+    return picker_account_picker_title(
+        menu_id,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+        ssh_user_menu_id=SSH_USER_MENU_ID,
+    )
 
 
 def _account_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
@@ -906,48 +723,36 @@ def _account_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
 
 
 def _account_picker_return_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    return picker_account_picker_return_keyboard(
+        menu_id,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
     )
 
 
 def _account_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]], menu_page: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    start = page * DELETE_PICK_PAGE_SIZE
-    chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
-
-    user_buttons: list[InlineKeyboardButton] = []
-    for idx, item in enumerate(chunk, start=start):
-        label = _account_picker_entry_label(menu_id, str(item.get("proto") or ""), str(item.get("username") or ""))
-        user_buttons.append(
-            InlineKeyboardButton(
-                _short_button_label(label, max_len=22),
-                callback_data=f"acc_pick{CALLBACK_SEP}{idx}",
-            )
-        )
-    rows.extend(_rows_from_buttons(user_buttons))
-
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    if total_pages > 1:
-        nav: list[InlineKeyboardButton] = []
-        if page > 0:
-            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"acc_page{CALLBACK_SEP}{page - 1}"))
-        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
-        if page + 1 < total_pages:
-            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"acc_page{CALLBACK_SEP}{page + 1}"))
-        rows.append(nav)
-
-    rows.extend(_account_picker_return_keyboard(menu_id, menu_page).inline_keyboard)
-    return InlineKeyboardMarkup(rows)
+    return picker_account_pick_keyboard(
+        menu_id,
+        page,
+        users,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        short_button_label=_short_button_label,
+        rows_from_buttons=_rows_from_buttons,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+    )
 
 
 def _account_pick_text(menu_id: str, action_label: str, page: int, users: list[dict[str, str]]) -> str:
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    return (
-        f"<b>{html.escape(_account_picker_title(menu_id))} · {html.escape(action_label)}</b>\n"
-        "Pilih user dulu dari daftar.\n\n"
-        f"Total user: <code>{len(users)}</code>\n"
-        f"Halaman: <code>{page + 1}/{total_pages}</code>"
+    return picker_account_pick_text(
+        menu_id,
+        action_label,
+        page,
+        users,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -1044,93 +849,66 @@ async def _show_account_user_picker(
 
 
 def _delete_pick_proto_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    proto_buttons = [
-        InlineKeyboardButton(
-            proto.upper(),
-            callback_data=f"dup_proto{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{proto}{CALLBACK_SEP}{max(menu_page, 0)}",
-        )
-        for proto in _menu_protocol_scope(menu_id)
-    ]
-    rows.extend(_rows_from_buttons(proto_buttons))
-    rows.append(
-        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    return picker_delete_pick_proto_keyboard(
+        menu_id,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
+        protocols=_menu_protocol_scope(menu_id),
+        rows_from_buttons=_rows_from_buttons,
     )
-    return InlineKeyboardMarkup(rows)
 
 
 def _delete_pick_return_keyboard(menu_id: str, menu_page: int) -> InlineKeyboardMarkup:
-    protocols = _menu_protocol_scope(menu_id)
-    rows: list[list[InlineKeyboardButton]] = []
-    if len(protocols) > 1:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "↩️ Ganti Protocol",
-                    callback_data=f"dup_proto_menu{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}",
-                )
-            ]
-        )
-    rows.append(
-        [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+    return picker_delete_pick_return_keyboard(
+        menu_id,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
+        protocols=_menu_protocol_scope(menu_id),
     )
-    return InlineKeyboardMarkup(rows)
 
 
 def _protocol_choices_for_action(menu_id: str, action_id: str) -> tuple[str, ...]:
-    scoped = _menu_protocol_scope(menu_id)
-    if scoped != USER_PROTOCOLS:
-        return scoped
-    if action_id in SSH_ONLY_PROTOCOL_ACTIONS:
-        return ("ssh",)
-    return XRAY_PROTOCOLS
+    return picker_protocol_choices_for_action(
+        menu_id,
+        action_id,
+        scoped=_menu_protocol_scope(menu_id),
+        user_protocols=USER_PROTOCOLS,
+        ssh_only_protocol_actions=SSH_ONLY_PROTOCOL_ACTIONS,
+        xray_protocols=XRAY_PROTOCOLS,
+    )
 
 
 def _delete_pick_users_keyboard(menu_id: str, page: int, users: list[str], menu_page: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    start = page * DELETE_PICK_PAGE_SIZE
-    chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
-
-    user_buttons: list[InlineKeyboardButton] = []
-    for idx, username in enumerate(chunk, start=start):
-        user_buttons.append(
-            InlineKeyboardButton(
-                _short_button_label(username, max_len=22),
-                callback_data=f"dup_user{CALLBACK_SEP}{idx}",
-            )
-        )
-    rows.extend(_rows_from_buttons(user_buttons))
-
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    if total_pages > 1:
-        nav: list[InlineKeyboardButton] = []
-        if page > 0:
-            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"dup_page{CALLBACK_SEP}{page - 1}"))
-        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
-        if page + 1 < total_pages:
-            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"dup_page{CALLBACK_SEP}{page + 1}"))
-        rows.append(nav)
-
-    return_markup = _delete_pick_return_keyboard(menu_id, menu_page)
-    rows.extend(return_markup.inline_keyboard)
-    return InlineKeyboardMarkup(rows)
+    return picker_delete_pick_users_keyboard(
+        menu_id,
+        page,
+        users,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        short_button_label=_short_button_label,
+        rows_from_buttons=_rows_from_buttons,
+        return_keyboard=_delete_pick_return_keyboard(menu_id, menu_page),
+    )
 
 
 def _delete_pick_text_proto(menu_id: str) -> str:
-    return (
-        f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
-        "Pilih protocol dulu, lalu pilih username dari daftar."
+    return picker_delete_pick_text_proto(
+        menu_id,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
 def _delete_pick_text_users(menu_id: str, proto: str, page: int, users: list[str]) -> str:
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    return (
-        f"<b>{html.escape(_delete_picker_title(menu_id))} · Delete User</b>\n"
-        f"Protocol: <code>{html.escape(proto.upper())}</code>\n"
-        f"Total user: <code>{len(users)}</code>\n"
-        f"Halaman: <code>{page + 1}/{total_pages}</code>\n"
-        "Pilih user yang mau dihapus:"
+    return picker_delete_pick_text_users(
+        menu_id,
+        proto,
+        page,
+        users,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        xray_user_menu_id=XRAY_USER_MENU_ID,
+        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -1703,7 +1481,7 @@ async def _run_action(
         reply_markup=_result_keyboard(menu_id, page),
     )
 
-    local_attachment = _resolve_local_download(result.data)
+    local_attachment = resolve_local_download(result.data, allow_dirs=DOWNLOAD_LOCAL_ALLOW_DIRS)
     if local_attachment is not None:
         filename, local_path = local_attachment
         try:
@@ -2252,13 +2030,13 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(
             (
                 "Ukuran file terlalu besar untuk restore upload.\n"
-                f"Maksimal: {_fmt_size(UPLOAD_RESTORE_MAX_BYTES)}\n"
-                f"File ini: {_fmt_size(size_bytes)}"
+                f"Maksimal: {format_size(UPLOAD_RESTORE_MAX_BYTES)}\n"
+                f"File ini: {format_size(size_bytes)}"
             )
         )
         return
 
-    upload_dir = _resolve_restore_upload_dir()
+    upload_dir = resolve_restore_upload_dir(UPLOAD_RESTORE_DIRS)
     upload_id = f"{int(time.time())}-{doc.file_unique_id}"
     upload_name = f"restore-upload-{upload_id}.tar.gz"
     upload_path = upload_dir / upload_name
@@ -2278,7 +2056,7 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     action = runtime.catalog.get_action(menu_id, action_id)
     if menu is None or action is None:
         context.user_data.pop(KEY_PENDING_UPLOAD_RESTORE, None)
-        _cleanup_uploaded_archive(str(upload_path))
+        cleanup_uploaded_archive(str(upload_path), UPLOAD_RESTORE_DIRS)
         await msg.reply_text("Action restore upload tidak ditemukan. Jalankan /menu lagi.")
         return
 
@@ -2299,7 +2077,7 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     confirm_msg = (
         f"<b>Konfirmasi: {html.escape(menu.label)} · {html.escape(action.label)}</b>\n\n"
         f"- File: <code>{html.escape(name or upload_name)}</code>\n"
-        f"- Ukuran: <code>{html.escape(_fmt_size(size_bytes))}</code>\n\n"
+        f"- Ukuran: <code>{html.escape(format_size(size_bytes))}</code>\n\n"
         "Lanjutkan eksekusi restore?"
     )
     await msg.reply_text(
@@ -2833,7 +2611,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
         )
         if action_id == "restore_from_upload":
-            _cleanup_uploaded_archive(str(params.get("upload_path") or ""))
+            cleanup_uploaded_archive(str(params.get("upload_path") or ""), UPLOAD_RESTORE_DIRS)
         return
 
     parts = data.split(CALLBACK_SEP)
@@ -2981,7 +2759,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 text=(
                     "<b>Restore Upload</b>\n"
                     "Kirim file backup berekstensi <code>.tar.gz</code> lewat Telegram.\n"
-                    f"Ukuran maksimal: <code>{html.escape(_fmt_size(UPLOAD_RESTORE_MAX_BYTES))}</code>\n\n"
+                    f"Ukuran maksimal: <code>{html.escape(format_size(UPLOAD_RESTORE_MAX_BYTES))}</code>\n\n"
                     "Setelah file diterima, bot akan minta konfirmasi sebelum restore dijalankan."
                 ),
                 reply_markup=InlineKeyboardMarkup(
@@ -3082,7 +2860,7 @@ async def post_init(application: Application) -> None:
 
 
 def main() -> None:
-    _configure_logging()
+    configure_masked_logging()
 
     config = load_config()
     backend = BackendClient(config.backend_base_url, config.shared_secret)

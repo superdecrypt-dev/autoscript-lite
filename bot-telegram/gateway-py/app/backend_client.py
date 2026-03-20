@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 
 import httpx
+
+from .redaction import sanitize_secret_text
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -82,24 +83,8 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "4:warp_tier_reconnect": 420.0,
 }
 
-TELEGRAM_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-THREE_SEGMENT_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b")
-
-
-def _mask_secret(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return text
-    if len(text) <= 8:
-        return "********"
-    return f"{text[:4]}****{text[-4:]}"
-
-
 def _sanitize_text(raw: str) -> str:
-    text = str(raw or "")
-    text = TELEGRAM_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    text = THREE_SEGMENT_TOKEN_RE.sub(lambda m: _mask_secret(m.group(0)), text)
-    return text
+    return sanitize_secret_text(raw, mask_bearer=False)
 
 
 @dataclass
