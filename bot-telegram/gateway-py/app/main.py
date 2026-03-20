@@ -63,6 +63,15 @@ from .pickers_ui import (
     delete_picker_title as picker_delete_picker_title,
     protocol_choices_for_action as picker_protocol_choices_for_action,
 )
+from .qac_ui import (
+    qac_menu_keyboard as qac_ui_menu_keyboard,
+    qac_menu_text as qac_ui_menu_text,
+    qac_pick_keyboard as qac_ui_pick_keyboard,
+    qac_pick_text as qac_ui_pick_text,
+    qac_picker_title as qac_ui_picker_title,
+    qac_selection_label as qac_ui_selection_label,
+    qac_selection_params as qac_ui_selection_params,
+)
 from .ui_helpers import (
     action_visible as ui_action_visible,
     confirm_keyboard as ui_confirm_keyboard,
@@ -457,11 +466,11 @@ def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
 
 
 def _qac_picker_title(menu_id: str) -> str:
-    if menu_id == XRAY_QAC_MENU_ID:
-        return "Xray QAC"
-    if menu_id == SSH_QAC_MENU_ID:
-        return "SSH QAC"
-    return "Quota & Access Control"
+    return qac_ui_picker_title(
+        menu_id,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
+        ssh_qac_menu_id=SSH_QAC_MENU_ID,
+    )
 
 
 def _set_qac_selection(
@@ -502,28 +511,19 @@ def _get_qac_selection(
 
 
 def _qac_selection_params(menu_id: str, selection: dict | None) -> dict[str, str]:
-    if not isinstance(selection, dict):
-        return {}
-    proto = str(selection.get("proto") or "").strip().lower()
-    username = str(selection.get("username") or "").strip()
-    if not username:
-        return {}
-    params = {"username": username}
-    if menu_id == XRAY_QAC_MENU_ID and proto:
-        params["proto"] = proto
-    return params
+    return qac_ui_selection_params(
+        menu_id,
+        selection,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
+    )
 
 
 def _qac_selection_label(menu_id: str, selection: dict | None) -> str:
-    if not isinstance(selection, dict):
-        return "-"
-    proto = str(selection.get("proto") or "").strip().lower()
-    username = str(selection.get("username") or "").strip()
-    if not username:
-        return "-"
-    if menu_id == XRAY_QAC_MENU_ID and proto:
-        return f"{username}@{proto}"
-    return username
+    return qac_ui_selection_label(
+        menu_id,
+        selection,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
+    )
 
 
 def _qac_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
@@ -533,146 +533,48 @@ def _qac_picker_entry_label(menu_id: str, proto: str, username: str) -> str:
 
 
 def _qac_menu_text(menu: MenuSpec, selection: dict, summary: dict[str, str] | None, page: int, total_pages: int) -> str:
-    lines = [
-        f"<b>{html.escape(menu.label)}</b>",
-    ]
-    if menu.description:
-        lines.append(html.escape(menu.description))
-    if summary:
-        if menu.id == SSH_QAC_MENU_ID:
-            lines.extend(
-                [
-                    "",
-                    "<pre>"
-                    + html.escape(
-                        "\n".join(
-                            [
-                                f"Username           : {str(summary.get('username') or _qac_selection_label(menu.id, selection))}",
-                                f"Quota Limit        : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used (SSH)   : {str(summary.get('quota_used') or '-')}",
-                                f"Expired At         : {str(summary.get('expired_at') or '-')}",
-                                f"IP/Login Limit     : {str(summary.get('ip_limit') or '-')}",
-                                f"IP/Login Limit Max : {str(summary.get('ip_limit_max') or '-')}",
-                                f"IP Unik Aktif      : {str(summary.get('distinct_ip_count') or '0')}",
-                                f"Daftar IP Aktif    : {str(summary.get('distinct_ips') or '-')}",
-                                f"IP/Login Metric    : {str(summary.get('ip_limit_metric') or '0')}",
-                                f"Block Reason       : {str(summary.get('block_reason') or '-')}",
-                                f"Account Locked     : {str(summary.get('account_locked') or 'OFF')}",
-                                f"Sesi Aktif         : {str(summary.get('active_sessions_total') or '0')}",
-                                f"Speed Download     : {str(summary.get('speed_download') or '-')}",
-                                f"Speed Upload       : {str(summary.get('speed_upload') or '-')}",
-                                f"Speed Limit        : {str(summary.get('speed_limit') or '-')}",
-                            ]
-                        )
-                    )
-                    + "</pre>",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "",
-                    "<pre>"
-                    + html.escape(
-                        "\n".join(
-                            [
-                                f"Username       : {str(summary.get('username') or _qac_selection_label(menu.id, selection))}",
-                                f"Quota Limit    : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used     : {str(summary.get('quota_used') or '-')}",
-                                f"Expired At     : {str(summary.get('expired_at') or '-')}",
-                                f"IP Limit       : {str(summary.get('ip_limit') or '-')}",
-                                f"Block Reason   : {str(summary.get('block_reason') or '-')}",
-                                f"IP Limit Max   : {str(summary.get('ip_limit_max') or '-')}",
-                                f"Speed Download : {str(summary.get('speed_download') or '-')}",
-                                f"Speed Upload   : {str(summary.get('speed_upload') or '-')}",
-                                f"Speed Limit    : {str(summary.get('speed_limit') or '-')}",
-                            ]
-                        )
-                    )
-                    + "</pre>",
-                ]
-            )
-    else:
-        lines.extend(
-            [
-                "",
-                f"User aktif: <code>{html.escape(_qac_selection_label(menu.id, selection))}</code>",
-            ]
-        )
-    lines.extend(
-        [
-            "",
-            f"Halaman aksi <code>{page + 1}/{max(total_pages, 1)}</code>",
-            "Pilih action:",
-        ]
+    return qac_ui_menu_text(
+        menu,
+        selection,
+        summary,
+        page,
+        total_pages,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
+        ssh_qac_menu_id=SSH_QAC_MENU_ID,
     )
-    return "\n".join(lines)
 
 
 def _qac_menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_page: int = 0) -> InlineKeyboardMarkup:
-    rows = list(_menu_keyboard(runtime, menu, page, parent_page=parent_page).inline_keyboard)
-    utility_row = [
-        InlineKeyboardButton("🔄 Refresh Summary", callback_data=f"qac_refresh{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}"),
-        InlineKeyboardButton("🔁 Ganti User", callback_data=f"qac_pick_menu{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{page}"),
-    ]
-    if rows and rows[-1]:
-        footer_callbacks = {str(btn.callback_data or "") for btn in rows[-1]}
-        if "h" in footer_callbacks or any(
-            cb == f"m{CALLBACK_SEP}{menu.parent_menu}" or cb.startswith(f"m{CALLBACK_SEP}{menu.parent_menu}{CALLBACK_SEP}")
-            for cb in footer_callbacks
-        ):
-            rows.insert(-1, utility_row)
-        else:
-            rows.append(utility_row)
-    else:
-        rows.append(utility_row)
-    return InlineKeyboardMarkup(rows)
+    return qac_ui_menu_keyboard(
+        menu,
+        page,
+        callback_sep=CALLBACK_SEP,
+        base_markup=_menu_keyboard(runtime, menu, page, parent_page=parent_page),
+    )
 
 
 def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]], menu_page: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    start = page * DELETE_PICK_PAGE_SIZE
-    chunk = users[start : start + DELETE_PICK_PAGE_SIZE]
-
-    user_buttons: list[InlineKeyboardButton] = []
-    for idx, item in enumerate(chunk, start=start):
-        label = _qac_picker_entry_label(menu_id, str(item.get("proto") or ""), str(item.get("username") or ""))
-        user_buttons.append(
-            InlineKeyboardButton(
-                _short_button_label(label, max_len=22),
-                callback_data=f"qac_pick{CALLBACK_SEP}{idx}",
-            )
-        )
-    rows.extend(_rows_from_buttons(user_buttons))
-
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    if total_pages > 1:
-        nav: list[InlineKeyboardButton] = []
-        if page > 0:
-            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"qac_page{CALLBACK_SEP}{page - 1}"))
-        nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="noop"))
-        if page + 1 < total_pages:
-            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"qac_page{CALLBACK_SEP}{page + 1}"))
-        rows.append(nav)
-
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "⬅️ Kembali",
-                callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}",
-            )
-        ]
+    return qac_ui_pick_keyboard(
+        menu_id,
+        page,
+        users,
+        menu_page,
+        callback_sep=CALLBACK_SEP,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        short_button_label=_short_button_label,
+        rows_from_buttons=_rows_from_buttons,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
     )
-    return InlineKeyboardMarkup(rows)
 
 
 def _qac_pick_text(menu_id: str, page: int, users: list[dict[str, str]]) -> str:
-    total_pages = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE) + 1 if users else 1
-    return (
-        f"<b>{html.escape(_qac_picker_title(menu_id))}</b>\n"
-        "Pilih user dulu untuk membuka menu QAC.\n\n"
-        f"Total user: <code>{len(users)}</code>\n"
-        f"Halaman: <code>{page + 1}/{total_pages}</code>"
+    return qac_ui_pick_text(
+        menu_id,
+        page,
+        users,
+        delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
+        xray_qac_menu_id=XRAY_QAC_MENU_ID,
+        ssh_qac_menu_id=SSH_QAC_MENU_ID,
     )
 
 
