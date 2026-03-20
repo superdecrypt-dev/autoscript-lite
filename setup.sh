@@ -200,9 +200,10 @@ source_setup_module "opt/setup/install/domain_guard.sh"
 trap run_exit_cleanups EXIT
 sanity_check() {
   local failed=0
-  local edge_provider edge_active edge_runtime_service
+  local edge_provider edge_active edge_runtime_service warp_runtime_mode
   edge_provider="${EDGE_PROVIDER:-none}"
   edge_active="${EDGE_ACTIVATE_RUNTIME:-false}"
+  warp_runtime_mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
 
   listener_present_tcp() {
     local pattern="$1"
@@ -249,7 +250,14 @@ sanity_check() {
     failed=1
   fi
 
-  if systemctl is-active --quiet wireproxy; then
+  if [[ "${warp_runtime_mode}" == "zerotrust" ]]; then
+    if systemctl is-active --quiet wireproxy; then
+      warn "check: wireproxy active saat mode Zero Trust"
+      warn "check: wireproxy seharusnya idle ketika backend Zero Trust menjadi runtime aktif."
+    else
+      ok "check: wireproxy idle (Zero Trust runtime)"
+    fi
+  elif systemctl is-active --quiet wireproxy; then
     ok "check: wireproxy active"
   else
     warn "check: wireproxy inactive"
@@ -260,7 +268,16 @@ sanity_check() {
 
   if command -v warp-cli >/dev/null 2>&1 || systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1; then
     ok "check: Zero Trust backend tersedia (cloudflare-warp)"
-    if systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
+    if [[ "${warp_runtime_mode}" == "zerotrust" ]]; then
+      if systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
+        ok "check: ${WARP_ZEROTRUST_SERVICE} active (Zero Trust runtime)"
+      else
+        warn "check: ${WARP_ZEROTRUST_SERVICE} inactive pada mode Zero Trust"
+        systemctl status "${WARP_ZEROTRUST_SERVICE}" --no-pager >&2 || true
+        journalctl -u "${WARP_ZEROTRUST_SERVICE}" -n 120 --no-pager >&2 || true
+        failed=1
+      fi
+    elif systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
       warn "check: ${WARP_ZEROTRUST_SERVICE} active"
       warn "check: backend Zero Trust aktif; pastikan ini memang state runtime yang diinginkan."
     else

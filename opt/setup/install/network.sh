@@ -286,13 +286,69 @@ cloudflare_warp_repo_supported() {
   [[ "${arch}" == "amd64" || "${arch}" == "arm64" ]]
 }
 
-cloudflare_warp_mode_state_get() {
-  local mode=""
-  if [[ ! -f "${WARP_STATE_FILE}" ]]; then
-    printf 'consumer\n'
-    return 0
+cloudflare_warp_zero_trust_proxy_port_get() {
+  local proxy_port=""
+  proxy_port="$(python3 - <<'PY' "${WARP_ZEROTRUST_CONFIG_FILE}" "${WARP_ZEROTRUST_PROXY_PORT}" 2>/dev/null || true
+import pathlib
+import sys
+
+cfg = pathlib.Path(sys.argv[1])
+default_port = str(sys.argv[2] or "40000").strip() or "40000"
+proxy_port = ""
+
+if cfg.exists():
+  try:
+    for line in cfg.read_text(encoding="utf-8").splitlines():
+      stripped = line.strip()
+      if not stripped or stripped.startswith("#") or "=" not in line:
+        continue
+      key, value = line.split("=", 1)
+      if key.strip() == "WARP_ZEROTRUST_PROXY_PORT":
+        proxy_port = value.strip()
+        break
+  except Exception:
+    proxy_port = ""
+
+print(proxy_port if proxy_port.isdigit() else default_port)
+PY
+)"
+  if [[ ! "${proxy_port}" =~ ^[0-9]+$ ]]; then
+    proxy_port="${WARP_ZEROTRUST_PROXY_PORT}"
   fi
-  mode="$(python3 - <<'PY' "${WARP_STATE_FILE}" 2>/dev/null || true
+  printf '%s\n' "${proxy_port}"
+}
+
+cloudflare_warp_port_listener_names_get() {
+  local port="${1:-}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  command -v ss >/dev/null 2>&1 || return 1
+  ss -lntp "sport = :${port}" 2>/dev/null | awk '
+    NR <= 1 { next }
+    {
+      line = $0
+      while (match(line, /\("[^"]+"/)) {
+        name = substr(line, RSTART + 2, RLENGTH - 3)
+        if (!(name in seen)) {
+          print name
+          seen[name] = 1
+        }
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  '
+}
+
+cloudflare_warp_zero_trust_proxy_owned_by_service() {
+  local port=""
+  port="$(cloudflare_warp_zero_trust_proxy_port_get 2>/dev/null || true)"
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  cloudflare_warp_port_listener_names_get "${port}" 2>/dev/null | grep -Fxq "${WARP_ZEROTRUST_SERVICE}"
+}
+
+cloudflare_warp_mode_state_get() {
+  local mode="" state_mode="" runtime_zero_trust_active=1
+  if [[ -f "${WARP_STATE_FILE}" ]]; then
+    state_mode="$(python3 - <<'PY' "${WARP_STATE_FILE}" 2>/dev/null || true
 import json
 import sys
 
@@ -306,9 +362,27 @@ value = str(data.get("warp_mode") or "").strip().lower()
 if value in {"consumer", "zerotrust"}:
   print(value)
 PY
-)"
-  if [[ "${mode}" == "consumer" || "${mode}" == "zerotrust" ]]; then
-    printf '%s\n' "${mode}"
+    )"
+  fi
+
+  if ! systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 \
+    || ! systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}" \
+    || ! cloudflare_warp_zero_trust_proxy_owned_by_service; then
+    runtime_zero_trust_active=0
+  fi
+
+  if (( runtime_zero_trust_active == 1 )); then
+    printf 'zerotrust\n'
+    return 0
+  fi
+
+  if [[ "${state_mode}" == "consumer" || "${state_mode}" == "zerotrust" ]]; then
+    printf '%s\n' "${state_mode}"
+    return 0
+  fi
+
+  if [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1 && systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
+    printf 'zerotrust\n'
   else
     printf 'consumer\n'
   fi
@@ -608,6 +682,7 @@ EOF
       warp-cli --accept-tos connect >/dev/null 2>&1 || true
     fi
     systemctl disable --now wireproxy >/dev/null 2>&1 || systemctl stop wireproxy >/dev/null 2>&1 || true
+    systemctl reset-failed wireproxy >/dev/null 2>&1 || true
     ok "wireproxy siap dalam keadaan idle karena mode runtime WARP saat ini adalah Zero Trust."
     return 0
   fi
