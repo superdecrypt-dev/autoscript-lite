@@ -1,12 +1,273 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/observability"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/runtime"
 )
+
+func TestReportFatalErrorSendsOnlyFirstError(t *testing.T) {
+	errCh := make(chan error, 1)
+	var once sync.Once
+
+	reportFatalError(errCh, &once, "first", errors.New("one"))
+	reportFatalError(errCh, &once, "second", errors.New("two"))
+
+	select {
+	case err := <-errCh:
+		if got := err.Error(); got != "first: one" {
+			t.Fatalf("reported error = %q, want %q", got, "first: one")
+		}
+	default:
+		t.Fatalf("expected first fatal error to be reported")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected extra fatal error reported: %v", err)
+	default:
+	}
+}
+
+func TestReportFatalErrorDoesNotBlockWhenChannelAlreadyFull(t *testing.T) {
+	errCh := make(chan error, 1)
+	errCh <- errors.New("existing")
+	var once sync.Once
+
+	done := make(chan struct{})
+	go func() {
+		reportFatalError(errCh, &once, "late", errors.New("boom"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("reportFatalError blocked on full channel")
+	}
+
+	select {
+	case err := <-errCh:
+		if got := err.Error(); got != "existing" {
+			t.Fatalf("channel value = %q, want existing", got)
+		}
+	default:
+		t.Fatalf("expected original buffered error to remain")
+	}
+}
+
+func TestReloadableListenerHealthyTracksClosedListener(t *testing.T) {
+	addr := reserveTCPAddr(t)
+	listener, err := newReloadableListener([]string{addr})
+	if err != nil {
+		t.Fatalf("newReloadableListener error = %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	if !listener.Healthy() {
+		t.Fatalf("Healthy() = false, want true immediately after start")
+	}
+
+	listener.mu.RLock()
+	ln := listener.listeners[addr]
+	listener.mu.RUnlock()
+	if ln == nil {
+		t.Fatalf("listener for %q = nil", addr)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !listener.Healthy()
+	})
+	if got := listener.ActiveAddrs(); len(got) != 0 {
+		t.Fatalf("ActiveAddrs() = %v, want empty after listener close", got)
+	}
+}
+
+func TestReloadableListenerReconcileRevivesClosedListener(t *testing.T) {
+	addr := reserveTCPAddr(t)
+	listener, err := newReloadableListener([]string{addr})
+	if err != nil {
+		t.Fatalf("newReloadableListener error = %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	listener.mu.RLock()
+	oldListener := listener.listeners[addr]
+	listener.mu.RUnlock()
+	if oldListener == nil {
+		t.Fatalf("listener for %q = nil", addr)
+	}
+	if err := oldListener.Close(); err != nil {
+		t.Fatalf("close listener error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !listener.Healthy()
+	})
+	if err := listener.Reconcile([]string{addr}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !listener.Healthy() {
+		t.Fatalf("Healthy() = false after reconcile, want true")
+	}
+
+	listener.mu.RLock()
+	newListener := listener.listeners[addr]
+	listener.mu.RUnlock()
+	if newListener == nil {
+		t.Fatalf("listener for %q = nil after reconcile", addr)
+	}
+	if newListener == oldListener {
+		t.Fatalf("listener was not recreated for %q", addr)
+	}
+}
+
+func TestReloadableListenerReconcileClosesInactiveListenerBeforeRebind(t *testing.T) {
+	addr := reserveTCPAddr(t)
+	stale, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("stale listen error = %v", err)
+	}
+
+	listener := &reloadableListener{
+		listeners: map[string]net.Listener{addr: stale},
+		active:    map[string]bool{addr: false},
+		addrs:     []string{addr},
+		acceptCh:  make(chan acceptResult, 1),
+		closeCh:   make(chan struct{}),
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	if err := listener.Reconcile([]string{addr}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !listener.Healthy() {
+		t.Fatalf("Healthy() = false after reconcile, want true")
+	}
+
+	listener.mu.RLock()
+	newListener := listener.listeners[addr]
+	listener.mu.RUnlock()
+	if newListener == nil {
+		t.Fatalf("listener for %q = nil after reconcile", addr)
+	}
+	if newListener == stale {
+		t.Fatalf("inactive listener for %q was not replaced", addr)
+	}
+}
+
+func TestReloadableListenerAcceptFailsWhenAllListenersInactive(t *testing.T) {
+	listener := &reloadableListener{
+		listeners: make(map[string]net.Listener),
+		active:    map[string]bool{"127.0.0.1:1": false},
+		addrs:     []string{"127.0.0.1:1"},
+		acceptCh:  make(chan acceptResult, 1),
+		closeCh:   make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := listener.Accept(ctx)
+	if !errors.Is(err, errNoActiveListeners) {
+		t.Fatalf("Accept() error = %v, want %v", err, errNoActiveListeners)
+	}
+}
+
+func TestIsRetryableAcceptErrorTreatsTemporaryAsRetryable(t *testing.T) {
+	if !isRetryableAcceptError(temporaryAcceptError{}) {
+		t.Fatalf("isRetryableAcceptError() = false, want true for temporary error")
+	}
+}
+
+func TestReloadableListenerMarksNonRetryableAcceptErrorInactive(t *testing.T) {
+	listener := &reloadableListener{
+		listeners: make(map[string]net.Listener),
+		active:    make(map[string]bool),
+		acceptCh:  make(chan acceptResult, 1),
+		closeCh:   make(chan struct{}),
+	}
+	addr := "127.0.0.1:1"
+	ln := &scriptedListener{acceptErr: errors.New("boom")}
+	listener.listeners[addr] = ln
+	listener.addrs = []string{addr}
+	listener.active[addr] = true
+
+	listener.serveAcceptLoop(addr, ln)
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !listener.Healthy()
+	})
+	if got := listener.ActiveAddrs(); len(got) != 0 {
+		t.Fatalf("ActiveAddrs() = %v, want empty after non-retryable accept error", got)
+	}
+}
+
+func reserveTCPAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserveTCPAddr listen error = %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("reserveTCPAddr close error = %v", err)
+	}
+	return addr
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", timeout)
+}
+
+type scriptedListener struct {
+	acceptErr error
+	closed    bool
+}
+
+func (l *scriptedListener) Accept() (net.Conn, error) { return nil, l.acceptErr }
+func (l *scriptedListener) Close() error {
+	l.closed = true
+	return nil
+}
+func (l *scriptedListener) Addr() net.Addr { return dummyTCPAddr("127.0.0.1:1") }
+
+type dummyTCPAddr string
+
+func (a dummyTCPAddr) Network() string { return "tcp" }
+func (a dummyTCPAddr) String() string  { return string(a) }
+
+var _ net.Listener = (*scriptedListener)(nil)
+var _ net.Addr = dummyTCPAddr("")
+
+type temporaryAcceptError struct{}
+
+func (temporaryAcceptError) Error() string   { return "temporary" }
+func (temporaryAcceptError) Temporary() bool { return true }
 
 func TestDecideHTTPRouteUnauthorizedForUnknownWebSocket(t *testing.T) {
 	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}

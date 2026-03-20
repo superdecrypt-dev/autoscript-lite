@@ -1039,13 +1039,34 @@ edge_runtime_enabled_for_public_ports() {
 }
 
 ssh_ws_public_ports_label() {
-  local http_port tls_port
-  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
-  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
-  if [[ -n "${tls_port}" && -n "${http_port}" ]]; then
-    printf '%s & %s\n' "${tls_port}" "${http_port}"
+  printf '%s\n' "443, 80"
+}
+
+ssh_alt_tls_public_ports_label() {
+  local tls_ports out=() port
+  tls_ports="$(edge_runtime_public_tls_ports 2>/dev/null || echo "443 2053 2083 2087 2096 8443")"
+  for port in ${tls_ports}; do
+    [[ "${port}" == "443" ]] && continue
+    out+=("${port}")
+  done
+  if (( ${#out[@]} > 0 )); then
+    printf '%s\n' "${out[*]}" | sed 's/ /, /g'
   else
-    printf '%s\n' "443 & 80"
+    printf '%s\n' "-"
+  fi
+}
+
+ssh_alt_http_public_ports_label() {
+  local http_ports out=() port
+  http_ports="$(edge_runtime_public_http_ports 2>/dev/null || echo "80 8080 8880 2052 2082 2086 2095")"
+  for port in ${http_ports}; do
+    [[ "${port}" == "80" ]] && continue
+    out+=("${port}")
+  done
+  if (( ${#out[@]} > 0 )); then
+    printf '%s\n' "${out[*]}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
   fi
 }
 
@@ -1088,8 +1109,8 @@ ssh_account_info_write() {
   ssh_state_dirs_prepare
   password_out="${password_raw:-"-"}"
 
-  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp badvpn_port_disp geo
-  local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_badvpn
+  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp ssh_alt_tls_ports_disp ssh_alt_http_ports_disp badvpn_port_disp geo
+  local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_ssh_alt_tls running_ssh_alt_http running_badvpn
   acc_file="$(ssh_account_info_file "${username}")"
   [[ -n "${output_file_override}" ]] && acc_file="${output_file_override}"
   domain="$(normalize_domain_token "${domain_override}")"
@@ -1203,6 +1224,8 @@ PY
   sshws_ports_disp="$(ssh_ws_public_ports_label)"
   ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
   ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
+  ssh_alt_tls_ports_disp="$(ssh_alt_tls_public_ports_label)"
+  ssh_alt_http_ports_disp="$(ssh_alt_http_public_ports_label)"
   badvpn_port_disp="$(badvpn_public_port_label)"
   local zivpn_block=""
   running_label_width=16
@@ -1211,6 +1234,8 @@ PY
   printf -v running_ssh_ws_port '%-*s : %s' "${running_label_width}" "SSH WS Port" "${sshws_ports_disp}"
   printf -v running_ssh_direct '%-*s : %s' "${running_label_width}" "SSH Direct Port" "${ssh_direct_ports_disp}"
   printf -v running_ssh_ssl_tls '%-*s : %s' "${running_label_width}" "SSH SSL/TLS Port" "${ssh_ssl_tls_ports_disp}"
+  printf -v running_ssh_alt_tls '%-*s : %s' "${running_label_width}" "Alt Port SSL/TLS" "${ssh_alt_tls_ports_disp}"
+  printf -v running_ssh_alt_http '%-*s : %s' "${running_label_width}" "Alt Port HTTP" "${ssh_alt_http_ports_disp}"
   printf -v running_badvpn '%-*s : %s' "${running_label_width}" "BadVPN UDPGW" "${badvpn_port_disp}"
   if zivpn_account_info_enabled; then
     local zivpn_password_line
@@ -1246,6 +1271,8 @@ ${running_ssh_ws_alt}
 ${running_ssh_ws_port}
 ${running_ssh_direct}
 ${running_ssh_ssl_tls}
+${running_ssh_alt_tls}
+${running_ssh_alt_http}
 ${running_badvpn}
 ${zivpn_block}
 

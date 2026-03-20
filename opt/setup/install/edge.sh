@@ -4,6 +4,8 @@ EDGE_RUNTIME_ENV_FILE="${EDGE_RUNTIME_ENV_FILE:-/etc/default/edge-runtime}"
 EDGE_DIST_DIR="${SCRIPT_DIR}/opt/edge/dist"
 EDGE_BIN="${EDGE_BIN:-/usr/local/bin/edge-mux}"
 EDGE_SERVICE_NAME="${EDGE_SERVICE_NAME:-edge-mux.service}"
+EDGE_DEFAULT_HTTP_PORTS="${EDGE_DEFAULT_HTTP_PORTS:-80,8080,8880,2052,2082,2086,2095}"
+EDGE_DEFAULT_TLS_PORTS="${EDGE_DEFAULT_TLS_PORTS:-443,2053,2083,2087,2096,8443}"
 EDGE_NGINX_TLS_BACKEND="${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}"
 EDGE_NGINX_STREAM_CONF="${EDGE_NGINX_STREAM_CONF:-/etc/nginx/stream-conf.d/edge-stream.conf}"
 EDGE_SSH_QUOTA_ROOT="${EDGE_SSH_QUOTA_ROOT:-/opt/quota/ssh}"
@@ -56,7 +58,7 @@ load_persisted_edge_runtime_env() {
 
   while IFS='=' read -r key value; do
     case "${key}" in
-      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_METRICS_ENABLED|EDGE_METRICS_LISTEN|EDGE_NGINX_HTTP_BACKEND|EDGE_NGINX_TLS_BACKEND|EDGE_NGINX_STREAM_CONF|EDGE_SSH_CLASSIC_BACKEND|EDGE_SSH_TLS_BACKEND|EDGE_SSH_WS_BACKEND|EDGE_SSH_QUOTA_ROOT|EDGE_XRAY_VLESS_RAW_BACKEND|EDGE_XRAY_TROJAN_RAW_BACKEND|EDGE_SSH_DROPBEAR_UNIT|EDGE_SSH_QAC_ENFORCER|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE|EDGE_TLS_HANDSHAKE_TIMEOUT_MS|EDGE_MAX_CONNS|EDGE_MAX_CONNS_PER_IP|EDGE_ACCEPT_RATE_LIMIT_PER_IP|EDGE_ACCEPT_RATE_WINDOW_SEC|EDGE_ABUSE_COOLDOWN_TRIGGER_REJECTS|EDGE_ABUSE_COOLDOWN_WINDOW_SEC|EDGE_ABUSE_COOLDOWN_SEC|EDGE_SSH_SESSION_ROOT|EDGE_SSH_SESSION_HEARTBEAT_SEC|EDGE_ACCEPT_PROXY_PROTOCOL|EDGE_TRUSTED_PROXY_CIDRS|EDGE_SNI_ROUTES|EDGE_SNI_PASSTHROUGH)
+      EDGE_PROVIDER|EDGE_ACTIVATE_RUNTIME|EDGE_PUBLIC_HTTP_PORT|EDGE_PUBLIC_TLS_PORT|EDGE_PUBLIC_HTTP_PORTS|EDGE_PUBLIC_TLS_PORTS|EDGE_METRICS_ENABLED|EDGE_METRICS_LISTEN|EDGE_NGINX_HTTP_BACKEND|EDGE_NGINX_TLS_BACKEND|EDGE_NGINX_STREAM_CONF|EDGE_SSH_CLASSIC_BACKEND|EDGE_SSH_TLS_BACKEND|EDGE_SSH_WS_BACKEND|EDGE_SSH_QUOTA_ROOT|EDGE_XRAY_VLESS_RAW_BACKEND|EDGE_XRAY_TROJAN_RAW_BACKEND|EDGE_SSH_DROPBEAR_UNIT|EDGE_SSH_QAC_ENFORCER|EDGE_HTTP_DETECT_TIMEOUT_MS|EDGE_CLASSIC_TLS_ON_80|EDGE_TLS_CERT_FILE|EDGE_TLS_KEY_FILE|EDGE_TLS_HANDSHAKE_TIMEOUT_MS|EDGE_MAX_CONNS|EDGE_MAX_CONNS_PER_IP|EDGE_ACCEPT_RATE_LIMIT_PER_IP|EDGE_ACCEPT_RATE_WINDOW_SEC|EDGE_ABUSE_COOLDOWN_TRIGGER_REJECTS|EDGE_ABUSE_COOLDOWN_WINDOW_SEC|EDGE_ABUSE_COOLDOWN_SEC|EDGE_SSH_SESSION_ROOT|EDGE_SSH_SESSION_HEARTBEAT_SEC|EDGE_ACCEPT_PROXY_PROTOCOL|EDGE_TRUSTED_PROXY_CIDRS|EDGE_SNI_ROUTES|EDGE_SNI_PASSTHROUGH)
         value="${value%$'\r'}"
         edge_runtime_set_default_from_persisted "${key}" "${value}"
         ;;
@@ -88,6 +90,94 @@ edge_provider_supported() {
 
 edge_provider_enabled() {
   [[ "$(edge_provider_selected)" != "none" ]]
+}
+
+edge_public_ports_normalize() {
+  local raw="${1:-}"
+  awk '
+    {
+      gsub(/,/, " ")
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          ports[++count] = $i
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        printf "%s%s", (i == 1 ? "" : ","), ports[i]
+      }
+    }
+  ' <<< "${raw}"
+}
+
+edge_public_http_ports_csv() {
+  local ports
+  ports="$(edge_public_ports_normalize "${EDGE_PUBLIC_HTTP_PORTS:-${EDGE_PUBLIC_HTTP_PORT:-${EDGE_DEFAULT_HTTP_PORTS}}}")"
+  [[ -n "${ports}" ]] || ports="$(edge_public_ports_normalize "${EDGE_DEFAULT_HTTP_PORTS}")"
+  printf '%s\n' "${ports}"
+}
+
+edge_public_tls_ports_csv() {
+  local ports
+  ports="$(edge_public_ports_normalize "${EDGE_PUBLIC_TLS_PORTS:-${EDGE_PUBLIC_TLS_PORT:-${EDGE_DEFAULT_TLS_PORTS}}}")"
+  [[ -n "${ports}" ]] || ports="$(edge_public_ports_normalize "${EDGE_DEFAULT_TLS_PORTS}")"
+  printf '%s\n' "${ports}"
+}
+
+edge_primary_port_from_csv() {
+  local csv="${1:-}" first
+  first="${csv%%,*}"
+  [[ "${first}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "${first}"
+}
+
+edge_public_http_primary_port() {
+  edge_primary_port_from_csv "$(edge_public_http_ports_csv)"
+}
+
+edge_public_tls_primary_port() {
+  edge_primary_port_from_csv "$(edge_public_tls_ports_csv)"
+}
+
+edge_public_ports_words() {
+  local csv="${1:-}"
+  printf '%s\n' "${csv//,/ }"
+}
+
+edge_render_nginx_stream_servers() {
+  local ports_csv backend_var
+  case "${1:-}" in
+    http)
+      ports_csv="$(edge_public_http_ports_csv)"
+      backend_var='$edge_stream_http_backend'
+      ;;
+    tls)
+      ports_csv="$(edge_public_tls_ports_csv)"
+      backend_var='$edge_stream_tls_backend'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  python3 - "${backend_var}" "${ports_csv}" <<'PY'
+import sys
+
+backend_var, ports_csv = sys.argv[1:]
+ports = [port for port in ports_csv.split(",") if port]
+
+for idx, port in enumerate(ports):
+    if idx:
+        print()
+    print("server {")
+    print(f"  listen {port};")
+    print(f"  proxy_pass {backend_var};")
+    print("  proxy_connect_timeout 10s;")
+    print("  proxy_timeout 7d;")
+    print("  ssl_preread on;")
+    print("}")
+PY
 }
 
 edge_provider_summary() {
@@ -180,8 +270,10 @@ write_edge_runtime_env() {
     0644 \
     "EDGE_PROVIDER=$(edge_provider_selected)" \
     "EDGE_ACTIVATE_RUNTIME=${EDGE_ACTIVATE_RUNTIME:-false}" \
-    "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \
-    "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
+    "EDGE_PUBLIC_HTTP_PORT=$(edge_public_http_primary_port)" \
+    "EDGE_PUBLIC_TLS_PORT=$(edge_public_tls_primary_port)" \
+    "EDGE_PUBLIC_HTTP_PORTS=$(edge_public_http_ports_csv)" \
+    "EDGE_PUBLIC_TLS_PORTS=$(edge_public_tls_ports_csv)" \
     "EDGE_METRICS_ENABLED=${EDGE_METRICS_ENABLED:-true}" \
     "EDGE_METRICS_LISTEN=${EDGE_METRICS_LISTEN:-127.0.0.1:9910}" \
     "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
@@ -245,8 +337,8 @@ stage_edge_nginx_stream_provider() {
     "nginx/stream-edge.conf" \
     "${EDGE_NGINX_STREAM_CONF}" \
     0644 \
-    "EDGE_PUBLIC_HTTP_PORT=${EDGE_PUBLIC_HTTP_PORT:-80}" \
-    "EDGE_PUBLIC_TLS_PORT=${EDGE_PUBLIC_TLS_PORT:-443}" \
+    "EDGE_HTTP_STREAM_SERVERS=$(edge_render_nginx_stream_servers http)" \
+    "EDGE_TLS_STREAM_SERVERS=$(edge_render_nginx_stream_servers tls)" \
     "EDGE_NGINX_HTTP_BACKEND=${EDGE_NGINX_HTTP_BACKEND:-127.0.0.1:18080}" \
     "EDGE_NGINX_TLS_BACKEND=${EDGE_NGINX_TLS_BACKEND:-127.0.0.1:18443}" \
     "EDGE_SSH_TLS_BACKEND=${EDGE_SSH_TLS_BACKEND:-127.0.0.1:22443}"
@@ -270,9 +362,10 @@ edge_runtime_port_owned_only_by_edge() {
 }
 
 edge_runtime_activation_preflight() {
-  local http_port tls_port
-  http_port="${EDGE_PUBLIC_HTTP_PORT:-80}"
-  tls_port="${EDGE_PUBLIC_TLS_PORT:-443}"
+  local port
+  local http_ports tls_ports
+  http_ports="$(edge_public_ports_words "$(edge_public_http_ports_csv)")"
+  tls_ports="$(edge_public_ports_words "$(edge_public_tls_ports_csv)")"
 
   [[ -s "${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}" ]] || die "TLS cert edge tidak ditemukan: ${EDGE_TLS_CERT_FILE:-/opt/cert/fullchain.pem}"
   [[ -s "${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}" ]] || die "TLS key edge tidak ditemukan: ${EDGE_TLS_KEY_FILE:-/opt/cert/privkey.pem}"
@@ -288,12 +381,16 @@ edge_runtime_activation_preflight() {
       ;;
   esac
 
-  if edge_runtime_port_busy "${http_port}"; then
-    edge_runtime_port_owned_only_by_edge "${http_port}" || die "Port edge HTTP ${http_port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
-  fi
-  if edge_runtime_port_busy "${tls_port}"; then
-    edge_runtime_port_owned_only_by_edge "${tls_port}" || die "Port edge TLS ${tls_port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
-  fi
+  for port in ${http_ports}; do
+    if edge_runtime_port_busy "${port}"; then
+      edge_runtime_port_owned_only_by_edge "${port}" || die "Port edge HTTP ${port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
+    fi
+  done
+  for port in ${tls_ports}; do
+    if edge_runtime_port_busy "${port}"; then
+      edge_runtime_port_owned_only_by_edge "${port}" || die "Port edge TLS ${port} sedang dipakai proses non-edge. Aktivasi runtime edge belum aman."
+    fi
+  done
 }
 
 activate_edge_provider_runtime() {

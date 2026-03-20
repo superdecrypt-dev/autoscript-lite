@@ -3,6 +3,7 @@ package tlsmux
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net"
 	"time"
 
@@ -53,7 +54,30 @@ func NewServer(cfg runtime.Config) (*Server, error) {
 }
 
 func (s *Server) Listen() (net.Listener, error) {
-	return net.Listen("tcp", s.cfg.TLSListenAddr())
+	addrs := s.cfg.TLSListenAddrs()
+	if len(addrs) != 1 {
+		return nil, fmt.Errorf("tlsmux listen requires exactly one TLS listen address, got %d", len(addrs))
+	}
+	return net.Listen("tcp", addrs[0])
+}
+
+func (s *Server) ListenAll() ([]net.Listener, error) {
+	addrs := s.cfg.TLSListenAddrs()
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("tlsmux listen requires at least one TLS listen address")
+	}
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			return nil, err
+		}
+		listeners = append(listeners, ln)
+	}
+	return listeners, nil
 }
 
 func (s *Server) AcceptTLSConn(conn net.Conn) (*tls.Conn, error) {

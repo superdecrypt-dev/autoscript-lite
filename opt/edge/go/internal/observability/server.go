@@ -21,10 +21,11 @@ type Server struct {
 	backendFn func(edgeruntime.Config) map[string]BackendHealthSnapshot
 	abuseFn   func() *AbuseSnapshot
 
-	mu   sync.Mutex
-	addr string
-	ln   net.Listener
-	srv  *http.Server
+	mu     sync.Mutex
+	addr   string
+	ln     net.Listener
+	srv    *http.Server
+	active bool
 }
 
 func NewServer(
@@ -52,6 +53,19 @@ func (s *Server) Configure(cfg edgeruntime.Config) error {
 			s.logger.Printf("edge-mux metrics listener disabled (was %s)", oldAddr)
 		}
 		return shutdownHTTPServer(oldSrv, oldLn)
+	}
+
+	if s.sameActiveAddr(cfg.MetricsAddr()) {
+		return nil
+	}
+	if s.sameInactiveAddr(cfg.MetricsAddr()) {
+		oldSrv, oldLn, oldAddr := s.swap(nil, nil, "")
+		if err := shutdownHTTPServer(oldSrv, oldLn); err != nil {
+			return err
+		}
+		if oldSrv != nil && s.logger != nil {
+			s.logger.Printf("edge-mux metrics listener cleared stale state on %s", oldAddr)
+		}
 	}
 
 	handler := s.newHandler()
@@ -85,7 +99,7 @@ func (s *Server) Addr() string {
 func (s *Server) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.srv != nil
+	return s.active
 }
 
 func (s *Server) Close() error {
@@ -94,8 +108,11 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) serve(server *http.Server, listener net.Listener, addr string) {
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && s.logger != nil {
-		s.logger.Printf("edge-mux metrics server failed addr=%s: %v", addr, err)
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		s.markInactive(server, listener)
+		if s.logger != nil {
+			s.logger.Printf("edge-mux metrics server failed addr=%s: %v", addr, err)
+		}
 	}
 }
 
@@ -108,7 +125,29 @@ func (s *Server) swap(server *http.Server, listener net.Listener, addr string) (
 	s.srv = server
 	s.ln = listener
 	s.addr = addr
+	s.active = server != nil
 	return oldSrv, oldLn, oldAddr
+}
+
+func (s *Server) markInactive(server *http.Server, listener net.Listener) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.srv != server || s.ln != listener {
+		return
+	}
+	s.active = false
+}
+
+func (s *Server) sameActiveAddr(addr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active && s.addr == addr && s.srv != nil && s.ln != nil
+}
+
+func (s *Server) sameInactiveAddr(addr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.active && s.addr == addr && (s.srv != nil || s.ln != nil)
 }
 
 func (s *Server) newHandler() http.Handler {

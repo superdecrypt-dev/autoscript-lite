@@ -1,6 +1,92 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
+XRAY_EDGE_RUNTIME_ENV_FILE="${XRAY_EDGE_RUNTIME_ENV_FILE:-/etc/default/edge-runtime}"
+
+xray_edge_runtime_env_value() {
+  local key="$1"
+  [[ -r "${XRAY_EDGE_RUNTIME_ENV_FILE}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[[:space:]]+/, "", $2)
+      sub(/[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }
+  ' "${XRAY_EDGE_RUNTIME_ENV_FILE}"
+}
+
+xray_edge_runtime_port_list() {
+  local list_key="$1" single_key="$2" fallback_list="$3" fallback_single="$4"
+  local raw
+  raw="$(xray_edge_runtime_env_value "${list_key}" 2>/dev/null || true)"
+  if [[ -z "${raw}" ]]; then
+    raw="$(xray_edge_runtime_env_value "${single_key}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${raw}" ]]; then
+    raw="${fallback_list:-${fallback_single}}"
+  fi
+  awk '
+    {
+      gsub(/,/, " ")
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          out = out (out ? " " : "") $i
+        }
+      }
+    }
+    END { print out }
+  ' <<< "${raw}"
+}
+
+xray_edge_runtime_ports_label() {
+  local ports="${1:-}"
+  [[ -n "${ports}" ]] || {
+    printf '%s\n' "-"
+    return 0
+  }
+  printf '%s\n' "${ports}" | sed 's/ /, /g'
+}
+
+xray_edge_runtime_public_http_ports_label() {
+  xray_edge_runtime_ports_label "$(xray_edge_runtime_port_list EDGE_PUBLIC_HTTP_PORTS EDGE_PUBLIC_HTTP_PORT "80 8080 8880 2052 2082 2086 2095" "80")"
+}
+
+xray_edge_runtime_public_tls_ports_label() {
+  xray_edge_runtime_ports_label "$(xray_edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443")"
+}
+
+xray_edge_runtime_ws_ports_label() {
+  printf '%s\n' "443, 80"
+}
+
+xray_edge_runtime_alt_tls_ports_label() {
+  local ports out=() port
+  ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443")"
+  for port in ${ports}; do
+    [[ "${port}" == "443" ]] && continue
+    out+=("${port}")
+  done
+  if (( ${#out[@]} > 0 )); then
+    printf '%s\n' "${out[*]}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
+
+xray_edge_runtime_alt_http_ports_label() {
+  local ports out=() port
+  ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_HTTP_PORTS EDGE_PUBLIC_HTTP_PORT "80 8080 8880 2052 2082 2086 2095" "80")"
+  for port in ${ports}; do
+    [[ "${port}" == "80" ]] && continue
+    out+=("${port}")
+  done
+  if (( ${#out[@]} > 0 )); then
+    printf '%s\n' "${out[*]}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
 
 
 xray_backup_config() {
@@ -1412,9 +1498,9 @@ write_account_artifacts() {
   [[ -n "${account_output_override}" ]] && acc_file="${account_output_override}"
   [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_ws_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
-acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up = sys.argv[1:20]
+acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up, ws_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:24]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
 ip_enabled = str(ip_enabled).lower() in ("1","true","yes","y","on")
@@ -1654,11 +1740,13 @@ else:
   lines.append("  Speed Limit : OFF")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
-lines.append(section_line(f"{proto_disp} WS", "443 & 80", running_label_width))
-lines.append(section_line(f"{proto_disp} HUP", "443 & 80", running_label_width))
-lines.append(section_line(f"{proto_disp} gRPC", "443", running_label_width))
+lines.append(section_line(f"{proto_disp} WS", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443", running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
+lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
+lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS Alt", ws_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_width))
@@ -1757,7 +1845,7 @@ account_info_refresh_for_user() {
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
   set +e
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}" "$(xray_edge_runtime_ws_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import base64
 import ipaddress
 import json
@@ -1768,7 +1856,7 @@ import tempfile
 import urllib.parse
 from datetime import date, datetime
 
-acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto, cred_override, output_override = sys.argv[1:12]
+acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto, cred_override, output_override, ws_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:16]
 email = f"{username}@{proto}"
 forced_cred = str(cred_override or "").strip()
 out_file = str(output_override or "").strip() or acc_file
@@ -2190,11 +2278,13 @@ else:
   lines.append("  Speed Limit : OFF")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
-lines.append(section_line(f"{proto_disp} WS", "443 & 80", running_label_width))
-lines.append(section_line(f"{proto_disp} HUP", "443 & 80", running_label_width))
-lines.append(section_line(f"{proto_disp} gRPC", "443", running_label_width))
+lines.append(section_line(f"{proto_disp} WS", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443", running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
+lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
+lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS Alt", ws_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_width))
@@ -4952,4 +5042,3 @@ QUOTA_PAGE_SIZE=10
 QUOTA_PAGE=0
 QUOTA_QUERY=""
 QUOTA_VIEW_INDEXES=()
-

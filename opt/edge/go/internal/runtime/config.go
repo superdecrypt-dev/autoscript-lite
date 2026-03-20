@@ -15,6 +15,8 @@ const (
 	defaultProvider            = "go"
 	defaultPublicHTTPAddr      = "0.0.0.0:80"
 	defaultPublicTLSAddr       = "0.0.0.0:443"
+	defaultPublicHTTPPorts     = "80,8080,8880,2052,2082,2086,2095"
+	defaultPublicTLSPorts      = "443,2053,2083,2087,2096,8443"
 	defaultMetricsListenAddr   = "127.0.0.1:9910"
 	defaultHTTPBackend         = "127.0.0.1:18080"
 	defaultSSHBackend          = "127.0.0.1:22022"
@@ -60,6 +62,8 @@ type Config struct {
 	Provider            string
 	PublicHTTPAddr      string
 	PublicTLSAddr       string
+	PublicHTTPAddrs     []string
+	PublicTLSAddrs      []string
 	MetricsEnabled      bool
 	MetricsListenAddr   string
 	HTTPBackend         string
@@ -158,11 +162,35 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	publicHTTPAddrs, publicHTTPAddr, err := envListenAddrs(
+		source,
+		"EDGE_PUBLIC_HTTP_PORTS",
+		"EDGE_PUBLIC_HTTP_PORT",
+		defaultPublicHTTPPorts,
+		defaultPublicHTTPAddr,
+		"0.0.0.0",
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	publicTLSAddrs, publicTLSAddr, err := envListenAddrs(
+		source,
+		"EDGE_PUBLIC_TLS_PORTS",
+		"EDGE_PUBLIC_TLS_PORT",
+		defaultPublicTLSPorts,
+		defaultPublicTLSAddr,
+		"0.0.0.0",
+	)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Provider:            envString(source, "EDGE_PROVIDER", defaultProvider),
-		PublicHTTPAddr:      normalizeAddr(envString(source, "EDGE_PUBLIC_HTTP_PORT", defaultPublicHTTPAddr), "0.0.0.0"),
-		PublicTLSAddr:       normalizeAddr(envString(source, "EDGE_PUBLIC_TLS_PORT", defaultPublicTLSAddr), "0.0.0.0"),
+		PublicHTTPAddr:      publicHTTPAddr,
+		PublicTLSAddr:       publicTLSAddr,
+		PublicHTTPAddrs:     publicHTTPAddrs,
+		PublicTLSAddrs:      publicTLSAddrs,
 		MetricsEnabled:      metricsEnabled,
 		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
 		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
@@ -207,8 +235,16 @@ func (c Config) Validate() error {
 	if c.Provider != "" && c.Provider != "go" {
 		return fmt.Errorf("unsupported EDGE_PROVIDER for edge-mux binary: %s", c.Provider)
 	}
-	if c.PublicHTTPAddr == "" || c.PublicTLSAddr == "" {
+	httpListenAddrs := c.HTTPListenAddrs()
+	tlsListenAddrs := c.TLSListenAddrs()
+	if len(httpListenAddrs) == 0 || len(tlsListenAddrs) == 0 {
 		return errors.New("listen addresses must not be empty")
+	}
+	if err := validateListenAddrs(httpListenAddrs, "HTTP"); err != nil {
+		return err
+	}
+	if err := validateListenAddrs(tlsListenAddrs, "TLS"); err != nil {
+		return err
 	}
 	if c.MetricsEnabled {
 		if c.MetricsListenAddr == "" {
@@ -268,20 +304,20 @@ func (c Config) Validate() error {
 		if _, _, err := net.SplitHostPort(target); err != nil {
 			return fmt.Errorf("invalid EDGE_SNI_PASSTHROUGH target %q for host %q: %w", target, host, err)
 		}
-		if targetLoopsToPublicListener(target, c.PublicHTTPAddr) {
+		if targetLoopsToAnyPublicListener(target, httpListenAddrs) {
 			return fmt.Errorf(
-				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public HTTP listener %q",
+				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public HTTP listener set %q",
 				target,
 				host,
-				c.PublicHTTPAddr,
+				strings.Join(httpListenAddrs, ","),
 			)
 		}
-		if targetLoopsToPublicListener(target, c.PublicTLSAddr) {
+		if targetLoopsToAnyPublicListener(target, tlsListenAddrs) {
 			return fmt.Errorf(
-				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public TLS listener %q",
+				"invalid EDGE_SNI_PASSTHROUGH target %q for host %q: target loops to edge public TLS listener set %q",
 				target,
 				host,
-				c.PublicTLSAddr,
+				strings.Join(tlsListenAddrs, ","),
 			)
 		}
 		if _, exists := c.SNIRoutes[host]; exists {
@@ -291,8 +327,40 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func (c Config) HTTPListenAddr() string       { return c.PublicHTTPAddr }
-func (c Config) TLSListenAddr() string        { return c.PublicTLSAddr }
+func (c Config) HTTPListenAddr() string {
+	if len(c.PublicHTTPAddrs) > 0 {
+		return c.PublicHTTPAddrs[0]
+	}
+	return c.PublicHTTPAddr
+}
+
+func (c Config) TLSListenAddr() string {
+	if len(c.PublicTLSAddrs) > 0 {
+		return c.PublicTLSAddrs[0]
+	}
+	return c.PublicTLSAddr
+}
+
+func (c Config) HTTPListenAddrs() []string {
+	if len(c.PublicHTTPAddrs) > 0 {
+		return append([]string(nil), c.PublicHTTPAddrs...)
+	}
+	if c.PublicHTTPAddr == "" {
+		return nil
+	}
+	return []string{c.PublicHTTPAddr}
+}
+
+func (c Config) TLSListenAddrs() []string {
+	if len(c.PublicTLSAddrs) > 0 {
+		return append([]string(nil), c.PublicTLSAddrs...)
+	}
+	if c.PublicTLSAddr == "" {
+		return nil
+	}
+	return []string{c.PublicTLSAddr}
+}
+
 func (c Config) MetricsAddr() string          { return c.MetricsListenAddr }
 func (c Config) HTTPBackendAddr() string      { return c.HTTPBackend }
 func (c Config) SSHBackendAddr() string       { return c.SSHBackend }
@@ -303,6 +371,12 @@ func (c Config) TrojanRawBackendAddr() string { return c.TrojanRawBackend }
 
 func (c Config) Clone() Config {
 	clone := c
+	if len(c.PublicHTTPAddrs) > 0 {
+		clone.PublicHTTPAddrs = append([]string(nil), c.PublicHTTPAddrs...)
+	}
+	if len(c.PublicTLSAddrs) > 0 {
+		clone.PublicTLSAddrs = append([]string(nil), c.PublicTLSAddrs...)
+	}
 	if len(c.TrustedProxyCIDRs) > 0 {
 		clone.TrustedProxyCIDRs = append([]string(nil), c.TrustedProxyCIDRs...)
 	}
@@ -478,6 +552,55 @@ func envCSV(source envSource, key, fallback string) []string {
 	return out
 }
 
+func envListenAddrs(source envSource, listKey, singleKey, defaultList, defaultSingle, defaultHost string) ([]string, string, error) {
+	listRaw := strings.TrimSpace(source[listKey])
+	singleRaw := strings.TrimSpace(source[singleKey])
+	switch {
+	case listRaw != "":
+		addrs, err := parseListenAddrs(listRaw, defaultHost)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid %s: %w", listKey, err)
+		}
+		primary := addrs[0]
+		if singleRaw != "" {
+			primary = normalizeAddr(singleRaw, defaultHost)
+			if _, _, err := net.SplitHostPort(primary); err != nil {
+				return nil, "", fmt.Errorf("invalid %s: %w", singleKey, err)
+			}
+			addrs = prioritizeListenAddr(addrs, primary)
+		}
+		return addrs, primary, nil
+	case singleRaw != "":
+		addr := normalizeAddr(singleRaw, defaultHost)
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return nil, "", fmt.Errorf("invalid %s: %w", singleKey, err)
+		}
+		return []string{addr}, addr, nil
+	default:
+		addrs, err := parseListenAddrs(defaultList, defaultHost)
+		if err != nil {
+			return nil, "", err
+		}
+		return addrs, normalizeAddr(defaultSingle, defaultHost), nil
+	}
+}
+
+func prioritizeListenAddr(addrs []string, primary string) []string {
+	primary = strings.TrimSpace(primary)
+	if primary == "" {
+		return append([]string(nil), addrs...)
+	}
+	out := make([]string, 0, len(addrs)+1)
+	out = append(out, primary)
+	for _, addr := range addrs {
+		if strings.TrimSpace(addr) == primary {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
+
 func envSNIRoutes(source envSource, key string) (map[string]string, error) {
 	raw := strings.TrimSpace(source[key])
 	return parseSNIRoutes(raw)
@@ -569,6 +692,52 @@ func normalizeAddr(raw, defaultHost string) string {
 		return raw
 	}
 	return defaultHost + ":" + raw
+}
+
+func parseListenAddrs(raw, defaultHost string) ([]string, error) {
+	parts := strings.FieldsFunc(strings.TrimSpace(raw), func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		addr := normalizeAddr(part, defaultHost)
+		if addr == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("empty listen address list")
+	}
+	return out, nil
+}
+
+func validateListenAddrs(addrs []string, label string) error {
+	if len(addrs) == 0 {
+		return fmt.Errorf("%s listen addresses must not be empty", label)
+	}
+	seen := make(map[string]struct{}, len(addrs))
+	for _, addr := range addrs {
+		if strings.TrimSpace(addr) == "" {
+			return fmt.Errorf("%s listen address must not be empty", label)
+		}
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return fmt.Errorf("invalid %s listen address %q: %w", label, addr, err)
+		}
+		if _, ok := seen[addr]; ok {
+			return fmt.Errorf("duplicate %s listen address %q", label, addr)
+		}
+		seen[addr] = struct{}{}
+	}
+	return nil
 }
 
 func parseSNIRoutes(raw string) (map[string]string, error) {
@@ -729,6 +898,15 @@ func targetLoopsToPublicListener(target, listen string) bool {
 	}
 	if isLoopbackHost(listenHost) && isLoopbackHost(targetHost) {
 		return true
+	}
+	return false
+}
+
+func targetLoopsToAnyPublicListener(target string, listens []string) bool {
+	for _, listen := range listens {
+		if targetLoopsToPublicListener(target, listen) {
+			return true
+		}
 	}
 	return false
 }

@@ -38,6 +38,13 @@ type flagOverrides struct {
 	timeoutMs   int
 }
 
+const (
+	reloadableListenerAcceptBuffer = 256
+	reloadableListenerRetryDelay   = 100 * time.Millisecond
+)
+
+var errNoActiveListeners = errors.New("no active listeners")
+
 func main() {
 	overrides := parseFlagOverrides()
 	loadConfig := func() (runtime.Config, error) {
@@ -61,8 +68,8 @@ func main() {
 	logger.Printf(
 		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
-		cfg.HTTPListenAddr(),
-		cfg.TLSListenAddr(),
+		formatListenAddrs(cfg.HTTPListenAddrs()),
+		formatListenAddrs(cfg.TLSListenAddrs()),
 		cfg.MetricsAddr(),
 		cfg.MetricsEnabled,
 		cfg.HTTPBackendAddr(),
@@ -94,11 +101,11 @@ func main() {
 		log.Fatalf("edge-mux tls init error: %v", err)
 	}
 
-	httpListener, err := newReloadableListener(cfg.HTTPListenAddr())
+	httpListener, err := newReloadableListener(cfg.HTTPListenAddrs())
 	if err != nil {
 		log.Fatalf("edge-mux http listen error: %v", err)
 	}
-	tlsListener, err := newReloadableListener(cfg.TLSListenAddr())
+	tlsListener, err := newReloadableListener(cfg.TLSListenAddrs())
 	if err != nil {
 		_ = httpListener.Close()
 		log.Fatalf("edge-mux tls listen error: %v", err)
@@ -116,8 +123,8 @@ func main() {
 		_ = tlsListener.Close()
 	}()
 
-	logger.Printf("edge-mux http listener ready on %s", httpListener.Addr())
-	logger.Printf("edge-mux tls listener ready on %s", tlsListener.Addr())
+	logger.Printf("edge-mux http listeners ready on %s", formatListenAddrs(httpListener.Addrs()))
+	logger.Printf("edge-mux tls listeners ready on %s", formatListenAddrs(tlsListener.Addrs()))
 
 	guard := abuse.NewGuard()
 	collector := observability.NewCollector(time.Now())
@@ -125,10 +132,10 @@ func main() {
 	var metricsServer *observability.Server
 	listenerState := func() observability.ListenerSnapshot {
 		snapshot := observability.ListenerSnapshot{
-			HTTPAddr: httpListener.Addr(),
-			TLSAddr:  tlsListener.Addr(),
-			HTTPUp:   httpListener.Addr() != "",
-			TLSUp:    tlsListener.Addr() != "",
+			HTTPAddr: formatListenAddrs(httpListener.ActiveAddrs()),
+			TLSAddr:  formatListenAddrs(tlsListener.ActiveAddrs()),
+			HTTPUp:   httpListener.Healthy(),
+			TLSUp:    tlsListener.Healthy(),
 		}
 		if metricsServer != nil {
 			snapshot.MetricsAddr = metricsServer.Addr()
@@ -180,13 +187,14 @@ func main() {
 	}()
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 1)
+	var fatalOnce sync.Once
 	start := func(name string, fn func(context.Context) error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
-				errCh <- errors.New(name + ": " + err.Error())
+				reportFatalError(errCh, &fatalOnce, name, err)
 			}
 		}()
 	}
@@ -234,9 +242,11 @@ func (o flagOverrides) Apply(cfg *runtime.Config) {
 	}
 	if o.httpListen != "" {
 		cfg.PublicHTTPAddr = o.httpListen
+		cfg.PublicHTTPAddrs = []string{o.httpListen}
 	}
 	if o.tlsListen != "" {
 		cfg.PublicTLSAddr = o.tlsListen
+		cfg.PublicTLSAddrs = []string{o.tlsListen}
 	}
 	if o.httpBackend != "" {
 		cfg.HTTPBackend = o.httpBackend
@@ -287,81 +297,358 @@ func (s *tlsState) Reload(cfg runtime.Config) error {
 }
 
 type reloadableListener struct {
-	mu   sync.RWMutex
-	ln   net.Listener
-	addr string
+	mu        sync.RWMutex
+	listeners map[string]net.Listener
+	addrs     []string
+	active    map[string]bool
+	acceptCh  chan acceptResult
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
-func newReloadableListener(addr string) (*reloadableListener, error) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
+type acceptResult struct {
+	conn net.Conn
+	err  error
+}
+
+func newReloadableListener(addrs []string) (*reloadableListener, error) {
+	l := &reloadableListener{
+		listeners: make(map[string]net.Listener),
+		active:    make(map[string]bool),
+		acceptCh:  make(chan acceptResult, reloadableListenerAcceptBuffer),
+		closeCh:   make(chan struct{}),
+	}
+	if err := l.Reconcile(addrs); err != nil {
 		return nil, err
 	}
-	return &reloadableListener{ln: ln, addr: addr}, nil
+	return l, nil
 }
 
 func (l *reloadableListener) Addr() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.addr
+	if len(l.addrs) == 0 {
+		return ""
+	}
+	return l.addrs[0]
 }
 
-func (l *reloadableListener) current() net.Listener {
+func (l *reloadableListener) Addrs() []string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.ln
+	return append([]string(nil), l.addrs...)
+}
+
+func (l *reloadableListener) ActiveAddrs() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]string, 0, len(l.addrs))
+	for _, addr := range l.addrs {
+		if l.active[addr] {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func (l *reloadableListener) Healthy() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if len(l.addrs) == 0 {
+		return false
+	}
+	for _, addr := range l.addrs {
+		if !l.active[addr] {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *reloadableListener) Accept(ctx context.Context) (net.Conn, error) {
 	for {
-		ln := l.current()
-		if ln == nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, net.ErrClosed
-		}
-		conn, err := ln.Accept()
-		if err == nil {
-			return conn, nil
-		}
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-l.closeCh:
+			return nil, net.ErrClosed
+		case result, ok := <-l.acceptCh:
+			if !ok {
+				return nil, net.ErrClosed
+			}
+			if result.err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+			if result.conn != nil {
+				return result.conn, nil
+			}
+		case <-time.After(reloadableListenerRetryDelay):
+			if l.allListenersInactive() {
+				return nil, errNoActiveListeners
+			}
 		}
-		if ln != l.current() {
-			continue
-		}
-		return nil, err
 	}
 }
 
-func (l *reloadableListener) Swap(addr string) error {
-	if addr == l.Addr() {
-		return nil
+func (l *reloadableListener) Reconcile(addrs []string) error {
+	desired := normalizeListenAddrs(addrs)
+	if len(desired) == 0 {
+		return errors.New("listener set must not be empty")
 	}
-	newLn, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+
+	l.mu.RLock()
+	current := make(map[string]net.Listener, len(l.listeners))
+	for addr, ln := range l.listeners {
+		current[addr] = ln
 	}
+	currentActive := make(map[string]bool, len(l.active))
+	for addr, active := range l.active {
+		currentActive[addr] = active
+	}
+	l.mu.RUnlock()
+
+	newlyCreated := make(map[string]net.Listener)
+	for _, addr := range desired {
+		if ln, ok := current[addr]; ok && currentActive[addr] {
+			_ = ln
+			continue
+		}
+		if ln, ok := current[addr]; ok && !currentActive[addr] {
+			_ = ln.Close()
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			for _, created := range newlyCreated {
+				_ = created.Close()
+			}
+			return err
+		}
+		newlyCreated[addr] = ln
+	}
+
+	next := make(map[string]net.Listener, len(desired))
+	nextActive := make(map[string]bool, len(desired))
+	for _, addr := range desired {
+		if ln, ok := current[addr]; ok && currentActive[addr] && newlyCreated[addr] == nil {
+			next[addr] = ln
+			nextActive[addr] = true
+			continue
+		}
+		next[addr] = newlyCreated[addr]
+		nextActive[addr] = true
+	}
+
 	l.mu.Lock()
-	oldLn := l.ln
-	l.ln = newLn
-	l.addr = addr
+	old := l.listeners
+	l.listeners = next
+	l.addrs = append([]string(nil), desired...)
+	l.active = nextActive
 	l.mu.Unlock()
-	if oldLn != nil {
-		_ = oldLn.Close()
+
+	for addr, ln := range newlyCreated {
+		l.serveAcceptLoop(addr, ln)
+	}
+	for addr, ln := range old {
+		if currentNext, ok := next[addr]; !ok || currentNext != ln {
+			_ = ln.Close()
+		}
 	}
 	return nil
 }
 
 func (l *reloadableListener) Close() error {
 	l.mu.Lock()
-	oldLn := l.ln
-	l.ln = nil
-	l.addr = ""
+	oldListeners := l.listeners
+	l.listeners = nil
+	l.addrs = nil
+	l.active = nil
 	l.mu.Unlock()
-	if oldLn != nil {
-		return oldLn.Close()
+
+	l.closeOnce.Do(func() {
+		close(l.closeCh)
+	})
+
+	var firstErr error
+	for _, ln := range oldListeners {
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (l *reloadableListener) serveAcceptLoop(addr string, ln net.Listener) {
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					l.markListenerInactive(addr, ln)
+					return
+				}
+				if !l.listenerStillActive(addr, ln) {
+					return
+				}
+				if !isRetryableAcceptError(err) {
+					l.markListenerInactive(addr, ln)
+					l.deliverAcceptError(err)
+					return
+				}
+				l.deliverAcceptError(err)
+				select {
+				case <-time.After(reloadableListenerRetryDelay):
+				case <-l.closeCh:
+					return
+				}
+				continue
+			}
+			if !l.deliverAcceptedConn(conn) {
+				return
+			}
+		}
+	}()
+}
+
+func (l *reloadableListener) deliverAcceptError(err error) {
+	select {
+	case l.acceptCh <- acceptResult{err: err}:
+	case <-l.closeCh:
+	default:
+	}
+}
+
+func (l *reloadableListener) deliverAcceptedConn(conn net.Conn) bool {
+	select {
+	case l.acceptCh <- acceptResult{conn: conn}:
+		return true
+	case <-l.closeCh:
+		_ = conn.Close()
+		return false
+	}
+}
+
+func (l *reloadableListener) listenerStillActive(addr string, ln net.Listener) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	current, ok := l.listeners[addr]
+	return ok && current == ln
+}
+
+func (l *reloadableListener) listenerActive(addr string) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.active[addr]
+}
+
+func (l *reloadableListener) markListenerInactive(addr string, ln net.Listener) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current, ok := l.listeners[addr]
+	if !ok || current != ln {
+		return
+	}
+	l.active[addr] = false
+}
+
+func (l *reloadableListener) allListenersInactive() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if len(l.addrs) == 0 {
+		return false
+	}
+	for _, addr := range l.addrs {
+		if l.active[addr] {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeListenAddrs(addrs []string) []string {
+	out := make([]string, 0, len(addrs))
+	seen := make(map[string]struct{}, len(addrs))
+	for _, addr := range addrs {
+		text := strings.TrimSpace(addr)
+		if text == "" {
+			continue
+		}
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+	}
+	return out
+}
+
+func formatListenAddrs(addrs []string) string {
+	if len(addrs) == 0 {
+		return "-"
+	}
+	return strings.Join(addrs, ",")
+}
+
+func isRetryableAcceptError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return true
+		}
+	}
+	type temporaryError interface {
+		Temporary() bool
+	}
+	var tempErr temporaryError
+	if errors.As(err, &tempErr) {
+		return tempErr.Temporary()
+	}
+	return false
+}
+
+func reportFatalError(errCh chan<- error, once *sync.Once, name string, err error) {
+	if err == nil || once == nil {
+		return
+	}
+	once.Do(func() {
+		select {
+		case errCh <- errors.New(name + ": " + err.Error()):
+		default:
+		}
+	})
+}
+
+func rollbackReloadState(
+	oldCfg runtime.Config,
+	tlsLive *tlsState,
+	httpListener *reloadableListener,
+	tlsListener *reloadableListener,
+	metricsServer *observability.Server,
+) error {
+	if metricsServer != nil {
+		if err := metricsServer.Configure(oldCfg); err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+	}
+	if tlsListener != nil {
+		if err := tlsListener.Reconcile(oldCfg.TLSListenAddrs()); err != nil {
+			return fmt.Errorf("tls listeners: %w", err)
+		}
+	}
+	if httpListener != nil {
+		if err := httpListener.Reconcile(oldCfg.HTTPListenAddrs()); err != nil {
+			return fmt.Errorf("http listeners: %w", err)
+		}
+	}
+	if tlsLive != nil {
+		if err := tlsLive.Reload(oldCfg); err != nil {
+			return fmt.Errorf("tls state: %w", err)
+		}
 	}
 	return nil
 }
@@ -398,32 +685,39 @@ func handleReloads(
 			logger.Printf("edge-mux reload tls failed: %v", err)
 			continue
 		}
-		if err := httpListener.Swap(newCfg.HTTPListenAddr()); err != nil {
+		if err := httpListener.Reconcile(newCfg.HTTPListenAddrs()); err != nil {
 			collector.ObserveReloadFailure("http_listener")
-			logger.Printf("edge-mux reload http listener failed addr=%s: %v", newCfg.HTTPListenAddr(), err)
-			_ = tlsLive.Reload(oldCfg)
+			logger.Printf("edge-mux reload http listeners failed addrs=%s: %v", formatListenAddrs(newCfg.HTTPListenAddrs()), err)
+			if rollbackErr := rollbackReloadState(oldCfg, tlsLive, nil, nil, nil); rollbackErr != nil {
+				return fmt.Errorf("reload rollback failed after http listener error: %w", rollbackErr)
+			}
 			continue
 		}
-		if err := tlsListener.Swap(newCfg.TLSListenAddr()); err != nil {
+		if err := tlsListener.Reconcile(newCfg.TLSListenAddrs()); err != nil {
 			collector.ObserveReloadFailure("tls_listener")
-			logger.Printf("edge-mux reload tls listener failed addr=%s: %v", newCfg.TLSListenAddr(), err)
-			_ = httpListener.Swap(oldCfg.HTTPListenAddr())
-			_ = tlsLive.Reload(oldCfg)
+			logger.Printf("edge-mux reload tls listeners failed addrs=%s: %v", formatListenAddrs(newCfg.TLSListenAddrs()), err)
+			if rollbackErr := rollbackReloadState(oldCfg, tlsLive, httpListener, nil, nil); rollbackErr != nil {
+				return fmt.Errorf("reload rollback failed after tls listener error: %w", rollbackErr)
+			}
+			continue
+		}
+		if err := metricsServer.Configure(newCfg); err != nil {
+			collector.ObserveReloadFailure("metrics")
+			logger.Printf("edge-mux reload metrics reconfigure failed addr=%s: %v", newCfg.MetricsAddr(), err)
+			if rollbackErr := rollbackReloadState(oldCfg, tlsLive, httpListener, tlsListener, metricsServer); rollbackErr != nil {
+				return fmt.Errorf("reload rollback failed after metrics error: %w", rollbackErr)
+			}
 			continue
 		}
 		live.Set(newCfg)
 		if backendHealth != nil {
 			backendHealth.Refresh(newCfg)
 		}
-		if err := metricsServer.Configure(newCfg); err != nil {
-			collector.ObserveReloadFailure("metrics")
-			logger.Printf("edge-mux reload metrics reconfigure failed addr=%s: %v", newCfg.MetricsAddr(), err)
-		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
 			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
-			newCfg.HTTPListenAddr(),
-			newCfg.TLSListenAddr(),
+			formatListenAddrs(newCfg.HTTPListenAddrs()),
+			formatListenAddrs(newCfg.TLSListenAddrs()),
 			newCfg.MetricsAddr(),
 			newCfg.MetricsEnabled,
 			newCfg.HTTPBackendAddr(),

@@ -317,6 +317,29 @@ def _edge_runtime_env_value(key: str, default: str = "") -> str:
     return _read_env_map(EDGE_RUNTIME_ENV_FILE).get(key, default)
 
 
+def _edge_runtime_ports(list_key: str, single_key: str, default_list: str, default_single: str) -> list[int]:
+    raw = _edge_runtime_env_value(list_key, "") or _edge_runtime_env_value(single_key, "")
+    if not raw:
+        raw = default_list or default_single
+    values: list[int] = []
+    seen: set[int] = set()
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token or not token.isdigit():
+            continue
+        port = int(token)
+        if port in seen:
+            continue
+        seen.add(port)
+        values.append(port)
+    return values
+
+
+def _edge_runtime_ports_label(ports: list[int]) -> str:
+    if not ports:
+        return "-"
+    return ", ".join(str(port) for port in ports)
+
+
 def _edge_runtime_provider_name(default: str = "go") -> str:
     provider = _edge_runtime_env_value("EDGE_PROVIDER", default).strip().lower()
     return provider or default
@@ -3029,8 +3052,8 @@ def op_edge_gateway_status() -> tuple[str, str]:
     service = _edge_runtime_service_name()
     provider = _edge_runtime_provider_name("go")
     active_flag = _edge_runtime_env_value("EDGE_ACTIVATE_RUNTIME", "false") or "false"
-    http_port = _edge_runtime_env_value("EDGE_PUBLIC_HTTP_PORT", "80") or "80"
-    tls_port = _edge_runtime_env_value("EDGE_PUBLIC_TLS_PORT", "443") or "443"
+    http_ports = _edge_runtime_ports("EDGE_PUBLIC_HTTP_PORTS", "EDGE_PUBLIC_HTTP_PORT", "80,8080,8880,2052,2082,2086,2095", "80")
+    tls_ports = _edge_runtime_ports("EDGE_PUBLIC_TLS_PORTS", "EDGE_PUBLIC_TLS_PORT", "443,2053,2083,2087,2096,8443", "443")
     http_backend = _edge_runtime_env_value("EDGE_NGINX_HTTP_BACKEND", "127.0.0.1:18080") or "127.0.0.1:18080"
     tls_backend = _edge_runtime_env_value("EDGE_NGINX_TLS_BACKEND", "127.0.0.1:18443") or "127.0.0.1:18443"
     ssh_backend = _edge_runtime_env_value("EDGE_SSH_CLASSIC_BACKEND", "127.0.0.1:22022") or "127.0.0.1:22022"
@@ -3040,8 +3063,8 @@ def op_edge_gateway_status() -> tuple[str, str]:
         _unit_status_line(service),
         f"Provider      : {provider}",
         f"Activate      : {active_flag}",
-        f"HTTP Port     : {http_port} ({'LISTENING' if http_port.isdigit() and _listener_present(int(http_port)) else 'unknown'})",
-        f"TLS Port      : {tls_port} ({'LISTENING' if tls_port.isdigit() and _listener_present(int(tls_port)) else 'unknown'})",
+        f"HTTP Ports    : {_edge_runtime_ports_label(http_ports)} ({'LISTENING' if http_ports and all(_listener_present(port) for port in http_ports) else 'unknown'})",
+        f"TLS Ports     : {_edge_runtime_ports_label(tls_ports)} ({'LISTENING' if tls_ports and all(_listener_present(port) for port in tls_ports) else 'unknown'})",
         f"HTTP Backend  : {http_backend}",
         f"TLS Backend   : {tls_backend}",
         f"SSH Backend   : {ssh_backend}",

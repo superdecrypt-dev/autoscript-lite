@@ -240,3 +240,65 @@ func TestMergeEnvSourceUsesRuntimeFileAsAuthoritativeForEdgeKeys(t *testing.T) {
 		t.Fatalf("merged EDGE_RUNTIME_ENV_FILE = %q, want /etc/default/edge-runtime", got)
 	}
 }
+
+func TestEnvListenAddrsPromotesSinglePortWhenListAlsoPresent(t *testing.T) {
+	source := envSource{
+		"EDGE_PUBLIC_HTTP_PORT":  "8080",
+		"EDGE_PUBLIC_HTTP_PORTS": "80,2052",
+	}
+
+	addrs, primary, err := envListenAddrs(
+		source,
+		"EDGE_PUBLIC_HTTP_PORTS",
+		"EDGE_PUBLIC_HTTP_PORT",
+		defaultPublicHTTPPorts,
+		defaultPublicHTTPAddr,
+		"0.0.0.0",
+	)
+	if err != nil {
+		t.Fatalf("envListenAddrs error = %v", err)
+	}
+	if primary != "0.0.0.0:8080" {
+		t.Fatalf("primary = %q, want 0.0.0.0:8080", primary)
+	}
+	if len(addrs) != 3 {
+		t.Fatalf("len(addrs) = %d, want 3", len(addrs))
+	}
+	want := []string{"0.0.0.0:8080", "0.0.0.0:80", "0.0.0.0:2052"}
+	for i, addr := range want {
+		if addrs[i] != addr {
+			t.Fatalf("addrs[%d] = %q, want %q", i, addrs[i], addr)
+		}
+	}
+}
+
+func TestEnvListenAddrsKeepsSinglePortUniqueWhenAlreadyInList(t *testing.T) {
+	source := envSource{
+		"EDGE_PUBLIC_TLS_PORT":  "2053",
+		"EDGE_PUBLIC_TLS_PORTS": "443,2053,2083",
+	}
+
+	addrs, primary, err := envListenAddrs(
+		source,
+		"EDGE_PUBLIC_TLS_PORTS",
+		"EDGE_PUBLIC_TLS_PORT",
+		defaultPublicTLSPorts,
+		defaultPublicTLSAddr,
+		"0.0.0.0",
+	)
+	if err != nil {
+		t.Fatalf("envListenAddrs error = %v", err)
+	}
+	if primary != "0.0.0.0:2053" {
+		t.Fatalf("primary = %q, want 0.0.0.0:2053", primary)
+	}
+	want := []string{"0.0.0.0:2053", "0.0.0.0:443", "0.0.0.0:2083"}
+	if len(addrs) != len(want) {
+		t.Fatalf("len(addrs) = %d, want %d", len(addrs), len(want))
+	}
+	for i, addr := range want {
+		if addrs[i] != addr {
+			t.Fatalf("addrs[%d] = %q, want %q", i, addrs[i], addr)
+		}
+	}
+}

@@ -197,6 +197,46 @@ edge_runtime_get_env() {
   ' "${env_file}"
 }
 
+edge_runtime_port_list() {
+  local list_key="$1" single_key="$2" fallback_list="$3" fallback_single="$4"
+  local raw
+  raw="$(edge_runtime_get_env "${list_key}" 2>/dev/null || true)"
+  if [[ -z "${raw}" ]]; then
+    raw="$(edge_runtime_get_env "${single_key}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${raw}" ]]; then
+    raw="${fallback_list:-${fallback_single}}"
+  fi
+  awk '
+    {
+      gsub(/,/, " ")
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          out = out (out ? " " : "") $i
+        }
+      }
+    }
+    END { print out }
+  ' <<< "${raw}"
+}
+
+edge_runtime_public_http_ports() {
+  edge_runtime_port_list EDGE_PUBLIC_HTTP_PORTS EDGE_PUBLIC_HTTP_PORT "80 8080 8880 2052 2082 2086 2095" "80"
+}
+
+edge_runtime_public_tls_ports() {
+  edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443"
+}
+
+edge_runtime_ports_label() {
+  local ports="${1:-}"
+  [[ -n "${ports}" ]] || {
+    printf '%s\n' "-"
+    return 0
+  }
+  printf '%s\n' "${ports}" | sed 's/ /, /g'
+}
+
 edge_runtime_service_name() {
   local provider
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -420,13 +460,13 @@ edge_runtime_status_menu() {
   echo "11) Maintenance > Edge Gateway Status"
   hr
 
-  local svc env_file provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
+  local svc env_file provider active http_ports tls_ports http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
-  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
-  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_ports="$(edge_runtime_public_http_ports)"
+  tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
@@ -442,8 +482,8 @@ edge_runtime_status_menu() {
   echo "Runtime env : ${env_file}"
   echo "Provider    : ${provider}"
   echo "Activate    : ${active}"
-  echo "HTTP port   : ${http_port}"
-  echo "TLS port    : ${tls_port}"
+  echo "HTTP ports  : $(edge_runtime_ports_label "${http_ports}")"
+  echo "TLS ports   : $(edge_runtime_ports_label "${tls_ports}")"
   echo "HTTP backend: ${http_backend}"
   if [[ "${tls_backend_required}" == "true" ]]; then
     echo "HTTPS b/e   : ${http_tls_backend}"
@@ -468,15 +508,26 @@ edge_runtime_status_menu() {
 
   hr
   if have_cmd ss; then
-    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${http_port}([[:space:]]|$)"; then
-      log "Public HTTP ${http_port} : LISTENING ✅"
+    local port missing_http=() missing_tls=()
+    for port in ${http_ports}; do
+      if ! ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"; then
+        missing_http+=("${port}")
+      fi
+    done
+    if (( ${#missing_http[@]} == 0 )); then
+      log "Public HTTP $(edge_runtime_ports_label "${http_ports}") : LISTENING ✅"
     else
-      warn "Public HTTP ${http_port} : NOT listening ❌"
+      warn "Public HTTP $(edge_runtime_ports_label "${http_ports}") : missing ${missing_http[*]} ❌"
     fi
-    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${tls_port}([[:space:]]|$)"; then
-      log "Public TLS  ${tls_port} : LISTENING ✅"
+    for port in ${tls_ports}; do
+      if ! ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"; then
+        missing_tls+=("${port}")
+      fi
+    done
+    if (( ${#missing_tls[@]} == 0 )); then
+      log "Public TLS  $(edge_runtime_ports_label "${tls_ports}") : LISTENING ✅"
     else
-      warn "Public TLS  ${tls_port} : NOT listening ❌"
+      warn "Public TLS  $(edge_runtime_ports_label "${tls_ports}") : missing ${missing_tls[*]} ❌"
     fi
 
     local backend_http_port backend_http_tls_port backend_ssh_port
@@ -520,13 +571,13 @@ edge_runtime_socket_listening() {
 }
 
 edge_runtime_post_restart_health_check() {
-  local svc provider active http_port tls_port http_backend http_tls_backend ssh_backend tls_backend_required
+  local svc provider active http_ports tls_ports http_backend http_tls_backend ssh_backend tls_backend_required
   local backend_http_port backend_http_tls_port backend_ssh_port
   svc="$(edge_runtime_service_name)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
-  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
-  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_ports="$(edge_runtime_public_http_ports)"
+  tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
@@ -545,14 +596,19 @@ edge_runtime_post_restart_health_check() {
   backend_http_tls_port="${http_tls_backend##*:}"
   backend_ssh_port="${ssh_backend##*:}"
 
-  if ! edge_runtime_socket_listening "${http_port}"; then
-    warn "Port HTTP publik ${http_port} belum listening setelah restart edge."
-    return 1
-  fi
-  if ! edge_runtime_socket_listening "${tls_port}"; then
-    warn "Port TLS publik ${tls_port} belum listening setelah restart edge."
-    return 1
-  fi
+  local port
+  for port in ${http_ports}; do
+    if ! edge_runtime_socket_listening "${port}"; then
+      warn "Port HTTP publik ${port} belum listening setelah restart edge."
+      return 1
+    fi
+  done
+  for port in ${tls_ports}; do
+    if ! edge_runtime_socket_listening "${port}"; then
+      warn "Port TLS publik ${port} belum listening setelah restart edge."
+      return 1
+    fi
+  done
   if ! edge_runtime_socket_listening "${backend_http_port}"; then
     warn "Backend HTTP ${http_backend} belum listening setelah restart edge."
     return 1
@@ -611,11 +667,11 @@ edge_runtime_info_menu() {
   echo "11) Maintenance > Edge Gateway Info"
   hr
 
-  local provider active http_port tls_port http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file
+  local provider active http_ports tls_ports http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
-  http_port="$(edge_runtime_get_env EDGE_PUBLIC_HTTP_PORT 2>/dev/null || echo "80")"
-  tls_port="$(edge_runtime_get_env EDGE_PUBLIC_TLS_PORT 2>/dev/null || echo "443")"
+  http_ports="$(edge_runtime_public_http_ports)"
+  tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
   ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
@@ -626,8 +682,8 @@ edge_runtime_info_menu() {
   key_file="$(edge_runtime_get_env EDGE_TLS_KEY_FILE 2>/dev/null || echo "/opt/cert/privkey.pem")"
   echo "Provider        : ${provider}"
   echo "Runtime Active  : ${active}"
-  echo "Public HTTP     : ${http_port}"
-  echo "Public TLS      : ${tls_port}"
+  echo "Public HTTP     : $(edge_runtime_ports_label "${http_ports}")"
+  echo "Public TLS      : $(edge_runtime_ports_label "${tls_ports}")"
   echo "HTTP Backend    : ${http_backend}"
   echo "HTTPS Backend   : ${http_tls_backend}"
   echo "SSH Backend     : ${ssh_backend}"
@@ -645,7 +701,7 @@ edge_runtime_info_menu() {
   else
     echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
   fi
-  echo "  - default gateway aktif hanya satu pada port publik"
+  echo "  - edge gateway aktif pada seluruh port Cloudflare HTTP/HTTPS yang didukung"
   hr
   pause
 }

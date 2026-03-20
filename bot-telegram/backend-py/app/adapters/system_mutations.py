@@ -358,6 +358,83 @@ def _edge_runtime_get_env(key: str) -> str:
     return ""
 
 
+def _edge_runtime_ports(list_key: str, single_key: str, default_list: str, default_single: str) -> list[int]:
+    raw = _edge_runtime_get_env(list_key).strip() or _edge_runtime_get_env(single_key).strip()
+    if not raw:
+        raw = default_list or default_single
+    values: list[int] = []
+    seen: set[int] = set()
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token or not token.isdigit():
+            continue
+        port = int(token)
+        if port in seen:
+            continue
+        seen.add(port)
+        values.append(port)
+    return values
+
+
+def _edge_runtime_ports_label(ports: list[int]) -> str:
+    if not ports:
+        return "-"
+    return ", ".join(str(port) for port in ports)
+
+
+def _edge_runtime_http_ports_label() -> str:
+    return _edge_runtime_ports_label(
+        _edge_runtime_ports(
+            "EDGE_PUBLIC_HTTP_PORTS",
+            "EDGE_PUBLIC_HTTP_PORT",
+            "80,8080,8880,2052,2082,2086,2095",
+            "80",
+        )
+    )
+
+
+def _edge_runtime_tls_ports_label() -> str:
+    return _edge_runtime_ports_label(
+        _edge_runtime_ports(
+            "EDGE_PUBLIC_TLS_PORTS",
+            "EDGE_PUBLIC_TLS_PORT",
+            "443,2053,2083,2087,2096,8443",
+            "443",
+        )
+    )
+
+
+def _edge_runtime_ws_ports_label() -> str:
+    return "443, 80"
+
+
+def _edge_runtime_alt_tls_ports_label() -> str:
+    ports = [
+        port
+        for port in _edge_runtime_ports(
+            "EDGE_PUBLIC_TLS_PORTS",
+            "EDGE_PUBLIC_TLS_PORT",
+            "443,2053,2083,2087,2096,8443",
+            "443",
+        )
+        if port != 443
+    ]
+    return _edge_runtime_ports_label(ports)
+
+
+def _edge_runtime_alt_http_ports_label() -> str:
+    ports = [
+        port
+        for port in _edge_runtime_ports(
+            "EDGE_PUBLIC_HTTP_PORTS",
+            "EDGE_PUBLIC_HTTP_PORT",
+            "80,8080,8880,2052,2082,2086,2095",
+            "80",
+        )
+        if port != 80
+    ]
+    return _edge_runtime_ports_label(ports)
+
+
 def _edge_runtime_service_name() -> str:
     provider = _edge_runtime_get_env("EDGE_PROVIDER").strip().lower()
     if provider == "nginx-stream":
@@ -370,12 +447,17 @@ def _edge_runtime_service_name() -> str:
 def _edge_runtime_uses_public_http_port_80() -> bool:
     provider = _edge_runtime_get_env("EDGE_PROVIDER").strip().lower()
     active = _edge_runtime_get_env("EDGE_ACTIVATE_RUNTIME").strip().lower()
-    http_port = _edge_runtime_get_env("EDGE_PUBLIC_HTTP_PORT").strip() or "80"
+    http_ports = _edge_runtime_ports(
+        "EDGE_PUBLIC_HTTP_PORTS",
+        "EDGE_PUBLIC_HTTP_PORT",
+        "80,8080,8880,2052,2082,2086,2095",
+        "80",
+    )
     if provider in {"", "none"}:
         return False
     if active not in {"1", "true", "yes", "on", "y"}:
         return False
-    return http_port == "80"
+    return 80 in http_ports
 
 
 def _restart_and_wait(name: str, timeout_sec: int = 20) -> bool:
@@ -2217,15 +2299,15 @@ def _ssh_ensure_state_token(payload: dict[str, Any], state_path: Path | None = N
 
 
 def _ssh_ws_public_ports_label() -> str:
-    return "443 & 80"
+    return _edge_runtime_ws_ports_label()
 
 
 def _ssh_direct_public_ports_label() -> str:
-    return "443 & 80"
+    return _edge_runtime_ws_ports_label()
 
 
 def _ssh_ssl_tls_public_ports_label() -> str:
-    return "443 & 80"
+    return _edge_runtime_ws_ports_label()
 
 
 def _badvpn_public_port_label() -> str:
@@ -3919,13 +4001,15 @@ def _build_account_text(
         [
             "",
             "=== RUNNING ON PORT & PATH ===",
-            section_line(f"{proto_disp} WS", "443 & 80"),
-            section_line(f"{proto_disp} HUP", "443 & 80"),
-            section_line(f"{proto_disp} gRPC", "443"),
+            section_line(f"{proto_disp} WS", _edge_runtime_ws_ports_label()),
+            section_line(f"{proto_disp} HUP", _edge_runtime_ws_ports_label()),
+            section_line(f"{proto_disp} gRPC", _edge_runtime_ws_ports_label()),
         ]
     )
     if proto in tcp_tls_protocols:
-        lines.append(section_line(f"{proto_disp} TCP+TLS Port", "443"))
+        lines.append(section_line(f"{proto_disp} TCP+TLS Port", _edge_runtime_ws_ports_label()))
+    lines.append(section_line("Alt Port SSL/TLS", _edge_runtime_alt_tls_ports_label()))
+    lines.append(section_line("Alt Port HTTP", _edge_runtime_alt_http_ports_label()))
     lines.extend(
         [
             section_line(f"{proto_disp} Path WS", ws_path),
