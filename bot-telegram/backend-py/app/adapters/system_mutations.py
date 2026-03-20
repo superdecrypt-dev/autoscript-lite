@@ -2261,6 +2261,10 @@ def _local_now() -> datetime:
     return datetime.now().astimezone()
 
 
+def _local_today() -> date:
+    return _local_now().date()
+
+
 def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     value = str(raw or "").strip()
     if not value:
@@ -2399,7 +2403,7 @@ def _ssh_expired_display(expired_at: str) -> str:
         return "unlimited"
     try:
         expiry = datetime.strptime(value, "%Y-%m-%d").date()
-        days = max(0, (expiry - date.today()).days)
+        days = max(0, (expiry - _local_today()).days)
         return f"{days} days"
     except Exception:
         return "unknown"
@@ -4158,12 +4162,9 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
     if not expired_at:
         expired_at = "-"
 
-    d_created = _parse_date_only(created_at)
     d_expired = _parse_date_only(expired_at)
-    if d_created and d_expired:
-        days = max(0, (d_expired - d_created).days)
-    elif d_expired:
-        days = max(0, (d_expired - date.today()).days)
+    if d_expired:
+        days = max(0, (d_expired - _local_today()).days)
     else:
         days = 0
 
@@ -4291,9 +4292,39 @@ def _account_refresh_outcome(
     return True, title, "\n".join(message_lines)
 
 
+def _account_info_has_display_mismatch(text: str) -> bool:
+    fields: dict[str, str] = {}
+    for raw in str(text or "").splitlines():
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        fields[key.strip()] = value.strip()
+
+    valid_until = str(fields.get("Valid Until") or "").strip()[:10]
+    expired_raw = str(fields.get("Expired") or "").strip()
+    if not valid_until or not expired_raw:
+        return False
+
+    d_expired = _parse_date_only(valid_until)
+    if d_expired is None:
+        return False
+
+    match = re.search(r"(\d+)", expired_raw)
+    if match is None:
+        return False
+
+    try:
+        shown_days = max(0, int(match.group(1)))
+    except Exception:
+        return False
+
+    expected_days = max(0, (d_expired - _local_today()).days)
+    return shown_days != expected_days
+
+
 def _account_info_needs_compat_refresh() -> bool:
     _ensure_runtime_dirs()
-    for proto in PROTOCOLS:
+    for proto in USER_PROTOCOLS:
         d = ACCOUNT_ROOT / proto
         if not d.exists():
             continue
@@ -4306,6 +4337,14 @@ def _account_info_needs_compat_refresh() -> bool:
                 text = p.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 return True
+
+            if _account_info_has_display_mismatch(text):
+                return True
+
+            if proto == SSH_PROTOCOL:
+                if is_noncanonical_name:
+                    return True
+                continue
 
             has_links_block = bool(re.search(r"(?m)^Links Import:\s*$", text))
             has_grpc_line = bool(re.search(r"(?m)^\s*gRPC\s*:", text))
@@ -5039,7 +5078,7 @@ def op_user_add(
         if username.strip().lower() == raw_password.strip().lower():
             return False, "User Management - Add User", "Password SSH tidak boleh sama dengan username."
 
-        expiry = (date.today() + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
+        expiry = (_local_today() + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
         created_at = _local_now().strftime("%Y-%m-%d %H:%M")
         quota_bytes = int(round(quota_gb * (1024**3)))
         quota_path = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
@@ -5444,7 +5483,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
         previous_payload = copy.deepcopy(quota_data)
 
         current_expiry = str(quota_data.get("expired_at") or "").strip()[:10]
-        today = date.today()
+        today = _local_today()
         mode_n = str(mode or "").strip().lower()
         if mode_n in {"extend", "tambah", "days", "1"}:
             add_days = _to_int(value, 0)
@@ -5511,7 +5550,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
     assert isinstance(quota_data, dict)
 
     current_expiry = str(quota_data.get("expired_at") or "").strip()[:10]
-    today = date.today()
+    today = _local_today()
 
     mode_n = str(mode or "").strip().lower()
     if mode_n in {"extend", "tambah", "days", "1"}:

@@ -68,6 +68,10 @@ ALLOWED_SERVICES = (
     "sshws-proxy",
     "sshws-qac-enforcer.timer",
 )
+
+
+def _local_today() -> date:
+    return datetime.now().astimezone().date()
 ALLOWED_RESTART_SERVICES = set(ALLOWED_SERVICES) | {"fail2ban"}
 XRAY_DAEMONS = ("xray-expired", "xray-quota", "xray-limit-ip", "xray-speed")
 SSHWS_SERVICES = ("sshws-dropbear", "sshws-stunnel", "sshws-proxy")
@@ -554,7 +558,7 @@ def _tls_expiry_days_left() -> int | None:
     for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y GMT"):
         try:
             expiry = datetime.strptime(raw, fmt)
-            return (expiry.date() - date.today()).days
+            return (expiry.date() - _local_today()).days
         except Exception:
             continue
     return None
@@ -969,7 +973,7 @@ def _fmt_active_period(data: dict) -> str:
         return "-"
     try:
         exp_date = datetime.strptime(expired_at, "%Y-%m-%d").date()
-        remain = max(0, (exp_date - date.today()).days)
+        remain = max(0, (exp_date - _local_today()).days)
         return f"{remain} hari (sampai {expired_at})"
     except Exception:
         return expired_at
@@ -995,7 +999,7 @@ def _fmt_active_period_from_account_fields(fields: dict[str, str]) -> str:
     if valid_until:
         try:
             exp_date = datetime.strptime(valid_until, "%Y-%m-%d").date()
-            remain = max(0, (exp_date - date.today()).days)
+            remain = max(0, (exp_date - _local_today()).days)
             return f"{remain} hari (sampai {valid_until})"
         except Exception:
             return valid_until
