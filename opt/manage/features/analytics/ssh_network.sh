@@ -913,7 +913,7 @@ if not targets:
 rows = []
 try:
   res = subprocess.run(
-    ["ps", "-eo", "pid=,ppid=,user=,comm=,args="],
+    ["ps", "-eo", "pid=,ppid=,user=,uid=,comm=,args="],
     stdout=subprocess.PIPE,
     stderr=subprocess.DEVNULL,
     text=True,
@@ -930,20 +930,31 @@ for line in (res.stdout or "").splitlines():
   raw = line.strip()
   if not raw:
     continue
-  parts = raw.split(None, 4)
-  if len(parts) < 5:
+  parts = raw.split(None, 5)
+  if len(parts) < 6:
     continue
   try:
     pid = int(parts[0])
     ppid = int(parts[1])
+    uid = int(parts[3])
   except ValueError:
     continue
   rows.append({
     "pid": pid,
     "ppid": ppid,
-    "comm": parts[3],
-    "args": parts[4],
+    "user": parts[2],
+    "uid": uid,
+    "comm": parts[4],
+    "args": parts[5],
   })
+
+proc_info = {}
+children = {}
+for row in rows:
+  pid = int(row.get("pid") or 0)
+  ppid = int(row.get("ppid") or 0)
+  proc_info[pid] = row
+  children.setdefault(ppid, []).append(pid)
 
 master_pids = set()
 for row in rows:
@@ -962,6 +973,29 @@ for row in rows:
 
 if not session_pids:
   raise SystemExit(0)
+
+def username_from_pid(pid):
+  queue = [int(pid)]
+  seen = set()
+  while queue:
+    cur = queue.pop(0)
+    if cur in seen:
+      continue
+    seen.add(cur)
+    meta = proc_info.get(cur) or {}
+    uid = int(meta.get("uid") or 0)
+    if uid > 0:
+      username = norm_user(meta.get("user"))
+      if username:
+        return username
+      try:
+        import pwd
+        return norm_user(pwd.getpwuid(uid).pw_name)
+      except Exception:
+        pass
+    for child in children.get(cur, ()):
+      queue.append(int(child))
+  return ""
 
 mapping = {}
 pat = re.compile(r"dropbear\[(\d+)\]: .*auth succeeded for '([^']+)'", re.IGNORECASE)
@@ -1007,7 +1041,7 @@ if not mapping:
     pass
 
 for pid in sorted(set(session_pids)):
-  username = mapping.get(pid)
+  username = username_from_pid(pid) or mapping.get(pid)
   if username in targets:
     print(f"{pid}|{username}")
 PY

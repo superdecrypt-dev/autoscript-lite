@@ -31,6 +31,7 @@ const (
 	defaultSSHQuotaRoot        = "/opt/quota/ssh"
 	defaultSSHDropbearUnit     = "sshws-dropbear"
 	defaultSSHQACEnforcer      = "/usr/local/bin/sshws-qac-enforcer"
+	defaultSSHManageBin        = "/usr/local/bin/manage"
 	defaultSSHSessionRoot      = "/run/autoscript/sshws-sessions"
 	defaultSSHSessionHeartbeat = 15 * time.Second
 	defaultMaxConnections      = 4096
@@ -78,6 +79,7 @@ type Config struct {
 	SSHQuotaRoot        string
 	SSHDropbearUnit     string
 	SSHQACEnforcer      string
+	SSHManageBin        string
 	SSHSessionRoot      string
 	SSHSessionHeartbeat time.Duration
 	MaxConnections      int
@@ -180,6 +182,7 @@ func LoadConfig() (Config, error) {
 		SSHQuotaRoot:        envString(source, "EDGE_SSH_QUOTA_ROOT", defaultSSHQuotaRoot),
 		SSHDropbearUnit:     envString(source, "EDGE_SSH_DROPBEAR_UNIT", defaultSSHDropbearUnit),
 		SSHQACEnforcer:      envString(source, "EDGE_SSH_QAC_ENFORCER", defaultSSHQACEnforcer),
+		SSHManageBin:        envString(source, "EDGE_SSH_MANAGE_BIN", defaultSSHManageBin),
 		SSHSessionRoot:      envString(source, "EDGE_SSH_SESSION_ROOT", defaultSSHSessionRoot),
 		SSHSessionHeartbeat: sessionHeartbeat,
 		MaxConnections:      maxConnections,

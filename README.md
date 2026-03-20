@@ -50,7 +50,7 @@ Catatan penting:
 - `Recover Pending Txn` di `Xray Users` dan `SSH Users` adalah menu repair untuk journal transaksi yang putus di tengah, bukan menu harian. Jika `pending = 0`, menu itu bisa diabaikan.
 - `5) Xray Network > DNS Settings` memakai model `staged changes`, sedangkan `5) Xray Network > DNS Add-ons > Open DNS config with nano` adalah jalur `full replace` untuk perubahan advanced.
 - `13) Tools > WARP Tier` sekarang menampilkan `mode`, status tier `Free/Plus`, dan bisa tetap menunjukkan `unknown/estimasi` saat probe `Cloudflare trace` tidak konklusif walau `wireproxy` tetap sehat.
-- `13) Tools > WARP Tier > Zero Trust` sekarang memakai backend `cloudflare-warp` + `warp-cli` untuk proxy lokal `127.0.0.1:40000`, tetapi `SSH Network` masih belum kompatibel dengan mode ini.
+- `13) Tools > WARP Tier > Zero Trust` sekarang memakai backend `cloudflare-warp` + `warp-cli` untuk proxy lokal `127.0.0.1:40000`; `SSH Network` kompatibel bila backend WARP SSH memakai `Local Proxy`, sedangkan `Dedicated Interface` tetap tidak kompatibel.
 - `setup.sh` sekarang ikut menyiapkan fondasi backend `cloudflare-warp` dalam state idle; mode `Zero Trust` baru aktif saat dipilih eksplisit dari `manage.sh`.
 - `9) Speedtest` memakai CLI Ookla (`speedtest`) jika binary tersedia di host.
 
@@ -95,7 +95,7 @@ Catatan penting:
 - `5) Xray Network`
   `WARP` (`status`, `restart`, `global`, `per-user`, `per-inbound`, `per-domain`), `DNS Settings` staged, `DNS Add-ons` advanced editor, dan `Checks` routing/config/service.
 - `6) SSH Network`
-  DNS steering user SSH (`dnsmasq` + `nftables`) dan routing `WARP` SSH global/per-user berbasis `fwmark`, `ip rule`, dan `wg-quick`.
+  DNS steering user SSH (`dnsmasq` + `nftables`) dan routing `WARP` SSH global/per-user via `Local Proxy` (`xray redirect` + proxy lokal WARP host) atau `Dedicated Interface` (`fwmark`, `ip rule`, `wg-quick`).
 - `7) Adblocker`
   Source adblock gabungan untuk `Xray` dan `SSH`: enable/disable runtime, manual domain, URL source, bound users, auto update, dan rebuild artifact.
 - `8) Domain Control`
@@ -111,7 +111,7 @@ Catatan penting:
 - `13) Tools`
   Submenu utilitas yang sekarang memuat `Telegram Bot`, `Discord Bot`, dan `WARP Tier`.
   `WARP Tier` kini dipisah jadi status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
-  `Zero Trust` memakai backend `cloudflare-warp` untuk jalur `Xray` via proxy lokal, sementara `SSH Network` tetap khusus backend `Free/Plus`.
+  `Zero Trust` memakai backend `cloudflare-warp` via proxy lokal host; `SSH Network` ikut kompatibel bila backend WARP SSH memakai `Local Proxy`, sedangkan `Dedicated Interface` tetap khusus `Free/Plus`.
 
 ## Fitur Installer dan Runtime
 - `run.sh`

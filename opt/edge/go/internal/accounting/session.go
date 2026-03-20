@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	startupResolveInterval = 250 * time.Millisecond
+	startupResolveWindow   = 10 * time.Second
+)
+
 type UsernameResolver func() string
 
 type SSHRuntimeSessionTracker struct {
@@ -68,32 +73,35 @@ func (t *SSHRuntimeSessionTracker) Stop() {
 		close(t.done)
 		if t.activeFile != "" {
 			_ = os.Remove(t.activeFile)
-			triggerEnforcer(t.logger, t.cfg.EnforcerPath)
+			triggerSessionSync(t.logger, t.cfg.ManagePath)
 		}
 	})
 }
 
 func (t *SSHRuntimeSessionTracker) run() {
-	ticker := time.NewTicker(t.heartbeat)
-	defer ticker.Stop()
+	started := time.Now()
 
 	for {
-		t.update()
+		resolved := t.update()
+		wait := t.heartbeat
+		if !resolved && time.Since(started) < startupResolveWindow {
+			wait = startupResolveInterval
+		}
 		select {
 		case <-t.done:
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
 		}
 	}
 }
 
-func (t *SSHRuntimeSessionTracker) update() {
+func (t *SSHRuntimeSessionTracker) update() bool {
 	username := t.resolveUsername()
 	if err := os.MkdirAll(t.cfg.SessionRoot, 0o750); err != nil {
 		if t.logger != nil {
 			t.logger.Printf("edge-mux session mkdir failed root=%s: %v", t.cfg.SessionRoot, err)
 		}
-		return
+		return username != ""
 	}
 	target := filepath.Join(t.cfg.SessionRoot, t.sessionID+".json")
 	payload := map[string]any{
@@ -111,7 +119,7 @@ func (t *SSHRuntimeSessionTracker) update() {
 		if t.logger != nil {
 			t.logger.Printf("edge-mux session write failed file=%s: %v", target, err)
 		}
-		return
+		return username != ""
 	}
 	if err := os.Chmod(target, 0o600); err != nil && t.logger != nil {
 		t.logger.Printf("edge-mux session chmod failed file=%s: %v", target, err)
@@ -119,7 +127,7 @@ func (t *SSHRuntimeSessionTracker) update() {
 	if t.activeFile == "" {
 		t.activeFile = target
 	}
-	triggerEnforcer(t.logger, t.cfg.EnforcerPath)
+	return username != ""
 }
 
 func (t *SSHRuntimeSessionTracker) resolveUsername() string {

@@ -20,6 +20,7 @@ type SSHQuotaConfig struct {
 	StateRoot        string
 	DropbearUnit     string
 	EnforcerPath     string
+	ManagePath       string
 	SessionRoot      string
 	SessionHeartbeat time.Duration
 }
@@ -48,7 +49,7 @@ func RecordSSHQuota(logger *log.Logger, cfg SSHQuotaConfig, username string, loc
 		return
 	}
 	logger.Printf("edge-mux quota updated user=%s bytes=%d port=%d", resolved, totalBytes, localPort)
-	triggerEnforcer(logger, cfg.EnforcerPath)
+	triggerEnforcer(logger, cfg.EnforcerPath, resolved)
 }
 
 func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort int, totalBytes uint64) {
@@ -276,15 +277,32 @@ func writeJSONAtomic(path string, payload map[string]any) error {
 	return os.Rename(tmp, path)
 }
 
-func triggerEnforcer(logger *log.Logger, enforcerPath string) {
+func triggerEnforcer(logger *log.Logger, enforcerPath, username string) {
 	path := strings.TrimSpace(enforcerPath)
 	if path == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--once")
+	args := []string{"--once"}
+	if user := normalizeUser(username); user != "" {
+		args = append(args, "--user", user)
+	}
+	cmd := exec.CommandContext(ctx, path, args...)
 	if err := cmd.Run(); err != nil {
 		logger.Printf("edge-mux quota enforcer failed: %v", err)
+	}
+}
+
+func triggerSessionSync(logger *log.Logger, managePath string) {
+	path := strings.TrimSpace(managePath)
+	if path == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "__sync-ssh-network-session-targets")
+	if err := cmd.Run(); err != nil {
+		logger.Printf("edge-mux ssh session sync failed: %v", err)
 	}
 }

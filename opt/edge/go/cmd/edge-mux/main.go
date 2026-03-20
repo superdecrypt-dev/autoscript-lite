@@ -1085,6 +1085,7 @@ func sshQuotaConfig(cfg runtime.Config) accounting.SSHQuotaConfig {
 		StateRoot:        cfg.SSHQuotaRoot,
 		DropbearUnit:     cfg.SSHDropbearUnit,
 		EnforcerPath:     cfg.SSHQACEnforcer,
+		ManagePath:       cfg.SSHManageBin,
 		SessionRoot:      cfg.SSHSessionRoot,
 		SessionHeartbeat: cfg.SSHSessionHeartbeat,
 	}

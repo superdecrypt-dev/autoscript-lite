@@ -115,11 +115,12 @@ Kriteria lulus:
 - Timer enforcer `SSH QAC` aktif (`sshws-qac-enforcer.timer`).
 - Jika Edge Gateway aktif, `edge-mux` harus `active` dan listener publik tetap ada di `:80/:443`.
 - Jika BadVPN dipasang, `badvpn-udpgw` harus `active` dan listen di `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900`.
-- Jika backend Zero Trust dipasang, `warp-svc` harus terdeteksi; status `inactive` tetap valid selama mode runtime masih `Free/Plus`.
+- Jika backend Zero Trust dipasang, `warp-svc` harus terdeteksi; status `inactive` tetap valid selama mode runtime masih `Free/Plus`, tetapi saat mode runtime `Zero Trust` aktif service dan proxy lokalnya harus `active/listening`.
 
-Khusus `SSH Network -> WARP SSH` backend `Local Proxy` (`Free/Plus`):
+Khusus `SSH Network -> WARP SSH` backend `Local Proxy` (`Free/Plus` / `Zero Trust`):
 - Jangan berhenti di status menu `Backend Applied: Local Proxy`; status itu belum membuktikan trafik SSH benar-benar masuk WARP.
 - Siapkan 1 akun SSH yang effective `warp`, buka tunnel SOCKS lewat surface publik SSH yang relevan (`SSH Direct :443` direkomendasikan; bila perubahan menyentuh jalur WS, ulangi juga lewat `SSH WS` token path).
+- Dalam mode host `Zero Trust`, sumber proxy host yang diuji boleh berasal dari `warp-svc`; bukti lulus tetap harus diambil dari trace tunnel SSH, bukan status host.
 - Verifikasi egress dari tunnel dengan:
 
 ```bash
@@ -446,11 +447,11 @@ Gunakan checklist ini saat regresi menu Telegram:
 - `Xray Network -> WARP Per User / Per Inbound`: saat `10-inbounds.json` atau `30-routing.json` invalid, menu harus warn invalid JSON, bukan menampilkan list kosong.
 - `Xray Network -> WARP Status`: verifikasi layar menampilkan `WARP Global`, jumlah override, dan `Conflict` selain status `wireproxy`.
 - `Xray Network -> WARP Per User / Per Inbound`: bila 1 entity sengaja dimasukkan ke marker `direct` dan `warp` sekaligus, status menu harus tampil `conflict`.
-- `SSH Network -> Routing SSH Global -> Apply Runtime`
+- `SSH Network -> Routing SSH Global -> Save WARP Backend (config only)` lalu `Apply Routing Runtime`
 - `SSH Network -> WARP SSH Per-User -> Enable WARP for User`
-- `SSH Network -> WARP SSH Per-User -> Reset User to Inherit` lalu verifikasi `wg-quick@<iface>` kembali `inactive` dan `disabled`
-- `SSH Network -> WARP SSH Global -> Stop WARP Interface`
-- `SSH Network -> WARP SSH Global -> Set WARP Interface`
+- `SSH Network -> WARP SSH Per-User -> Reset User to Inherit` lalu verifikasi runtime dibersihkan sesuai backend target (`Local Proxy`: redirect/counter turun, `Dedicated Interface`: `wg-quick@<iface>` kembali `inactive`)
+- `SSH Network -> WARP SSH Global -> Enable WARP Global`
+- `SSH Network -> WARP SSH Global -> Disable WARP Global`
 - `systemctl restart ssh-network-restore.service` lalu verifikasi `Result=success`
 
 6. Ops

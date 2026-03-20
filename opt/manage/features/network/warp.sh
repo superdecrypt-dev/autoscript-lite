@@ -2636,8 +2636,16 @@ warp_zero_trust_ssh_guard_state_get() {
   backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
   backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
   [[ -n "${backend_applied}" ]] || backend_applied="${backend_effective:-idle}"
-  if [[ "${effective}" =~ ^[0-9]+$ ]] && (( effective > 0 )) && [[ "${backend_applied}" != "local-proxy" ]]; then
-    printf 'blocked (%s effective warp users, backend applied=%s)\n' "${effective}" "${backend_applied}"
+  if [[ "${effective}" =~ ^[0-9]+$ ]] && (( effective > 0 )); then
+    if [[ "${backend_applied}" == "local-proxy" ]]; then
+      printf 'ok (%s effective warp users via Local Proxy)\n' "${effective}"
+    else
+      printf 'blocked (%s effective warp users, backend applied=%s)\n' "${effective}" "${backend_applied}"
+    fi
+    return 0
+  fi
+  if [[ "${backend_applied}" == "local-proxy" ]]; then
+    printf 'ok (Local Proxy ready)\n'
   else
     printf 'ok\n'
   fi
@@ -2647,10 +2655,10 @@ warp_zero_trust_require_ssh_compatible() {
   local guard=""
   guard="$(warp_zero_trust_ssh_guard_state_get)"
   case "${guard}" in
-    ok|unknown) return 0 ;;
+    ok*|unknown) return 0 ;;
   esac
-  warn "Zero Trust belum kompatibel dengan SSH Network yang backend applied-nya belum sehat untuk Local Proxy."
-  warn "Pastikan WARP SSH memakai Local Proxy yang sudah applied, atau matikan routing WARP SSH dulu."
+  warn "Zero Trust untuk SSH hanya didukung bila runtime SSH Network sudah applied sehat di backend Local Proxy."
+  warn "Set SSH Network ke backend Local Proxy lalu apply, atau kosongkan effective WARP users dulu."
   warn "Status guard: ${guard}"
   return 1
 }
@@ -2887,15 +2895,15 @@ warp_tier_zero_trust_show_requirements() {
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
   printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
-  printf "Requirement   : SSH Network yang belum applied sehat di backend Local Proxy harus direct saat Zero Trust diaktifkan\n"
+  printf "Requirement   : bila ada effective WARP users di SSH Network, runtime SSH wajib applied sehat di backend Local Proxy sebelum Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
-  printf "Rollout Note  : Zero Trust sekarang difokuskan ke jalur Xray via proxy lokal\n"
+  printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan SSH Network via Local Proxy\n"
   printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
-  printf "Rollout Note  : Dedicated interface SSH tetap dipertahankan sebagai fallback, tetapi tidak kompatibel dengan Zero Trust\n"
+  printf "Rollout Note  : Dedicated interface SSH tetap dipertahankan sebagai fallback Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_free_plus_backend_prepare_activate_unlocked() {
@@ -3663,6 +3671,7 @@ warp_tier_zero_trust_menu() {
 }
 
 warp_controls_menu() {
+  # shellcheck disable=SC2034 # used by ui_menu_render_options via nameref
   local -a items=(
     "1|WARP Status"
     "2|Restart WARP"

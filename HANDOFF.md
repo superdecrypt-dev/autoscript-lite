@@ -78,7 +78,7 @@ Agent AI baru wajib memulai dari baseline konteks di atas.
 - `WARP Tier` diroute dari `Tools`; judul user-facing yang diharapkan adalah `13) Tools > WARP Tier`.
 - `WARP Tier > Zero Trust` sudah punya engine runtime di `manage`, termasuk config state, apply/connect, disconnect, dan return-to-Free/Plus.
 - Fondasi install/runtime `cloudflare-warp` + `warp-cli` sedang dirapikan di working tree ini agar setup host tidak lagi bergantung pada instalasi manual untuk backend Zero Trust.
-- `SSH Network` tetap belum kompatibel dengan mode `Zero Trust`; guard SSH masih sengaja memblok aktivasi jika effective SSH WARP users masih ada.
+- `SSH Network` kompatibel dengan mode `Zero Trust` bila backend WARP SSH memakai `Local Proxy`; guard SSH hanya memblok aktivasi jika effective SSH WARP users belum applied sehat di backend itu.
 - `11) Maintenance` tidak lagi menampilkan `Normalize Quota Dates` pada surface user-facing terbaru.
 - Smoke test live terbaru pada `2026-03-19` yang sudah lolos:
   - `printf '0\n' | bash manage.sh`
