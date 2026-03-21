@@ -2542,6 +2542,8 @@ def _ssh_write_account_info(
     running_ssh_ws_port = f"{'SSH WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}"
     running_ssh_direct = f"{'SSH Direct Port':<{running_label_width}} : {_ssh_direct_public_ports_label()}"
     running_ssh_ssl_tls = f"{'SSH SSL/TLS Port':<{running_label_width}} : {_ssh_ssl_tls_public_ports_label()}"
+    running_ssh_alt_tls = f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}"
+    running_ssh_alt_http = f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}"
     running_badvpn = f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}"
     lines = [
         "=== SSH ACCOUNT INFO ===",
@@ -2564,6 +2566,8 @@ def _ssh_write_account_info(
         running_ssh_ws_port,
         running_ssh_direct,
         running_ssh_ssl_tls,
+        running_ssh_alt_tls,
+        running_ssh_alt_http,
         running_badvpn,
     ]
     if _zivpn_account_info_enabled():
