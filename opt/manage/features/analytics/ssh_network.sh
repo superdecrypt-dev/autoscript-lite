@@ -2386,10 +2386,7 @@ ssh_menu() {
     "3|Set Expiry"
     "4|Reset Password"
     "5|List Users"
-    "6|Status"
-    "7|Restart SSH WS"
-    "8|Active Sessions"
-    "9|Recover Pending Txn"
+    "6|Recover Pending Txn"
     "0|Back"
   )
   while true; do
@@ -2440,10 +2437,7 @@ ssh_menu() {
         fi
         ;;
       5) ssh_list_users_menu ;;
-      6) ssh_runtime_context_run ssh-users sshws_status_menu ;;
-      7) ssh_runtime_context_run ssh-users sshws_restart_menu ;;
-      8) ssh_runtime_context_run ssh-users sshws_active_sessions_menu ;;
-      9) menu_run_isolated_report "Recover Pending SSH Txn" ssh_recover_pending_txn_menu ;;
+      6) menu_run_isolated_report "Recover Pending SSH Txn" ssh_recover_pending_txn_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

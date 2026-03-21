@@ -27,6 +27,10 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_sshws_status()
         return ok_response(title, msg)
 
+    if action == "active_sshws_sessions":
+        title, msg = system.op_sshws_active_sessions()
+        return ok_response("Maintenance - Active SSHWS Sessions", msg)
+
     if action == "sshws_diagnostics":
         title, msg = system.op_sshws_diagnostics()
         return ok_response(title, msg)

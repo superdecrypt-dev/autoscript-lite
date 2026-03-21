@@ -11,6 +11,7 @@ MAINTENANCE_ACTIONS = {
     "badvpn_status",
     "daemon_status",
     "sshws_status",
+    "active_sshws_sessions",
     "sshws_diagnostics",
     "xray_logs",
     "nginx_logs",

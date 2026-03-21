@@ -564,26 +564,6 @@
           "style": "primary"
         },
         {
-          "id": "sshws_status",
-          "label": "SSH WS Service Status",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
-          "id": "restart_sshws_stack",
-          "label": "Restart SSH WS Stack",
-          "mode": "direct",
-          "style": "danger",
-          "confirm": true,
-          "dangerous": true
-        },
-        {
-          "id": "active_sshws_sessions",
-          "label": "Active SSHWS Sessions",
-          "mode": "direct",
-          "style": "secondary"
-        },
-        {
           "id": "search_user",
           "label": "Search User",
           "mode": "modal",
@@ -1594,12 +1574,24 @@
           "style": "secondary"
         },
         {
+          "id": "sshws_status",
+          "label": "SSH WS Service Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
           "id": "restart_sshws_stack",
           "label": "Restart SSHWS Stack",
           "mode": "direct",
           "style": "danger",
           "confirm": true,
           "dangerous": true
+        },
+        {
+          "id": "active_sshws_sessions",
+          "label": "Active SSHWS Sessions",
+          "mode": "direct",
+          "style": "secondary"
         },
         {
           "id": "sshws_diagnostics",
