@@ -16,6 +16,9 @@ PASSWORD_KEY_RE = re.compile(r"password", re.IGNORECASE)
 KV_SECRET_RE = re.compile(
     r"(?im)^([A-Za-z0-9_ -]*(?:token|secret|password|license(?:[_-]?key)?|api[_-]?key|authorization)[A-Za-z0-9_ -]*)(\s*)([:=])(\s*)([^\n]*)$"
 )
+ACCOUNT_INFO_URI_RE = re.compile(r"(?im)^\s*((?:vless|vmess|trojan)://\S+)\s*$")
+ACCOUNT_INFO_FIELD_RE = re.compile(r"^(\s*(?:Username|Password)\s*:\s*)(.+?)\s*$")
+ACCOUNT_INFO_PAYLOAD_LABEL_RE = re.compile(r"^\s*Payload(?:\s+[A-Z0-9/_-]+)?\s*:\s*$", re.IGNORECASE)
 
 
 def now_utc_text() -> str:
@@ -58,17 +61,25 @@ def _mask_param_if_sensitive(key: str, value: str, *, allow_password: bool = Fal
     return _sanitize_output_text(value, allow_password=allow_password)
 
 
-def main_menu_text(hostname: str, menu_count: int) -> str:
+def main_menu_text(hostname: str, menu_count: int, header_text: str = "") -> str:
     lines = [
         "<b>AUTOSCRIPT TELEGRAM CONTROL</b>",
         "Panel mobile untuk kontrol VPS.",
         "",
-        f"• Host: <code>{html.escape(hostname)}</code>",
-        f"• Kategori aktif: <code>{menu_count}</code>",
-        f"• Updated: <code>{now_utc_text()}</code>",
-        "",
-        "Pilih kategori di bawah:",
     ]
+    header = str(header_text or "").strip()
+    if header:
+        lines.append(html.escape(_trim(header, 1800)))
+        lines.append("")
+    lines.extend(
+        [
+            f"• Host: <code>{html.escape(hostname)}</code>",
+            f"• Kategori aktif: <code>{menu_count}</code>",
+            f"• Updated: <code>{now_utc_text()}</code>",
+            "",
+            "Pilih kategori di bawah:",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -178,6 +189,40 @@ def action_result_text(result: BackendActionResponse) -> str:
     title = html.escape(result.title or "Result")
     allow_password = bool(result.data.get("allow_sensitive_output")) if isinstance(result.data, dict) else False
     message = _sanitize_output_text(result.message or "(no output)", allow_password=allow_password)
+    render_mode = str(result.data.get("render_mode") or "").strip().lower() if isinstance(result.data, dict) else ""
+
+    if render_mode == "account_info":
+        body_lines: list[str] = []
+        for raw_line in message.splitlines():
+            line = str(raw_line)
+            uri_match = ACCOUNT_INFO_URI_RE.match(line)
+            if uri_match:
+                body_lines.append(f"<code>{html.escape(uri_match.group(1))}</code>")
+                continue
+
+            field_match = ACCOUNT_INFO_FIELD_RE.match(line)
+            if field_match:
+                body_lines.append(
+                    f"{html.escape(field_match.group(1))}<code>{html.escape(field_match.group(2))}</code>"
+                )
+                continue
+
+            if ACCOUNT_INFO_PAYLOAD_LABEL_RE.match(line) or line.startswith("    "):
+                body_lines.append(f"<code>{html.escape(line)}</code>")
+                continue
+
+            if line:
+                body_lines.append(html.escape(line))
+            else:
+                body_lines.append("")
+
+        lines = [
+            f"<b>{icon} {title}</b>",
+            f"Code: <code>{html.escape(result.code)}</code>",
+            "",
+            *body_lines,
+        ]
+        return "\n".join(lines)
 
     lines = [
         f"<b>{icon} {title}</b>",

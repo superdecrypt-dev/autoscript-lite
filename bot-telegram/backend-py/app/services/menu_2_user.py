@@ -74,6 +74,12 @@ def _allow_sensitive_output(data: dict[str, object] | None = None) -> dict[str, 
     return payload
 
 
+def _mark_account_info_render(data: dict[str, object] | None = None) -> dict[str, object]:
+    payload = dict(data or {})
+    payload["render_mode"] = "account_info"
+    return payload
+
+
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
     protocols = _scope_protocols(scope)
     if protocols == SSH_ONLY_PROTOCOLS:
@@ -205,7 +211,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 lines.append(account_text)
             else:
                 lines.append(f"(SSH ACCOUNT INFO tidak ditemukan: {account_path})")
-            return ok_response(title, "\n".join(lines), data=_allow_sensitive_output(data))
+            return ok_response(title, "\n".join(lines), data=_allow_sensitive_output(_mark_account_info_render(data)))
 
         account_path = _extract_add_user_path(msg_add, "Account")
         quota_path = _extract_add_user_path(msg_add, "Quota")
@@ -224,7 +230,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             lines.append(account_text)
         else:
             lines.append(f"(XRAY ACCOUNT INFO tidak ditemukan: {account_path})")
-        return ok_response(title, "\n".join(lines), data=data)
+        return ok_response(title, "\n".join(lines), data=_mark_account_info_render(data))
 
     if action == "delete_user":
         title = _scope_title(scope, "Delete User")
@@ -326,15 +332,15 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if not ok_download or not isinstance(download_or_err, dict):
             msg_warn = f"{msg_info}\n\n- Warning: file account tidak bisa diunduh ({download_or_err})"
             if str(proto_or_err) == system.SSH_PROTOCOL:
-                return ok_response(title, msg_warn, data=_allow_sensitive_output())
-            return ok_response(title, msg_warn)
+                return ok_response(title, msg_warn, data=_allow_sensitive_output(_mark_account_info_render()))
+            return ok_response(title, msg_warn, data=_mark_account_info_render())
 
         data: dict[str, object] = {
             "download_file": download_or_err,
         }
         if str(proto_or_err) == system.SSH_PROTOCOL:
             data = _allow_sensitive_output(data)
-        return ok_response(title, msg_info, data=data)
+        return ok_response(title, msg_info, data=_mark_account_info_render(data))
 
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")
 

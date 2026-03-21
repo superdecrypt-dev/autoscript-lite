@@ -84,6 +84,7 @@ def get_main_menu_overview() -> dict:
     return {
         "mode": "standalone",
         "menu_count": _visible_menu_count(data),
+        "header_text": system.main_menu_header_text(),
         "menus": data.get("menus", []),
     }
 

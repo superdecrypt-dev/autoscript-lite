@@ -192,6 +192,7 @@ class Runtime:
     catalog: CommandCatalog
     backend: BackendClient
     hostname: str
+    main_menu_header: str = ""
 
 
 def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
@@ -199,6 +200,30 @@ def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
     if not isinstance(runtime, Runtime):
         raise RuntimeError("Runtime belum terinisialisasi.")
     return runtime
+
+
+def _main_menu_message(runtime: Runtime) -> str:
+    return main_menu_text(
+        runtime.hostname,
+        len(_visible_main_menus(runtime)),
+        runtime.main_menu_header,
+    )
+
+
+def _catalog_from_main_menu_payload(main_menu: dict) -> tuple[CommandCatalog, str]:
+    menus = main_menu.get("menus") if isinstance(main_menu, dict) else None
+    if not isinstance(menus, list):
+        raise RuntimeError("payload menus tidak valid")
+    catalog = CommandCatalog.from_payload({"menus": menus})
+    header_text = str(main_menu.get("header_text") or "").strip() if isinstance(main_menu, dict) else ""
+    return catalog, header_text
+
+
+async def _refresh_main_menu_snapshot(runtime: Runtime, timeout: float = 5.0) -> None:
+    main_menu = await runtime.backend.get_main_menu(timeout=timeout)
+    catalog, header_text = _catalog_from_main_menu_payload(main_menu)
+    runtime.catalog = catalog
+    runtime.main_menu_header = header_text
 
 
 def _update_log_context(update: object) -> str:
@@ -1634,9 +1659,13 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     _clear_pending(context)
+    try:
+        await _refresh_main_menu_snapshot(runtime)
+    except Exception as exc:
+        LOGGER.warning("Refresh main menu snapshot gagal: %s", sanitize_secret_text(str(exc)))
 
     await update.effective_message.reply_text(
-        main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
+        _main_menu_message(runtime),
         parse_mode=ParseMode.HTML,
         reply_markup=_main_menu_keyboard(runtime),
     )
@@ -2020,11 +2049,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "h":
         _clear_pending(context)
+        try:
+            await _refresh_main_menu_snapshot(runtime)
+        except Exception as exc:
+            LOGGER.warning("Refresh main menu snapshot gagal: %s", sanitize_secret_text(str(exc)))
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
             context=context,
-            text=main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
+            text=_main_menu_message(runtime),
             reply_markup=_main_menu_keyboard(runtime),
         )
         return
@@ -2040,7 +2073,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 query=query,
                 chat_id=chat_id,
                 context=context,
-                text=main_menu_text(runtime.hostname, len(_visible_main_menus(runtime))),
+                text=_main_menu_message(runtime),
                 reply_markup=_main_menu_keyboard(runtime),
             )
             return
@@ -2665,7 +2698,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer("Interaksi tidak dikenali. Jalankan /menu lagi.", show_alert=True)
 
 
-def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
+def _load_main_menu_snapshot_from_backend_or_die(backend: BackendClient) -> tuple[CommandCatalog, str]:
     deadline = time.monotonic() + BACKEND_MENU_SYNC_TIMEOUT_SECONDS
     attempt = 0
     last_error: Exception | None = None
@@ -2674,16 +2707,13 @@ def _load_catalog_from_backend_or_die(backend: BackendClient) -> CommandCatalog:
         attempt += 1
         try:
             main_menu = asyncio.run(backend.get_main_menu())
-            menus = main_menu.get("menus") if isinstance(main_menu, dict) else None
-            if not isinstance(menus, list):
-                raise RuntimeError("payload menus tidak valid")
-            catalog = CommandCatalog.from_payload({"menus": menus})
+            catalog, header_text = _catalog_from_main_menu_payload(main_menu)
             LOGGER.info(
                 "Backend menu sync complete: menus=%s attempts=%s",
                 len(catalog.menus),
                 attempt,
             )
-            return catalog
+            return catalog, header_text
         except (BackendError, RuntimeError) as exc:
             last_error = exc
 
@@ -2726,13 +2756,14 @@ def main() -> None:
 
     config = load_config()
     backend = BackendClient(config.backend_base_url, config.shared_secret)
-    catalog = _load_catalog_from_backend_or_die(backend)
+    catalog, header_text = _load_main_menu_snapshot_from_backend_or_die(backend)
 
     runtime = Runtime(
         config=config,
         catalog=catalog,
         backend=backend,
         hostname=socket.gethostname(),
+        main_menu_header=header_text,
     )
 
     application = Application.builder().token(config.token).post_init(post_init).build()

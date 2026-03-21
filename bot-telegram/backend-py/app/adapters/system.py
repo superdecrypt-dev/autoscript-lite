@@ -6,6 +6,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import time
 from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -79,6 +80,9 @@ SSHWS_DROPBEAR_UNIT = Path("/etc/systemd/system/sshws-dropbear.service")
 SSHWS_STUNNEL_CONF = Path("/etc/stunnel/sshws.conf")
 SSHWS_PROXY_UNIT = Path("/etc/systemd/system/sshws-proxy.service")
 MESSAGE_SOFT_LIMIT = 3500
+MAIN_MENU_HEADER_CACHE_TTL_SECONDS = 180
+_MAIN_MENU_HEADER_CACHE_TEXT = ""
+_MAIN_MENU_HEADER_CACHE_TS = 0.0
 
 
 def run_cmd(argv: List[str], timeout: int = 20) -> Tuple[bool, str]:
@@ -158,6 +162,167 @@ def detect_tls_expiry() -> str:
         return out
     line = out.splitlines()[-1].strip()
     return line.replace("notAfter=", "")
+
+
+def _main_menu_os_pretty() -> str:
+    os_release = Path("/etc/os-release")
+    if os_release.exists():
+        try:
+            for raw in os_release.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw.strip()
+                if not line.startswith("PRETTY_NAME="):
+                    continue
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if value:
+                    return value
+        except Exception:
+            pass
+    ok, out = run_cmd(["uname", "-sr"], timeout=8)
+    if ok and out.strip():
+        return out.splitlines()[0].strip()
+    return "-"
+
+
+def _main_menu_ipv4_get() -> str:
+    if shutil.which("curl") is not None:
+        ok, out = run_cmd(
+            ["curl", "-fsSL", "--max-time", "3", "http://ip-api.com/json/?fields=status,query"],
+            timeout=5,
+        )
+        if ok and out.strip():
+            try:
+                payload = json.loads(out)
+            except Exception:
+                payload = {}
+            query = str(payload.get("query") or "").strip()
+            if payload.get("status") == "success" and query:
+                return query
+
+    ok, ip_raw = run_cmd(["ip", "-4", "-o", "addr", "show", "scope", "global"], timeout=8)
+    if ok:
+        match = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/", ip_raw)
+        if match:
+            ip = match.group(1)
+            try:
+                if not ipaddress.ip_address(ip).is_private:
+                    return ip
+            except Exception:
+                return ip
+
+    if shutil.which("curl") is not None:
+        ok, out = run_cmd(["curl", "-4fsSL", "--max-time", "3", "https://api.ipify.org"], timeout=5)
+        if ok and out.strip():
+            return out.splitlines()[0].strip()
+    return "-"
+
+
+def _main_menu_geo_lookup(ip: str) -> tuple[str, str, str]:
+    ip_value = str(ip or "").strip()
+    if not ip_value or ip_value == "-" or shutil.which("curl") is None:
+        return "-", "-", "-"
+
+    providers = (
+        (
+            f"http://ip-api.com/json/{ip_value}?fields=status,query,country,isp",
+            lambda payload: (
+                str(payload.get("query") or "-"),
+                str(payload.get("isp") or "-"),
+                str(payload.get("country") or "-"),
+            )
+            if payload.get("status") == "success"
+            else ("-", "-", "-"),
+        ),
+        (
+            f"https://ipwho.is/{ip_value}",
+            lambda payload: (
+                str(payload.get("ip") or ip_value or "-"),
+                str(payload.get("connection", {}).get("isp") or "-"),
+                str(payload.get("country") or payload.get("country_name") or "-"),
+            )
+            if bool(payload.get("success"))
+            else ("-", "-", "-"),
+        ),
+        (
+            f"https://ipinfo.io/{ip_value}/json",
+            lambda payload: (
+                str(payload.get("ip") or ip_value or "-"),
+                str(payload.get("org") or "-"),
+                str(payload.get("country") or "-"),
+            ),
+        ),
+    )
+
+    for url, parser in providers:
+        ok, out = run_cmd(["curl", "-fsSL", "--max-time", "3", url], timeout=5)
+        if not ok or not out.strip():
+            continue
+        try:
+            payload = json.loads(out)
+        except Exception:
+            continue
+        ip_out, isp_out, country_out = parser(payload)
+        ip_out = ip_out if ip_out and ip_out != "null" else "-"
+        isp_out = isp_out if isp_out and isp_out != "null" else "-"
+        country_out = country_out if country_out and country_out != "null" else "-"
+        if ip_out != "-" or isp_out != "-" or country_out != "-":
+            return ip_out, isp_out, country_out
+    return ip_value, "-", "-"
+
+
+def _main_menu_tls_expiry_label() -> str:
+    days = _tls_expiry_days_left()
+    if days is None:
+        return "-"
+    if days < 0:
+        return "Expired"
+    return f"{days} days"
+
+
+def _main_menu_warp_status_label() -> str:
+    if _warp_mode_state_get() == "zerotrust":
+        if not service_exists(WARP_ZEROTRUST_SERVICE):
+            return "Zero Trust Missing"
+        if service_state(WARP_ZEROTRUST_SERVICE) != "active":
+            return "Zero Trust Inactive"
+        return "Active (Zero Trust)"
+
+    if not service_exists("wireproxy"):
+        return "Not Installed"
+    if service_state("wireproxy") != "active":
+        return "Inactive"
+
+    live = _warp_live_tier()
+    if live == "plus":
+        return "Active (Plus)"
+    if live == "free":
+        return "Active (Free)"
+    return "Active"
+
+
+def main_menu_header_text() -> str:
+    global _MAIN_MENU_HEADER_CACHE_TEXT, _MAIN_MENU_HEADER_CACHE_TS
+
+    now = time.time()
+    if _MAIN_MENU_HEADER_CACHE_TEXT and (now - _MAIN_MENU_HEADER_CACHE_TS) < MAIN_MENU_HEADER_CACHE_TTL_SECONDS:
+        return _MAIN_MENU_HEADER_CACHE_TEXT
+
+    ip = _main_menu_ipv4_get()
+    ip, isp, country = _main_menu_geo_lookup(ip)
+    ok_uptime, uptime = run_cmd(["uptime", "-p"], timeout=8)
+    lines = [
+        f"{'System OS':<12} : {_main_menu_os_pretty()}",
+        f"{'RAM':<12} : {memory_summary()}",
+        f"{'Uptime':<12} : {uptime.splitlines()[0].strip() if ok_uptime and uptime.strip() else '-'}",
+        f"{'IP VPS':<12} : {ip}",
+        f"{'ISP':<12} : {isp}",
+        f"{'Country':<12} : {country}",
+        f"{'Domain':<12} : {detect_domain()}",
+        f"{'TLS Expired':<12} : {_main_menu_tls_expiry_label()}",
+        f"{'WARP Status':<12} : {_main_menu_warp_status_label()}",
+    ]
+    _MAIN_MENU_HEADER_CACHE_TEXT = "\n".join(lines)
+    _MAIN_MENU_HEADER_CACHE_TS = now
+    return _MAIN_MENU_HEADER_CACHE_TEXT
 
 
 def service_state(name: str) -> str:
