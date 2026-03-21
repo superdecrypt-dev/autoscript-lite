@@ -772,6 +772,17 @@ def recompute_lock_reason(st):
   else:
     st["locked_at"] = ""
 
+def recompute_limit_flags(meta, st):
+  quota_limit = parse_int(meta.get("quota_limit", 0), "quota_limit", 0)
+  quota_used = parse_int(meta.get("quota_used", 0), "quota_used", 0)
+  st["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
+
+  ip_enabled = bool(st.get("ip_limit_enabled"))
+  ip_limit = parse_int(st.get("ip_limit", 0), "ip_limit", 0)
+  ip_metric = parse_int(st.get("ip_limit_metric", 0), "ip_limit_metric", 0)
+  st["ip_limit_locked"] = bool(ip_enabled and ip_limit > 0 and ip_metric > ip_limit)
+  recompute_lock_reason(st)
+
 with open(lock_path, "a+", encoding="utf-8") as lf:
   fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
   try:
@@ -807,7 +818,7 @@ with open(lock_path, "a+", encoding="utf-8") as lf:
       if len(args) != 1:
         raise SystemExit("set_quota_limit_recompute butuh 1 argumen (bytes)")
       d["quota_limit"] = parse_int(args[0], "quota_limit", 0)
-      recompute_lock_reason(st)
+      recompute_limit_flags(d, st)
 
     elif action == "reset_quota_used_recompute":
       d["quota_used"] = 0
@@ -834,14 +845,13 @@ with open(lock_path, "a+", encoding="utf-8") as lf:
         raise SystemExit("ip_limit_enabled_set butuh 1 argumen (on/off)")
       enabled = parse_onoff(args[0])
       st["ip_limit_enabled"] = bool(enabled)
-      if not enabled:
-        st["ip_limit_locked"] = False
-        recompute_lock_reason(st)
+      recompute_limit_flags(d, st)
 
     elif action == "set_ip_limit":
       if len(args) != 1:
         raise SystemExit("set_ip_limit butuh 1 argumen (angka)")
       st["ip_limit"] = parse_int(args[0], "ip_limit", 1)
+      recompute_limit_flags(d, st)
 
     elif action == "clear_ip_limit_locked_recompute":
       st["ip_limit_locked"] = False
@@ -1487,4 +1497,3 @@ quota_menu() {
     esac
   done
 }
-

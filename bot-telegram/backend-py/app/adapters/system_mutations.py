@@ -2233,6 +2233,22 @@ def _status_apply_lock_fields(status: dict[str, Any]) -> None:
         status["locked_at"] = ""
 
 
+def _xray_recompute_limit_lock_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    quota_limit = max(0, _to_int(payload.get("quota_limit"), 0))
+    quota_used = max(0, _to_int(payload.get("quota_used"), 0))
+    status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
+
+    ip_enabled = bool(status.get("ip_limit_enabled"))
+    ip_limit = max(0, _to_int(status.get("ip_limit"), 0))
+    ip_metric = max(0, _to_int(status.get("ip_limit_metric"), 0))
+    status["ip_limit_locked"] = bool(ip_enabled and ip_limit > 0 and ip_metric > ip_limit)
+
+    _status_apply_lock_fields(status)
+    payload["status"] = status
+    return status
+
+
 def _linux_user_exists(username: str) -> bool:
     try:
         pwd.getpwnam(str(username or "").strip())
@@ -5862,9 +5878,7 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
 
     previous_payload = copy.deepcopy(q_data)
     q_data["quota_limit"] = int(round(quota_gb * (1024**3)))
-    st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
-    _status_apply_lock_fields(st)
-    q_data["status"] = st
+    _xray_recompute_limit_lock_fields(q_data)
     return _xray_apply_quota_update(
         "Quota - Set Limit",
         proto,
@@ -6037,10 +6051,8 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
     previous_payload = copy.deepcopy(q_data)
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["ip_limit_enabled"] = bool(enabled)
-    if not enabled:
-        st["ip_limit_locked"] = False
-    _status_apply_lock_fields(st)
     q_data["status"] = st
+    _xray_recompute_limit_lock_fields(q_data)
     return _xray_apply_quota_update(
         "Quota - IP Limit",
         proto,
@@ -6099,6 +6111,7 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
     st = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
     st["ip_limit"] = int(limit)
     q_data["status"] = st
+    _xray_recompute_limit_lock_fields(q_data)
     return _xray_apply_quota_update(
         "Quota - Set IP Limit",
         proto,
