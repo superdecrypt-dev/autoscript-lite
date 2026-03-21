@@ -2380,6 +2380,18 @@ ssh_network_menu() {
 
 ssh_menu() {
   local pending_count=0
+  local -a items=(
+    "1|Add User"
+    "2|Delete User"
+    "3|Set Expiry"
+    "4|Reset Password"
+    "5|List Users"
+    "6|Status"
+    "7|Restart SSH WS"
+    "8|Active Sessions"
+    "9|Recover Pending Txn"
+    "0|Back"
+  )
   while true; do
     pending_count="$(ssh_pending_recovery_count)"
     [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
