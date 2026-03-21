@@ -9,9 +9,9 @@ validate_email_user() {
 
 is_default_xray_email_or_tag() {
   # Default/bawaan Xray (disembunyikan dari menu WARP per-user):
-  # default@(vless|vmess|trojan)-(tcp|ws|hup|grpc)
+  # default@(vless|vmess|trojan)-(tcp|ws|hup|xhttp|grpc)
   local s="${1:-}"
-  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(tcp|ws|hup|grpc)$ ]]
+  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(tcp|ws|hup|grpc|xhttp)$ ]]
 }
 
 is_readonly_geosite_domain() {
@@ -1845,5 +1845,3 @@ xray_routing_custom_domain_entry_set_mode() {
   xray_routing_post_speed_sync_or_die "${backup}" "${backup_out}" "update routing WARP per-domain"
   return 0
 }
-
-

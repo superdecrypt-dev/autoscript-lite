@@ -161,6 +161,56 @@ nginx_export_if_missing_from_live() {
   fi
 }
 
+nginx_export_prefer_runtime() {
+  local var_name="$1" runtime_value="$2" fallback_value="$3"
+  if [[ -n "${runtime_value}" ]]; then
+    declare -gx "${var_name}=${runtime_value}"
+    return 0
+  fi
+  if [[ -n "${fallback_value}" ]]; then
+    declare -gx "${var_name}=${fallback_value}"
+  fi
+}
+
+nginx_read_live_xray_inbound_value() {
+  local tag_name="$1" field_name="$2"
+  local xray_inbounds="${XRAY_CONFDIR}/10-inbounds.json"
+  [[ -f "${xray_inbounds}" ]] || return 1
+  python3 - "${xray_inbounds}" "${tag_name}" "${field_name}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, tag_name, field_name = sys.argv[1:]
+cfg = json.loads(Path(path).read_text())
+for inbound in cfg.get("inbounds", []):
+    if inbound.get("tag") != tag_name:
+        continue
+    if field_name == "port":
+        value = inbound.get("port")
+    else:
+        stream = inbound.get("streamSettings") or {}
+        network = stream.get("network") or ""
+        if field_name == "path":
+            if network == "ws":
+                value = (stream.get("wsSettings") or {}).get("path")
+            elif network == "httpupgrade":
+                value = (stream.get("httpupgradeSettings") or {}).get("path")
+            elif network == "xhttp":
+                value = (stream.get("xhttpSettings") or {}).get("path")
+            else:
+                value = None
+        elif field_name == "serviceName":
+            value = (stream.get("grpcSettings") or {}).get("serviceName") if network == "grpc" else None
+        else:
+            value = None
+    if value not in (None, ""):
+        print(value)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 nginx_ensure_domain_context_or_die() {
   local detected_domain
   if [[ -z "${DOMAIN:-}" ]]; then
@@ -174,30 +224,37 @@ nginx_ensure_domain_context_or_die() {
 }
 
 nginx_capture_live_route_context() {
-  [[ -f "${NGINX_CONF}" ]] || return 0
+  local has_nginx_conf="false"
+  [[ -f "${NGINX_CONF}" ]] && has_nginx_conf="true"
 
-  nginx_export_if_missing_from_live P_VLESS_WS "$(nginx_read_live_map_value internal_port 'vless-ws' || true)"
-  nginx_export_if_missing_from_live P_VMESS_WS "$(nginx_read_live_map_value internal_port 'vmess-ws' || true)"
-  nginx_export_if_missing_from_live P_TROJAN_WS "$(nginx_read_live_map_value internal_port 'trojan-ws' || true)"
-  nginx_export_if_missing_from_live P_VLESS_HUP "$(nginx_read_live_map_value internal_port 'vless-hup' || true)"
-  nginx_export_if_missing_from_live P_VMESS_HUP "$(nginx_read_live_map_value internal_port 'vmess-hup' || true)"
-  nginx_export_if_missing_from_live P_TROJAN_HUP "$(nginx_read_live_map_value internal_port 'trojan-hup' || true)"
+  nginx_export_prefer_runtime P_VLESS_WS "$(nginx_read_live_xray_inbound_value 'default@vless-ws' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vless-ws' || true)"
+  nginx_export_prefer_runtime P_VMESS_WS "$(nginx_read_live_xray_inbound_value 'default@vmess-ws' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vmess-ws' || true)"
+  nginx_export_prefer_runtime P_TROJAN_WS "$(nginx_read_live_xray_inbound_value 'default@trojan-ws' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'trojan-ws' || true)"
+  nginx_export_prefer_runtime P_VLESS_HUP "$(nginx_read_live_xray_inbound_value 'default@vless-hup' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vless-hup' || true)"
+  nginx_export_prefer_runtime P_VMESS_HUP "$(nginx_read_live_xray_inbound_value 'default@vmess-hup' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vmess-hup' || true)"
+  nginx_export_prefer_runtime P_TROJAN_HUP "$(nginx_read_live_xray_inbound_value 'default@trojan-hup' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'trojan-hup' || true)"
+  nginx_export_prefer_runtime P_VLESS_XHTTP "$(nginx_read_live_xray_inbound_value 'default@vless-xhttp' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vless-xhttp' || true)"
+  nginx_export_prefer_runtime P_VMESS_XHTTP "$(nginx_read_live_xray_inbound_value 'default@vmess-xhttp' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vmess-xhttp' || true)"
+  nginx_export_prefer_runtime P_TROJAN_XHTTP "$(nginx_read_live_xray_inbound_value 'default@trojan-xhttp' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'trojan-xhttp' || true)"
 
-  nginx_export_if_missing_from_live P_VLESS_GRPC "$(nginx_read_live_map_value internal_port 'vless-grpc' || true)"
-  nginx_export_if_missing_from_live P_VMESS_GRPC "$(nginx_read_live_map_value internal_port 'vmess-grpc' || true)"
-  nginx_export_if_missing_from_live P_TROJAN_GRPC "$(nginx_read_live_map_value internal_port 'trojan-grpc' || true)"
+  nginx_export_prefer_runtime P_VLESS_GRPC "$(nginx_read_live_xray_inbound_value 'default@vless-grpc' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vless-grpc' || true)"
+  nginx_export_prefer_runtime P_VMESS_GRPC "$(nginx_read_live_xray_inbound_value 'default@vmess-grpc' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'vmess-grpc' || true)"
+  nginx_export_prefer_runtime P_TROJAN_GRPC "$(nginx_read_live_xray_inbound_value 'default@trojan-grpc' 'port' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_port 'trojan-grpc' || true)"
 
-  nginx_export_if_missing_from_live I_VLESS_WS "$(nginx_read_live_map_value internal_path 'vless-ws' || true)"
-  nginx_export_if_missing_from_live I_VMESS_WS "$(nginx_read_live_map_value internal_path 'vmess-ws' || true)"
-  nginx_export_if_missing_from_live I_TROJAN_WS "$(nginx_read_live_map_value internal_path 'trojan-ws' || true)"
+  nginx_export_prefer_runtime I_VLESS_WS "$(nginx_read_live_xray_inbound_value 'default@vless-ws' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vless-ws' || true)"
+  nginx_export_prefer_runtime I_VMESS_WS "$(nginx_read_live_xray_inbound_value 'default@vmess-ws' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vmess-ws' || true)"
+  nginx_export_prefer_runtime I_TROJAN_WS "$(nginx_read_live_xray_inbound_value 'default@trojan-ws' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'trojan-ws' || true)"
 
-  nginx_export_if_missing_from_live I_VLESS_HUP "$(nginx_read_live_map_value internal_path 'vless-hup' || true)"
-  nginx_export_if_missing_from_live I_VMESS_HUP "$(nginx_read_live_map_value internal_path 'vmess-hup' || true)"
-  nginx_export_if_missing_from_live I_TROJAN_HUP "$(nginx_read_live_map_value internal_path 'trojan-hup' || true)"
+  nginx_export_prefer_runtime I_VLESS_HUP "$(nginx_read_live_xray_inbound_value 'default@vless-hup' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vless-hup' || true)"
+  nginx_export_prefer_runtime I_VMESS_HUP "$(nginx_read_live_xray_inbound_value 'default@vmess-hup' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vmess-hup' || true)"
+  nginx_export_prefer_runtime I_TROJAN_HUP "$(nginx_read_live_xray_inbound_value 'default@trojan-hup' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'trojan-hup' || true)"
+  nginx_export_prefer_runtime I_VLESS_XHTTP "$(nginx_read_live_xray_inbound_value 'default@vless-xhttp' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vless-xhttp' || true)"
+  nginx_export_prefer_runtime I_VMESS_XHTTP "$(nginx_read_live_xray_inbound_value 'default@vmess-xhttp' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'vmess-xhttp' || true)"
+  nginx_export_prefer_runtime I_TROJAN_XHTTP "$(nginx_read_live_xray_inbound_value 'default@trojan-xhttp' 'path' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_map_value internal_path 'trojan-xhttp' || true)"
 
-  nginx_export_if_missing_from_live I_VLESS_GRPC "$(nginx_read_live_grpc_value 'vless-grpc' || true)"
-  nginx_export_if_missing_from_live I_VMESS_GRPC "$(nginx_read_live_grpc_value 'vmess-grpc' || true)"
-  nginx_export_if_missing_from_live I_TROJAN_GRPC "$(nginx_read_live_grpc_value 'trojan-grpc' || true)"
+  nginx_export_prefer_runtime I_VLESS_GRPC "$(nginx_read_live_xray_inbound_value 'default@vless-grpc' 'serviceName' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_grpc_value 'vless-grpc' || true)"
+  nginx_export_prefer_runtime I_VMESS_GRPC "$(nginx_read_live_xray_inbound_value 'default@vmess-grpc' 'serviceName' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_grpc_value 'vmess-grpc' || true)"
+  nginx_export_prefer_runtime I_TROJAN_GRPC "$(nginx_read_live_xray_inbound_value 'default@trojan-grpc' 'serviceName' || true)" "$([[ "${has_nginx_conf}" == "true" ]] && nginx_read_live_grpc_value 'trojan-grpc' || true)"
 }
 
 nginx_ensure_render_context_or_die() {
@@ -207,9 +264,11 @@ nginx_ensure_render_context_or_die() {
   local required_vars=(
     P_VLESS_WS P_VMESS_WS P_TROJAN_WS
     P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
+    P_VLESS_XHTTP P_VMESS_XHTTP P_TROJAN_XHTTP
     P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
     I_VLESS_WS I_VMESS_WS I_TROJAN_WS
     I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP
+    I_VLESS_XHTTP I_VMESS_XHTTP I_TROJAN_XHTTP
     I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC
   )
   local missing=()
@@ -386,6 +445,9 @@ write_nginx_config() {
     "P_VLESS_HUP=${P_VLESS_HUP}"
     "P_VMESS_HUP=${P_VMESS_HUP}"
     "P_TROJAN_HUP=${P_TROJAN_HUP}"
+    "P_VLESS_XHTTP=${P_VLESS_XHTTP}"
+    "P_VMESS_XHTTP=${P_VMESS_XHTTP}"
+    "P_TROJAN_XHTTP=${P_TROJAN_XHTTP}"
     "P_VLESS_GRPC=${P_VLESS_GRPC}"
     "P_VMESS_GRPC=${P_VMESS_GRPC}"
     "P_TROJAN_GRPC=${P_TROJAN_GRPC}"
@@ -395,6 +457,9 @@ write_nginx_config() {
     "I_VLESS_HUP=${I_VLESS_HUP}"
     "I_VMESS_HUP=${I_VMESS_HUP}"
     "I_TROJAN_HUP=${I_TROJAN_HUP}"
+    "I_VLESS_XHTTP=${I_VLESS_XHTTP}"
+    "I_VMESS_XHTTP=${I_VMESS_XHTTP}"
+    "I_TROJAN_XHTTP=${I_TROJAN_XHTTP}"
     "I_VLESS_GRPC=${I_VLESS_GRPC}"
     "I_VMESS_GRPC=${I_VMESS_GRPC}"
     "I_TROJAN_GRPC=${I_TROJAN_GRPC}"

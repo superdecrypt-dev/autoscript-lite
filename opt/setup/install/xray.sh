@@ -29,6 +29,7 @@ write_xray_config() {
   local P_VLESS_TCP P_TROJAN_TCP
   local P_VLESS_WS P_VMESS_WS P_TROJAN_WS
   local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
+  local P_VLESS_XHTTP P_VMESS_XHTTP P_TROJAN_XHTTP
   local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
   local P_API P_SSH_WARP_REDIR P_SSH_WARP_REDIR6
 
@@ -40,6 +41,9 @@ write_xray_config() {
   P_VLESS_HUP="$(pick_port)"
   P_VMESS_HUP="$(pick_port)"
   P_TROJAN_HUP="$(pick_port)"
+  P_VLESS_XHTTP="$(pick_port)"
+  P_VMESS_XHTTP="$(pick_port)"
+  P_TROJAN_XHTTP="$(pick_port)"
   P_VLESS_GRPC="$(pick_port)"
   P_VMESS_GRPC="$(pick_port)"
   P_TROJAN_GRPC="$(pick_port)"
@@ -58,6 +62,7 @@ write_xray_config() {
 
   local I_VLESS_WS I_VMESS_WS I_TROJAN_WS
   local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP
+  local I_VLESS_XHTTP I_VMESS_XHTTP I_TROJAN_XHTTP
   local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC
 
   I_VLESS_WS="/$(rand_str 14)"
@@ -66,6 +71,9 @@ write_xray_config() {
   I_VLESS_HUP="/$(rand_str 14)"
   I_VMESS_HUP="/$(rand_str 14)"
   I_TROJAN_HUP="/$(rand_str 14)"
+  I_VLESS_XHTTP="/vless-xhttp"
+  I_VMESS_XHTTP="/vmess-xhttp"
+  I_TROJAN_XHTTP="/trojan-xhttp"
   I_VLESS_GRPC="$(rand_str 12)"
   I_VMESS_GRPC="$(rand_str 12)"
   I_TROJAN_GRPC="$(rand_str 12)"
@@ -451,6 +459,95 @@ write_xray_config() {
     },
     {
       "listen": "127.0.0.1",
+      "port": ${P_VLESS_XHTTP},
+      "protocol": "vless",
+      "tag": "default@vless-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "email": "default@vless-xhttp"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "${I_VLESS_XHTTP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_VMESS_XHTTP},
+      "protocol": "vmess",
+      "tag": "default@vmess-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "alterId": 0,
+            "email": "default@vmess-xhttp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "${I_VMESS_XHTTP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_TROJAN_XHTTP},
+      "protocol": "trojan",
+      "tag": "default@trojan-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "password": "${TROJAN_PASS}",
+            "email": "default@trojan-xhttp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "${I_TROJAN_XHTTP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
       "port": ${P_TROJAN_HUP},
       "protocol": "trojan",
       "tag": "default@trojan-hup",
@@ -637,6 +734,9 @@ EOF
   declare -gx P_VLESS_HUP="$P_VLESS_HUP"
   declare -gx P_VMESS_HUP="$P_VMESS_HUP"
   declare -gx P_TROJAN_HUP="$P_TROJAN_HUP"
+  declare -gx P_VLESS_XHTTP="$P_VLESS_XHTTP"
+  declare -gx P_VMESS_XHTTP="$P_VMESS_XHTTP"
+  declare -gx P_TROJAN_XHTTP="$P_TROJAN_XHTTP"
   declare -gx P_VLESS_GRPC="$P_VLESS_GRPC"
   declare -gx P_VMESS_GRPC="$P_VMESS_GRPC"
   declare -gx P_TROJAN_GRPC="$P_TROJAN_GRPC"
@@ -647,6 +747,9 @@ EOF
   declare -gx I_VLESS_HUP="$I_VLESS_HUP"
   declare -gx I_VMESS_HUP="$I_VMESS_HUP"
   declare -gx I_TROJAN_HUP="$I_TROJAN_HUP"
+  declare -gx I_VLESS_XHTTP="$I_VLESS_XHTTP"
+  declare -gx I_VMESS_XHTTP="$I_VMESS_XHTTP"
+  declare -gx I_TROJAN_XHTTP="$I_TROJAN_XHTTP"
   declare -gx I_VLESS_GRPC="$I_VLESS_GRPC"
   declare -gx I_VMESS_GRPC="$I_VMESS_GRPC"
   declare -gx I_TROJAN_GRPC="$I_TROJAN_GRPC"
