@@ -305,19 +305,9 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             return ok_response(title, msg_reset)
         return error_response("user_reset_password_failed", title, msg_reset)
 
-    if action == "active_sshws_sessions":
-        title, msg = system.op_sshws_active_sessions()
-        return ok_response(_scope_title(scope, "Active SSHWS Sessions"), msg)
-
-    if scope == "ssh" and action == "sshws_status":
-        title, msg = system.op_sshws_status()
-        return ok_response(title, msg)
-
-    if scope == "ssh" and action == "restart_sshws_stack":
-        ok_restart, title, msg = system.op_restart_sshws_stack()
-        if ok_restart:
-            return ok_response(title, msg)
-        return error_response("restart_service_failed", title, msg)
+    if action in {"active_sshws_sessions", "sshws_status", "restart_sshws_stack"}:
+        title = _scope_title(scope, "SSHWS")
+        return error_response("action_moved", title, "Aksi SSHWS dipindahkan ke menu Maintenance.")
 
     if action == "account_info":
         title = _scope_title(scope, "Account Info")

@@ -887,7 +887,7 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 
 	switch class {
 	case detect.ClassHTTP:
-		decision := decideHTTPRoute(cfg, "http-port", initial, "", "")
+		decision := decideHTTPRoute(cfg, "http-port", initial, "", "", remoteIsLoopback(conn))
 		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status, "detect", "")
 		event.Surface = "http-port"
 		if decision.Status > 0 {
@@ -998,7 +998,7 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		handleTLSPayloadConn(logger, cfg, collector, health, tlsConn, "tls-inner")
 		return
 	case detect.ClassHTTP:
-		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "")
+		decision := decideHTTPRoute(cfg, "tls-port-plaintext", initial, "", "", remoteIsLoopback(conn))
 		event := routeDecisionEvent(cfg, health, class, decision.Backend, decision.Route, decision.Host, decision.Path, decision.ALPN, decision.SNI, "", decision.Status, "detect", "")
 		event.Surface = "tls-port-plaintext"
 		if decision.Status > 0 {
@@ -1060,7 +1060,7 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 	collector.ObserveDetect(surface, class)
 	alpn := negotiatedALPN(tlsConn)
 	sni := negotiatedSNI(tlsConn)
-	decision := decideTLSPayloadRoute(cfg, surface, initial, class, alpn, sni)
+	decision := decideTLSPayloadRoute(cfg, surface, initial, class, alpn, sni, remoteIsLoopback(tlsConn))
 	if decision.status == 408 {
 		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
 		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
@@ -1094,7 +1094,7 @@ type tlsRouteDecision struct {
 	sendHTTP502  bool
 }
 
-func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, class detect.InitialClass, alpn, sni string) tlsRouteDecision {
+func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, class detect.InitialClass, alpn, sni string, allowDiagnostic bool) tlsRouteDecision {
 	if decision, ok := resolveSNIRouteDecision(cfg, sni, surface); ok {
 		if req, parsed := routing.ParseHTTPRequest(initial); parsed {
 			decision.host = req.Host
@@ -1111,7 +1111,7 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 	}
 	switch class {
 	case detect.ClassHTTP:
-		httpDecision := decideHTTPRoute(cfg, surface, initial, alpn, sni)
+		httpDecision := decideHTTPRoute(cfg, surface, initial, alpn, sni, allowDiagnostic)
 		decision.target = httpDecision.Backend
 		decision.contextLabel = httpDecision.Context
 		decision.route = httpDecision.Route
@@ -1306,7 +1306,7 @@ type httpRouteDecision struct {
 	Text    string
 }
 
-func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, sni string) httpRouteDecision {
+func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, sni string, allowDiagnostic bool) httpRouteDecision {
 	decision := httpRouteDecision{
 		Backend: cfg.HTTPBackendAddr(),
 		Route:   "http-other",
@@ -1317,6 +1317,11 @@ func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, s
 		decision.Route = routing.RouteLabel(req, alpn)
 		decision.Host = req.Host
 		decision.Path = req.Path
+		if req.Path == "/diagnostic-probe" && !allowDiagnostic {
+			decision.Route = "websocket-other"
+			decision.Status = 401
+			decision.Text = "Unauthorized"
+		}
 		if decision.Route == "websocket-other" {
 			decision.Status = 401
 			decision.Text = "Unauthorized"
@@ -1326,6 +1331,21 @@ func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, s
 	}
 	decision.Context = fmt.Sprintf("%s:http:%s", surface, decision.Route)
 	return decision
+}
+
+func remoteIsLoopback(conn net.Conn) bool {
+	if conn == nil || conn.RemoteAddr() == nil {
+		return false
+	}
+	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok && addr.IP != nil {
+		return addr.IP.IsLoopback()
+	}
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }
 
 func negotiatedALPN(conn net.Conn) string {

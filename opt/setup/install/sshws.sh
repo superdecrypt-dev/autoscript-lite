@@ -1,6 +1,34 @@
 #!/usr/bin/env bash
 # SSHWS install/runtime module for setup runtime.
 
+SSHWS_PROXY_DIST_DIR="${SCRIPT_DIR}/opt/wsproxy/dist"
+
+sshws_go_arch_suffix() {
+  local arch
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  case "${arch}" in
+    x86_64|amd64) printf '%s\n' "amd64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+sshws_go_dist_binary_path() {
+  local suffix
+  suffix="$(sshws_go_arch_suffix)" || return 1
+  printf '%s\n' "${SSHWS_PROXY_DIST_DIR}/ws-proxy-linux-${suffix}"
+}
+
+install_sshws_proxy_binary_or_die() {
+  local src
+  src="$(sshws_go_dist_binary_path)" || die "Arsitektur host belum didukung untuk Websocket Proxy (Go)."
+  [[ -f "${src}" && -s "${src}" ]] || die "Binary prebuilt Websocket Proxy (Go) tidak ditemukan: ${src}"
+  install -d -m 755 /usr/local/bin
+  install -m 0755 "${src}" /usr/local/bin/ws-proxy
+  ln -sfn /usr/local/bin/ws-proxy /usr/local/bin/sshws-proxy
+  chown root:root /usr/local/bin/ws-proxy /usr/local/bin/sshws-proxy 2>/dev/null || true
+}
+
 validate_port_number() {
   local name="$1"
   local value="$2"
@@ -59,17 +87,34 @@ sshws_runtime_session_stale_sec_value() {
   printf '%s\n' "${value}"
 }
 
+sshws_handshake_timeout_sec_value() {
+  local value="${SSHWS_HANDSHAKE_TIMEOUT_SEC:-10}"
+  [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "SSHWS_HANDSHAKE_TIMEOUT_SEC harus angka positif (got: ${value})."
+  python3 - <<'PY' "${value}"
+import sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+if value <= 0:
+    raise SystemExit(1)
+print(f"{value:g}")
+PY
+  [[ $? -eq 0 ]] || die "SSHWS_HANDSHAKE_TIMEOUT_SEC harus lebih besar dari 0 (got: ${value})."
+}
+
 write_sshws_runtime_env() {
   render_setup_template_or_die \
     "config/sshws-runtime.env" \
     "/etc/default/sshws-runtime" \
     0644 \
-    "SSHWS_RUNTIME_SESSION_STALE_SEC=$(sshws_runtime_session_stale_sec_value)"
+    "SSHWS_RUNTIME_SESSION_STALE_SEC=$(sshws_runtime_session_stale_sec_value)" \
+    "SSHWS_HANDSHAKE_TIMEOUT_SEC=$(sshws_handshake_timeout_sec_value)"
 }
 
 install_sshws_stack() {
   ok "Pasang SSH WS stack..."
-  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS proxy."
+  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WS control plane."
   [[ -x /usr/sbin/dropbear ]] || die "dropbear tidak ditemukan di /usr/sbin/dropbear."
 
   local stunnel_bin=""
@@ -130,7 +175,8 @@ install_sshws_stack() {
     rm -f /etc/stunnel/sshws.conf /etc/systemd/system/sshws-stunnel.service >/dev/null 2>&1 || true
   fi
 
-  install_setup_bin_or_die "sshws-proxy.py" "/usr/local/bin/sshws-proxy" 0755
+  install_sshws_proxy_binary_or_die
+  install_setup_bin_or_die "sshws-control.py" "/usr/local/bin/sshws-control" 0755
   write_sshws_runtime_env
 
   render_setup_template_or_die \

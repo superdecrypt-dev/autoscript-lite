@@ -37,7 +37,8 @@ Prinsip:
 - Validasi minimum yang sudah lolos:
   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
   - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
-  - `python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py`
+  - `python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py`
+  - `go -C opt/edge/go test ./cmd/sshws-proxy`
 
 ## Target Struktur
 

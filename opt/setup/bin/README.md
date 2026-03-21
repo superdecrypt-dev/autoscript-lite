@@ -4,10 +4,12 @@ Script executable yang sebelumnya dihasilkan dari heredoc di `setup.sh`
 dipindah ke folder ini secara bertahap.
 
 Yang sudah dipindah:
-- `sshws-proxy.py`
 - `sshws-qac-enforcer.py`
 - `xray-speed.py`
 - `xray-domain-guard`
+
+Komponen Go yang sekarang juga aktif:
+- `opt/edge/go/cmd/sshws-proxy` (`Websocket Proxy (Go)`)
 
 Kandidat berikutnya bila masih ada script inline baru:
 - utility Python/Bash tambahan yang saat ini masih dibuat langsung dari `setup.sh`

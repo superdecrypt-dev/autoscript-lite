@@ -16,6 +16,9 @@ import time
 STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 LOCK_FILE = pathlib.Path("/run/autoscript/locks/sshws-qac.lock")
 SESSION_ROOT = pathlib.Path("/run/autoscript/sshws-sessions")
+SESSION_USER_INDEX_ROOT = SESSION_ROOT / ".by-user"
+SSH_NETWORK_CONFIG_FILE = pathlib.Path("/etc/autoscript/ssh-network/config.env")
+SSH_NETWORK_SYNC_CACHE_FILE = pathlib.Path("/run/autoscript/cache/ssh-network-session-targets.json")
 LOCK_SHELL_CANDIDATES = (
   "/usr/sbin/nologin",
   "/usr/bin/nologin",
@@ -145,6 +148,53 @@ def iter_runtime_sessions(root, prune_stale=False):
       except Exception:
         pass
 
+
+def session_user_index_path(username):
+  user = norm_user(username)
+  if not user:
+    return None
+  return SESSION_USER_INDEX_ROOT / f"{user}.json"
+
+
+def load_user_session_index(username):
+  path = session_user_index_path(username)
+  if path is None or not path.is_file():
+    return {"username": norm_user(username), "sessions": {}}
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+  except Exception:
+    return {"username": norm_user(username), "sessions": {}}
+  if not isinstance(payload, dict):
+    return {"username": norm_user(username), "sessions": {}}
+  sessions = payload.get("sessions")
+  if not isinstance(sessions, dict):
+    sessions = {}
+  return {"username": norm_user(username), "sessions": sessions}
+
+
+def write_user_session_index(username, payload):
+  path = session_user_index_path(username)
+  if path is None:
+    return
+  path.parent.mkdir(parents=True, exist_ok=True)
+  out = payload if isinstance(payload, dict) else {}
+  out["username"] = norm_user(username)
+  sessions = out.get("sessions")
+  if not isinstance(sessions, dict):
+    sessions = {}
+  out["sessions"] = sessions
+  write_json_atomic(path, out)
+
+
+def drop_user_session_index(username):
+  path = session_user_index_path(username)
+  if path is None:
+    return
+  try:
+    path.unlink()
+  except FileNotFoundError:
+    pass
+
 def cmd_ok(cmd):
   try:
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -179,8 +229,40 @@ def runtime_session_stats(username):
   user = norm_user(username)
   if not user or not SESSION_ROOT.is_dir():
     return None, None, []
+  index = load_user_session_index(user)
+  sessions = index.get("sessions") or {}
+  if sessions:
+    total = 0
+    ips = set()
+    fresh_sessions = {}
+    for port, meta in sessions.items():
+      session_path = SESSION_ROOT / f"{to_int(port, 0)}.json"
+      try:
+        payload = json.loads(session_path.read_text(encoding="utf-8"))
+      except Exception:
+        continue
+      if not runtime_session_payload_valid(payload):
+        continue
+      if norm_user(payload.get("username") or session_path.stem) != user:
+        continue
+      total += 1
+      ip = normalize_ip(payload.get("client_ip"))
+      if ip:
+        ips.add(ip)
+      fresh_sessions[str(to_int(port, 0))] = {
+        "client_ip": ip,
+        "updated_at": to_int(payload.get("updated_at"), 0),
+      }
+    if fresh_sessions != sessions:
+      if fresh_sessions:
+        write_user_session_index(user, {"username": user, "sessions": fresh_sessions})
+      else:
+        drop_user_session_index(user)
+    ip_list = sorted(ips, key=lambda value: (":" in value, value))
+    return total, len(ip_list), ip_list
   total = 0
   ips = set()
+  fresh_sessions = {}
   try:
     for path, payload in iter_runtime_sessions(SESSION_ROOT, prune_stale=True):
       session_user = norm_user(payload.get("username") or path.stem)
@@ -189,8 +271,14 @@ def runtime_session_stats(username):
         ip = normalize_ip(payload.get("client_ip"))
         if ip:
           ips.add(ip)
+        fresh_sessions[str(to_int(payload.get("backend_local_port"), 0))] = {
+          "client_ip": ip,
+          "updated_at": to_int(payload.get("updated_at"), 0),
+        }
   except Exception:
     return None, None, []
+  if fresh_sessions:
+    write_user_session_index(user, {"username": user, "sessions": fresh_sessions})
   ip_list = sorted(ips, key=lambda value: (":" in value, value))
   return total, len(ip_list), ip_list
 
@@ -326,20 +414,18 @@ def active_sessions(username):
   if not username or not user_exists(username):
     return 0
   runtime_count = active_sessions_from_runtime(username)
-  dropbear_count = active_sessions_from_dropbear(username)
   if runtime_count is not None:
-    return max(int(runtime_count), int(dropbear_count))
-  return int(dropbear_count)
+    return int(runtime_count)
+  return int(active_sessions_from_dropbear(username))
 
 def active_login_metric(username):
   if not username or not user_exists(username):
     return 0
   runtime_count, runtime_ip_count, _ = runtime_session_stats(username)
-  dropbear_count = active_sessions_from_dropbear(username)
   if runtime_count is not None:
     if int(runtime_ip_count or 0) > 0:
       return int(runtime_ip_count)
-    return max(int(runtime_count), int(dropbear_count))
+    return int(runtime_count)
   return active_sessions(username)
 
 def lock_user(username, status=None):
@@ -390,6 +476,81 @@ def write_json_atomic(path, payload):
         os.remove(tmp)
     except Exception:
       pass
+
+def ssh_network_config_map():
+  data = {}
+  if SSH_NETWORK_CONFIG_FILE.is_file():
+    try:
+      for raw in SSH_NETWORK_CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        line = str(raw or "").strip()
+        if not line or line.startswith("#") or "=" not in line:
+          continue
+        key, value = line.split("=", 1)
+        data[key.strip()] = value.strip()
+    except Exception:
+      data = {}
+  global_mode = str(data.get("SSH_NETWORK_ROUTE_GLOBAL") or "direct").strip().lower()
+  if global_mode not in ("direct", "warp"):
+    global_mode = "direct"
+  warp_backend = str(data.get("SSH_NETWORK_WARP_BACKEND") or "auto").strip().lower()
+  if warp_backend not in ("auto", "local-proxy", "interface"):
+    warp_backend = "auto"
+  return {"global_mode": global_mode, "warp_backend": warp_backend}
+
+def ssh_network_backend_effective(configured):
+  backend = str(configured or "auto").strip().lower()
+  if backend in ("local-proxy", "interface"):
+    return backend
+  if shutil.which("xray") and shutil.which("iptables"):
+    return "local-proxy"
+  return "interface"
+
+def ssh_network_user_route_mode(payload):
+  if not isinstance(payload, dict):
+    return ""
+  network = payload.get("network")
+  if not isinstance(network, dict):
+    return ""
+  value = str(network.get("route_mode") or "").strip().lower()
+  if value in ("direct", "warp"):
+    return value
+  return ""
+
+def ssh_network_sync_snapshot():
+  cfg = ssh_network_config_map()
+  backend_effective = ssh_network_backend_effective(cfg.get("warp_backend"))
+  if backend_effective != "local-proxy":
+    return {"backend_effective": backend_effective, "warp_users": []}
+  global_mode = str(cfg.get("global_mode") or "direct").strip().lower()
+  warp_users = []
+  for path in iter_ssh_state_files(STATE_ROOT):
+    try:
+      payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      payload = {}
+    username = norm_user((payload or {}).get("username") or path.stem)
+    if not username or not user_exists(username):
+      continue
+    override = ssh_network_user_route_mode(payload)
+    effective = override if override in ("direct", "warp") else global_mode
+    if effective == "warp":
+      warp_users.append(username)
+  warp_users = sorted(set(warp_users), key=str.lower)
+  return {"backend_effective": backend_effective, "warp_users": warp_users}
+
+def ssh_network_sync_cache_load():
+  try:
+    payload = json.loads(SSH_NETWORK_SYNC_CACHE_FILE.read_text(encoding="utf-8"))
+  except Exception:
+    return None
+  return payload if isinstance(payload, dict) else None
+
+def ssh_network_sync_cache_store(snapshot):
+  try:
+    SSH_NETWORK_SYNC_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+  except Exception:
+    return
+  write_json_atomic(SSH_NETWORK_SYNC_CACHE_FILE, snapshot)
 
 def iter_ssh_state_files(root):
   root_path = pathlib.Path(root)
@@ -520,11 +681,15 @@ def enforce_user(path):
   if ip_limit < 0:
     ip_limit = 0
   runtime_count, runtime_ip_count, runtime_ips = runtime_session_stats(username)
-  dropbear_count = active_sessions_from_dropbear(username)
+  runtime_unavailable = (runtime_count is None or runtime_ip_count is None)
   if runtime_count is None:
     runtime_count = 0
   if runtime_ip_count is None:
     runtime_ip_count = 0
+  if runtime_unavailable:
+    dropbear_count = active_sessions_from_dropbear(username)
+  else:
+    dropbear_count = 0
   status["active_sessions_runtime"] = int(runtime_count)
   status["active_sessions_dropbear"] = int(dropbear_count)
   status["active_sessions_total"] = max(int(runtime_count), int(dropbear_count))
@@ -629,16 +794,23 @@ def refresh_ssh_network_session_targets():
   manage_bin = shutil.which("manage") or "/usr/local/bin/manage"
   if not manage_bin:
     return
+  snapshot = ssh_network_sync_snapshot()
+  cached = ssh_network_sync_cache_load()
+  if cached == snapshot:
+    return
   attempts = int(max(1, SSH_NETWORK_SYNC_RETRY_ATTEMPTS))
   for idx in range(attempts):
     try:
-      subprocess.run(
+      res = subprocess.run(
         [manage_bin, "__sync-ssh-network-session-targets"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
         timeout=45,
       )
+      if getattr(res, "returncode", 1) == 0:
+        ssh_network_sync_cache_store(snapshot)
+        return
     except Exception:
       pass
     if idx >= attempts - 1:

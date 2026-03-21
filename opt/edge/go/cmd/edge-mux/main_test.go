@@ -273,7 +273,7 @@ func TestDecideHTTPRouteUnauthorizedForUnknownWebSocket(t *testing.T) {
 	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
 	initial := []byte("GET / HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
-	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "")
+	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
 
 	if decision.Route != "websocket-other" {
 		t.Fatalf("route = %q, want websocket-other", decision.Route)
@@ -290,13 +290,28 @@ func TestDecideHTTPRouteKnownSSHWebSocketPathPassesThrough(t *testing.T) {
 	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
 	initial := []byte("GET /deadbeef00 HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
-	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "")
+	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
 
 	if decision.Route != "ssh-ws-like" {
 		t.Fatalf("route = %q, want ssh-ws-like", decision.Route)
 	}
 	if decision.Status != 0 {
 		t.Fatalf("status = %d, want 0", decision.Status)
+	}
+}
+
+func TestDecideHTTPRouteDiagnosticProbeRequiresLoopback(t *testing.T) {
+	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
+	initial := []byte("GET /diagnostic-probe HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+
+	blocked := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
+	if blocked.Route != "websocket-other" || blocked.Status != 401 {
+		t.Fatalf("blocked diagnostic route = (%q,%d), want (websocket-other,401)", blocked.Route, blocked.Status)
+	}
+
+	allowed := decideHTTPRoute(cfg, "tls-inner", initial, "", "", true)
+	if allowed.Route != "ssh-ws-like" || allowed.Status != 0 {
+		t.Fatalf("allowed diagnostic route = (%q,%d), want (ssh-ws-like,0)", allowed.Route, allowed.Status)
 	}
 }
 
@@ -367,7 +382,7 @@ func TestDecideTLSPayloadRouteUsesSNIOverride(t *testing.T) {
 	}
 	initial := []byte("GET / HTTP/1.1\r\nHost: vmess.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
-	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "http/1.1", "vmess.example.com")
+	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "http/1.1", "vmess.example.com", false)
 
 	if decision.target != cfg.VLESSRawBackendAddr() {
 		t.Fatalf("target = %q, want %q", decision.target, cfg.VLESSRawBackendAddr())
@@ -401,7 +416,7 @@ func TestDecideTLSPayloadRouteFallsBackWhenSNIMissing(t *testing.T) {
 	}
 	initial := []byte("GET / HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
-	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "http/1.1", "unknown.example.com")
+	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "http/1.1", "unknown.example.com", false)
 
 	if decision.target != cfg.HTTPBackendAddr() {
 		t.Fatalf("target = %q, want %q", decision.target, cfg.HTTPBackendAddr())
@@ -559,7 +574,7 @@ func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 	}
 	initial := []byte("GET /vless-ws HTTP/1.1\r\nHost: forced.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
-	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "", "forced.example.com")
+	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "", "forced.example.com", false)
 
 	if decision.target != cfg.TrojanRawBackendAddr() {
 		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.TrojanRawBackendAddr())

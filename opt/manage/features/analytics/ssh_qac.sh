@@ -9,15 +9,9 @@ SSH_QAC_PAGE=0
 SSH_QAC_QUERY=""
 SSH_QAC_VIEW_INDEXES=()
 SSH_QAC_ENFORCER_BIN="/usr/local/bin/sshws-qac-enforcer"
-SSHWS_SESSION_ROWS=()
-SSHWS_SESSION_VIEW_INDEXES=()
-SSHWS_SESSION_PAGE_SIZE=10
-SSHWS_SESSION_PAGE=0
-SSHWS_SESSION_QUERY=""
-SSHWS_SESSION_DISTINCT_IPS=0
-SSHWS_SESSION_MODE_SUMMARY="-"
 SSHWS_RUNTIME_SESSION_DIR="/run/autoscript/sshws-sessions"
 SSHWS_RUNTIME_ENV_FILE="/etc/default/sshws-runtime"
+SSHWS_CONTROL_BIN="/usr/local/bin/sshws-control"
 
 sshws_runtime_session_stale_sec() {
   local value="90"
@@ -33,7 +27,6 @@ sshws_runtime_session_stale_sec() {
 
 ssh_active_sessions_count() {
   local username="${1:-}"
-  local stale_sec
   [[ -n "${username}" ]] || {
     echo "0"
     return 0
@@ -43,10 +36,39 @@ ssh_active_sessions_count() {
     return 0
   fi
 
+  local helper_count=""
+  if [[ -x "${SSHWS_CONTROL_BIN}" && -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
+    helper_count="$("${SSHWS_CONTROL_BIN}" session-stats \
+      --session-root "${SSHWS_RUNTIME_SESSION_DIR}" \
+      --username "${username}" 2>/dev/null | python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+value = payload.get("total")
+if isinstance(value, bool):
+    value = int(value)
+elif not isinstance(value, int):
+    try:
+        value = int(float(str(value or "").strip()))
+    except Exception:
+        value = ""
+print(value if isinstance(value, int) and value >= 0 else "")
+' 2>/dev/null || true)"
+  fi
+  if [[ "${helper_count}" =~ ^[0-9]+$ ]]; then
+    echo "${helper_count}"
+    return 0
+  fi
+
   local runtime_count="0"
   if [[ -d "${SSHWS_RUNTIME_SESSION_DIR}" ]]; then
-    stale_sec="$(sshws_runtime_session_stale_sec)"
-    runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" "${stale_sec}" <<'PY' 2>/dev/null || true
+    runtime_count="$(python3 - "${SSHWS_RUNTIME_SESSION_DIR}" "${username}" "$(sshws_runtime_session_stale_sec)" <<'PY' 2>/dev/null || true
 import json, pathlib, sys, time
 import os
 root = pathlib.Path(sys.argv[1])
@@ -1832,5 +1854,3 @@ ssh_quota_menu() {
     esac
   done
 }
-
-

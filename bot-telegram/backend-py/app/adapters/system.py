@@ -15,6 +15,7 @@ from typing import Any, List, Tuple
 ACCOUNT_ROOT = Path("/opt/account")
 QUOTA_ROOT = Path("/opt/quota")
 SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
+SSHWS_CONTROL_BIN = Path("/usr/local/bin/sshws-control")
 XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 CERT_FULLCHAIN = Path("/opt/cert/fullchain.pem")
@@ -27,6 +28,7 @@ SSH_NETWORK_ENV_FILE = Path("/etc/autoscript/ssh-network/config.env")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
 BADVPN_RUNTIME_ENV_FILE = Path("/etc/default/badvpn-udpgw")
+SSHWS_RUNTIME_ENV_FILE = Path("/etc/default/sshws-runtime")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
@@ -398,6 +400,32 @@ def _journal_tail(unit: str, lines: int = 40) -> str:
     return _trim_message(f"Gagal membaca log {unit}:\n{out}")
 
 
+def _journal_last_line(unit: str) -> str:
+    ok, out = run_cmd(["journalctl", "-u", unit, "--no-pager", "-n", "1"], timeout=20)
+    if not ok:
+        return "-"
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    return lines[-1] if lines else "-"
+
+
+def _systemctl_show_props(name: str, props: list[str]) -> dict[str, str]:
+    if not props:
+        return {}
+    argv = ["systemctl", "show", name]
+    for prop in props:
+        argv.extend(["-p", prop])
+    ok, out = run_cmd(argv, timeout=12)
+    if not ok:
+        return {}
+    data: dict[str, str] = {}
+    for raw in out.splitlines():
+        if "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        data[key.strip()] = value.strip()
+    return data
+
+
 def _unit_status_line(name: str, *, unit_type: str = "service") -> str:
     if name.endswith(f".{unit_type}"):
         unit = name
@@ -514,6 +542,10 @@ def _badvpn_runtime_env_value(key: str, default: str = "") -> str:
     return _read_env_map(BADVPN_RUNTIME_ENV_FILE).get(key, default)
 
 
+def _sshws_runtime_env_value(key: str, default: str = "") -> str:
+    return _read_env_map(SSHWS_RUNTIME_ENV_FILE).get(key, default)
+
+
 def _edge_runtime_service_name() -> str:
     provider = _edge_runtime_provider_name("go")
     if provider == "nginx-stream":
@@ -603,6 +635,8 @@ def _probe_ws_endpoint(
             f"Host: {host_header or host}\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            f"Sec-WebSocket-Key: {base64.b64encode(str(time.time_ns()).encode('ascii', 'ignore')).decode('ascii', 'ignore')}\r\n"
             "User-Agent: bot-telegram/sshws-diagnostics\r\n"
             "\r\n"
         ).encode("ascii", "ignore")
@@ -659,6 +693,40 @@ def _service_group_restart(services: tuple[str, ...] | list[str], title: str) ->
     if attempted == 0:
         return False, title, "Tidak ada unit yang ditemukan."
     return (not had_failure), title, "\n".join(lines)
+
+
+def _sshws_post_restart_health_check() -> tuple[bool, list[str]]:
+    failed: list[str] = []
+    dropbear_port = _sshws_dropbear_port()
+    stunnel_port = _sshws_stunnel_port()
+    proxy_port = _sshws_proxy_port()
+    domain = detect_domain()
+    probe_path = "/diagnostic-probe"
+
+    if (service_exists("sshws-proxy") or service_exists("sshws-stunnel")) and not _listener_present(80):
+        failed.append("port-80")
+    if (service_exists("sshws-proxy") or service_exists("sshws-stunnel")) and not _listener_present(443):
+        failed.append("port-443")
+    if service_exists("sshws-dropbear") and not _probe_tcp_endpoint("127.0.0.1", dropbear_port).startswith("CONNECTED"):
+        failed.append("dropbear")
+    if service_exists("sshws-proxy") and not _probe_ws_endpoint(
+        "127.0.0.1",
+        proxy_port,
+        path=probe_path,
+        host_header=f"127.0.0.1:{proxy_port}",
+    ).startswith("HTTP 101"):
+        failed.append("ws-proxy")
+    if service_exists("sshws-stunnel") and not _probe_tcp_endpoint("127.0.0.1", stunnel_port, tls_mode=True).startswith("CONNECTED"):
+        failed.append("stunnel")
+    if _listener_present(80):
+        probe80 = _probe_ws_endpoint("127.0.0.1", 80, path=probe_path, host_header=domain or "127.0.0.1")
+        if not probe80.startswith("HTTP 101"):
+            failed.append("nginx-80")
+    if domain and domain != "-" and _listener_present(443):
+        probe443 = _probe_ws_endpoint("127.0.0.1", 443, path=probe_path, host_header=domain, tls_mode=True, sni=domain)
+        if not probe443.startswith("HTTP 101"):
+            failed.append("nginx-443")
+    return (len(failed) == 0), failed
 
 
 def _restart_service_checked(service: str, timeout: int = 25) -> tuple[bool, str, str]:
@@ -3144,7 +3212,14 @@ def op_restart_edge_gateway() -> tuple[bool, str, str]:
 
 
 def op_restart_sshws_stack() -> tuple[bool, str, str]:
-    return _service_group_restart(SSHWS_SERVICES, "Maintenance - Restart SSHWS Stack")
+    ok, title, message = _service_group_restart(SSHWS_SERVICES, "Maintenance - Restart SSHWS Stack")
+    if not ok:
+        return ok, title, message
+    healthy, failed = _sshws_post_restart_health_check()
+    if not healthy:
+        details = ", ".join(failed) if failed else "unknown"
+        return False, title, f"{message}\n\nPost-restart health check gagal: {details}"
+    return True, title, f"{message}\n\nPost-restart health check: OK"
 
 
 def op_restart_all_core() -> tuple[bool, str, str]:
@@ -3291,12 +3366,22 @@ def op_xray_daemon_logs() -> tuple[str, str]:
 
 def op_sshws_status() -> tuple[str, str]:
     title = "SSH Management - SSH WS Service Status"
+    runtime_stale_sec = _sshws_runtime_env_value("SSHWS_RUNTIME_SESSION_STALE_SEC", "90") or "90"
+    runtime_handshake_sec = _sshws_runtime_env_value("SSHWS_HANDSHAKE_TIMEOUT_SEC", "10") or "10"
+    enforcer_state = _systemctl_show_props(
+        "sshws-qac-enforcer.service",
+        ["Result", "ExecMainStatus"],
+    )
+    enforcer_result = enforcer_state.get("Result") or "-"
+    enforcer_exit = enforcer_state.get("ExecMainStatus") or "-"
+    enforcer_last = _journal_last_line("sshws-qac-enforcer.service")
     lines = ["Services:"]
     for service in SSHWS_SERVICES:
         if service == "sshws-stunnel" and not service_exists(service):
             lines.append(f"- {service}.service: optional / not installed")
         else:
             lines.append(_unit_status_line(service))
+    lines.append(_unit_status_line("sshws-qac-enforcer", unit_type="timer"))
 
     lines.extend(
         [
@@ -3309,6 +3394,16 @@ def op_sshws_status() -> tuple[str, str]:
             f"- dropbear : 127.0.0.1:{_sshws_dropbear_port()}",
             f"- stunnel  : 127.0.0.1:{_sshws_stunnel_port()}",
             f"- ws proxy : 127.0.0.1:{_sshws_proxy_port()}",
+            "",
+            "Runtime Env:",
+            f"- env file      : {SSHWS_RUNTIME_ENV_FILE}",
+            f"- stale sec     : {runtime_stale_sec}",
+            f"- handshake sec : {runtime_handshake_sec}",
+            "",
+            "Enforcer:",
+            f"- last result   : {enforcer_result}",
+            f"- last exit code: {enforcer_exit}",
+            f"- last journal  : {enforcer_last}",
         ]
     )
     return title, "\n".join(lines)
@@ -3320,6 +3415,7 @@ def op_sshws_diagnostics() -> tuple[str, str]:
     dropbear_port = _sshws_dropbear_port()
     stunnel_port = _sshws_stunnel_port()
     proxy_port = _sshws_proxy_port()
+    probe_path = "/diagnostic-probe"
 
     lines = ["Services:"]
     for service in SSHWS_SERVICES:
@@ -3336,10 +3432,11 @@ def op_sshws_diagnostics() -> tuple[str, str]:
             f"- stunnel  : 127.0.0.1:{stunnel_port}",
             f"- ws proxy : 127.0.0.1:{proxy_port}",
             f"- domain   : {domain}",
+            f"- path     : {probe_path}",
             "",
             "Local Probes:",
             f"- dropbear tcp : {_probe_tcp_endpoint('127.0.0.1', dropbear_port)}",
-            f"- proxy ws     : {_probe_ws_endpoint('127.0.0.1', proxy_port, host_header=f'127.0.0.1:{proxy_port}')}",
+            f"- proxy ws     : {_probe_ws_endpoint('127.0.0.1', proxy_port, path=probe_path, host_header=f'127.0.0.1:{proxy_port}')}",
         ]
     )
     if service_exists("sshws-stunnel"):
@@ -3349,12 +3446,12 @@ def op_sshws_diagnostics() -> tuple[str, str]:
 
     lines.extend(["", "Public Path Probes:"])
     if _listener_present(80):
-        lines.append(f"- nginx :80  : {_probe_ws_endpoint('127.0.0.1', 80, host_header=domain or '127.0.0.1')}")
+        lines.append(f"- nginx :80  : {_probe_ws_endpoint('127.0.0.1', 80, path=probe_path, host_header=domain or '127.0.0.1')}")
     else:
         lines.append("- nginx :80  : SKIP (not listening)")
     if domain and domain != "-" and _listener_present(443):
         lines.append(
-            f"- nginx :443 : {_probe_ws_endpoint('127.0.0.1', 443, host_header=domain, tls_mode=True, sni=domain)}"
+            f"- nginx :443 : {_probe_ws_endpoint('127.0.0.1', 443, path=probe_path, host_header=domain, tls_mode=True, sni=domain)}"
         )
     else:
         lines.append("- nginx :443 : SKIP (domain/443 unavailable)")
@@ -3365,7 +3462,7 @@ def op_sshws_diagnostics() -> tuple[str, str]:
             "Notes:",
             "- HTTP 101 menandakan chain SSHWS sehat.",
             "- HTTP 502 biasanya berarti backend internal belum siap.",
-            "- HTTP 301/308 pada port 80 normal jika force-HTTPS aktif.",
+            "- HTTP 401/403 berarti probe path ditolak oleh guard/proxy.",
         ]
     )
     return title, _trim_message("\n".join(lines))
@@ -3374,11 +3471,18 @@ def op_sshws_diagnostics() -> tuple[str, str]:
 def op_sshws_combined_logs() -> tuple[str, str]:
     title = "Maintenance - SSHWS Combined Logs"
     chunks: list[str] = []
-    for service in SSHWS_SERVICES:
-        if not service_exists(service):
+    units = (
+        ("sshws-proxy", "service", 8),
+        ("sshws-qac-enforcer", "service", 8),
+        ("sshws-dropbear", "service", 6),
+        ("sshws-stunnel", "service", 6),
+    )
+    for service, unit_type, lines in units:
+        if not service_exists(service, unit_type=unit_type):
             continue
-        chunks.append(f"[{service}]")
-        chunks.append(_journal_tail(service, lines=12))
+        unit = f"{service}.{unit_type}"
+        chunks.append(f"[{unit}]")
+        chunks.append(_journal_tail(unit, lines=lines))
         chunks.append("")
     if not chunks:
         return title, "Tidak ada unit SSHWS yang terpasang."
@@ -3390,21 +3494,51 @@ def op_sshws_active_sessions() -> tuple[str, str]:
     if not SSHWS_RUNTIME_SESSION_DIR.exists():
         return title, f"Runtime session dir tidak ditemukan: {SSHWS_RUNTIME_SESSION_DIR}"
 
+    if not SSHWS_CONTROL_BIN.exists():
+        return title, f"Helper SSHWS tidak ditemukan: {SSHWS_CONTROL_BIN}"
+
+    ok, out = run_cmd(
+        [
+            str(SSHWS_CONTROL_BIN),
+            "session-list",
+            "--session-root",
+            str(SSHWS_RUNTIME_SESSION_DIR),
+        ],
+        timeout=20,
+    )
+    if not ok:
+        return title, f"Gagal membaca sesi aktif SSHWS.\n\n{out}"
+    try:
+        payload = json.loads(out)
+    except Exception as exc:
+        return title, f"Gagal parse output helper SSHWS: {exc}"
+
+    raw_sessions = payload.get("sessions")
+    raw_counts = payload.get("counts")
+    if not isinstance(raw_sessions, list):
+        raw_sessions = []
+    if not isinstance(raw_counts, dict):
+        raw_counts = {}
+
     sessions: list[dict[str, str]] = []
     counts: Counter[str] = Counter()
-    for path in sorted(SSHWS_RUNTIME_SESSION_DIR.glob("*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+    for item in raw_sessions:
+        if not isinstance(item, dict):
             continue
-        if not isinstance(payload, dict):
-            continue
-        username = str(payload.get("username") or "").strip()
+        username = str(item.get("username") or "").strip()
         if not username:
             continue
-        backend_port = str(payload.get("backend_local_port") or "-").strip() or "-"
-        proxy_pid = str(payload.get("proxy_pid") or "-").strip() or "-"
-        updated_raw = payload.get("updated_at")
+        backend_port = str(item.get("backend_port") or item.get("backend_local_port") or "-").strip() or "-"
+        backend_target = str(item.get("backend_target") or item.get("backend") or "-").strip() or "-"
+        client_ip = str(item.get("client_ip") or "-").strip() or "-"
+        proxy_pid = str(item.get("proxy_pid") or "-").strip() or "-"
+        created_raw = item.get("created_at")
+        created_text = "-"
+        try:
+            created_text = datetime.fromtimestamp(int(created_raw), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            pass
+        updated_raw = item.get("updated_at")
         updated_text = "-"
         try:
             updated_text = datetime.fromtimestamp(int(updated_raw), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -3415,18 +3549,28 @@ def op_sshws_active_sessions() -> tuple[str, str]:
             {
                 "username": username,
                 "backend_port": backend_port,
+                "backend_target": backend_target,
+                "client_ip": client_ip,
                 "proxy_pid": proxy_pid,
+                "created_at": created_text,
                 "updated_at": updated_text,
-                "session_file": path.name,
+                "session_file": str(item.get("session_file") or "-").strip() or "-",
             }
         )
+
+    if not counts and raw_counts:
+        for username, value in raw_counts.items():
+            try:
+                counts[str(username)] = int(value)
+            except Exception:
+                continue
 
     if not sessions:
         return title, "Belum ada sesi aktif SSHWS."
 
     summary_lines = [f"- {user}: {counts[user]} sesi" for user in sorted(counts.keys())]
     detail_lines = [
-        f"{idx+1:03d}. {item['username']} | port={item['backend_port']} | pid={item['proxy_pid']} | updated={item['updated_at']} | file={item['session_file']}"
+        f"{idx+1:03d}. {item['username']} | ip={item['client_ip']} | port={item['backend_port']} | backend={item['backend_target']} | pid={item['proxy_pid']} | created={item['created_at']} | updated={item['updated_at']} | file={item['session_file']}"
         for idx, item in enumerate(sessions[:200])
     ]
     msg = "\n".join(

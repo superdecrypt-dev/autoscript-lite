@@ -29,7 +29,7 @@ Internet / Cloudflare
         +--> nginx            127.0.0.1:18080
         +--> SSH Dropbear     127.0.0.1:22022
         +--> SSH Stunnel      127.0.0.1:22443
-        +--> SSH WS Proxy     127.0.0.1:10015
+        +--> Websocket Proxy (Go)  127.0.0.1:10015
         +--> Xray-core        via inbound runtime
 ```
 
@@ -42,7 +42,7 @@ Internet / Cloudflare
 | `nginx` | HTTP backend internal dan TLS/web support | internal |
 | `sshws-dropbear` | backend SSH direct/dropbear | internal |
 | `sshws-stunnel` | backend SSH SSL/TLS | internal |
-| `sshws-proxy` | backend SSH WebSocket | internal |
+| `sshws-proxy` | Websocket Proxy (Go) untuk backend SSH WS | internal |
 | `badvpn-udpgw` | UDPGW lokal untuk payload/game tertentu | internal |
 | `wireproxy` / `warp-svc` | runtime `WARP Free/Plus` atau `Zero Trust` | sesuai mode aktif |
 | `xray-domain-guard` | guardrail domain, TLS, dan health check | maintenance |
@@ -113,7 +113,7 @@ Internet / Cloudflare
 | `nginx` | `127.0.0.1:18080` | backend web internal |
 | `sshws-dropbear` | `127.0.0.1:22022` | backend SSH direct |
 | `sshws-stunnel` | `127.0.0.1:22443` | backend SSH TLS |
-| `sshws-proxy` | `127.0.0.1:10015` | backend SSH WebSocket |
+| `sshws-proxy` | `127.0.0.1:10015` | Websocket Proxy (Go) untuk SSH WS |
 | `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot Telegram |
 | `edge-mux metrics` | `127.0.0.1:9910` | metrics dan status edge |
 | `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |

@@ -54,7 +54,7 @@ Fokus:
 
 ### Prioritas 3: SSH dan QAC
 - `opt/setup/install/sshws.sh`
-- `opt/setup/bin/sshws-proxy.py`
+- `opt/edge/go/cmd/sshws-proxy/*`
 - `opt/setup/bin/sshws-qac-enforcer.py`
 - `opt/edge/go/*`
 - `opt/manage/features/analytics/*.sh`
@@ -122,7 +122,8 @@ shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
 find opt/manage -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 find opt/manage -type f -name '*.sh' -print0 | xargs -0 shellcheck -x -S warning
 shellcheck -x -S warning opt/setup/bin/xray-domain-guard
-python3 -m py_compile opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
+python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
+go -C opt/edge/go test ./cmd/sshws-proxy
 go -C opt/edge/go build ./...
 test -s opt/edge/dist/edge-mux-linux-amd64
 test -s opt/edge/dist/edge-mux-linux-arm64
@@ -167,7 +168,7 @@ rg -n "source |trusted|resolve_manage_modules_dir|manage_source_relative|RUN_USE
 ### 6.3 Cek jalur runtime SSH WS
 ```bash
 rg -n "401|403|502|101|sshws_token|client_ip|ip_limit|speed_limit|quota_used|updated_at|SSH Direct|SSH SSL/TLS" \
-  setup.sh opt/setup/install/sshws.sh opt/setup/bin/sshws-proxy.py opt/setup/bin/sshws-qac-enforcer.py \
+  setup.sh opt/setup/install/sshws.sh opt/edge/go/cmd/sshws-proxy opt/setup/bin/sshws-qac-enforcer.py \
   opt/edge/go opt/manage/features/analytics opt/manage/features/maintenance
 ```
 

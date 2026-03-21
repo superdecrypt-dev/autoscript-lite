@@ -27,6 +27,30 @@ ssh_runtime_menu_title() {
   fi
 }
 
+sshws_runtime_env_file() {
+  printf '%s\n' "${SSHWS_RUNTIME_ENV_FILE:-/etc/default/sshws-runtime}"
+}
+
+sshws_runtime_env_value() {
+  local key="${1:-}"
+  local default_value="${2:-}"
+  local env_file
+  env_file="$(sshws_runtime_env_file)"
+  [[ -n "${key}" ]] || {
+    printf '%s\n' "${default_value}"
+    return 0
+  }
+  if [[ -r "${env_file}" ]]; then
+    local value
+    value="$(awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${env_file}" | tr -d '\r' || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "${default_value}"
+}
+
 sshws_status_menu() {
   title
   if [[ "${SSH_RUNTIME_MENU_CONTEXT:-}" == "ssh-network" ]]; then
@@ -64,13 +88,21 @@ sshws_status_menu() {
 
   hr
   local dropbear_port stunnel_port proxy_port
+  local runtime_env runtime_stale_sec runtime_handshake_timeout
   dropbear_port="$(sshws_detect_dropbear_port)"
   stunnel_port="$(sshws_detect_stunnel_port)"
   proxy_port="$(sshws_detect_proxy_port)"
+  runtime_env="$(sshws_runtime_env_file)"
+  runtime_stale_sec="$(sshws_runtime_env_value "SSHWS_RUNTIME_SESSION_STALE_SEC" "90")"
+  runtime_handshake_timeout="$(sshws_runtime_env_value "SSHWS_HANDSHAKE_TIMEOUT_SEC" "10")"
   echo "Internal ports (detected):"
   echo "  - dropbear local : 127.0.0.1:${dropbear_port}"
   echo "  - stunnel local  : 127.0.0.1:${stunnel_port}"
   echo "  - ws proxy local : 127.0.0.1:${proxy_port}"
+  echo "Runtime env:"
+  echo "  - env file       : ${runtime_env}"
+  echo "  - stale sec      : ${runtime_stale_sec}"
+  echo "  - handshake sec  : ${runtime_handshake_timeout}"
   hr
   pause
 }
@@ -193,6 +225,8 @@ sshws_probe_tcp_endpoint() {
 import socket
 import ssl
 import sys
+import base64
+import os
 
 host, port_s, mode = sys.argv[1:4]
 try:
@@ -235,6 +269,8 @@ sshws_probe_ws_endpoint() {
   local sni="${6:-}"
   need_python3
   python3 - <<'PY' "${host}" "${port}" "${path}" "${host_header}" "${tls_mode}" "${sni}" 2>/dev/null || true
+import base64
+import os
 import socket
 import ssl
 import sys
@@ -263,6 +299,8 @@ try:
     f"Host: {host_header or host}\r\n"
     "Upgrade: websocket\r\n"
     "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Version: 13\r\n"
+    f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n"
     "User-Agent: autoscript-manage/sshws-diagnostics\r\n"
     "\r\n"
   ).encode("ascii", "ignore")
@@ -313,7 +351,7 @@ sshws_probe_result_disp() {
       case "${part1:-0}" in
         101) echo "OK (HTTP 101 ${part2:-})" ;;
         301|302|307|308) echo "WARN (HTTP ${part1} ${part2:-redirect})" ;;
-        401|403) echo "WARN (HTTP ${part1} ${part2:-token-required})" ;;
+        401|403) echo "FAIL (HTTP ${part1} ${part2:-probe-rejected})" ;;
         *) echo "FAIL (HTTP ${part1:-0} ${part2:-})" ;;
       esac
       ;;
@@ -334,7 +372,7 @@ sshws_probe_result_is_healthy() {
     ok) return 0 ;;
     http)
       case "${part1:-0}" in
-        101|301|302|307|308|401|403) return 0 ;;
+        101|301|302|307|308) return 0 ;;
       esac
       ;;
   esac
@@ -446,10 +484,10 @@ sshws_diagnostics_menu() {
 
     hr
     echo "Notes:"
-    echo "  - HTTP 101 menandakan chain SSH WS sehat."
+    echo "  - HTTP 101 menandakan chain SSH WS sehat, termasuk probe path sintetis."
     echo "  - HTTP 502 biasanya berarti backend internal belum siap."
     echo "  - HTTP 301/308 pada port 80 normal jika force-HTTPS aktif."
-    echo "  - HTTP 401/403 biasanya berarti path/token SSH WS belum cocok."
+    echo "  - HTTP 401/403 berarti probe sintetis ditolak; cek ws-proxy path/auth flow."
     hr
     echo "  1) Refresh"
     echo "  2) Combined SSH WS Logs"
@@ -467,4 +505,3 @@ sshws_diagnostics_menu() {
     esac
   done
 }
-

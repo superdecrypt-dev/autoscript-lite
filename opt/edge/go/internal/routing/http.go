@@ -17,19 +17,21 @@ type HTTPRequest struct {
 }
 
 var knownRouteNames = map[string]struct{}{
-	"vless-ws":    {},
-	"vmess-ws":    {},
-	"trojan-ws":   {},
-	"vless-hup":   {},
-	"vless-xhttp": {},
-	"vmess-hup":   {},
-	"vmess-xhttp": {},
-	"trojan-hup":  {},
+	"vless-ws":     {},
+	"vmess-ws":     {},
+	"trojan-ws":    {},
+	"vless-hup":    {},
+	"vless-xhttp":  {},
+	"vmess-hup":    {},
+	"vmess-xhttp":  {},
+	"trojan-hup":   {},
 	"trojan-xhttp": {},
-	"vless-grpc":  {},
-	"vmess-grpc":  {},
-	"trojan-grpc": {},
+	"vless-grpc":   {},
+	"vmess-grpc":   {},
+	"trojan-grpc":  {},
 }
+
+const diagnosticProbeToken = "diagnostic-probe"
 
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
 	lines := bytes.Split(initial, []byte{'\n'})
@@ -170,6 +172,9 @@ func looksLikeSSHWSPath(path string) bool {
 		return false
 	}
 	last := segments[len(segments)-1]
+	if last == diagnosticProbeToken {
+		return true
+	}
 	if len(last) < 8 {
 		return false
 	}
