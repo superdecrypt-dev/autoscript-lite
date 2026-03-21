@@ -51,7 +51,7 @@ Internet / Cloudflare
 
 ## Layanan dan Protokol
 - `VLESS`, `VMess`, `Trojan`
-- transport `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS`
+- transport `XHTTP`, `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS`
 - `SSH WS`, `SSH SSL/TLS`, `SSH Direct`
 - `WARP Free/Plus`, `WARP Zero Trust`, `BadVPN UDPGW`
 
@@ -73,11 +73,38 @@ Internet / Cloudflare
 | `SSH WS` | `443, 80` + alt port Cloudflare |
 | `SSH SSL/TLS` | `443, 80` + alt port Cloudflare |
 | `SSH Direct` | `443, 80` + alt port Cloudflare |
+| `VLESS XHTTP` | `443, 80` + alt port Cloudflare |
 | `VLESS WS` | `443, 80` + alt port Cloudflare |
 | `VLESS HUP` | `443, 80` + alt port Cloudflare |
 | `VLESS gRPC` | `443, 80` + alt port Cloudflare |
 | `VLESS TCP+TLS` | `443, 80` + alt port Cloudflare |
+| `VMess XHTTP` | `443, 80` + alt port Cloudflare |
+| `VMess WS` | `443, 80` + alt port Cloudflare |
+| `VMess HUP` | `443, 80` + alt port Cloudflare |
+| `VMess gRPC` | `443, 80` + alt port Cloudflare |
+| `Trojan XHTTP` | `443, 80` + alt port Cloudflare |
+| `Trojan WS` | `443, 80` + alt port Cloudflare |
+| `Trojan HUP` | `443, 80` + alt port Cloudflare |
+| `Trojan gRPC` | `443, 80` + alt port Cloudflare |
 | `Trojan TCP+TLS` | `443, 80` + alt port Cloudflare |
+
+## Path Publik
+
+| Transport | Path / Service |
+| --- | --- |
+| `SSH WS` | `/<token>` dan `/<bebas>/<token>` |
+| `VLESS WS` | `/vless-ws` dan `/<bebas>/vless-ws` |
+| `VLESS HUP` | `/vless-hup` dan `/<bebas>/vless-hup` |
+| `VLESS XHTTP` | `/vless-xhttp` dan `/<bebas>/vless-xhttp` |
+| `VLESS gRPC` | `vless-grpc` dan `<bebas>/vless-grpc` |
+| `VMess WS` | `/vmess-ws` dan `/<bebas>/vmess-ws` |
+| `VMess HUP` | `/vmess-hup` dan `/<bebas>/vmess-hup` |
+| `VMess XHTTP` | `/vmess-xhttp` dan `/<bebas>/vmess-xhttp` |
+| `VMess gRPC` | `vmess-grpc` dan `<bebas>/vmess-grpc` |
+| `Trojan WS` | `/trojan-ws` dan `/<bebas>/trojan-ws` |
+| `Trojan HUP` | `/trojan-hup` dan `/<bebas>/trojan-hup` |
+| `Trojan XHTTP` | `/trojan-xhttp` dan `/<bebas>/trojan-xhttp` |
+| `Trojan gRPC` | `trojan-grpc` dan `<bebas>/trojan-grpc` |
 
 ## Port Internal
 
