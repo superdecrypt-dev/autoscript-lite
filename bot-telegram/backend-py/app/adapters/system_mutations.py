@@ -2832,7 +2832,6 @@ def _ssh_write_account_info(
     speed_enabled = bool(status.get("speed_limit_enabled"))
     speed_down = max(0.0, _to_float(status.get("speed_down_mbit"), 0.0))
     speed_up = max(0.0, _to_float(status.get("speed_up_mbit"), 0.0))
-    route_override, route_effective = _ssh_route_mode_details(quota_payload)
     sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
         sshws_path = f"/{sshws_token}"
@@ -2877,18 +2876,12 @@ def _ssh_write_account_info(
     if openvpn_enabled:
         account_info_labels.extend(
             [
-                "OpenVPN Username",
-                "OpenVPN Password",
-                "OpenVPN TCP",
                 "OpenVPN WS Path",
                 "OpenVPN WS Path Alt",
                 "OpenVPN WS Port",
-                "OpenVPN Session",
-                "OpenVPN Policy",
-                "OpenVPN Quota Limit",
-                "OpenVPN IP Limit",
-                "OpenVPN Speed Limit",
-                "OpenVPN Download",
+                "OpenVPN TCP",
+                "Alt Port SSL/TLS",
+                "Alt Port HTTP",
             ]
         )
     running_label_width = max(len(label) for label in account_info_labels)
@@ -2901,7 +2894,7 @@ def _ssh_write_account_info(
     running_ssh_alt_http = f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}"
     running_badvpn = f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}"
     lines = [
-        "=== SSH ACCOUNT INFO ===",
+        "=== ACCOUNT INFO ===",
         f"Domain      : {domain}",
         f"IP          : {ip}",
         f"ISP         : {isp}",
@@ -2914,9 +2907,8 @@ def _ssh_write_account_info(
         f"Created     : {created_disp}",
         f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
         f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
-        f"Route Mode  : {route_effective.upper()} ({route_override})",
         "",
-        "=== RUNNING ON PORT ===",
+        "=== SSH ===",
         running_ssh_ws_path,
         running_ssh_ws_alt,
         running_ssh_ws_port,
@@ -2933,7 +2925,6 @@ def _ssh_write_account_info(
                 "",
                 "=== ZIVPN UDP ===",
                 f"{'ZIVPN Password':<{running_label_width}} : {zivpn_password_state}",
-                "",
             ]
         )
     if openvpn_enabled:
@@ -2943,31 +2934,15 @@ def _ssh_write_account_info(
             [
                 "",
                 "=== OPENVPN ===",
-                f"{'OpenVPN Username':<{running_label_width}} : {username}",
-                f"{'OpenVPN Password':<{running_label_width}} : same as SSH password",
-                f"{'OpenVPN TCP':<{running_label_width}} : {_openvpn_public_host()}:{_openvpn_public_tcp_ports_label()}",
                 f"{'OpenVPN WS Path':<{running_label_width}} : {openvpn_ws_path}",
                 f"{'OpenVPN WS Path Alt':<{running_label_width}} : {openvpn_ws_alt_path}",
                 f"{'OpenVPN WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
-                f"{'OpenVPN Session':<{running_label_width}} : single active session per username",
-                f"{'OpenVPN Policy':<{running_label_width}} : independent quota / IP limit / speed",
-                f"{'OpenVPN Quota Limit':<{running_label_width}} : {_ssh_quota_limit_display(openvpn_quota_limit)}",
-                f"{'OpenVPN IP Limit':<{running_label_width}} : {_ssh_ip_limit_display(openvpn_ip_enabled, openvpn_ip_limit)}",
-                f"{'OpenVPN Speed Limit':<{running_label_width}} : {_ssh_speed_limit_display(openvpn_speed_enabled, openvpn_speed_down, openvpn_speed_up)}",
-                f"{'OpenVPN Download':<{running_label_width}} : generate fresh .ovpn link from bot/action output",
+                f"{'OpenVPN TCP':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
+                f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}",
+                f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}",
             ]
         )
         lines.append("")
-    lines.extend(
-        [
-            "=== STANDARD PAYLOAD ===",
-            "Payload WS:",
-            f"    GET {sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
-            "",
-            "Payload WSS:",
-            f"    GET wss://[host]{sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]",
-        ]
-    )
     content = "\n".join(lines) + "\n"
     try:
         _write_text_atomic(account_file, content)

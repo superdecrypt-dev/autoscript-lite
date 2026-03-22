@@ -1370,13 +1370,12 @@ PY
   )
   if openvpn_runtime_available; then
     account_info_labels+=(
-      "OpenVPN Username"
-      "OpenVPN Password"
-      "OpenVPN TCP"
       "OpenVPN WS Path"
       "OpenVPN WS Path Alt"
       "OpenVPN WS Port"
-      "OpenVPN Link"
+      "OpenVPN TCP"
+      "Alt Port SSL/TLS"
+      "Alt Port HTTP"
     )
   fi
   running_label_width=0
@@ -1399,36 +1398,28 @@ PY
     else
       printf -v zivpn_password_line '%-*s : %s' "${running_label_width}" "ZIVPN Password" "not synced to runtime"
     fi
-    zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"$'\n'
+    zivpn_block=$'\n'"=== ZIVPN UDP ==="$'\n'"${zivpn_password_line}"
   fi
   if openvpn_runtime_available; then
-    local openvpn_host openvpn_tcp_ports_disp openvpn_ws_path openvpn_ws_alt_path openvpn_link
+    local openvpn_ws_path openvpn_ws_alt_path
     local openvpn_ws_path_line openvpn_ws_alt_line openvpn_ws_port_line
-    local openvpn_user_line openvpn_pass_line openvpn_tcp_line openvpn_link_line
-    openvpn_host="$(openvpn_public_host)"
-    openvpn_tcp_ports_disp="$(openvpn_public_tcp_ports_label)"
+    local openvpn_tcp_line openvpn_alt_tls_line openvpn_alt_http_line
     openvpn_ws_path="$(openvpn_ws_public_path)"
     openvpn_ws_alt_path="$(openvpn_ws_public_alt_path)"
-    openvpn_link="$(openvpn_download_link "${username}")"
-    printf -v openvpn_user_line '%-*s : %s' "${running_label_width}" "OpenVPN Username" "${username}"
-    printf -v openvpn_pass_line '%-*s : %s' "${running_label_width}" "OpenVPN Password" "same as SSH password"
-    printf -v openvpn_tcp_line '%-*s : %s' "${running_label_width}" "OpenVPN TCP" "${openvpn_host}:${openvpn_tcp_ports_disp}"
     printf -v openvpn_ws_path_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path" "${openvpn_ws_path}"
     printf -v openvpn_ws_alt_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path Alt" "${openvpn_ws_alt_path}"
     printf -v openvpn_ws_port_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Port" "${sshws_ports_disp}"
-    if [[ -n "${openvpn_link}" ]]; then
-      printf -v openvpn_link_line '%-*s : %s' "${running_label_width}" "OpenVPN Link" "${openvpn_link}"
-      openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_user_line}"$'\n'"${openvpn_pass_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_link_line}"$'\n'
-    else
-      openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_user_line}"$'\n'"${openvpn_pass_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'
-    fi
+    printf -v openvpn_tcp_line '%-*s : %s' "${running_label_width}" "OpenVPN TCP" "${sshws_ports_disp}"
+    printf -v openvpn_alt_tls_line '%-*s : %s' "${running_label_width}" "Alt Port SSL/TLS" "${ssh_alt_tls_ports_disp}"
+    printf -v openvpn_alt_http_line '%-*s : %s' "${running_label_width}" "Alt Port HTTP" "${ssh_alt_http_ports_disp}"
+    openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_alt_tls_line}"$'\n'"${openvpn_alt_http_line}"$'\n'
   fi
   local tmp_acc_file=""
   mkdir -p "$(dirname "${acc_file}")" 2>/dev/null || return 1
   tmp_acc_file="$(mktemp "${acc_file}.tmp.XXXXXX" 2>/dev/null || true)"
   [[ -n "${tmp_acc_file}" ]] || tmp_acc_file="${acc_file}.tmp.$$"
   if ! cat > "${tmp_acc_file}" <<EOF
-=== SSH ACCOUNT INFO ===
+=== ACCOUNT INFO ===
 Domain      : ${domain}
 IP          : ${ip}
 ISP         : ${isp}
@@ -1442,7 +1433,7 @@ Created     : ${created_disp}
 IP Limit    : ${ip_disp}
 Speed Limit : ${speed_disp}
 
-=== RUNNING ON PORT ===
+=== SSH ===
 ${running_ssh_ws_path}
 ${running_ssh_ws_alt}
 ${running_ssh_ws_port}
@@ -1453,13 +1444,6 @@ ${running_ssh_alt_http}
 ${running_badvpn}
 ${zivpn_block}
 ${openvpn_block}
-
-=== STANDARD PAYLOAD ===
-Payload WS:
-    GET ${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
-
-Payload WSS:
-    GET wss://[host]${sshws_alt_path} HTTP/1.1[crlf]Host: [host_port][crlf]Upgrade: websocket[crlf]Connection: Keep-Alive[crlf][crlf]
 EOF
   then
     rm -f "${tmp_acc_file}" >/dev/null 2>&1 || true

@@ -157,7 +157,7 @@ Internet / Cloudflare
 - `manage.sh` adalah panel CLI modular untuk operasi harian.
 - `run.sh` dan `setup.sh` menangani bootstrap host, install runtime, dan sinkronisasi service.
 - `bot-telegram/` menyediakan backend + gateway menu-first untuk operasi dari Telegram.
-- `opt/edge/go/` memuat source `edge-mux` dan artefak distribusi ada di `opt/edge/dist/`.
+- `opt/edge/go/` memuat source `edge-mux` dan `wsproxy`, sedangkan artefak distribusi ada di `opt/edge/dist/` dan `opt/wsproxy/dist/`.
 - `manage_bundle.zip` dan `bot_telegram.zip` dipakai sebagai release artifact untuk installer.
 
 ## Menu Utama

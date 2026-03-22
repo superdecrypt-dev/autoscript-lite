@@ -291,7 +291,7 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
   - `opt/setup/bin`
   - `opt/setup/templates`
 - Asset runtime besar yang sebelumnya inline kini dipisah, termasuk:
-  - `cmd/sshws-proxy/main.go` (`Websocket Proxy (Go)`)
+  - `cmd/wsproxy/main.go` (`Websocket Proxy (Go)`)
   - `sshws-qac-enforcer.py`
   - `xray-speed.py`
   - `xray-domain-guard`
@@ -323,7 +323,7 @@ Rilis ini memecah `setup.sh` menjadi installer modular yang lebih mudah diaudit,
 ### Hasil Validasi
 - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh` -> PASS
 - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh opt/setup/bin/xray-domain-guard` -> PASS
-- `go -C opt/edge/go test ./cmd/sshws-proxy` -> PASS
+- `go -C opt/edge/go test ./cmd/wsproxy` -> PASS
 - `python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py` -> PASS
 - Full E2E modular installer `run.sh -> setup.sh -> manage.sh` live -> PASS
 
@@ -381,7 +381,7 @@ Rilis ini mengubah baseline SSH WS menjadi token path per-user yang fail-close, 
 
 ### Hasil Validasi
 - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-- `go -C opt/edge/go test ./cmd/sshws-proxy` -> PASS
+- `go -C opt/edge/go test ./cmd/wsproxy` -> PASS
 - `python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py` -> PASS
 - Runtime SSH WS:
   - path tanpa token -> `401`
@@ -435,7 +435,7 @@ Update ini menyelaraskan perilaku SSH WS ke mode autoscript-stream, lalu menamba
 
 ### Hasil Validasi
 - `bash -n setup.sh manage.sh opt/manage/features/analytics.sh` -> PASS
-- `go -C opt/edge/go test ./cmd/sshws-proxy` -> PASS
+- `go -C opt/edge/go test ./cmd/wsproxy` -> PASS
 - Runtime check SSH WS:
   - backend down -> `HTTP/1.1 502 Bad Gateway`
   - backend up -> `HTTP/1.1 101 Switching Protocols`

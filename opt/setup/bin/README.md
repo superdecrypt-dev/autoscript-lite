@@ -9,7 +9,7 @@ Yang sudah dipindah:
 - `xray-domain-guard`
 
 Komponen Go yang sekarang juga aktif:
-- `opt/edge/go/cmd/sshws-proxy` (`Websocket Proxy (Go)`)
+- `opt/edge/go/cmd/wsproxy` (`Websocket Proxy (Go)`)
 
 Kandidat berikutnya bila masih ada script inline baru:
 - utility Python/Bash tambahan yang saat ini masih dibuat langsung dari `setup.sh`

@@ -121,7 +121,7 @@ Catatan khusus proyek ini: temuan hardcoded Cloudflare token pada lokasi histori
   - `3c85652` (`refactor(bot-telegram): streamline menu-first flows`)
 - Validasi runtime terbaru:
   - `bash -n setup.sh manage.sh run.sh install-telegram-bot.sh` -> PASS
-  - `python3 -m py_compile` heredoc `sshws-proxy`, `sshws-qac-enforcer`, dan `xray-speed` -> PASS
+  - `python3 -m py_compile` helper `wsproxy`, `sshws-qac-enforcer`, dan `xray-speed` -> PASS
   - smoke `manage.sh` -> PASS
   - uji SSH WS tokenless/invalid/down/up -> PASS (`401` / `403` / `502` / `101`)
 - Catatan workspace saat handoff ini ditulis:
