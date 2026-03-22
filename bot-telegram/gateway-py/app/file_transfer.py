@@ -49,6 +49,28 @@ def cleanup_uploaded_archive(raw_path: str, upload_restore_dirs: tuple[Path, ...
         pass
 
 
+def cleanup_stale_uploaded_archives(upload_restore_dirs: tuple[Path, ...]) -> int:
+    deleted = 0
+    seen: set[Path] = set()
+    for root in upload_restore_dirs:
+        try:
+            resolved_root = root.resolve()
+        except Exception:
+            continue
+        if resolved_root in seen:
+            continue
+        seen.add(resolved_root)
+        try:
+            for candidate in resolved_root.glob("restore-upload-*.tar.gz"):
+                if not candidate.is_file():
+                    continue
+                cleanup_uploaded_archive(str(candidate), upload_restore_dirs)
+                deleted += 1
+        except Exception:
+            continue
+    return deleted
+
+
 def resolve_local_download(
     data: dict,
     *,

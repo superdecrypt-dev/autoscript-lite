@@ -43,7 +43,7 @@ main_menu_render_options() {
     "1|Xray Users"
     "2|SSH Users"
     "3|Xray QAC"
-    "4|SSH QAC"
+    "4|SSH & OpenVPN QAC"
     "5|Xray Network"
     "6|SSH Network"
     "7|Adblocker"
@@ -74,7 +74,9 @@ main_menu() {
       1) run_action "Xray Users" user_menu ;;
       2|ssh) run_action "SSH Users" ssh_menu ;;
       3|quota) run_action "Xray QAC" quota_menu ;;
-      4|sshquota|ssh-qac) run_action "SSH QAC" ssh_quota_menu ;;
+      4|qac|ssh-openvpn-qac) run_action "SSH & OpenVPN QAC" ssh_openvpn_qac_menu ;;
+      sshquota|ssh-qac) run_action "SSH QAC" ssh_quota_menu ;;
+      openvpnqac|openvpn-qac|ovpnqac|ovpn-qac) run_action "OpenVPN QAC" openvpn_quota_menu ;;
       5|network) run_action "Xray Network" network_menu ;;
       6|ssh-network|sshnet) run_action "SSH Network" ssh_network_menu ;;
       7|adblock|adblocker) run_action "Adblocker" adblock_menu ;;

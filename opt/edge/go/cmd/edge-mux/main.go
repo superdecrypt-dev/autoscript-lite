@@ -66,7 +66,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s openvpn_raw_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		formatListenAddrs(cfg.HTTPListenAddrs()),
 		formatListenAddrs(cfg.TLSListenAddrs()),
@@ -76,6 +76,7 @@ func main() {
 		cfg.SSHBackendAddr(),
 		cfg.SSHTLSBackendAddr(),
 		cfg.SSHWSBackendAddr(),
+		cfg.OpenVPNRawBackendAddr(),
 		cfg.VLESSRawBackendAddr(),
 		cfg.VLESSRawSource,
 		cfg.TrojanRawBackendAddr(),
@@ -927,6 +928,20 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "http-port:ssh-direct", false)
 		return
+	case detect.ClassOpenVPNRaw:
+		target := cfg.OpenVPNRawBackendAddr()
+		if strings.TrimSpace(target) == "" {
+			target = cfg.SSHBackendAddr()
+		}
+		event := routeDecisionEvent(cfg, health, class, target, "openvpn-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "http-port:openvpn-tcp", false)
+		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
@@ -1026,6 +1041,20 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.SSHBackendAddr(), initial, "tls-port:ssh-direct", false)
+		return
+	case detect.ClassOpenVPNRaw:
+		target := cfg.OpenVPNRawBackendAddr()
+		if strings.TrimSpace(target) == "" {
+			target = cfg.SSHBackendAddr()
+		}
+		event := routeDecisionEvent(cfg, health, class, target, "openvpn-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "tls-port:openvpn-tcp", false)
 		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.SSHBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
@@ -1131,6 +1160,16 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.target = cfg.SSHBackendAddr()
 		decision.route = "ssh"
 		decision.contextLabel = fmt.Sprintf("%s:ssh", surface)
+	case detect.ClassOpenVPNRaw:
+		decision.target = cfg.OpenVPNRawBackendAddr()
+		if strings.TrimSpace(decision.target) == "" {
+			decision.target = cfg.SSHBackendAddr()
+			decision.route = "ssh"
+			decision.contextLabel = fmt.Sprintf("%s:ssh-fallback", surface)
+			break
+		}
+		decision.route = "openvpn-tcp"
+		decision.contextLabel = fmt.Sprintf("%s:openvpn-tcp", surface)
 	case detect.ClassVLESSRaw:
 		decision.target = cfg.VLESSRawBackendAddr()
 		decision.route = "vless-tcp"
@@ -1232,6 +1271,8 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "ssh-tls"
 	case cfg.SSHWSBackendAddr():
 		return "ssh-ws"
+	case cfg.OpenVPNRawBackendAddr():
+		return "openvpn"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
 	case cfg.TrojanRawBackendAddr():
@@ -1276,6 +1317,8 @@ func routeDetectClassName(class detect.InitialClass) string {
 		return "tls_client_hello"
 	case detect.ClassSSH:
 		return "ssh"
+	case detect.ClassOpenVPNRaw:
+		return "openvpn_raw"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:
@@ -1525,6 +1568,7 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 	addCheck("ssh-direct", cfg.SSHBackendAddr(), true)
 	addCheck("ssh-tls", cfg.SSHTLSBackendAddr(), true)
 	addCheck("ssh-ws", cfg.SSHWSBackendAddr(), true)
+	addCheck("openvpn", cfg.OpenVPNRawBackendAddr(), strings.TrimSpace(cfg.OpenVPNRawBackendAddr()) != "")
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
 	for _, target := range uniquePassthroughTargets(cfg) {

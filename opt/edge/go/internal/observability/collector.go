@@ -129,6 +129,7 @@ type StatusSnapshot struct {
 	SSHBackend                string                           `json:"ssh_backend"`
 	SSHTLSBackend             string                           `json:"ssh_tls_backend"`
 	SSHWSBackend              string                           `json:"ssh_ws_backend"`
+	OpenVPNRawBackend         string                           `json:"openvpn_raw_backend"`
 	VLESSRawBackend           string                           `json:"vless_raw_backend"`
 	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
 	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
@@ -468,6 +469,7 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		SSHBackend:                cfg.SSHBackendAddr(),
 		SSHTLSBackend:             cfg.SSHTLSBackendAddr(),
 		SSHWSBackend:              cfg.SSHWSBackendAddr(),
+		OpenVPNRawBackend:         cfg.OpenVPNRawBackendAddr(),
 		VLESSRawBackend:           cfg.VLESSRawBackendAddr(),
 		VLESSRawBackendSource:     cfg.VLESSRawSource,
 		TrojanRawBackend:          cfg.TrojanRawBackendAddr(),

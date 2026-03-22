@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SSH expired cleaner daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1d
+AccuracySec=1h
+Persistent=true
+Unit=ssh-expired-cleaner.service
+
+[Install]
+WantedBy=timers.target

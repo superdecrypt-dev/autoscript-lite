@@ -240,3 +240,31 @@ install_sshws_qac_enforcer() {
     warn "Gagal mengaktifkan sshws-qac-enforcer.timer. Cek: systemctl status sshws-qac-enforcer.timer --no-pager"
   fi
 }
+
+install_ssh_expired_cleaner() {
+  ok "Pasang SSH expired cleaner..."
+  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH expired cleaner."
+  install -d -m 755 /etc/systemd/system
+
+  install_setup_bin_or_die "ssh-expired-cleaner.py" "/usr/local/bin/ssh-expired-cleaner" 0755
+
+  render_setup_template_or_die \
+    "systemd/ssh-expired-cleaner.service" \
+    "/etc/systemd/system/ssh-expired-cleaner.service" \
+    0644
+
+  render_setup_template_or_die \
+    "systemd/ssh-expired-cleaner.timer" \
+    "/etc/systemd/system/ssh-expired-cleaner.timer" \
+    0644
+
+  systemctl daemon-reload
+  if systemctl enable --now ssh-expired-cleaner.timer >/dev/null 2>&1; then
+    systemctl start ssh-expired-cleaner.service >/dev/null 2>&1 || true
+    ok "SSH expired cleaner aktif:"
+    ok "  - binary: /usr/local/bin/ssh-expired-cleaner"
+    ok "  - timer : ssh-expired-cleaner.timer (harian)"
+  else
+    warn "Gagal mengaktifkan ssh-expired-cleaner.timer. Cek: systemctl status ssh-expired-cleaner.timer --no-pager"
+  fi
+}

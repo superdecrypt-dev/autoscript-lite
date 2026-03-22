@@ -599,6 +599,24 @@ func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 	}
 }
 
+func TestDecideTLSPayloadRouteUsesOpenVPNBackendForOpenVPNClass(t *testing.T) {
+	cfg := runtime.Config{
+		SSHBackend:        "127.0.0.1:22022",
+		OpenVPNRawBackend: "127.0.0.1:1194",
+	}
+
+	decision := decideTLSPayloadRoute(cfg, "tls-port", nil, detect.ClassOpenVPNRaw, "", "", false)
+	if decision.target != cfg.OpenVPNRawBackendAddr() {
+		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.OpenVPNRawBackendAddr())
+	}
+	if decision.route != "openvpn-tcp" {
+		t.Fatalf("decision.route = %q, want openvpn-tcp", decision.route)
+	}
+	if got := backendLabel(cfg, cfg.OpenVPNRawBackendAddr()); got != "openvpn" {
+		t.Fatalf("backendLabel(openvpn) = %q, want openvpn", got)
+	}
+}
+
 func TestHealthBlockReasonUsesBackendStatus(t *testing.T) {
 	if got := healthBlockReason(observability.BackendHealthSnapshot{Healthy: false, Status: "down"}, true); got != "backend_down" {
 		t.Fatalf("healthBlockReason(down) = %q, want backend_down", got)

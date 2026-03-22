@@ -33,6 +33,7 @@ from .commands_loader import ActionSpec, CommandCatalog, MenuSpec
 from .config import AppConfig, load_config
 from .file_transfer import (
     cleanup_uploaded_archive,
+    cleanup_stale_uploaded_archives,
     format_size,
     resolve_local_download,
     resolve_restore_upload_dir,
@@ -116,10 +117,11 @@ XRAY_USER_MENU_ID = "22"
 SSH_USER_MENU_ID = "23"
 XRAY_QAC_MENU_ID = "24"
 SSH_QAC_MENU_ID = "25"
+OPENVPN_QAC_MENU_ID = "44"
 BACKUP_MENU_ID = "32"
 SSH_NETWORK_MENU_IDS = {"34", "37", "38", "39", "40", "41"}
 DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
-QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID}
+QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID, OPENVPN_QAC_MENU_ID}
 ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password", "reset_credential"}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
@@ -486,6 +488,8 @@ def _safe_int(raw: str, default: int = 0) -> int:
 def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
     if menu_id in {XRAY_USER_MENU_ID, XRAY_QAC_MENU_ID}:
         return XRAY_PROTOCOLS
+    if menu_id == OPENVPN_QAC_MENU_ID:
+        return ("openvpn",)
     if menu_id in {SSH_USER_MENU_ID, SSH_QAC_MENU_ID} | SSH_NETWORK_MENU_IDS:
         return ("ssh",)
     return USER_PROTOCOLS
@@ -496,6 +500,7 @@ def _qac_picker_title(menu_id: str) -> str:
         menu_id,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
         ssh_qac_menu_id=SSH_QAC_MENU_ID,
+        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -567,6 +572,7 @@ def _qac_menu_text(menu: MenuSpec, selection: dict, summary: dict[str, str] | No
         total_pages,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
         ssh_qac_menu_id=SSH_QAC_MENU_ID,
+        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -579,9 +585,16 @@ def _qac_menu_keyboard(runtime: Runtime, menu: MenuSpec, page: int, *, parent_pa
     )
 
 
-def _qac_pick_keyboard(menu_id: str, page: int, users: list[dict[str, str]], menu_page: int) -> InlineKeyboardMarkup:
+def _qac_pick_keyboard(
+    menu_id: str,
+    return_menu_id: str,
+    page: int,
+    users: list[dict[str, str]],
+    menu_page: int,
+) -> InlineKeyboardMarkup:
     return qac_ui_pick_keyboard(
         menu_id,
+        return_menu_id,
         page,
         users,
         menu_page,
@@ -601,6 +614,7 @@ def _qac_pick_text(menu_id: str, page: int, users: list[dict[str, str]]) -> str:
         delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
         ssh_qac_menu_id=SSH_QAC_MENU_ID,
+        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -903,6 +917,7 @@ async def _render_qac_menu(
     menu: MenuSpec,
     page: int = 0,
 ) -> None:
+    return_menu_id = menu.parent_menu if menu.parent_menu else menu.id
     selection = _get_qac_selection(context, menu.id, chat_id=chat_id)
     if selection is None:
         await _show_qac_user_picker(
@@ -927,7 +942,7 @@ async def _render_qac_menu(
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu.id}{CALLBACK_SEP}{max(page, 0)}")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{return_menu_id}{CALLBACK_SEP}{max(page, 0)}")]]
             ),
         )
         return
@@ -976,6 +991,8 @@ async def _show_qac_user_picker(
     page: int = 0,
     menu_page: int = 0,
 ) -> None:
+    menu = runtime.catalog.get_menu(menu_id)
+    return_menu_id = menu.parent_menu if menu and menu.parent_menu else menu_id
     try:
         users = await _load_qac_user_entries(runtime, menu_id)
     except BackendError as exc:
@@ -989,7 +1006,7 @@ async def _show_qac_user_picker(
                 f"<pre>{html.escape(str(exc)[:1200])}</pre>"
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{return_menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
             ),
         )
         return
@@ -1006,7 +1023,7 @@ async def _show_qac_user_picker(
                 "Belum ada user yang bisa dipilih."
             ),
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
+                [[InlineKeyboardButton("⬅️ Kembali", callback_data=f"m{CALLBACK_SEP}{return_menu_id}{CALLBACK_SEP}{max(menu_page, 0)}")]]
             ),
         )
         return
@@ -1029,7 +1046,7 @@ async def _show_qac_user_picker(
         chat_id=chat_id,
         context=context,
         text=_qac_pick_text(menu_id, page, users),
-        reply_markup=_qac_pick_keyboard(menu_id, page, users, menu_page),
+        reply_markup=_qac_pick_keyboard(menu_id, return_menu_id, page, users, menu_page),
     )
 
 
@@ -1344,7 +1361,7 @@ async def _run_action(
     params: dict[str, str],
     page: int,
     query,
-) -> None:
+) -> BackendActionResponse | None:
     try:
         result = await runtime.backend.run_action(menu_id=menu_id, action=action_id, params=params)
     except BackendError as exc:
@@ -1359,7 +1376,7 @@ async def _run_action(
             ),
             reply_markup=_result_keyboard(menu_id, page),
         )
-        return
+        return None
 
     await _send_or_edit(
         query=query,
@@ -1382,15 +1399,15 @@ async def _run_action(
                 )
         except Exception as exc:
             LOGGER.warning("Gagal kirim lampiran lokal %s: %s", local_path, exc)
-        return
+        return result
 
     attachment = decode_download_payload(result.data)
     if attachment is None:
-        return
+        return result
 
     filename, payload = attachment
     if not payload:
-        return
+        return result
     allow_password = bool(result.data.get("allow_sensitive_output")) if isinstance(result.data, dict) else False
     filename, payload = sanitize_download_attachment(filename, payload, allow_password=allow_password)
 
@@ -1405,6 +1422,7 @@ async def _run_action(
         )
     except Exception as exc:
         LOGGER.warning("Gagal kirim lampiran %s: %s", filename, exc)
+    return result
 
 
 def _prefilled_action_params(
@@ -2402,6 +2420,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if menu_id not in QAC_MENU_IDS or not users:
             await query.answer("Sesi pemilihan user QAC tidak valid.", show_alert=True)
             return
+        menu = runtime.catalog.get_menu(menu_id)
+        return_menu_id = menu.parent_menu if menu and menu.parent_menu else menu_id
         parts = data.split(CALLBACK_SEP)
         page = _safe_int(parts[1] if len(parts) > 1 else "0", default=0)
         page_max = ((len(users) - 1) // DELETE_PICK_PAGE_SIZE)
@@ -2413,7 +2433,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             chat_id=chat_id,
             context=context,
             text=_qac_pick_text(menu_id, page, users),
-            reply_markup=_qac_pick_keyboard(menu_id, page, users, menu_page),
+            reply_markup=_qac_pick_keyboard(menu_id, return_menu_id, page, users, menu_page),
         )
         return
 
@@ -2496,7 +2516,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             text="<b>⏳ Menjalankan action...</b>",
             reply_markup=_result_keyboard(menu_id, page),
         )
-        await _run_action(
+        result = await _run_action(
             runtime=runtime,
             context=context,
             chat_id=chat_id,
@@ -2507,7 +2527,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             query=query,
         )
         if action_id == "restore_from_upload":
-            cleanup_uploaded_archive(str(params.get("upload_path") or ""), UPLOAD_RESTORE_DIRS)
+            keep_upload = False
+            if result is None:
+                keep_upload = True
+            elif isinstance(result.data, dict):
+                keep_upload = bool(result.data.get("keep_upload_archive"))
+            if not keep_upload:
+                cleanup_uploaded_archive(str(params.get("upload_path") or ""), UPLOAD_RESTORE_DIRS)
         return
 
     parts = data.split(CALLBACK_SEP)
@@ -2732,6 +2758,13 @@ def _load_main_menu_snapshot_from_backend_or_die(backend: BackendClient) -> tupl
 
 
 async def post_init(application: Application) -> None:
+    try:
+        deleted = cleanup_stale_uploaded_archives(UPLOAD_RESTORE_DIRS)
+        if deleted > 0:
+            LOGGER.info("Cleanup restore upload orphan saat startup: deleted=%s", deleted)
+    except Exception as exc:
+        LOGGER.warning("Cleanup restore upload orphan saat startup gagal: %s", sanitize_secret_text(str(exc)))
+
     runtime = application.bot_data.get("runtime")
     if isinstance(runtime, Runtime):
         try:

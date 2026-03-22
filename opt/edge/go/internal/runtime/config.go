@@ -22,11 +22,12 @@ const (
 	defaultSSHBackend          = "127.0.0.1:22022"
 	defaultSSHTLSBackend       = "127.0.0.1:22443"
 	defaultSSHWSBackend        = "127.0.0.1:10015"
+	defaultOpenVPNRawBackend   = "127.0.0.1:1194"
 	defaultVLESSRawBackend     = "127.0.0.1:28080"
 	defaultTrojanRawBackend    = "127.0.0.1:28081"
 	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
 	defaultTLSKeyFile          = "/opt/cert/privkey.pem"
-	defaultDetectTimeout       = 250 * time.Millisecond
+	defaultDetectTimeout       = 1500 * time.Millisecond
 	defaultMetricsEnabled      = true
 	defaultTLSOn80             = true
 	defaultTLSHandshakeTimeout = 5 * time.Second
@@ -70,6 +71,7 @@ type Config struct {
 	SSHBackend          string
 	SSHTLSBackend       string
 	SSHWSBackend        string
+	OpenVPNRawBackend   string
 	VLESSRawBackend     string
 	TrojanRawBackend    string
 	XrayInboundsFile    string
@@ -197,6 +199,7 @@ func LoadConfig() (Config, error) {
 		SSHBackend:          normalizeAddr(envString(source, "EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
 		SSHTLSBackend:       normalizeAddr(envString(source, "EDGE_SSH_TLS_BACKEND", defaultSSHTLSBackend), "127.0.0.1"),
 		SSHWSBackend:        normalizeAddr(envString(source, "EDGE_SSH_WS_BACKEND", defaultSSHWSBackend), "127.0.0.1"),
+		OpenVPNRawBackend:   normalizeAddr(envString(source, "EDGE_OPENVPN_TCP_BACKEND", defaultOpenVPNRawBackend), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
@@ -361,13 +364,14 @@ func (c Config) TLSListenAddrs() []string {
 	return []string{c.PublicTLSAddr}
 }
 
-func (c Config) MetricsAddr() string          { return c.MetricsListenAddr }
-func (c Config) HTTPBackendAddr() string      { return c.HTTPBackend }
-func (c Config) SSHBackendAddr() string       { return c.SSHBackend }
-func (c Config) SSHTLSBackendAddr() string    { return c.SSHTLSBackend }
-func (c Config) SSHWSBackendAddr() string     { return c.SSHWSBackend }
-func (c Config) VLESSRawBackendAddr() string  { return c.VLESSRawBackend }
-func (c Config) TrojanRawBackendAddr() string { return c.TrojanRawBackend }
+func (c Config) MetricsAddr() string           { return c.MetricsListenAddr }
+func (c Config) HTTPBackendAddr() string       { return c.HTTPBackend }
+func (c Config) SSHBackendAddr() string        { return c.SSHBackend }
+func (c Config) SSHTLSBackendAddr() string     { return c.SSHTLSBackend }
+func (c Config) SSHWSBackendAddr() string      { return c.SSHWSBackend }
+func (c Config) OpenVPNRawBackendAddr() string { return c.OpenVPNRawBackend }
+func (c Config) VLESSRawBackendAddr() string   { return c.VLESSRawBackend }
+func (c Config) TrojanRawBackendAddr() string  { return c.TrojanRawBackend }
 
 func (c Config) Clone() Config {
 	clone := c

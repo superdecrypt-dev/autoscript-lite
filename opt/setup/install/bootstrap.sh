@@ -121,17 +121,17 @@ install_extra_deps() {
   mkdir -p /var/log/chrony
 
   ensure_dpkg_consistent
-  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear dnsmasq-base wireguard-tools
+  apt_get_with_lock_retry install -y jq fail2ban chrony tar expect logrotate nftables dropbear dnsmasq-base wireguard-tools openvpn easy-rsa
 
   if command -v stunnel4 >/dev/null 2>&1 || command -v stunnel >/dev/null 2>&1; then
-    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base; stunnel sudah tersedia)."
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base, openvpn, easy-rsa; stunnel sudah tersedia)."
     return 0
   fi
   if apt_get_with_lock_retry install -y stunnel4 >/dev/null 2>&1 || apt_get_with_lock_retry install -y stunnel >/dev/null 2>&1; then
-    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base; stunnel opsional tersedia)."
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base, openvpn, easy-rsa; stunnel opsional tersedia)."
   else
     warn "Paket stunnel tidak tersedia di repo distro. Layanan sshws-stunnel akan dilewati (opsional)."
-    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base)."
+    ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base, openvpn, easy-rsa)."
   fi
 }
 

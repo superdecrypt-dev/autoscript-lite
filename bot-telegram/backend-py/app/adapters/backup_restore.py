@@ -436,6 +436,7 @@ def _load_and_validate_manifest(
         with tarfile.open(archive_path, "r:gz") as tf:
             payload_members: dict[str, tarfile.TarInfo] = {}
             manifest_member: tarfile.TarInfo | None = None
+            seen_payload_paths: set[str] = set()
 
             for member in tf.getmembers():
                 ok_name, name_or_err = _normalize_member_name(member.name)
@@ -443,10 +444,15 @@ def _load_and_validate_manifest(
                     return False, str(name_or_err), None, None
                 norm_name = str(name_or_err)
                 if norm_name == "manifest.json":
+                    if manifest_member is not None:
+                        return False, "manifest.json duplikat ditemukan di archive.", None, None
                     manifest_member = member
                     continue
                 if member.isfile() and norm_name.startswith("payload/"):
                     rel = norm_name[len("payload/") :].lstrip("/")
+                    if rel in seen_payload_paths:
+                        return False, f"Payload duplikat ditemukan: {rel}", None, None
+                    seen_payload_paths.add(rel)
                     payload_members[rel] = member
 
             if manifest_member is None or not manifest_member.isfile():
@@ -474,6 +480,7 @@ def _load_and_validate_manifest(
 
             directories_raw = manifest.get("directories")
             directories: list[dict[str, Any]] = []
+            seen_directory_paths: set[str] = set()
             if directories_raw is not None:
                 if not isinstance(directories_raw, list):
                     return False, "Manifest directories tidak valid.", None, None
@@ -487,6 +494,9 @@ def _load_and_validate_manifest(
                     if not ok_rel:
                         return False, str(rel_norm_or_err), None, None
                     rel_norm = str(rel_norm_or_err)
+                    if rel_norm in seen_directory_paths:
+                        return False, f"Directory duplikat pada manifest: /{rel_norm}", None, None
+                    seen_directory_paths.add(rel_norm)
                     target = Path("/") / rel_norm
                     if not any(_is_subpath(target, base) for base in RESTORE_ALLOWED_DIRS):
                         return False, f"Directory restore tidak diizinkan: /{rel_norm}", None, None
@@ -512,6 +522,7 @@ def _load_and_validate_manifest(
                 )
 
             entries: list[dict[str, Any]] = []
+            seen_entry_paths: set[str] = set()
             total_payload_bytes = 0
             for item in entries_raw:
                 if not isinstance(item, dict):
@@ -528,6 +539,9 @@ def _load_and_validate_manifest(
                 if not ok_rel:
                     return False, str(rel_norm_or_err), None, None
                 rel_norm = str(rel_norm_or_err)
+                if rel_norm in seen_entry_paths:
+                    return False, f"Entry duplikat pada manifest: /{rel_norm}", None, None
+                seen_entry_paths.add(rel_norm)
                 if rel_norm not in payload_members:
                     return False, f"Payload file tidak ditemukan: {rel_norm}", None, None
                 if size < 0:

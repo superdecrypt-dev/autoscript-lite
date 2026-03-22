@@ -505,3 +505,118 @@ sshws_diagnostics_menu() {
     esac
   done
 }
+
+openvpn_status_menu() {
+  title
+  echo "11) Maintenance > OpenVPN Status"
+  hr
+
+  local services=("${OPENVPN_TCP_SERVICE}" "${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}")
+  local svc
+  for svc in "${services[@]}"; do
+    if svc_exists "${svc}"; then
+      svc_status_line "${svc}"
+    else
+      warn "${svc}.service tidak terpasang"
+    fi
+  done
+
+  hr
+  local tcp_port public_tcp_port ws_proxy_port ws_public_path ws_alt_path tls_ports http_ports merged_ports=() seen_ports=() port
+  tcp_port="$(awk -F= '$1=="OPENVPN_PORT_TCP"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  public_tcp_port="$(awk -F= '$1=="OPENVPN_PUBLIC_PORT_TCP"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  ws_proxy_port="$(awk -F= '$1=="OPENVPN_WS_PROXY_PORT"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  ws_public_path="$(awk -F= '$1=="OPENVPN_WS_PUBLIC_PATH"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  [[ -n "${tcp_port}" ]] || tcp_port="1194"
+  tls_ports="$(edge_runtime_public_tls_ports 2>/dev/null || echo "443 2053 2083 2087 2096 8443")"
+  http_ports="$(edge_runtime_public_http_ports 2>/dev/null || echo "80 8080 8880 2052 2082 2086 2095")"
+  for port in ${tls_ports} ${http_ports}; do
+    [[ "${port}" =~ ^[0-9]+$ ]] || continue
+    if [[ " ${seen_ports[*]:-} " == *" ${port} "* ]]; then
+      continue
+    fi
+    seen_ports+=("${port}")
+    merged_ports+=("${port}")
+  done
+  if (( ${#merged_ports[@]} > 0 )); then
+    public_tcp_port="$(printf '%s\n' "${merged_ports[*]}" | sed 's/ /, /g')"
+  else
+    [[ -n "${public_tcp_port}" ]] || public_tcp_port="${tcp_port}"
+  fi
+  [[ -n "${ws_proxy_port}" ]] || ws_proxy_port="10016"
+  [[ -n "${ws_public_path}" ]] || ws_public_path="-"
+  if [[ "${ws_public_path}" != "-" ]]; then
+    [[ "${ws_public_path}" == /* ]] || ws_public_path="/${ws_public_path}"
+    ws_alt_path="/<bebas>/${ws_public_path#/}"
+  else
+    ws_alt_path="-"
+  fi
+  if have_cmd ss; then
+    if ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${tcp_port}([[:space:]]|$)"; then
+      log "Backend TCP ${tcp_port} : LISTENING ✅"
+    else
+      warn "Backend TCP ${tcp_port} : NOT listening ❌"
+    fi
+    if ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${ws_proxy_port}([[:space:]]|$)"; then
+      log "WS proxy ${ws_proxy_port} : LISTENING ✅"
+    else
+      warn "WS proxy ${ws_proxy_port} : NOT listening ❌"
+    fi
+  fi
+
+  hr
+  echo "Runtime:"
+  echo "  - env file    : ${OPENVPN_CONFIG_ENV_FILE}"
+  echo "  - profile dir : ${OPENVPN_PROFILE_DIR}"
+  echo "  - metadata dir: ${OPENVPN_METADATA_DIR}"
+  echo "  - helper      : ${OPENVPN_MANAGE_BIN}"
+  echo "  - public tcp  : ${public_tcp_port} (via edge-mux)"
+  echo "  - ws path     : ${ws_public_path}"
+  echo "  - ws path alt : ${ws_alt_path}"
+  echo "  - ws port     : $(ssh_ws_public_ports_label)"
+  hr
+  pause
+}
+
+openvpn_restart_menu() {
+  title
+  echo "11) Maintenance > Restart OpenVPN"
+  hr
+  local confirm_rc=0
+  confirm_yn_or_back "Restart semua service OpenVPN sekarang?"
+  confirm_rc=$?
+  if (( confirm_rc != 0 )); then
+    warn "Restart OpenVPN dibatalkan."
+    hr
+    pause
+    return 0
+  fi
+  if ! svc_restart_checked "${OPENVPN_TCP_SERVICE}" 60; then
+    warn "Restart ${OPENVPN_TCP_SERVICE} gagal."
+    hr
+    pause
+    return 1
+  fi
+  if ! svc_restart_checked "${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}" 60; then
+    warn "Restart ${OPENVPN_WS_SERVICE:-ovpn-ws-proxy} gagal."
+    hr
+    pause
+    return 1
+  fi
+  log "OpenVPN TCP + WS proxy berhasil direstart."
+  hr
+  pause
+}
+
+openvpn_logs_menu() {
+  title
+  echo "11) Maintenance > OpenVPN Logs"
+  hr
+  echo "[${OPENVPN_TCP_SERVICE}.service]"
+  journalctl -u "${OPENVPN_TCP_SERVICE}.service" --no-pager -n 80 2>/dev/null || true
+  echo
+  echo "[${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}.service]"
+  journalctl -u "${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}.service" --no-pager -n 80 2>/dev/null || true
+  hr
+  pause
+}

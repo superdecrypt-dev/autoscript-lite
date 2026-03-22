@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"encoding/binary"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/wsproxy"
 )
 
 func TestConnectionRegistryAdmitAndReserveSeesPendingReservation(t *testing.T) {
@@ -150,5 +155,106 @@ func TestPythonSessionWriteUsesProvidedProxyPID(t *testing.T) {
 	}
 	if got := int(payload["proxy_pid"].(float64)); got != 999999 {
 		t.Fatalf("proxy_pid = %d, want 999999", got)
+	}
+}
+
+func writeMaskedClientFrame(t *testing.T, conn net.Conn, opcode byte, payload []byte) {
+	t.Helper()
+	mask := [4]byte{0x11, 0x22, 0x33, 0x44}
+	header := []byte{0x80 | opcode}
+	switch {
+	case len(payload) < 126:
+		header = append(header, 0x80|byte(len(payload)))
+	case len(payload) <= 65535:
+		header = append(header, 0x80|126)
+		var ext [2]byte
+		binary.BigEndian.PutUint16(ext[:], uint16(len(payload)))
+		header = append(header, ext[:]...)
+	default:
+		t.Fatalf("payload too large for test: %d", len(payload))
+	}
+	header = append(header, mask[:]...)
+	masked := append([]byte(nil), payload...)
+	for i := range masked {
+		masked[i] ^= mask[i%4]
+	}
+	if _, err := conn.Write(append(header, masked...)); err != nil {
+		t.Fatalf("writeMaskedClientFrame: %v", err)
+	}
+}
+
+func TestSniffInitialClientRouteUsesOpenVPNControlPacketForOpenVPN(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(20 * time.Millisecond)
+		writeMaskedClientFrame(t, client, wsproxy.OpBinary, []byte{
+			0x00, 0x0e, 0x38, 0xe1, 0x07, 0x7d, 0x5b, 0xb3,
+			0xe4, 0xe3, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00,
+		})
+	}()
+
+	reader := bufio.NewReader(server)
+	writer := wsproxy.NewWSWriter(server)
+	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("sniffInitialClientRoute error: %v", err)
+	}
+	if frame == nil {
+		t.Fatal("expected first frame, got nil")
+	}
+	if !useOVPN {
+		t.Fatal("expected OpenVPN route for OpenVPN control payload")
+	}
+	<-done
+}
+
+func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForOpenVPN(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(20 * time.Millisecond)
+		writeMaskedClientFrame(t, client, wsproxy.OpBinary, []byte{0x16, 0x03, 0x01, 0x00, 0x00})
+	}()
+
+	reader := bufio.NewReader(server)
+	writer := wsproxy.NewWSWriter(server)
+	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("sniffInitialClientRoute error: %v", err)
+	}
+	if frame == nil {
+		t.Fatal("expected first frame, got nil")
+	}
+	if !useOVPN {
+		t.Fatal("expected OpenVPN route for TLS-like payload")
+	}
+	<-done
+}
+
+func TestSniffInitialClientRouteTimeoutFallsBackToSSH(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	reader := bufio.NewReader(server)
+	writer := wsproxy.NewWSWriter(server)
+	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("sniffInitialClientRoute timeout error: %v", err)
+	}
+	if frame != nil {
+		t.Fatalf("expected nil frame on timeout, got %#v", frame)
+	}
+	if useOVPN {
+		t.Fatal("expected SSH fallback on timeout")
 	}
 }

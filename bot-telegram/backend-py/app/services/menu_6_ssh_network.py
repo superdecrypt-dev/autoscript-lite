@@ -3,6 +3,26 @@ from ..utils.response import error_response, ok_response
 from ..utils.validators import require_param
 
 
+def _download_url(download_payload: dict[str, object] | None) -> str:
+    if not isinstance(download_payload, dict):
+        return ""
+    return str(download_payload.get("download_url") or "").strip()
+
+
+def _attach_ssh_account_download(title: str, message: str, username: str) -> dict:
+    data: dict[str, object] = {}
+    ok_download, download_or_err = system_mutations.op_user_account_file_download(system.SSH_PROTOCOL, username)
+    if ok_download and isinstance(download_or_err, dict):
+        data["download_file"] = download_or_err
+        data["allow_sensitive_output"] = True
+        ovpn_link = _download_url(download_or_err)
+        if ovpn_link:
+            message = f"{message}\n\nOpenVPN Download Link:\n{ovpn_link}"
+    else:
+        message = f"{message}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
+    return ok_response(title, message, data=data)
+
+
 def handle(action: str, params: dict, settings) -> dict:
     if action == "overview":
         title, msg = system.op_ssh_network_overview()
@@ -104,14 +124,15 @@ def handle(action: str, params: dict, settings) -> dict:
         ok_u, user_or_err = require_param(params, "username", "SSH Network - Routing SSH Per-User")
         if not ok_u:
             return user_or_err
+        username = str(user_or_err)
         mode = {
             "routing_ssh_user_inherit": "inherit",
             "routing_ssh_user_direct": "direct",
             "routing_ssh_user_warp": "warp",
         }[action]
-        ok_op, title, msg = system_mutations.op_ssh_network_set_user_route_mode(str(user_or_err), mode)
+        ok_op, title, msg = system_mutations.op_ssh_network_set_user_route_mode(username, mode)
         if ok_op:
-            return ok_response(title, msg)
+            return _attach_ssh_account_download(title, msg, username)
         return error_response("ssh_network_user_route_failed", title, msg)
 
     if action == "warp_ssh_global_enable":
@@ -130,14 +151,15 @@ def handle(action: str, params: dict, settings) -> dict:
         ok_u, user_or_err = require_param(params, "username", "SSH Network - WARP SSH Per-User")
         if not ok_u:
             return user_or_err
+        username = str(user_or_err)
         mode = {
             "warp_ssh_user_enable": "warp",
             "warp_ssh_user_disable": "direct",
             "warp_ssh_user_inherit": "inherit",
         }[action]
-        ok_op, title, msg = system_mutations.op_ssh_network_set_warp_user_mode(str(user_or_err), mode)
+        ok_op, title, msg = system_mutations.op_ssh_network_set_warp_user_mode(username, mode)
         if ok_op:
-            return ok_response(title, msg)
+            return _attach_ssh_account_download(title, msg, username)
         return error_response("ssh_network_warp_user_failed", title, msg)
 
     return error_response("unknown_action", "SSH Network", f"Action tidak dikenal: {action}")

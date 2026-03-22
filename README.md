@@ -1,10 +1,11 @@
 # Autoscript
 
-> Installer, runtime, dan panel operasional harian untuk stack `Xray-core`, `SSH WS`, `Edge Gateway`, `WARP`, dan bot `Telegram` di VPS Linux.
+> Installer, runtime, dan panel operasional harian untuk stack `Xray-core`, `SSH WS`, `OpenVPN`, `Edge Gateway`, `WARP`, dan bot `Telegram` di VPS Linux.
 
 Autoscript dirancang untuk operator yang ingin satu repo untuk:
 - bootstrap server dari nol
 - mengelola user `Xray` dan `SSH` dari CLI modular
+- menautkan `OpenVPN` langsung ke lifecycle akun `SSH`
 - menjalankan ingress publik berbasis `Go edge-mux`
 - mengoperasikan `WARP`, `BadVPN`, `Domain Guard`, dan bot `Telegram`
 
@@ -43,6 +44,7 @@ Internet / Cloudflare
 | `sshws-dropbear` | backend SSH direct/dropbear | internal |
 | `sshws-stunnel` | backend SSH SSL/TLS | internal |
 | `sshws-proxy` | Websocket Proxy (Go) untuk backend SSH WS | internal |
+| `openvpn-server@autoscript-tcp` | OpenVPN TCP classic yang terikat ke akun SSH | publik |
 | `badvpn-udpgw` | UDPGW lokal untuk payload/game tertentu | internal |
 | `wireproxy` / `warp-svc` | runtime `WARP Free/Plus` atau `Zero Trust` | sesuai mode aktif |
 | `xray-domain-guard` | guardrail domain, TLS, dan health check | maintenance |
@@ -53,6 +55,7 @@ Internet / Cloudflare
 - `VLESS`, `VMess`, `Trojan`
 - transport `XHTTP`, `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS`
 - `SSH WS`, `SSH SSL/TLS`, `SSH Direct`
+- `OpenVPN TCP`
 - `WARP Free/Plus`, `WARP Zero Trust`, `BadVPN UDPGW`
 
 ## Port Publik
@@ -87,6 +90,7 @@ Internet / Cloudflare
 | `Trojan HUP` | `443, 80` + alt port Cloudflare |
 | `Trojan gRPC` | `443, 80` + alt port Cloudflare |
 | `Trojan TCP+TLS` | `443, 80` + alt port Cloudflare |
+| `OpenVPN TCP` | `1194/tcp` |
 
 ## Path Publik
 
@@ -119,6 +123,36 @@ Internet / Cloudflare
 | `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |
 | `BadVPN UDPGW` | `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` | UDPGW lokal |
 
+## OpenVPN
+- `OpenVPN` di repo ini bersifat `SSH-linked`, bukan sistem akun terpisah.
+- `Username` dan `password` OpenVPN mengikuti akun `SSH` yang sama.
+- `Quota`, `IP limit`, dan `speed limit` OpenVPN sekarang memakai state terpisah di `/opt/quota/openvpn/<username>@openvpn.json`.
+- `Quota`, `IP limit`, dan `speed limit` `SSH` tidak lagi dihitung bersama dengan `OpenVPN`.
+- OpenVPN tetap `SSH-linked` hanya untuk identitas login (`username/password`) dan lifecycle user.
+- `Status` runtime OpenVPN disampling lebih rapat untuk memperkecil gap accounting pada sesi pendek.
+- `client-disconnect` hook dipakai sebagai ledger final supaya sesi sangat pendek tetap ikut terhitung ke quota.
+- Jalur egress OpenVPN tetap `direct` dan tidak dirancang untuk lewat `WARP`.
+- Rule `WARP SSH` / `Zero Trust` di host tidak boleh dipakai untuk membelokkan trafik OpenVPN kecuali ada redesign routing yang disengaja.
+- Runtime publik aktif saat ini adalah `TCP 1194`.
+- Bundle user-facing dikirim sebagai file `.ovpn` tunggal dan bisa diunduh dari:
+  - file lokal account info
+  - bot Telegram
+  - short link `https://domain/ovpn/<token>`
+- Format `.ovpn` sekarang disederhanakan untuk kompatibilitas client:
+  - `proto tcp`
+  - `auth-user-pass`
+  - `remote-cert-tls server`
+  - `verify-x509-name autoscript-server name`
+  - `tls-version-min 1.2`
+  - `auth SHA256`
+  - `data-ciphers AES-256-GCM:AES-128-GCM`
+  - `CA inline`
+  - tanpa `client cert/key`
+  - tanpa `tls-auth` / `tls-crypt`
+- Server OpenVPN menerima cipher:
+  - `AES-256-GCM`
+  - `AES-128-GCM`
+
 ## Service Highlights
 - `manage.sh` adalah panel CLI modular untuk operasi harian.
 - `run.sh` dan `setup.sh` menangani bootstrap host, install runtime, dan sinkronisasi service.
@@ -131,7 +165,7 @@ Internet / Cloudflare
 1) Xray Users
 2) SSH Users
 3) Xray QAC
-4) SSH QAC
+4) SSH & OpenVPN QAC
 5) Xray Network
 6) SSH Network
 7) Adblocker

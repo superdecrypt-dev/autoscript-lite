@@ -19,6 +19,10 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_badvpn_status()
         return ok_response(title, msg)
 
+    if action == "openvpn_status":
+        title, msg = system.op_openvpn_status()
+        return ok_response(title, msg)
+
     if action == "daemon_status":
         title, msg = system.op_daemon_status()
         return ok_response(title, msg)
@@ -51,9 +55,15 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_sshws_combined_logs()
         return ok_response(title, msg)
 
-    if action in {"restart_xray", "restart_nginx", "restart_wireproxy", "restart_edge_gateway", "restart_badvpn"}:
+    if action == "openvpn_logs":
+        title, msg = system.op_openvpn_logs()
+        return ok_response(title, msg)
+
+    if action in {"restart_xray", "restart_nginx", "restart_wireproxy", "restart_edge_gateway", "restart_badvpn", "restart_openvpn"}:
         if action == "restart_edge_gateway":
             ok, title, msg = system.op_restart_edge_gateway()
+        elif action == "restart_openvpn":
+            ok, title, msg = system.op_restart_openvpn()
         elif action == "restart_wireproxy":
             ok, title, msg = system_mutations.op_network_warp_restart()
         else:

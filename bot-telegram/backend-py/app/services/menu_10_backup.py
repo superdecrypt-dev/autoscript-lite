@@ -28,7 +28,7 @@ def handle(action: str, params: dict, settings) -> dict:
             return upload_or_err
         ok, title, msg = backup_restore.op_restore_from_upload(str(upload_or_err))
         if ok:
-            return ok_response(title, msg)
-        return error_response("backup_restore_upload_failed", title, msg)
+            return ok_response(title, msg, data={"cleanup_upload_archive": True})
+        return error_response("backup_restore_upload_failed", title, msg, data={"keep_upload_archive": True})
 
     return error_response("unknown_action", "Backup/Restore", f"Action tidak dikenal: {action}")

@@ -8,6 +8,7 @@ for _rel in \
   "features/analytics/ssh_users.sh" \
   "features/analytics/ssh_network.sh" \
   "features/analytics/ssh_qac.sh" \
+  "features/analytics/openvpn_qac.sh" \
   "features/analytics/tools.sh"; do
   manage_source_relative "${_rel}"
 done

@@ -1,7 +1,9 @@
 import json
+import re
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from ..adapters import system, system_mutations
 from ..auth import verify_shared_secret
@@ -11,6 +13,8 @@ from ..services import MENU_HANDLERS
 from ..utils.response import error_response
 
 router = APIRouter(tags=["menus"])
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
+DOWNLOAD_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{6,32}$")
 
 
 def _load_commands_file(path: str) -> dict:
@@ -71,6 +75,55 @@ def _visible_menu_count(payload: dict) -> int:
     return count
 
 
+@router.api_route("/ovpn/{token}", methods=["GET", "HEAD"])
+def download_openvpn_profile(token: str, request: Request) -> Response:
+    token_n = str(token or "").strip()
+    if not DOWNLOAD_TOKEN_RE.fullmatch(token_n):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link download tidak valid.")
+    token_path = system_mutations._openvpn_download_token_file(token_n)
+    if not token_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link download tidak ditemukan.")
+    try:
+        payload = json.loads(token_path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token download rusak.")
+    exp = int(payload.get("exp") or 0)
+    user_n = str(payload.get("username") or "").strip()
+    if exp < int(time.time()):
+        token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Link download sudah expired.")
+    if not SSH_USERNAME_RE.fullmatch(user_n):
+        token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile tidak ditemukan.")
+    ok_profile, payload_or_err = system_mutations._openvpn_manage_json("profile-download", "--username", user_n, timeout=300)
+    if not ok_profile or not isinstance(payload_or_err, dict):
+        token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile OpenVPN tidak tersedia.")
+    profile_path = Path(str(payload_or_err.get("profile_path") or "").strip())
+    if not profile_path.exists():
+        token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile OpenVPN tidak ditemukan.")
+    if request.method.upper() == "HEAD":
+        body = b""
+        content_length = profile_path.stat().st_size
+    else:
+        body = profile_path.read_bytes()
+        content_length = len(body)
+    if request.method.upper() == "GET":
+        token_path.unlink(missing_ok=True)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{user_n}@openvpn.ovpn"',
+        "Content-Length": str(content_length),
+        "Cache-Control": "private, no-store",
+    }
+    return Response(
+        content=body,
+        media_type="text/plain; charset=utf-8",
+        headers=headers,
+    )
+
+
 @router.get("/api/menus", dependencies=[Depends(verify_shared_secret)])
 def get_menus() -> dict:
     settings = get_settings()
@@ -92,8 +145,13 @@ def get_main_menu_overview() -> dict:
 @router.get("/api/users/options", dependencies=[Depends(verify_shared_secret)])
 def get_user_options(proto: str | None = None) -> dict:
     proto_norm = (proto or "").strip().lower()
-    if proto_norm and proto_norm not in set(system.USER_PROTOCOLS):
+    allowed = set(system.USER_PROTOCOLS) | {getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn")}
+    if proto_norm and proto_norm not in allowed:
         return {"users": []}
+
+    if proto_norm == getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn"):
+        users = [{"proto": proto_norm, "username": username} for username, _path in system._iter_proto_quota_files(proto_norm)]
+        return {"users": users}
 
     records = system.list_accounts()
     if proto_norm:

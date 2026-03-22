@@ -1,10 +1,10 @@
 [Unit]
-Description=Run SSH WS QAC enforcer every minute
+Description=Run SSH WS QAC enforcer every 10 seconds
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=1min
-AccuracySec=30s
+OnUnitActiveSec=10s
+AccuracySec=2s
 Unit=sshws-qac-enforcer.service
 Persistent=true
 

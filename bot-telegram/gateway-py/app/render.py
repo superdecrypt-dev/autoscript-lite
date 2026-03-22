@@ -19,6 +19,7 @@ KV_SECRET_RE = re.compile(
 ACCOUNT_INFO_URI_RE = re.compile(r"(?im)^\s*((?:vless|vmess|trojan)://\S+)\s*$")
 ACCOUNT_INFO_FIELD_RE = re.compile(r"^(\s*(?:Username|Password)\s*:\s*)(.+?)\s*$")
 ACCOUNT_INFO_PAYLOAD_LABEL_RE = re.compile(r"^\s*Payload(?:\s+[A-Z0-9/_-]+)?\s*:\s*$", re.IGNORECASE)
+ACCOUNT_INFO_HTTP_URL_RE = re.compile(r"(?im)^\s*(https?://\S+)\s*$")
 
 
 def now_utc_text() -> str:
@@ -102,7 +103,7 @@ def _target_identity(menu: MenuSpec, params: dict[str, str] | None = None) -> st
 
     if menu.id == "24" and username and proto:
         return f"{username}@{proto}"
-    if menu.id == "25" and username:
+    if menu.id in {"25", "44"} and username:
         return username
     return ""
 
@@ -158,7 +159,7 @@ def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> 
         lines.append("")
 
     display_params = params
-    if menu.id in {"24", "25"}:
+    if menu.id in {"24", "25", "44"}:
         display_params = {
             key: value
             for key, value in params.items()
@@ -198,6 +199,12 @@ def action_result_text(result: BackendActionResponse) -> str:
             uri_match = ACCOUNT_INFO_URI_RE.match(line)
             if uri_match:
                 body_lines.append(f"<code>{html.escape(uri_match.group(1))}</code>")
+                continue
+
+            url_match = ACCOUNT_INFO_HTTP_URL_RE.match(line)
+            if url_match:
+                url = url_match.group(1)
+                body_lines.append(f'<a href="{html.escape(url, quote=True)}">{html.escape(url)}</a>')
                 continue
 
             field_match = ACCOUNT_INFO_FIELD_RE.match(line)

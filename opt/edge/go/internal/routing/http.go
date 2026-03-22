@@ -31,7 +31,9 @@ var knownRouteNames = map[string]struct{}{
 	"trojan-grpc":  {},
 }
 
-const diagnosticProbeToken = "diagnostic-probe"
+const (
+	diagnosticProbeToken = "diagnostic-probe"
+)
 
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
 	lines := bytes.Split(initial, []byte{'\n'})

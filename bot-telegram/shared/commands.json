@@ -44,8 +44,8 @@
     },
     {
       "id": "4",
-      "label": "SSH QAC",
-      "description": "Quota, IP/Login limit, dan speed limit untuk akun SSH.",
+      "label": "SSH & OpenVPN QAC",
+      "description": "Quota, IP limit, dan speed limit untuk akun SSH dan OpenVPN dengan policy terpisah.",
       "actions": [
         {
           "id": "open_ssh_qac",
@@ -53,8 +53,31 @@
           "mode": "menu",
           "style": "primary",
           "target_menu": "25"
+        },
+        {
+          "id": "open_openvpn_qac",
+          "label": "OpenVPN QAC",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "44"
         }
       ]
+    },
+    {
+      "id": "14",
+      "label": "OpenVPN QAC",
+      "description": "Quota, IP limit, dan speed limit khusus akun OpenVPN.",
+      "actions": [
+        {
+          "id": "open_openvpn_qac",
+          "label": "OpenVPN QAC",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "44"
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "4"
     },
     {
       "id": "5",
@@ -1170,6 +1193,254 @@
       "parent_menu": "4"
     },
     {
+      "id": "44",
+      "label": "OpenVPN QAC",
+      "description": "Ringkasan quota dan kontrol akses per akun OpenVPN.",
+      "actions": [
+        {
+          "id": "detail",
+          "label": "Detail",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "OpenVPN Quota Detail",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: alice"
+              }
+            ]
+          }
+        },
+        {
+          "id": "set_quota_limit",
+          "label": "Set Quota",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set OpenVPN Quota Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "quota_gb",
+                "label": "Quota GB",
+                "style": "short",
+                "required": true,
+                "placeholder": "100"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "reset_quota_used",
+          "label": "Reset Used",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "modal": {
+            "title": "Reset OpenVPN Quota Used",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "manual_block",
+          "label": "Block / Unblock",
+          "mode": "modal",
+          "style": "danger",
+          "modal": {
+            "title": "OpenVPN Manual Block",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "ip_limit_enable",
+          "label": "Toggle IP Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "OpenVPN IP Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_ip_limit",
+          "label": "Set IP Limit",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set OpenVPN IP Limit",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "ip_limit",
+                "label": "IP Limit",
+                "style": "short",
+                "required": true,
+                "placeholder": "2"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "unlock_ip_lock",
+          "label": "Unlock IP Lock",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Unlock OpenVPN IP Lock",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_download",
+          "label": "Set Speed Down",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set OpenVPN Speed Download",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_down_mbit",
+                "label": "Speed Down Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "20"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "set_speed_upload",
+          "label": "Set Speed Up",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set OpenVPN Speed Upload",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "speed_up_mbit",
+                "label": "Speed Up Mbps",
+                "style": "short",
+                "required": true,
+                "placeholder": "10"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "speed_limit",
+          "label": "Toggle Speed",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "OpenVPN Speed Limit Enable/Disable",
+            "fields": [
+              {
+                "id": "username",
+                "label": "Username",
+                "style": "short",
+                "required": true,
+                "placeholder": "alice"
+              },
+              {
+                "id": "enabled",
+                "label": "Enabled",
+                "style": "short",
+                "required": true,
+                "placeholder": "on / off"
+              }
+            ]
+          },
+          "dangerous": true
+        }
+      ],
+      "hidden": true,
+      "parent_menu": "4"
+    },
+    {
       "id": "26",
       "label": "Domain Control",
       "description": "Kontrol domain aktif, sertifikat TLS, refresh account info, dan health domain.",
@@ -1536,6 +1807,12 @@
           "style": "secondary"
         },
         {
+          "id": "openvpn_status",
+          "label": "OpenVPN Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
           "id": "restart_wireproxy",
           "label": "Restart Wireproxy",
           "mode": "direct",
@@ -1554,6 +1831,14 @@
         {
           "id": "restart_badvpn",
           "label": "Restart BadVPN",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restart_openvpn",
+          "label": "Restart OpenVPN",
           "mode": "direct",
           "style": "danger",
           "confirm": true,
@@ -1602,6 +1887,12 @@
         {
           "id": "sshws_combined_logs",
           "label": "SSHWS Combined Logs",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "openvpn_logs",
+          "label": "OpenVPN Logs",
           "mode": "direct",
           "style": "secondary"
         },

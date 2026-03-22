@@ -438,6 +438,11 @@ write_nginx_config() {
     nginx_mode_desc="public 80/443"
   fi
 
+  local openvpn_ws_public_path="${OPENVPN_WS_PUBLIC_PATH:-}"
+  if [[ -z "${openvpn_ws_public_path}" && -f "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" ]]; then
+    openvpn_ws_public_path="$(awk -F= '$1=="OPENVPN_WS_PUBLIC_PATH"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" 2>/dev/null | tr -d '\r' || true)"
+  fi
+
   local -a nginx_tpl_vars=(
     "P_VLESS_WS=${P_VLESS_WS}"
     "P_VMESS_WS=${P_VMESS_WS}"
@@ -466,6 +471,8 @@ write_nginx_config() {
     "DOMAIN=${DOMAIN}"
     "CERT_DIR=${CERT_DIR}"
     "SSHWS_PROXY_PORT=${SSHWS_PROXY_PORT}"
+    "OPENVPN_WS_PROXY_PORT=${OPENVPN_WS_PROXY_PORT:-10016}"
+    "OPENVPN_WS_PUBLIC_PATH=${openvpn_ws_public_path}"
     "NGINX_LISTEN_BLOCK=${nginx_listen_block}"
     "NGINX_TLS_BLOCK=${nginx_tls_block}"
   )
