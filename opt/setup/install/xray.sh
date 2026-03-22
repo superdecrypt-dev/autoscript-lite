@@ -89,9 +89,47 @@ write_xray_config() {
   },
   "dns": {
     "queryStrategy": "UseIP",
+    "hosts": {
+      "localhost": "127.0.0.1",
+      "localhost.": "127.0.0.1"
+    },
     "servers": [
-      "1.1.1.1",
-      "8.8.8.8"
+      {
+        "address": "https://1.1.1.1/dns-query",
+        "domains": [
+          "geosite:apple",
+          "geosite:meta",
+          "geosite:google",
+          "geosite:openai",
+          "geosite:spotify",
+          "geosite:netflix",
+          "geosite:reddit"
+        ],
+        "skipFallback": true
+      },
+      {
+        "address": "https://1.1.1.1/dns-query",
+        "domains": [
+          "geosite:telegram"
+        ],
+        "skipFallback": true
+      },
+      {
+        "address": "https://dns.google/dns-query",
+        "domains": [
+          "geosite:discord"
+        ],
+        "skipFallback": true
+      },
+      {
+        "address": "tls://1.0.0.1",
+        "domains": [
+          "geosite:microsoft"
+        ],
+        "skipFallback": true
+      },
+      "https://dns.google/dns-query",
+      "tls://1.1.1.1"
     ]
   },
   "api": {
