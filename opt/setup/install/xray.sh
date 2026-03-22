@@ -88,6 +88,7 @@ write_xray_config() {
     "loglevel": "info"
   },
   "dns": {
+    "queryStrategy": "UseIP",
     "servers": [
       "1.1.1.1",
       "8.8.8.8"
@@ -105,6 +106,11 @@ write_xray_config() {
   "policy": {
     "levels": {
       "0": {
+        "handshake": 4,
+        "connIdle": 300,
+        "uplinkOnly": 2,
+        "downlinkOnly": 5,
+        "bufferSize": 32,
         "statsUserUplink": true,
         "statsUserDownlink": true
       }
@@ -116,6 +122,7 @@ write_xray_config() {
   },
   "routing": {
     "domainStrategy": "IPIfNonMatch",
+    "domainMatcher": "hybrid",
     "rules": [
       {
         "type": "field",
@@ -136,6 +143,13 @@ write_xray_config() {
         "type": "field",
         "domain": [
           "geosite:private"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
         ],
         "outboundTag": "blocked"
       },
@@ -775,6 +789,10 @@ managed_routing_markers = {
   "dummy-warp-user",
   "dummy-direct-user",
 }
+managed_routing_inbound_markers = {
+  "dummy-warp-inbounds",
+  "dummy-direct-inbounds",
+}
 
 def load_json_if_exists(path, fallback):
   try:
@@ -835,6 +853,7 @@ def merge_clients_into_inbounds(inbounds, preserved_clients):
 
 def preserve_routing_state(cfg):
   marker_users = {marker: [] for marker in managed_routing_markers}
+  marker_inbounds = {marker: [] for marker in managed_routing_inbound_markers}
   speed_rules = []
   for rule in (cfg.get("routing") or {}).get("rules") or []:
     if not isinstance(rule, dict) or rule.get("type") != "field":
@@ -850,6 +869,16 @@ def preserve_routing_state(cfg):
             if isinstance(user, str) and user and user != marker
           ]
         )
+    inbound_tags = rule.get("inboundTag")
+    if isinstance(inbound_tags, list):
+      for marker in managed_routing_inbound_markers:
+        if marker in inbound_tags:
+          marker_inbounds[marker].extend(
+            [
+              inbound for inbound in inbound_tags
+              if isinstance(inbound, str) and inbound and inbound != marker
+            ]
+          )
     has_speed_marker = any(
       isinstance(user, str) and user.startswith(speed_rule_marker_prefix)
       for user in users
@@ -867,9 +896,19 @@ def preserve_routing_state(cfg):
       seen.add(user)
       deduped.append(user)
     deduped_marker_users[marker] = deduped
-  return deduped_marker_users, speed_rules
+  deduped_marker_inbounds = {}
+  for marker, inbounds in marker_inbounds.items():
+    seen = set()
+    deduped = []
+    for inbound in inbounds:
+      if inbound in seen:
+        continue
+      seen.add(inbound)
+      deduped.append(inbound)
+    deduped_marker_inbounds[marker] = deduped
+  return deduped_marker_users, deduped_marker_inbounds, speed_rules
 
-def merge_routing_state(routing, marker_users, speed_rules):
+def merge_routing_state(routing, marker_users, marker_inbounds, speed_rules):
   rules = routing.get("rules")
   if not isinstance(rules, list):
     return
@@ -888,6 +927,21 @@ def merge_routing_state(routing, marker_users, speed_rules):
       if user not in merged:
         merged.append(user)
     rule["user"] = merged
+  for rule in rules:
+    if not isinstance(rule, dict):
+      continue
+    inbound_tags = rule.get("inboundTag")
+    if not isinstance(inbound_tags, list):
+      continue
+    marker = next((item for item in inbound_tags if item in managed_routing_inbound_markers), None)
+    if not marker:
+      continue
+    merged = [marker]
+    merged.extend([inbound for inbound in inbound_tags if isinstance(inbound, str) and inbound and inbound != marker])
+    for inbound in marker_inbounds.get(marker) or []:
+      if inbound not in merged:
+        merged.append(inbound)
+    rule["inboundTag"] = merged
 
   if speed_rules:
     def is_protected_rule(rule):
@@ -951,8 +1005,8 @@ existing_outbounds = load_json_if_exists(os.path.join(outdir, "20-outbounds.json
 existing_routing = load_json_if_exists(os.path.join(outdir, "30-routing.json"), {})
 
 merge_clients_into_inbounds(inbounds_fresh, preserve_clients_by_proto(existing_inbounds))
-marker_users, speed_rules = preserve_routing_state(existing_routing)
-merge_routing_state(routing, marker_users, speed_rules)
+marker_users, marker_inbounds, speed_rules = preserve_routing_state(existing_routing)
+merge_routing_state(routing, marker_users, marker_inbounds, speed_rules)
 outbounds_fresh.extend(preserve_speed_outbounds(existing_outbounds))
 
 parts = [
