@@ -1722,7 +1722,6 @@ running_labels = [
   f"{proto_disp} Path Service Alt",
 ]
 if proto in TCP_TLS_PROTOCOLS:
-  running_labels.append(f"{proto_disp} TCP+TLS Address")
   running_labels.append(f"{proto_disp} TCP+TLS Port")
 running_label_width = max(len(label) for label in running_labels)
 
@@ -1755,7 +1754,6 @@ lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_widt
 lines.append(section_line(f"{proto_disp} XHTTP", ws_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Address", tcp_tls_host, running_label_width))
   lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
@@ -2266,7 +2264,6 @@ running_labels = [
   f"{proto_disp} Path Service Alt",
 ]
 if proto in TCP_TLS_PROTOCOLS:
-  running_labels.append(f"{proto_disp} TCP+TLS Address")
   running_labels.append(f"{proto_disp} TCP+TLS Port")
 running_label_width = max(len(label) for label in running_labels)
 nets = ["ws", "httpupgrade", "grpc"]
@@ -2310,7 +2307,6 @@ lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_widt
 lines.append(section_line(f"{proto_disp} XHTTP", ws_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Address", tcp_tls_host, running_label_width))
   lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))

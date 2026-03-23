@@ -4603,7 +4603,6 @@ def _build_account_text(
         f"{proto_disp} Path Service Alt",
     ]
     if proto in tcp_tls_protocols:
-        running_labels.append(f"{proto_disp} TCP+TLS Address")
         running_labels.append(f"{proto_disp} TCP+TLS Port")
     running_label_width = max(len(label) for label in running_labels)
 
@@ -4658,7 +4657,6 @@ def _build_account_text(
         ]
     )
     if proto in tcp_tls_protocols:
-        lines.append(section_line(f"{proto_disp} TCP+TLS Address", tcp_tls_host))
         lines.append(section_line(f"{proto_disp} TCP+TLS Port", _edge_runtime_ws_ports_label()))
     lines.append(section_line("Alt Port SSL/TLS", _edge_runtime_alt_tls_ports_label()))
     lines.append(section_line("Alt Port HTTP", _edge_runtime_alt_http_ports_label()))
