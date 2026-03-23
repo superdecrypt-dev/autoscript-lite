@@ -415,12 +415,12 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassTLSClientHello, nil
 			case IsSSHBanner(current):
 				return current, ClassSSH, nil
-			case IsOpenVPNClientHello(current):
-				return current, ClassOpenVPNRaw, nil
-			case IsTrojanRequest(current):
-				return current, ClassTrojanRaw, nil
 			case IsVLESSRequest(current):
 				return current, ClassVLESSRaw, nil
+			case IsTrojanRequest(current):
+				return current, ClassTrojanRaw, nil
+			case IsOpenVPNClientHello(current):
+				return current, ClassOpenVPNRaw, nil
 			case IsPossibleOpenVPNPrefix(current):
 				continue
 			case IsPossibleHTTPPrefix(current):
@@ -455,12 +455,12 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassTimeout, nil
 				case IsSSHBanner(current):
 					return current, ClassSSH, nil
-				case IsOpenVPNClientHello(current):
-					return current, ClassOpenVPNRaw, nil
-				case IsTrojanRequest(current):
-					return current, ClassTrojanRaw, nil
 				case IsVLESSRequest(current):
 					return current, ClassVLESSRaw, nil
+				case IsTrojanRequest(current):
+					return current, ClassTrojanRaw, nil
+				case IsOpenVPNClientHello(current):
+					return current, ClassOpenVPNRaw, nil
 				case IsPossibleOpenVPNPrefix(current):
 					return current, ClassTimeout, nil
 				case IsPossibleHTTPPrefix(current):
@@ -483,12 +483,12 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassTimeout, nil
 	case IsSSHBanner(current):
 		return current, ClassSSH, nil
-	case IsOpenVPNClientHello(current):
-		return current, ClassOpenVPNRaw, nil
-	case IsTrojanRequest(current):
-		return current, ClassTrojanRaw, nil
 	case IsVLESSRequest(current):
 		return current, ClassVLESSRaw, nil
+	case IsTrojanRequest(current):
+		return current, ClassTrojanRaw, nil
+	case IsOpenVPNClientHello(current):
+		return current, ClassOpenVPNRaw, nil
 	case IsPossibleOpenVPNPrefix(current):
 		return current, ClassTimeout, nil
 	case IsPossibleHTTPPrefix(current):

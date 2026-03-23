@@ -442,6 +442,12 @@ write_nginx_config() {
   if [[ -z "${openvpn_ws_public_path}" && -f "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" ]]; then
     openvpn_ws_public_path="$(awk -F= '$1=="OPENVPN_WS_PUBLIC_PATH"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" 2>/dev/null | tr -d '\r' || true)"
   fi
+  openvpn_ws_public_path="$(printf '%s' "${openvpn_ws_public_path}" | xargs 2>/dev/null || true)"
+  # Prevent an empty OpenVPN WS path from degrading into a regex that matches
+  # almost every one-segment public path and hijacks Xray routes.
+  if [[ -z "${openvpn_ws_public_path}" ]]; then
+    openvpn_ws_public_path="/__openvpn-ws-disabled__"
+  fi
 
   local -a nginx_tpl_vars=(
     "P_VLESS_WS=${P_VLESS_WS}"

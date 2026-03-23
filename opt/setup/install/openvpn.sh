@@ -348,6 +348,11 @@ install_openvpn_stack() {
   systemctl daemon-reload
   service_enable_restart_checked "${OPENVPN_TCP_SERVICE}" || die "Gagal mengaktifkan ${OPENVPN_TCP_SERVICE}."
   service_enable_restart_checked "${OPENVPN_WS_SERVICE}" || die "Gagal mengaktifkan ${OPENVPN_WS_SERVICE}."
+  # Nginx may have been rendered before OpenVPN finalized its WS public path.
+  # Re-render here so the public path never stays empty and hijacks Xray routes.
+  if declare -F write_nginx_config >/dev/null 2>&1; then
+    write_nginx_config
+  fi
   install_openvpn_speed_limiter_foundation
   ok "OpenVPN aktif: ${OPENVPN_TCP_SERVICE} (backend tcp/${OPENVPN_PORT_TCP}, public tcp/${OPENVPN_PUBLIC_PORT_TCP})"
   ok "OpenVPN WS aktif: ${OPENVPN_WS_SERVICE} (${OPENVPN_WS_PUBLIC_PATH} -> 127.0.0.1:${OPENVPN_WS_PROXY_PORT})"
