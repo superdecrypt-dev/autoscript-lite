@@ -1593,11 +1593,14 @@ def _warp_restart_target_service() -> tuple[bool, str, str, str]:
     return False, "", "Free/Plus", "wireproxy.service tidak terdeteksi."
 
 
-def _ssh_network_apply_runtime() -> tuple[bool, str]:
+def _ssh_network_apply_runtime(*, skip_network_lock: bool = False) -> tuple[bool, str]:
     manage_script = _manage_script_path()
     if manage_script is None:
         return False, "manage script tidak ditemukan untuk apply SSH Network."
-    return _run_cmd(["bash", str(manage_script), "__apply-ssh-network"], timeout=180)
+    env = os.environ.copy()
+    if skip_network_lock:
+        env["SSH_NETWORK_LOCK_HELD"] = "1"
+    return _run_cmd(["bash", str(manage_script), "__apply-ssh-network"], timeout=180, env=env)
 
 
 def _ssh_network_snapshot() -> dict[str, Any]:
@@ -4209,6 +4212,26 @@ def _routing_set_custom_domain_mode(rt_cfg: dict[str, Any], mode: str, entry: st
             normalize_rule(direct_idx, direct_marker, False)
         if warp_idx >= 0:
             normalize_rule(warp_idx, warp_marker, False)
+
+    for idx in range(len(rules) - 1, -1, -1):
+        rule = rules[idx]
+        if not isinstance(rule, dict):
+            continue
+        if rule.get("type") != "field":
+            continue
+        if str(rule.get("outboundTag") or "") not in {"direct", "warp"}:
+            continue
+        domains = rule.get("domain")
+        if not isinstance(domains, list):
+            continue
+        normalized = [str(item).strip() for item in domains if str(item).strip()]
+        if not normalized:
+            continue
+        real_domains = [item for item in normalized if item not in {direct_marker, warp_marker}]
+        if real_domains:
+            continue
+        if direct_marker in normalized or warp_marker in normalized:
+            rules.pop(idx)
 
     routing["rules"] = rules
     rt_cfg["routing"] = routing
@@ -9016,16 +9039,16 @@ def op_ssh_network_set_global_mode(mode: str) -> tuple[bool, str, str]:
         ok_env, msg_env = _ssh_network_update_env_many({"SSH_NETWORK_ROUTE_GLOBAL": mode_n})
         if not ok_env:
             return False, title, msg_env
-        ok_apply, msg_apply = _ssh_network_apply_runtime()
+        ok_apply, msg_apply = _ssh_network_apply_runtime(skip_network_lock=True)
         if not ok_apply:
             _ssh_network_restore_snapshot(snapshot)
-            _ssh_network_apply_runtime()
+            _ssh_network_apply_runtime(skip_network_lock=True)
             return False, title, msg_apply
         with _user_data_mutation_lock():
             ok_refresh, refresh_msg = _ssh_refresh_all_account_info()
         if not ok_refresh:
             _ssh_network_restore_snapshot(snapshot)
-            ok_rb_apply, msg_rb_apply = _ssh_network_apply_runtime()
+            ok_rb_apply, msg_rb_apply = _ssh_network_apply_runtime(skip_network_lock=True)
             ok_rb_files, msg_rb_files = _ssh_restore_account_info_snapshots(account_snapshots)
             notes: list[str] = [f"refresh account-info: {refresh_msg}"]
             if not ok_rb_apply:

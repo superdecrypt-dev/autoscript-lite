@@ -1450,6 +1450,26 @@ elif mode == 'off':
 else:
   raise SystemExit("Mode harus direct|warp|off")
 
+for idx in range(len(rules) - 1, -1, -1):
+  r = rules[idx]
+  if not isinstance(r, dict):
+    continue
+  if r.get('type') != 'field':
+    continue
+  if str(r.get('outboundTag') or '') not in {'direct', 'warp'}:
+    continue
+  dom = r.get('domain')
+  if not isinstance(dom, list):
+    continue
+  normalized = [str(x).strip() for x in dom if str(x).strip()]
+  if not normalized:
+    continue
+  real_domains = [x for x in normalized if x not in {direct_marker, warp_marker}]
+  if real_domains:
+    continue
+  if direct_marker in normalized or warp_marker in normalized:
+    rules.pop(idx)
+
 routing['rules'] = rules
 cfg['routing'] = routing
 

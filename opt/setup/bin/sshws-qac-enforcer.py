@@ -840,7 +840,11 @@ def ssh_network_sync_snapshot():
   cfg = ssh_network_config_map()
   backend_effective = ssh_network_backend_effective(cfg.get("warp_backend"))
   if backend_effective != "local-proxy":
-    return {"backend_effective": backend_effective, "warp_users": []}
+    return {
+      "backend_effective": backend_effective,
+      "warp_users": [],
+      "active_dropbear_sessions": [],
+    }
   global_mode = str(cfg.get("global_mode") or "direct").strip().lower()
   warp_users = []
   for path in iter_ssh_state_files(SSH_STATE_ROOT):
@@ -856,7 +860,20 @@ def ssh_network_sync_snapshot():
     if effective == "warp":
       warp_users.append(username)
   warp_users = sorted(set(warp_users), key=str.lower)
-  return {"backend_effective": backend_effective, "warp_users": warp_users}
+  warp_user_set = {item.lower() for item in warp_users}
+  active_sessions = []
+  if warp_user_set:
+    pid_map = dropbear_pid_auth_map()
+    for pid in active_dropbear_session_pids():
+      username = norm_user(pid_map.get(int(pid)) or "")
+      if username and username in warp_user_set:
+        active_sessions.append(f"{username}:{int(pid)}")
+  active_sessions = sorted(set(active_sessions), key=str.lower)
+  return {
+    "backend_effective": backend_effective,
+    "warp_users": warp_users,
+    "active_dropbear_sessions": active_sessions,
+  }
 
 def ssh_network_sync_cache_load():
   try:
