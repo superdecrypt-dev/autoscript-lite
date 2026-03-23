@@ -44,4 +44,12 @@ MENU_HANDLERS = {
     "36": menu_13_warp_tier.handle,
     "42": menu_13_warp_tier.handle,
     "43": menu_13_warp_tier.handle,
+    "46": menu_10_backup.handle,
+    "47": menu_10_backup.handle,
+    "48": menu_10_backup.handle,
+    "49": menu_10_backup.handle,
+    "50": menu_10_backup.handle,
+    "51": menu_10_backup.handle,
+    "52": menu_10_backup.handle,
+    "53": menu_10_backup.handle,
 }

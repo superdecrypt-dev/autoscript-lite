@@ -26,7 +26,7 @@ Dikelola di `/etc/bot-telegram/bot.env`:
 - `TELEGRAM_ALLOW_UNRESTRICTED_ACCESS` (default `false`, tidak direkomendasikan)
 - `TELEGRAM_ACTION_COOLDOWN_SECONDS` (default `1`)
 - `TELEGRAM_CLEANUP_COOLDOWN_SECONDS` (default `30`)
-- `TELEGRAM_MAX_INPUT_LENGTH` (default `128`)
+- `TELEGRAM_MAX_INPUT_LENGTH` (default `2048`)
 - `BACKEND_BASE_URL`
 - `COMMANDS_FILE`
 

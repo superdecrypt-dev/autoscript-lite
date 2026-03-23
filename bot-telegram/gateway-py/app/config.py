@@ -159,5 +159,5 @@ def load_config() -> AppConfig:
         allow_unrestricted_access=allow_unrestricted_access,
         action_cooldown_seconds=_parse_float("TELEGRAM_ACTION_COOLDOWN_SECONDS", 1.0, 0.0, 30.0),
         cleanup_cooldown_seconds=_parse_float("TELEGRAM_CLEANUP_COOLDOWN_SECONDS", 30.0, 0.0, 600.0),
-        max_manual_input_len=_parse_int("TELEGRAM_MAX_INPUT_LENGTH", 128, 32, 4096),
+        max_manual_input_len=_parse_int("TELEGRAM_MAX_INPUT_LENGTH", 2048, 32, 4096),
     )

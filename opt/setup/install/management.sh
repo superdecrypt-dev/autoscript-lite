@@ -1552,6 +1552,16 @@ if __name__ == "__main__":
 
 EOF
   chmod +x /usr/local/bin/xray-quota
+  local backup_manage_src="${SETUP_BIN_SRC_DIR:-${SCRIPT_DIR}/opt/setup/bin}/backup-manage.py"
+  if [[ -f "${backup_manage_src}" ]]; then
+    install -d -m 0755 /usr/local/bin
+    install -m 0755 "${backup_manage_src}" /usr/local/bin/backup-manage
+    chown root:root /usr/local/bin/backup-manage 2>/dev/null || true
+  fi
+  render_setup_template_or_die \
+    "config/backup-cloud.env" \
+    "/etc/autoscript/backup/config.env" \
+    0644
   render_setup_template_or_die \
     "systemd/xray-expired.service" \
     "/etc/systemd/system/xray-expired.service" \
@@ -1586,6 +1596,7 @@ EOF
   ok "  - /usr/local/bin/limit-ip     (service: xray-limit-ip)"
   ok "  - /usr/local/bin/user-block   (CLI)"
   ok "  - /usr/local/bin/xray-quota    (service: xray-quota)"
+  ok "  - /usr/local/bin/backup-manage (CLI local/cloud backup)"
 }
 
 sync_manage_modules_layout() {

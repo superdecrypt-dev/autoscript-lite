@@ -2,6 +2,7 @@
 # shellcheck shell=bash
 
 for _rel in \
+  "features/backup.sh" \
   "features/analytics/traffic.sh" \
   "features/analytics/security.sh" \
   "features/analytics/runtime_services.sh" \

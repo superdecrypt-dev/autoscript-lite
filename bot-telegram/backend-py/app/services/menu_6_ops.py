@@ -26,7 +26,29 @@ MAINTENANCE_ACTIONS = {
     "restart_xray_daemons",
     "restart_sshws_stack",
 }
-BACKUP_ACTIONS = {"list_backups", "create_backup", "restore_latest", "restore_from_upload"}
+BACKUP_ACTIONS = {
+    "list_backups",
+    "create_backup",
+    "restore_latest",
+    "restore_from_upload",
+    "gdrive_setup_help",
+    "gdrive_status",
+    "gdrive_create_upload",
+    "gdrive_list_backups",
+    "gdrive_restore_latest",
+    "gdrive_quick_setup",
+    "gdrive_show_oauth_steps",
+    "gdrive_paste_oauth_token",
+    "gdrive_use_existing_remote",
+    "gdrive_manual_rclone_config",
+    "r2_setup_help",
+    "r2_status",
+    "r2_create_upload",
+    "r2_list_backups",
+    "r2_restore_latest",
+    "r2_quick_setup",
+    "r2_manual_rclone_config",
+}
 
 
 def handle(action: str, params: dict, settings) -> dict:

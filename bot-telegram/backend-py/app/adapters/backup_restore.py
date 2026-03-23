@@ -85,6 +85,7 @@ REQUIRED_RESTART_SERVICES = (
     "xray-limit-ip",
 )
 OPTIONAL_RESTART_SERVICES = ("wireproxy", "sshws-stunnel", "edge-mux", "badvpn-udpgw")
+DOMAIN_BACKUP_REL_PATH = "etc/xray/domain"
 
 
 def _now_utc_text() -> str:
@@ -303,9 +304,19 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
         return False, "Tidak ada file yang bisa dibackup.", None
     directories = _iter_backup_directories(files)
 
-    backup_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}-{uuid.uuid4().hex[:8]}"
-    filename = f"{kind}-backup-{backup_id}.tar.gz"
+    now = datetime.now(timezone.utc)
+    backup_id = f"{now.strftime('%Y%m%d%H%M%S%f')}-{uuid.uuid4().hex[:8]}"
+    if kind == "manual":
+        base_name = f"backup-{now.strftime('%Y-%m-%d-%H:%M')}"
+    else:
+        base_name = f"safety-{now.strftime('%Y-%m-%d-%H%M%S')}"
+    filename = f"{base_name}.tar.gz"
     archive_path = dst_dir / filename
+    suffix = 2
+    while archive_path.exists():
+        filename = f"{base_name}-{suffix}.tar.gz"
+        archive_path = dst_dir / filename
+        suffix += 1
 
     try:
         with tarfile.open(archive_path, "w:gz") as tf:
@@ -867,6 +878,14 @@ def _service_exists(name: str) -> bool:
     return f"{name}.service" in out_list
 
 
+def _service_is_active(name: str) -> bool:
+    ok, out = run_cmd(["systemctl", "is-active", name], timeout=10)
+    if not ok:
+        return False
+    state = out.splitlines()[-1].strip() if out else ""
+    return state == "active"
+
+
 def _restart_service_checked(
     name: str,
     *,
@@ -995,6 +1014,117 @@ def _restore_archive_with_safety(
     )
 
 
+def _extract_archive_text_entry(
+    archive_path: Path,
+    rel_path: str,
+    *,
+    upload_limits: bool = False,
+) -> tuple[bool, str, str | None]:
+    manifest_kwargs: dict[str, int] = {}
+    if upload_limits:
+        manifest_kwargs = {
+            "max_member_bytes": MAX_UPLOAD_RESTORE_MEMBER_BYTES,
+            "max_total_bytes": MAX_UPLOAD_RESTORE_TOTAL_BYTES,
+            "max_entries": MAX_UPLOAD_RESTORE_ENTRIES,
+        }
+
+    ok_manifest, msg_manifest, _manifest, entries = _load_and_validate_manifest(archive_path, **manifest_kwargs)
+    if not ok_manifest or entries is None:
+        return False, msg_manifest, None
+
+    wanted = str(rel_path or "").strip().lstrip("/")
+    entry = next((item for item in entries if str(item.get("path") or "") == wanted), None)
+    if entry is None:
+        return False, f"Arsip backup tidak memuat /{wanted}.", None
+
+    try:
+        with tarfile.open(archive_path, "r:gz") as tf:
+            member = tf.getmember(f"payload/{wanted}")
+            fp = tf.extractfile(member)
+            if fp is None:
+                return False, f"Gagal membaca payload /{wanted}.", None
+            raw = fp.read()
+    except Exception as exc:
+        return False, f"Gagal membaca arsip untuk /{wanted}: {exc}", None
+
+    text = raw.decode("utf-8", errors="ignore").strip()
+    if not text:
+        return False, f"Isi /{wanted} kosong.", None
+    return True, "ok", text
+
+
+def _restore_domain_refresh_from_archive(
+    archive_path: Path,
+    source_label: str,
+    *,
+    upload_limits: bool = False,
+) -> tuple[bool, str]:
+    ok_text, msg_text, domain_text = _extract_archive_text_entry(
+        archive_path,
+        DOMAIN_BACKUP_REL_PATH,
+        upload_limits=upload_limits,
+    )
+    if not ok_text or not domain_text:
+        return False, msg_text
+
+    domain_from_backup = str(domain_text.splitlines()[0] or "").strip()
+    if not domain_from_backup:
+        return False, "Domain di arsip backup kosong."
+
+    from . import system_mutations as sm
+
+    previous_domain = str(sm._detect_domain() or "").strip()
+    current_domain = str(sm._normalize_domain(previous_domain) if previous_domain else "").strip()
+    wanted_domain = str(sm._normalize_domain(domain_from_backup)).strip()
+
+    if not wanted_domain:
+        return False, "Domain dari arsip backup tidak valid."
+
+    if wanted_domain == current_domain:
+        ok_refresh, title_refresh, msg_refresh = sm.op_domain_refresh_accounts()
+        lines = [
+            f"Restore selektif berhasil dari {source_label}.",
+            f"- Mode            : domain + refresh account info",
+            f"- Domain aktif    : {wanted_domain}",
+            "- Akun aktif      : dipertahankan (tanpa prune restore penuh)",
+            "",
+            f"{title_refresh}",
+            msg_refresh,
+        ]
+        return ok_refresh, "\n".join(lines)
+
+    ok_set, title_set, msg_set = sm.op_domain_set(wanted_domain, issue_cert=False)
+    if ok_set:
+        lines = [
+            f"Restore selektif berhasil dari {source_label}.",
+            f"- Mode            : domain + refresh account info",
+            f"- Domain lama     : {current_domain or '-'}",
+            f"- Domain backup   : {wanted_domain}",
+            "- Akun aktif      : dipertahankan (tanpa prune restore penuh)",
+            "- Certificate     : tidak di-restore pada mode ini",
+            "",
+            f"{title_set}",
+            msg_set,
+        ]
+        return True, "\n".join(lines)
+
+    detected_after = str(sm._normalize_domain(sm._detect_domain())).strip()
+    if current_domain and detected_after and detected_after != current_domain:
+        rb_ok, rb_title, rb_msg = sm.op_domain_set(current_domain, issue_cert=False)
+        if rb_ok:
+            return False, (
+                f"Restore selektif gagal: {msg_set}\n"
+                f"Rollback domain berhasil ke {current_domain}.\n"
+                f"{rb_title}\n{rb_msg}"
+            )
+        return False, (
+            f"Restore selektif gagal: {msg_set}\n"
+            f"Rollback domain juga gagal.\n"
+            f"{rb_title}\n{rb_msg}"
+        )
+    return False, f"Restore selektif gagal: {msg_set}"
+
+
 def op_backup_create() -> tuple[bool, str, str, dict[str, Any] | None]:
     title = "Backup/Restore - Create Backup"
     with file_lock(BACKUP_LOCK_FILE):
@@ -1065,6 +1195,39 @@ def op_restore_latest_local() -> tuple[bool, str, str]:
     return False, title, msg_restore
 
 
+def op_restore_latest_local_domain_refresh() -> tuple[bool, str, str]:
+    title = "Backup/Restore - Restore Latest Local Domain Only"
+    _ensure_backup_dirs()
+    files = [p for p in BACKUP_ARCHIVES_DIR.glob("*.tar.gz") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return False, title, "Belum ada backup lokal untuk dipakai."
+    latest = files[0]
+
+    with file_lock(BACKUP_LOCK_FILE):
+        ok_restore, msg_restore = _restore_domain_refresh_from_archive(latest, source_label=f"local:{latest.name}")
+    if ok_restore:
+        return True, title, msg_restore
+    return False, title, msg_restore
+
+
+def op_restore_domain_latest_local() -> tuple[bool, str, str]:
+    title = "Backup/Restore - Apply Domain From Latest Local"
+    _ensure_backup_dirs()
+    files = [p for p in BACKUP_ARCHIVES_DIR.glob("*.tar.gz") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return False, title, "Belum ada backup lokal untuk dipakai."
+    latest = files[0]
+
+    with file_lock(BACKUP_LOCK_FILE):
+        ok_restore, msg_restore = _restore_domain_refresh_from_archive(
+            latest,
+            source_label=f"local:{latest.name}",
+        )
+    return ok_restore, title, msg_restore
+
+
 def op_restore_from_upload(upload_path: str) -> tuple[bool, str, str]:
     title = "Backup/Restore - Restore From Upload"
     ok_upload, msg_upload, archive_path = _validate_upload_archive_path(upload_path)
@@ -1083,6 +1246,56 @@ def op_restore_from_upload(upload_path: str) -> tuple[bool, str, str]:
     except Exception as exc:
         ok_restore = False
         msg_restore = f"Restore upload gagal dijalankan: {exc}"
+
+    if ok_restore:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except Exception:
+            msg_restore += f"\nCatatan: arsip upload belum terhapus otomatis: {archive_path}"
+        return True, title, msg_restore
+
+    return False, title, f"{msg_restore}\nArsip upload dipertahankan di: {archive_path}"
+
+
+def op_restore_domain_from_upload(upload_path: str) -> tuple[bool, str, str]:
+    title = "Backup/Restore - Apply Domain From Upload"
+    ok_upload, msg_upload, archive_path = _validate_upload_archive_path(upload_path)
+    if not ok_upload or archive_path is None:
+        return False, title, msg_upload
+
+    try:
+        with file_lock(BACKUP_LOCK_FILE):
+            ok_restore, msg_restore = _restore_domain_refresh_from_archive(
+                archive_path,
+                source_label=f"upload:{archive_path.name}",
+                upload_limits=True,
+            )
+    except Exception as exc:
+        return False, title, f"Restore domain dari upload gagal dijalankan: {exc}"
+
+    if ok_restore:
+        return True, title, msg_restore
+    return False, title, msg_restore
+
+
+def op_restore_from_upload_domain_refresh(upload_path: str) -> tuple[bool, str, str]:
+    title = "Backup/Restore - Restore Upload Domain Only"
+    ok_upload, msg_upload, archive_path = _validate_upload_archive_path(upload_path)
+    if not ok_upload or archive_path is None:
+        return False, title, msg_upload
+
+    ok_restore = False
+    msg_restore = "Restore upload domain-only tidak dijalankan."
+    try:
+        with file_lock(BACKUP_LOCK_FILE):
+            ok_restore, msg_restore = _restore_domain_refresh_from_archive(
+                archive_path,
+                source_label=f"upload:{archive_path.name}",
+                upload_limits=True,
+            )
+    except Exception as exc:
+        ok_restore = False
+        msg_restore = f"Restore upload domain-only gagal dijalankan: {exc}"
 
     if ok_restore:
         try:

@@ -18,6 +18,7 @@ tools_menu() {
   local -a items=(
     "1|Telegram Bot"
     "2|WARP Tier"
+    "3|Backup/Restore"
     "0|Back"
   )
   while true; do
@@ -31,6 +32,7 @@ tools_menu() {
     case "${c}" in
       1) run_action "Telegram Bot" install_telegram_bot_menu ;;
       2) tools_warp_tier_menu ;;
+      3|backup|restore|backup-restore) run_action "Backup/Restore" backup_restore_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

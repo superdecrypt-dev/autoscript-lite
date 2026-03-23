@@ -206,6 +206,20 @@
       ]
     },
     {
+      "id": "15",
+      "label": "Backup/Restore",
+      "description": "Backup dan restore via Google Drive, Cloudflare R2, atau Telegram.",
+      "actions": [
+        {
+          "id": "open_backup_restore",
+          "label": "Backup/Restore",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "45"
+        }
+      ]
+    },
+    {
       "id": "22",
       "label": "Xray Users",
       "description": "Kelola pengguna Xray, masa aktif, pencarian, dan informasi akun.",
@@ -1756,7 +1770,7 @@
     {
       "id": "31",
       "label": "Maintenance",
-      "description": "Status runtime, restart service, logs, dan akses backup tools.",
+      "description": "Status runtime, restart service, dan logs utama.",
       "actions": [
         {
           "id": "restart_xray",
@@ -1895,13 +1909,6 @@
           "label": "OpenVPN Logs",
           "mode": "direct",
           "style": "secondary"
-        },
-        {
-          "id": "open_backup_tools",
-          "label": "Backup Tools",
-          "mode": "menu",
-          "style": "secondary",
-          "target_menu": "32"
         }
       ],
       "hidden": true,
@@ -1909,8 +1916,8 @@
     },
     {
       "id": "32",
-      "label": "Backup Tools",
-      "description": "Backup lokal, list arsip, restore latest, dan restore via upload.",
+      "label": "Telegram",
+      "description": "Backup lokal dan restore via arsip Telegram.\n- restore penuh akan menimpa runtime aktif\n- opsi domain-only hanya ganti domain + refresh ACCOUNT INFO\n- gunakan restore hanya untuk rollback / recovery",
       "actions": [
         {
           "id": "create_backup",
@@ -1928,9 +1935,17 @@
         },
         {
           "id": "restore_latest",
-          "label": "Restore Latest",
+          "label": "Restore Latest Backup",
           "mode": "direct",
           "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "restore_latest_domain_only",
+          "label": "Restore Latest Domain Only",
+          "mode": "direct",
+          "style": "secondary",
           "confirm": true,
           "dangerous": true
         },
@@ -1943,7 +1958,7 @@
         }
       ],
       "hidden": true,
-      "parent_menu": "11"
+      "parent_menu": "45"
     },
     {
       "id": "33",
@@ -2708,6 +2723,426 @@
           "label": "Rollout Notes",
           "mode": "direct",
           "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "45",
+      "label": "Backup/Restore",
+      "description": "Provider yang tersedia:\n- Google Drive  : mudah dipakai, cocok untuk akun personal.\n- Cloudflare R2 : lebih cocok untuk backup server/object storage.\n\nRekomendasi:\n- Google Drive bila ingin simpan backup di Drive pribadi.\n- Cloudflare R2 bila ingin backend cloud yang lebih native.\n\nCatatan:\n- restore bersifat live dan akan menimpa runtime aktif\n- gunakan restore hanya untuk rollback / recovery",
+      "hidden": true,
+      "parent_menu": "15",
+      "actions": [
+        {
+          "id": "open_backup_gdrive",
+          "label": "Google Drive",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "46"
+        },
+        {
+          "id": "open_backup_r2",
+          "label": "Cloudflare R2",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "47"
+        },
+        {
+          "id": "open_backup_telegram",
+          "label": "Telegram",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "32"
+        }
+      ]
+    },
+    {
+      "id": "46",
+      "label": "Google Drive",
+      "description": "Google Drive:\n- cocok untuk backup pribadi\n- setup awal via OAuth, bisa dibantu bot atau SSH terminal VPS\n- paling nyaman untuk simpan arsip backup di Drive sendiri\n- restore penuh akan menimpa runtime aktif",
+      "hidden": true,
+      "parent_menu": "45",
+      "actions": [
+        {
+          "id": "open_gdrive_setup",
+          "label": "Setup",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "48"
+        },
+        {
+          "id": "gdrive_status",
+          "label": "Status Config",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "gdrive_test_remote",
+          "label": "Test Remote",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "gdrive_create_upload",
+          "label": "Create & Upload Backup",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "gdrive_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "gdrive_restore_latest",
+          "label": "Restore Latest Cloud Backup",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "open_gdrive_restore_select",
+          "label": "Restore Select Backup",
+          "mode": "menu",
+          "style": "danger",
+          "target_menu": "50"
+        },
+        {
+          "id": "open_gdrive_delete_backup",
+          "label": "Delete Cloud Backup",
+          "mode": "menu",
+          "style": "danger",
+          "target_menu": "51"
+        }
+      ]
+    },
+    {
+      "id": "47",
+      "label": "Cloudflare R2",
+      "description": "Cloudflare R2:\n- cocok untuk backup server\n- setup awal via key API\n- lebih native untuk object storage di VPS\n- restore penuh akan menimpa runtime aktif",
+      "hidden": true,
+      "parent_menu": "45",
+      "actions": [
+        {
+          "id": "open_r2_setup",
+          "label": "Setup",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "49"
+        },
+        {
+          "id": "r2_status",
+          "label": "Status Config",
+          "mode": "direct",
+          "style": "primary"
+        },
+        {
+          "id": "r2_test_remote",
+          "label": "Test Remote",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "r2_create_upload",
+          "label": "Create & Upload Backup",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "r2_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "r2_restore_latest",
+          "label": "Restore Latest Cloud Backup",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "open_r2_restore_select",
+          "label": "Restore Select Backup",
+          "mode": "menu",
+          "style": "danger",
+          "target_menu": "52"
+        },
+        {
+          "id": "open_r2_delete_backup",
+          "label": "Delete Cloud Backup",
+          "mode": "menu",
+          "style": "danger",
+          "target_menu": "53"
+        }
+      ]
+    },
+    {
+      "id": "48",
+      "label": "Google Drive Setup",
+      "description": "Setup Google Drive lewat 2 opsi:\n1. Termux langsung\n2. VPS + SSH tunnel\n\nSetelah JSON auth didapat, tempel lewat menu Paste JSON Auth Google.\n\nDefault target:\n- Remote Name : gdrive\n- Folder Name : autoscript-backups",
+      "hidden": true,
+      "parent_menu": "46",
+      "actions": [
+        {
+          "id": "gdrive_show_oauth_steps",
+          "label": "Tutorial Setup",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "gdrive_paste_oauth_token",
+          "label": "Paste JSON Auth Google",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Paste JSON Auth Google Drive",
+            "fields": [
+              {
+                "id": "remote_name",
+                "label": "Remote Name",
+                "style": "short",
+                "required": false,
+                "placeholder": "default: gdrive"
+              },
+              {
+                "id": "folder_name",
+                "label": "Folder Name",
+                "style": "short",
+                "required": false,
+                "placeholder": "default: autoscript-backups"
+              },
+              {
+                "id": "token_json",
+                "label": "JSON Auth Google",
+                "style": "short",
+                "required": true,
+                "placeholder": "paste JSON auth satu baris"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "gdrive_use_existing_remote",
+          "label": "Use Existing Remote",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "49",
+      "label": "Cloudflare R2 Setup",
+      "description": "Setup default:\n- Remote Name : r2\n- Bucket Name : autoscript\n\nTutorial setup Cloudflare R2:\n1. Siapkan Account ID, Bucket Name, Access Key ID, dan Secret Access Key.\n2. Quick Setup R2 untuk isi semua data.\n3. Setelah valid, backup akan aktif ke target R2.",
+      "hidden": true,
+      "parent_menu": "47",
+      "actions": [
+        {
+          "id": "r2_setup_help",
+          "label": "Tutorial Setup",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "r2_quick_setup",
+          "label": "Quick Setup R2",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Quick Setup Cloudflare R2",
+            "fields": [
+              {
+                "id": "remote_name",
+                "label": "Remote Name",
+                "style": "short",
+                "required": false,
+                "placeholder": "default: r2"
+              },
+              {
+                "id": "account_id",
+                "label": "Account ID",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 437232799e..."
+              },
+              {
+                "id": "bucket_name",
+                "label": "Bucket Name",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: autoscript"
+              },
+              {
+                "id": "access_key_id",
+                "label": "Access Key ID",
+                "style": "short",
+                "required": true,
+                "placeholder": "paste Access Key ID"
+              },
+              {
+                "id": "secret_access_key",
+                "label": "Secret Access Key",
+                "style": "short",
+                "required": true,
+                "placeholder": "paste Secret Access Key"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "r2_manual_rclone_config",
+          "label": "Manual rclone config",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "50",
+      "label": "Google Drive Restore Select",
+      "description": "Restore Select Backup:\n1. Tekan List Cloud Backups dulu.\n2. Catat NO dan nama file backup yang ingin dipakai.\n3. Tekan Input Backup NO lalu masukkan nomor dari daftar.",
+      "hidden": true,
+      "parent_menu": "46",
+      "actions": [
+        {
+          "id": "gdrive_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "gdrive_restore_select",
+          "label": "Input Backup NO",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true,
+          "modal": {
+            "title": "Restore Selected Google Drive Backup",
+            "fields": [
+              {
+                "id": "archive_no",
+                "label": "Backup NO",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "51",
+      "label": "Google Drive Delete Backup",
+      "description": "Delete Cloud Backup:\n1. Tekan List Cloud Backups dulu.\n2. Pastikan NO dan nama file backup yang ingin dihapus.\n3. Tekan Input Backup NO lalu masukkan nomor dari daftar.",
+      "hidden": true,
+      "parent_menu": "46",
+      "actions": [
+        {
+          "id": "gdrive_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "gdrive_delete_backup",
+          "label": "Input Backup NO",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true,
+          "modal": {
+            "title": "Delete Google Drive Backup",
+            "fields": [
+              {
+                "id": "archive_no",
+                "label": "Backup NO",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "52",
+      "label": "Cloudflare R2 Restore Select",
+      "description": "Restore Select Backup:\n1. Tekan List Cloud Backups dulu.\n2. Catat NO dan nama file backup yang ingin dipakai.\n3. Tekan Input Backup NO lalu masukkan nomor dari daftar.",
+      "hidden": true,
+      "parent_menu": "47",
+      "actions": [
+        {
+          "id": "r2_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "r2_restore_select",
+          "label": "Input Backup NO",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true,
+          "modal": {
+            "title": "Restore Selected Cloudflare R2 Backup",
+            "fields": [
+              {
+                "id": "archive_no",
+                "label": "Backup NO",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "53",
+      "label": "Cloudflare R2 Delete Backup",
+      "description": "Delete Cloud Backup:\n1. Tekan List Cloud Backups dulu.\n2. Pastikan NO dan nama file backup yang ingin dihapus.\n3. Tekan Input Backup NO lalu masukkan nomor dari daftar.",
+      "hidden": true,
+      "parent_menu": "47",
+      "actions": [
+        {
+          "id": "r2_list_backups",
+          "label": "List Cloud Backups",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "r2_delete_backup",
+          "label": "Input Backup NO",
+          "mode": "modal",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true,
+          "modal": {
+            "title": "Delete Cloudflare R2 Backup",
+            "fields": [
+              {
+                "id": "archive_no",
+                "label": "Backup NO",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1"
+              }
+            ]
+          }
         }
       ]
     }

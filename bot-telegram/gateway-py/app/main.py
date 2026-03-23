@@ -129,6 +129,12 @@ ROOT_DOMAIN_FALLBACK_OPTIONS = (
 )
 FORM_CHOICE_MANUAL_VALUE = "__manual_input__"
 FORM_CHOICE_SKIP_VALUE = "__skip_optional__"
+BACKUP_ARCHIVE_SELECT_ACTIONS = {
+    "gdrive_restore_select": "gdrive_list_backups",
+    "gdrive_delete_backup": "gdrive_list_backups",
+    "r2_restore_select": "r2_list_backups",
+    "r2_delete_backup": "r2_list_backups",
+}
 FORM_CHOICE_USERNAME_ACTIONS = {
     "extend_expiry",
     "account_info",
@@ -1131,6 +1137,25 @@ def _choice_total_pages(choice_options: list[dict[str, str]]) -> int:
     return ((len(choice_options) - 1) // FORM_CHOICE_PAGE_SIZE) + 1
 
 
+def _parse_backup_choice_options(message: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for raw_line in str(message or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Backup/Restore -") or stripped.startswith("Total arsip remote:"):
+            continue
+        if stripped.startswith("Belum ada arsip remote.") or stripped.startswith("NO") or stripped.startswith("---"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        index = parts[0]
+        filename = parts[1]
+        out.append((f"{index}. {filename}", index))
+    return out
+
+
 def _choice_keyboard(menu_id: str, choice_options: list[dict[str, str]], page: int, *, menu_page: int = 0) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if choice_options:
@@ -1164,6 +1189,16 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
     menu_id = str(pending.get("menu_id") or "").strip()
     action_id = str(pending.get("action_id") or "").strip()
     params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+
+    if field_id == "archive_no" and action_id in BACKUP_ARCHIVE_SELECT_ACTIONS:
+        list_action = BACKUP_ARCHIVE_SELECT_ACTIONS[action_id]
+        try:
+            result = await runtime.backend.run_action(menu_id, list_action, {})
+        except BackendError:
+            return []
+        if not result.ok:
+            return []
+        return _parse_backup_choice_options(result.message)
 
     if field_id == "proto":
         return [(proto.upper(), proto) for proto in _protocol_choices_for_action(menu_id, action_id)]
@@ -1709,6 +1744,19 @@ async def _prompt_next_form_field(
     field = action.modal.fields[idx]
     click_only_field = _is_click_only_field(action.id, field.id)
     choice_options = await _resolve_form_choice_options(runtime, pending, field.id)
+    if field.id == "archive_no" and action.id in BACKUP_ARCHIVE_SELECT_ACTIONS and not choice_options:
+        await _send_or_edit(
+            query=query,
+            chat_id=chat_id,
+            context=context,
+            text=(
+                f"<b>{html.escape(menu.label)} · {html.escape(action.label)}</b>\n\n"
+                "Belum ada backup cloud yang bisa dipilih.\n"
+                "Jalankan <code>List Cloud Backups</code> atau buat backup baru dulu."
+            ),
+            reply_markup=_result_keyboard(menu.id, _safe_int(str(pending.get('page') or '0'), default=0)),
+        )
+        return
     choice_with_manual: list[tuple[str, str]] = list(choice_options)
     if not click_only_field:
         if choice_options:
