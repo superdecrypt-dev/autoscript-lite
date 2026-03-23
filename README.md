@@ -90,13 +90,15 @@ Internet / Cloudflare
 | `Trojan HUP` | `443, 80` + alt port Cloudflare |
 | `Trojan gRPC` | `443, 80` + alt port Cloudflare |
 | `Trojan TCP+TLS` | `443, 80` + alt port Cloudflare |
-| `OpenVPN TCP` | `1194/tcp` |
+| `OpenVPN TCP` | `443, 80` + alt port Cloudflare |
+| `OpenVPN WS` | `443, 80` + alt port Cloudflare |
 
 ## Path Publik
 
 | Transport | Path / Service |
 | --- | --- |
 | `SSH WS` | `/<token>` dan `/<bebas>/<token>` |
+| `OpenVPN WS` | `/<token>` dan `/<bebas>/<token>` |
 | `VLESS WS` | `/vless-ws` dan `/<bebas>/vless-ws` |
 | `VLESS HUP` | `/vless-hup` dan `/<bebas>/vless-hup` |
 | `VLESS XHTTP` | `/vless-xhttp` dan `/<bebas>/vless-xhttp` |
@@ -118,40 +120,11 @@ Internet / Cloudflare
 | `sshws-dropbear` | `127.0.0.1:22022` | backend SSH direct |
 | `sshws-stunnel` | `127.0.0.1:22443` | backend SSH TLS |
 | `sshws-proxy` | `127.0.0.1:10015` | Websocket Proxy (Go) untuk SSH WS |
+| `ovpn-ws-proxy` | `127.0.0.1:10016` | Websocket Proxy (Go) untuk OpenVPN WS |
 | `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot Telegram |
 | `edge-mux metrics` | `127.0.0.1:9910` | metrics dan status edge |
 | `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |
 | `BadVPN UDPGW` | `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` | UDPGW lokal |
-
-## OpenVPN
-- `OpenVPN` di repo ini bersifat `SSH-linked`, bukan sistem akun terpisah.
-- `Username` dan `password` OpenVPN mengikuti akun `SSH` yang sama.
-- `Quota`, `IP limit`, dan `speed limit` OpenVPN sekarang memakai state terpisah di `/opt/quota/openvpn/<username>@openvpn.json`.
-- `Quota`, `IP limit`, dan `speed limit` `SSH` tidak lagi dihitung bersama dengan `OpenVPN`.
-- OpenVPN tetap `SSH-linked` hanya untuk identitas login (`username/password`) dan lifecycle user.
-- `Status` runtime OpenVPN disampling lebih rapat untuk memperkecil gap accounting pada sesi pendek.
-- `client-disconnect` hook dipakai sebagai ledger final supaya sesi sangat pendek tetap ikut terhitung ke quota.
-- Jalur egress OpenVPN tetap `direct` dan tidak dirancang untuk lewat `WARP`.
-- Rule `WARP SSH` / `Zero Trust` di host tidak boleh dipakai untuk membelokkan trafik OpenVPN kecuali ada redesign routing yang disengaja.
-- Runtime publik aktif saat ini adalah `TCP 1194`.
-- Bundle user-facing dikirim sebagai file `.ovpn` tunggal dan bisa diunduh dari:
-  - file lokal account info
-  - bot Telegram
-  - short link `https://domain/ovpn/<token>`
-- Format `.ovpn` sekarang disederhanakan untuk kompatibilitas client:
-  - `proto tcp`
-  - `auth-user-pass`
-  - `remote-cert-tls server`
-  - `verify-x509-name autoscript-server name`
-  - `tls-version-min 1.2`
-  - `auth SHA256`
-  - `data-ciphers AES-256-GCM:AES-128-GCM`
-  - `CA inline`
-  - tanpa `client cert/key`
-  - tanpa `tls-auth` / `tls-crypt`
-- Server OpenVPN menerima cipher:
-  - `AES-256-GCM`
-  - `AES-128-GCM`
 
 ## Service Highlights
 - `manage.sh` adalah panel CLI modular untuk operasi harian.
@@ -177,6 +150,84 @@ Internet / Cloudflare
 13) Tools
 0) Keluar
 ```
+
+### Tools
+```text
+13) Tools
+1) Telegram Bot
+2) WARP Tier
+3) Backup/Restore
+0) Back
+```
+
+## Backup/Restore
+- `Backup/Restore` sekarang tersedia di:
+  - CLI `manage` lewat `13) Tools -> 3) Backup/Restore`
+  - bot Telegram lewat `Main Menu -> Backup/Restore`
+- Provider cloud yang didukung:
+  - `Google Drive`
+  - `Cloudflare R2`
+  - `Telegram` dipakai untuk backup lokal + restore upload dari chat
+- Nama file backup manual memakai format:
+  - `backup-YYYY-MM-DD-HH:MM.tar.gz`
+- `safety backup` internal tetap dibuat otomatis sebelum restore penuh dan disimpan terpisah.
+
+### Menu Cloud
+Baik di CLI maupun bot Telegram, menu cloud sekarang mengikuti susunan ini:
+
+```text
+- Setup
+- Status Config
+- Test Remote
+- Create & Upload Backup
+- List Cloud Backups
+- Restore Latest Cloud Backup
+- Restore Select Backup
+- Delete Cloud Backup
+```
+
+### Setup Google Drive
+- `Google Drive` mendukung flow OAuth headless.
+- Setup bisa dilakukan dari:
+  - `Termux` langsung memakai `rclone authorize`
+  - `VPS + SSH tunnel`
+- Bot Telegram menyediakan:
+  - `Tutorial Setup`
+  - `Paste JSON Auth Google`
+  - `Use Existing Remote`
+- CLI menyediakan flow yang sama di menu `Google Drive -> Setup`.
+
+### Setup Cloudflare R2
+- `Cloudflare R2` mendukung setup dari:
+  - bot Telegram lewat `Quick Setup R2`
+  - CLI lewat wizard `Quick Setup R2`
+  - `Manual rclone config`
+- Data minimum yang dibutuhkan:
+  - `Account ID`
+  - `Bucket Name`
+  - `Access Key ID`
+  - `Secret Access Key`
+
+### Perilaku Restore
+- `Restore Latest Cloud Backup` dan `Restore Select Backup` adalah restore penuh.
+- Restore penuh bekerja sebagai `snapshot replace` untuk scope restore yang diizinkan.
+- Artinya file akun/quota/speed/config dalam scope restore akan mengikuti isi backup, bukan merge.
+- Domain aktif, config Xray, quota, speed, cert, dan state runtime yang masuk whitelist restore akan ikut dipulihkan.
+- Sebelum restore penuh, sistem membuat `safety backup` dulu dan mencoba rollback otomatis jika validasi pasca-restore gagal.
+
+### Perilaku Select/Delete
+- `Restore Select Backup` dan `Delete Cloud Backup` sekarang memakai `NO` dari `List Cloud Backups`, bukan nama file manual.
+- Di CLI, daftar backup cloud ditampilkan dulu sebelum input `NO`.
+- Di bot Telegram, submenu select/delete menyediakan:
+  - `List Cloud Backups`
+  - `Input Backup NO`
+
+### Catatan Operasional
+- Restore bersifat live dan akan menimpa runtime aktif.
+- Gunakan restore hanya untuk rollback atau recovery, bukan untuk trial acak.
+- `Google Drive` lebih cocok untuk backup pribadi/operator.
+- `Cloudflare R2` lebih cocok untuk backup server/object storage native.
+- Panduan lebih detail ada di `docs/BACKUP_RESTORE_CLOUD.md`.
 
 ## Bot
 ### Telegram
