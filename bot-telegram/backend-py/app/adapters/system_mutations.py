@@ -374,10 +374,99 @@ def _openvpn_env_value(key: str, default: str = "") -> str:
 
 
 def _openvpn_public_host() -> str:
+    domain = _detect_domain()
+    if domain:
+        return domain
     host = str(_openvpn_env_value("OPENVPN_PUBLIC_HOST", "") or "").strip()
     if host:
         return host
-    return _detect_domain() or (_detect_public_ipv4() or "-")
+    return _detect_public_ipv4() or "-"
+
+
+def _openvpn_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
+    lines: list[str] = []
+    if OPENVPN_CONFIG_ENV_FILE.exists():
+        try:
+            lines = OPENVPN_CONFIG_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            return False, f"Gagal membaca config env OpenVPN: {exc}"
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in lines:
+        line = str(raw or "")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key, _ = line.split("=", 1)
+        key = key.strip()
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+        out.append(line)
+
+    for key, value in updates.items():
+        if key in seen:
+            continue
+        out.append(f"{key}={value}")
+
+    try:
+        OPENVPN_CONFIG_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(OPENVPN_CONFIG_ENV_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(OPENVPN_CONFIG_ENV_FILE, 0o600)
+    except Exception as exc:
+        return False, f"Gagal menulis config env OpenVPN: {exc}"
+    return True, "ok"
+
+
+def _managed_ssh_usernames() -> list[str]:
+    names: set[str] = set()
+    for directory, suffix in ((SSH_ACCOUNT_DIR, f"@{SSH_PROTOCOL}.txt"), (SSH_QUOTA_DIR, f"@{SSH_PROTOCOL}.json")):
+        if not directory.exists():
+            continue
+        for path in sorted(directory.iterdir()):
+            if not path.is_file():
+                continue
+            name = path.name
+            if name.endswith(suffix):
+                username = name[: -len(suffix)]
+            elif "." in name:
+                continue
+            else:
+                username = name
+            username = str(username or "").strip()
+            if username:
+                names.add(username)
+    return sorted(names)
+
+
+def _openvpn_sync_public_host_and_profiles(domain: str | None = None) -> tuple[int, int, int, str]:
+    if not _openvpn_runtime_available():
+        return 0, 0, 0, "OpenVPN runtime tidak tersedia."
+
+    domain_eff = str(domain or "").strip() or _detect_domain()
+    if not domain_eff:
+        return 0, 0, 0, "Domain aktif tidak ditemukan."
+
+    ok_env, env_msg = _openvpn_update_env_many({"OPENVPN_PUBLIC_HOST": domain_eff})
+    if not ok_env:
+        return 0, 0, 0, env_msg
+
+    updated = 0
+    failed = 0
+    skipped = 0
+    for username in _managed_ssh_usernames():
+        if not _linux_user_exists(username):
+            skipped += 1
+            continue
+        ok_profile, payload_or_err = _openvpn_manage_json("ensure-user", "--username", username, timeout=300)
+        if ok_profile and isinstance(payload_or_err, dict) and bool(payload_or_err.get("ok", True)):
+            updated += 1
+        else:
+            failed += 1
+    return updated, failed, skipped, "ok"
 
 
 def _openvpn_public_tcp_port() -> str:
@@ -4373,7 +4462,7 @@ def _dns_toggle_cache(cfg: dict[str, Any]) -> tuple[bool, str]:
     return True, "DNS cache sekarang: OFF."
 
 
-def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str, str]:
+def _build_links(proto: str, username: str, cred: str, domain: str, tcp_tls_host: str) -> dict[str, str]:
     public_paths = {
         "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
@@ -4387,7 +4476,8 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
             q["path"] = val or "/"
         elif net == "grpc" and val:
             q["serviceName"] = val
-        return f"vless://{cred}@{domain}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
+        host = tcp_tls_host if net == "tcp" else domain
+        return f"vless://{cred}@{host}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
 
     def trojan_link(net: str, val: str) -> str:
         q = {"security": "tls", "type": net, "sni": domain}
@@ -4395,7 +4485,8 @@ def _build_links(proto: str, username: str, cred: str, domain: str) -> dict[str,
             q["path"] = val or "/"
         elif net == "grpc" and val:
             q["serviceName"] = val
-        return f"trojan://{cred}@{domain}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
+        host = tcp_tls_host if net == "tcp" else domain
+        return f"trojan://{cred}@{host}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
 
     def vmess_link(net: str, val: str) -> str:
         obj = {
@@ -4452,9 +4543,11 @@ def _build_account_text(
     speed_down: float,
     speed_up: float,
 ) -> str:
-    links = _build_links(proto, username, credential, domain)
     ok_ip, public_ip = _get_public_ipv4()
     ip = (public_ip if ok_ip else str(ip or "").strip() or _detect_public_ipv4() or "-").strip() or "-"
+    tcp_tls_protocols = {"vless", "trojan"}
+    tcp_tls_host = domain
+    links = _build_links(proto, username, credential, domain, tcp_tls_host)
     isp, country = _geo_lookup(ip)
     proto_disp = _proto_display_label(proto)
     public_paths = {
@@ -4462,7 +4555,6 @@ def _build_account_text(
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
     }
-    tcp_tls_protocols = {"vless", "trojan"}
     public_proto = public_paths.get(proto, {})
     ws_path = public_proto.get("ws", "") or "/"
     ws_path_alt = _path_alt_placeholder(ws_path)
@@ -4488,6 +4580,7 @@ def _build_account_text(
         f"{proto_disp} Path Service Alt",
     ]
     if proto in tcp_tls_protocols:
+        running_labels.append(f"{proto_disp} TCP+TLS Address")
         running_labels.append(f"{proto_disp} TCP+TLS Port")
     running_label_width = max(len(label) for label in running_labels)
 
@@ -4542,6 +4635,7 @@ def _build_account_text(
         ]
     )
     if proto in tcp_tls_protocols:
+        lines.append(section_line(f"{proto_disp} TCP+TLS Address", tcp_tls_host))
         lines.append(section_line(f"{proto_disp} TCP+TLS Port", _edge_runtime_ws_ports_label()))
     lines.append(section_line("Alt Port SSL/TLS", _edge_runtime_alt_tls_ports_label()))
     lines.append(section_line("Alt Port HTTP", _edge_runtime_alt_http_ports_label()))
@@ -7864,6 +7958,7 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed, skipped = _refresh_all_account_info(domain=domain_n, ip=ip_override)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_n)
     lines = [
         f"Domain aktif sekarang: {domain_n}",
         "- Certificate mode : standalone",
@@ -7875,6 +7970,14 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
         )
     if skipped > 0:
         lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
+    if ovpn_failed > 0:
+        lines.append(
+            f"- Warning: {ovpn_failed} profil OpenVPN gagal direfresh. Jalankan refresh eksplisit bila diperlukan."
+        )
+    elif ovpn_msg != "ok":
+        lines.append(f"- Catatan OpenVPN: {ovpn_msg}")
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        lines.append(f"- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}")
     return True, title, "\n".join(lines)
 
 
@@ -8003,6 +8106,7 @@ def op_domain_setup_cloudflare(
         return False, title, f"{error_msg}\nRollback domain gagal:\n{msg_rb}"
 
     updated, failed, skipped = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_final)
     lines = [
         f"Domain aktif sekarang: {domain_final}",
         f"- Root domain      : {root_domain}",
@@ -8019,6 +8123,12 @@ def op_domain_setup_cloudflare(
     if skipped > 0:
         lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
     lines.append(f"- ACCOUNT INFO updated: {updated}")
+    if ovpn_failed > 0:
+        lines.append(f"- Warning OpenVPN : {ovpn_failed} profil gagal direfresh.")
+    elif ovpn_msg != "ok":
+        lines.append(f"- Catatan OpenVPN : {ovpn_msg}")
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        lines.append(f"- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}")
     return True, title, "\n".join(lines)
 
 
@@ -8040,6 +8150,7 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
         return False, title, ng_msg
 
     updated, failed, skipped = _refresh_all_account_info(domain=domain_n)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_n)
     if failed > 0:
         return True, title, (
             f"Domain berhasil diubah ke: {domain_n}\n"
@@ -8049,18 +8160,32 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
     msg = f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
     if skipped > 0:
         msg += f"\n- Catatan: {skipped} entri account-info yatim dilewati otomatis."
+    if ovpn_failed > 0:
+        msg += f"\n- Warning OpenVPN: {ovpn_failed} profil gagal direfresh."
+    elif ovpn_msg != 'ok':
+        msg += f"\n- Catatan OpenVPN: {ovpn_msg}"
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        msg += f"\n- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}"
     return True, title, msg
 
 
 @_user_data_mutation_locked
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     updated, failed, skipped = _refresh_all_account_info()
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles()
     title = "Domain Control - Refresh Account Info"
     msg = f"Selesai: updated={updated}, failed={failed}"
     if skipped > 0:
         msg += f", skipped={skipped}"
+    if ovpn_updated > 0 or ovpn_failed > 0 or ovpn_skipped > 0:
+        msg += f"\nOpenVPN profiles: updated={ovpn_updated}, failed={ovpn_failed}, skipped={ovpn_skipped}"
+    elif ovpn_msg != "ok":
+        msg += f"\nOpenVPN: {ovpn_msg}"
     if failed > 0:
         msg += "\nSebagian ACCOUNT INFO gagal direfresh."
+        return False, title, msg
+    if ovpn_failed > 0:
+        msg += "\nSebagian profil OpenVPN gagal direfresh."
         return False, title, msg
     if skipped > 0:
         msg += "\nEntri account-info yatim dilewati otomatis."

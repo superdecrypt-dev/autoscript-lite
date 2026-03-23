@@ -144,9 +144,6 @@ def linux_user_exists(username: str) -> bool:
 
 
 def detect_public_host(cfg: dict[str, str]) -> str:
-    explicit = str(cfg.get("public_host") or "").strip()
-    if explicit:
-        return explicit
     domain_file = Path(cfg["domain_file"])
     if domain_file.exists():
         try:
@@ -155,6 +152,9 @@ def detect_public_host(cfg: dict[str, str]) -> str:
                 return value
         except Exception:
             pass
+    explicit = str(cfg.get("public_host") or "").strip()
+    if explicit:
+        return explicit
     try:
         with socket.create_connection(("1.1.1.1", 53), timeout=2.0) as sock:
             local_ip = sock.getsockname()[0]

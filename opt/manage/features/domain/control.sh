@@ -1070,7 +1070,78 @@ domain_control_set_domain_now() {
   else
     warn "ACCOUNT INFO berhasil direfresh ke domain baru, tetapi state sinkronisasi domain gagal disimpan."
   fi
+  if domain_control_openvpn_sync_after_domain_change "${DOMAIN}"; then
+    log "Profile OpenVPN berhasil diselaraskan ke domain baru."
+  else
+    warn "Sebagian profil OpenVPN gagal diselaraskan ke domain baru."
+  fi
   pause
+}
+
+domain_control_openvpn_sync_after_domain_change() {
+  local domain="${1:-}"
+  [[ -n "${domain}" ]] || return 0
+  if ! declare -F openvpn_runtime_available >/dev/null 2>&1; then
+    return 0
+  fi
+  openvpn_runtime_available || return 0
+
+  local env_file="${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}"
+  python3 - <<'PY' "${env_file}" "${domain}" || return 1
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+domain = sys.argv[2].strip()
+lines = path.read_text(encoding="utf-8", errors="ignore").splitlines() if path.exists() else []
+out = []
+seen = False
+for raw in lines:
+    line = str(raw)
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
+        out.append(line)
+        continue
+    key, _ = line.split("=", 1)
+    if key.strip() == "OPENVPN_PUBLIC_HOST":
+        out.append(f"OPENVPN_PUBLIC_HOST={domain}")
+        seen = True
+    else:
+        out.append(line)
+if not seen:
+    out.append(f"OPENVPN_PUBLIC_HOST={domain}")
+path.parent.mkdir(parents=True, exist_ok=True)
+tmp = path.with_name(f".{path.name}.tmp")
+tmp.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+tmp.chmod(0o600)
+tmp.replace(path)
+PY
+
+  local usernames=()
+  local username
+  while IFS= read -r username; do
+    [[ -n "${username}" ]] || continue
+    usernames+=("${username}")
+  done < <(
+    {
+      find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null \
+        | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//'
+      find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null \
+        | sed -E 's/@ssh\.txt$//' | sed -E 's/\.txt$//'
+    } | sort -u
+  )
+
+  local updated=0 failed=0
+  for username in "${usernames[@]}"; do
+    id "${username}" >/dev/null 2>&1 || continue
+    if openvpn_manage_json ensure-user --username "${username}" >/dev/null 2>&1; then
+      updated=$((updated + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done
+
+  log "OpenVPN sync domain=${domain}: updated=${updated}, failed=${failed}"
+  (( failed == 0 ))
 }
 
 domain_control_set_domain_after_prompt() {
@@ -2103,4 +2174,3 @@ domain_control_menu() {
     esac
   done
 }
-
