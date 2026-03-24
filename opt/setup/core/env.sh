@@ -82,8 +82,14 @@ SPEED_POLICY_LOCK_FILE="/var/lock/xray-speed-policy.lock"
 
 # Xray Assets
 XRAY_ASSET_DIR="/usr/local/share/xray"
+XRAY_GEOIP_DAT="${XRAY_ASSET_DIR}/geoip.dat"
+XRAY_GEOSITE_DAT="${XRAY_ASSET_DIR}/geosite.dat"
+CUSTOM_GEOSITE_DAT="${XRAY_ASSET_DIR}/geosite-custom.dat"
 CUSTOM_GEOSITE_DEST="${XRAY_ASSET_DIR}/custom.dat"
 ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
+
+# Account Runtime
+ACCOUNT_INFO_FILE="/etc/autoscript/account-info.json"
 
 # Mutation & Working Dir
 WORK_DIR="/var/lib/xray-manage"
