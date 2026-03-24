@@ -16,12 +16,23 @@ export PATH
 # Konstanta (samakan dengan setup.sh)
 # -------------------------
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+MANAGE_ENV_FILE=""
 # shellcheck source=opt/setup/core/env.sh
-if [[ -f "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh" ]]; then
-  . "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh"
-elif [[ -f "/opt/setup/core/env.sh" ]]; then
-  . "/opt/setup/core/env.sh"
+for MANAGE_ENV_CANDIDATE in \
+  "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh" \
+  "/opt/setup/core/env.sh" \
+  "/usr/local/lib/autoscript-setup/opt/setup/core/env.sh"
+do
+  if [[ -f "${MANAGE_ENV_CANDIDATE}" ]]; then
+    MANAGE_ENV_FILE="${MANAGE_ENV_CANDIDATE}"
+    break
+  fi
+done
+if [[ -z "${MANAGE_ENV_FILE}" ]]; then
+  echo "manage: env.sh tidak ditemukan; cari di source repo, /opt/setup, dan /usr/local/lib/autoscript-setup." >&2
+  exit 1
 fi
+. "${MANAGE_ENV_FILE}"
 
 # Entry-point specific constants (Keep as requested)
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
