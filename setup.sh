@@ -27,78 +27,8 @@ BOLD='\033[1m'
 DIM='\033[0;37m'
 NC='\033[0m'
 
-XRAY_CONFIG="/usr/local/etc/xray/config.json"
-XRAY_CONFDIR="/usr/local/etc/xray/conf.d"
-XRAY_DOMAIN_FILE="/etc/xray/domain"
-NGINX_CONF="/etc/nginx/conf.d/xray.conf"
-CERT_DIR="/opt/cert"
-CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
-CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
-WIREPROXY_CONF="/etc/wireproxy/config.conf"
-WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
-SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
-SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
-SSH_NETWORK_WARP_BACKEND="${SSH_NETWORK_WARP_BACKEND:-auto}"
-SSH_NETWORK_XRAY_REDIR_PORT="${SSH_NETWORK_XRAY_REDIR_PORT:-12345}"
-SSH_NETWORK_XRAY_REDIR_PORT_V6="${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}"
-WARP_ZEROTRUST_ROOT="${WARP_ZEROTRUST_ROOT:-/etc/autoscript/warp-zerotrust}"
-WARP_ZEROTRUST_CONFIG_FILE="${WARP_ZEROTRUST_ROOT}/config.env"
-WARP_ZEROTRUST_MDM_FILE="${WARP_ZEROTRUST_MDM_FILE:-/var/lib/cloudflare-warp/mdm.xml}"
-WARP_ZEROTRUST_SERVICE="${WARP_ZEROTRUST_SERVICE:-warp-svc}"
-WARP_ZEROTRUST_PROXY_PORT="${WARP_ZEROTRUST_PROXY_PORT:-40000}"
-WARP_STATE_FILE="${WARP_STATE_FILE:-/var/lib/xray-manage/network_state.json}"
-CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
-CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
-SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
-SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
-SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
-NGINX_SIGNING_KEY_FPRS="${NGINX_SIGNING_KEY_FPRS:-8540A6F18833A80E9C1653A42FD21310B49F6B46 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3}"
-# Backward compatibility: jika user hanya set 1 fingerprint via env sebelumnya.
-NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-}"
-SPEED_POLICY_ROOT="/opt/speed"
-SPEED_STATE_DIR="/var/lib/xray-speed"
-SPEED_CONFIG_DIR="/etc/xray-speed"
-SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
-DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
-DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
-DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
-CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
-# Daftar domain induk yang disediakan (private)
-PROVIDED_ROOT_DOMAINS=(
-"vyxara1.web.id"
-"vyxara2.web.id"
-)
-
-# NOTE: Script ini dipakai pribadi. Isi token di atas jika tidak memakai env var.
-# ACME_CERT_MODE:
-# - standalone: issue cert for DOMAIN via standalone (port 80)
-# - dns_cf_wildcard: issue wildcard cert for ACME_ROOT_DOMAIN via dns_cf
-ACME_CERT_MODE="standalone"
-ACME_ROOT_DOMAIN=""
-CF_ZONE_ID=""
-CF_ACCOUNT_ID=""
-VPS_IPV4=""
-CF_PROXIED="false"
-XRAY_INSTALL_REF="${XRAY_INSTALL_REF:-e741a4f56d368afbb9e5be3361b40c4552d3710d}"
-ACME_SH_INSTALL_REF="${ACME_SH_INSTALL_REF:-f39d066ced0271d87790dc426556c1e02a88c91b}"
-ACME_DEFAULT_CA="${ACME_DEFAULT_CA:-letsencrypt}"
-XRAY_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh"
-ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
-ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
-XRAY_ASSET_DIR="/usr/local/share/xray"
-CUSTOM_GEOSITE_DEST="${XRAY_ASSET_DIR}/custom.dat"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-SETUP_BIN_SRC_DIR="${SCRIPT_DIR}/opt/setup/bin"
-SETUP_TEMPLATE_SRC_DIR="${SCRIPT_DIR}/opt/setup/templates"
-MANAGE_MODULES_SRC_DIR="${SCRIPT_DIR}/opt/manage"
-MANAGE_MODULES_DST_DIR="/opt/manage"
-MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
-MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
-MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 SETUP_MODULES_ROOT="${SCRIPT_DIR}/opt/setup"
-SETUP_FALLBACK_ROOT="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
-SETUP_FALLBACK_SCRIPT="${SETUP_FALLBACK_SCRIPT:-${SETUP_FALLBACK_ROOT}/setup.sh}"
-SETUP_FALLBACK_MODULES_ROOT="${SETUP_FALLBACK_MODULES_ROOT:-${SETUP_FALLBACK_ROOT}/opt/setup}"
 
 setup_bootstrap_die() {
   echo -e "${RED}[ERROR]${NC} $*" >&2
@@ -164,6 +94,21 @@ source_setup_module() {
   . "${file}"
 }
 
+# shellcheck source=opt/setup/core/env.sh
+source_setup_module "opt/setup/core/env.sh"
+
+CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
+# Daftar domain induk yang disediakan (private)
+PROVIDED_ROOT_DOMAINS=(
+"vyxara1.web.id"
+"vyxara2.web.id"
+)
+
+# Overrides for specific script logic that needs SCRIPT_DIR
+SETUP_BIN_SRC_DIR="${SCRIPT_DIR}/opt/setup/bin"
+SETUP_TEMPLATE_SRC_DIR="${SCRIPT_DIR}/opt/setup/templates"
+MANAGE_MODULES_SRC_DIR="${SCRIPT_DIR}/opt/manage"
+
 # shellcheck source=opt/setup/core/logging.sh
 source_setup_module "opt/setup/core/logging.sh"
 # shellcheck source=opt/setup/core/helpers.sh
@@ -198,266 +143,10 @@ source_setup_module "opt/setup/install/zivpn.sh"
 source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
+# shellcheck source=opt/setup/install/sanity.sh
+source_setup_module "opt/setup/install/sanity.sh"
 
 trap run_exit_cleanups EXIT
-sanity_check() {
-  local failed=0
-  local edge_provider edge_active edge_runtime_service warp_runtime_mode
-  edge_provider="${EDGE_PROVIDER:-none}"
-  edge_active="${EDGE_ACTIVATE_RUNTIME:-false}"
-  warp_runtime_mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
-
-  listener_present_tcp() {
-    local pattern="$1"
-    ss -lntp 2>/dev/null | grep -Eq "${pattern}"
-  }
-
-  listener_present_badvpn() {
-    local port="$1"
-    local pattern="(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"
-    ss -lntp 2>/dev/null | grep -Eq "${pattern}" || ss -lunp 2>/dev/null | grep -Eq "${pattern}"
-  }
-
-  wait_for_listener() {
-    local checker="$1"
-    local target="$2"
-    local tries="${3:-5}"
-    local delay="${4:-1}"
-    local i
-    for ((i = 0; i < tries; i++)); do
-      if "${checker}" "${target}"; then
-        return 0
-      fi
-      sleep "${delay}"
-    done
-    return 1
-  }
-
-  # Core services (must be active)
-  if systemctl is-active --quiet xray; then
-    ok "check: xray active"
-  else
-    warn "check: xray inactive"
-    systemctl status xray --no-pager >&2 || true
-    journalctl -u xray -n 200 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet nginx; then
-    ok "check: nginx active"
-  else
-    warn "check: nginx inactive"
-    systemctl status nginx --no-pager >&2 || true
-    journalctl -u nginx -n 200 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if [[ "${warp_runtime_mode}" == "zerotrust" ]]; then
-    if systemctl is-active --quiet wireproxy; then
-      warn "check: wireproxy active saat mode Zero Trust"
-      warn "check: wireproxy seharusnya idle ketika backend Zero Trust menjadi runtime aktif."
-    else
-      ok "check: wireproxy idle (Zero Trust runtime)"
-    fi
-  elif systemctl is-active --quiet wireproxy; then
-    ok "check: wireproxy active"
-  else
-    warn "check: wireproxy inactive"
-    systemctl status wireproxy --no-pager >&2 || true
-    journalctl -u wireproxy -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if command -v warp-cli >/dev/null 2>&1 || systemctl list-unit-files "${WARP_ZEROTRUST_SERVICE}" >/dev/null 2>&1; then
-    ok "check: Zero Trust backend tersedia (cloudflare-warp)"
-    if [[ "${warp_runtime_mode}" == "zerotrust" ]]; then
-      if systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
-        ok "check: ${WARP_ZEROTRUST_SERVICE} active (Zero Trust runtime)"
-      else
-        warn "check: ${WARP_ZEROTRUST_SERVICE} inactive pada mode Zero Trust"
-        systemctl status "${WARP_ZEROTRUST_SERVICE}" --no-pager >&2 || true
-        journalctl -u "${WARP_ZEROTRUST_SERVICE}" -n 120 --no-pager >&2 || true
-        failed=1
-      fi
-    elif systemctl is-active --quiet "${WARP_ZEROTRUST_SERVICE}"; then
-      warn "check: ${WARP_ZEROTRUST_SERVICE} active"
-      warn "check: backend Zero Trust aktif; pastikan ini memang state runtime yang diinginkan."
-    else
-      ok "check: ${WARP_ZEROTRUST_SERVICE} idle"
-    fi
-  else
-    warn "check: Zero Trust backend belum terpasang (opsional)"
-  fi
-
-  if systemctl is-active --quiet sshws-dropbear; then
-    ok "check: sshws-dropbear active"
-  else
-    warn "check: sshws-dropbear inactive"
-    systemctl status sshws-dropbear --no-pager >&2 || true
-    journalctl -u sshws-dropbear -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet sshws-stunnel; then
-    ok "check: sshws-stunnel active"
-  else
-    warn "check: sshws-stunnel inactive"
-    systemctl status sshws-stunnel --no-pager >&2 || true
-    journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
-    warn "check: sshws-stunnel opsional"
-  fi
-
-  if systemctl is-active --quiet sshws-proxy; then
-    ok "check: sshws-proxy active"
-  else
-    warn "check: sshws-proxy inactive"
-    systemctl status sshws-proxy --no-pager >&2 || true
-    journalctl -u sshws-proxy -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet sshws-qac-enforcer.timer; then
-    ok "check: ssh qac timer active"
-  else
-    warn "check: ssh qac timer inactive"
-    systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet zivpn.service; then
-    ok "check: zivpn active"
-  else
-    warn "check: zivpn inactive"
-    systemctl status zivpn.service --no-pager >&2 || true
-    journalctl -u zivpn.service -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    ok "check: ssh adblock active"
-  else
-    warn "check: ssh adblock inactive"
-    systemctl status "${SSH_DNS_ADBLOCK_SERVICE}" --no-pager >&2 || true
-    journalctl -u "${SSH_DNS_ADBLOCK_SERVICE}" -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet xray-domain-guard.timer; then
-    ok "check: domain guard timer active"
-  else
-    warn "check: domain guard timer inactive"
-    systemctl status xray-domain-guard.timer --no-pager >&2 || true
-    journalctl -u xray-domain-guard.timer -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if badvpn_runtime_expected 2>/dev/null; then
-    if systemctl is-active --quiet badvpn-udpgw.service; then
-      ok "check: badvpn-udpgw active"
-    else
-      warn "check: badvpn-udpgw inactive"
-      systemctl status badvpn-udpgw.service --no-pager >&2 || true
-      journalctl -u badvpn-udpgw.service -n 120 --no-pager >&2 || true
-      failed=1
-    fi
-  else
-    warn "check: badvpn-udpgw optional (prebuilt tidak tersedia)"
-  fi
-
-  if [[ "${edge_provider}" != "none" ]]; then
-    case "${edge_provider}" in
-      nginx-stream) edge_runtime_service="nginx" ;;
-      *) edge_runtime_service="edge-mux.service" ;;
-    esac
-    case "${edge_active}" in
-      1|true|TRUE|yes|YES|on|ON)
-        if systemctl is-active --quiet "${edge_runtime_service}"; then
-          ok "check: ${edge_runtime_service} active"
-        else
-          warn "check: ${edge_runtime_service} inactive"
-          systemctl status "${edge_runtime_service}" --no-pager >&2 || true
-          journalctl -u "${edge_runtime_service}" -n 120 --no-pager >&2 || true
-          failed=1
-        fi
-        ;;
-    esac
-  fi
-
-  # Config sanity (non-fatal if tools missing)
-  if command -v nginx >/dev/null 2>&1; then
-    if nginx -t >/dev/null 2>&1; then
-      ok "check: nginx -t OK"
-    else
-      warn "check: nginx -t failed"
-      nginx -t >&2 || true
-      failed=1
-    fi
-  fi
-
-  if command -v jq >/dev/null 2>&1 && [[ -f "${XRAY_CONFDIR}/10-inbounds.json" ]]; then
-    if jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >/dev/null 2>&1; then
-      ok "check: xray config OK"
-    else
-      warn "check: xray config invalid"
-      jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >&2 || true
-      failed=1
-    fi
-  fi
-
-  # Cert presence (TLS termination depends on these)
-  if [[ -s "/opt/cert/fullchain.pem" && -s "/opt/cert/privkey.pem" ]]; then
-    ok "check: cert files present"
-  else
-    warn "check: cert files missing"
-    failed=1
-  fi
-
-  # Listener hints (informational only)
-  # Match exact port agar tidak false-positive ke :4430 dst.
-  if wait_for_listener listener_present_tcp '(^|[[:space:]])[^[:space:]]*:80([[:space:]]|$)' 5 1; then
-    ok "check: port 80 listening"
-  else
-    warn "check: port 80 not listening"
-  fi
-
-  if wait_for_listener listener_present_tcp '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)' 5 1; then
-    ok "check: port 443 listening"
-  else
-    warn "check: port 443 not listening"
-  fi
-
-  if badvpn_runtime_expected 2>/dev/null; then
-    local badvpn_ports badvpn_ports_label badvpn_missing="" port
-    badvpn_ports="$(awk -F= '
-      $1 == "BADVPN_UDPGW_PORTS" {
-        gsub(/"/, "", $2)
-        gsub(/,/, " ", $2)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-        print $2
-        exit
-      }
-    ' /etc/default/badvpn-udpgw 2>/dev/null)"
-    [[ -n "${badvpn_ports}" ]] || badvpn_ports="7300 7400 7500 7600 7700 7800 7900"
-    badvpn_ports_label="$(printf '%s\n' "${badvpn_ports}" | sed 's/ /, /g')"
-    for port in ${badvpn_ports}; do
-      if ! wait_for_listener listener_present_badvpn "${port}" 5 1; then
-        badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
-      fi
-    done
-    if [[ -z "${badvpn_missing}" ]]; then
-      ok "check: badvpn ${badvpn_ports_label} listening"
-    else
-      warn "check: badvpn ${badvpn_ports_label} missing ${badvpn_missing}"
-      failed=1
-    fi
-  else
-    warn "check: badvpn 7300, 7400, 7500, 7600, 7700, 7800, 7900 optional (prebuilt tidak tersedia)"
-  fi
-
-  if [[ "$failed" -ne 0 ]]; then
-    die "Sanity check gagal. Lihat log di atas."
-  fi
-}
 
 SETUP_PROGRESS_FILE=""
 

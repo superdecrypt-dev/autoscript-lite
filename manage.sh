@@ -15,48 +15,30 @@ export PATH
 # -------------------------
 # Konstanta (samakan dengan setup.sh)
 # -------------------------
-XRAY_CONFDIR="/usr/local/etc/xray/conf.d"
-XRAY_LOG_CONF="${XRAY_CONFDIR}/00-log.json"
-XRAY_API_CONF="${XRAY_CONFDIR}/01-api.json"
-XRAY_DNS_CONF="${XRAY_CONFDIR}/02-dns.json"
-XRAY_INBOUNDS_CONF="${XRAY_CONFDIR}/10-inbounds.json"
-XRAY_OUTBOUNDS_CONF="${XRAY_CONFDIR}/20-outbounds.json"
-XRAY_ROUTING_CONF="${XRAY_CONFDIR}/30-routing.json"
-XRAY_POLICY_CONF="${XRAY_CONFDIR}/40-policy.json"
-XRAY_STATS_CONF="${XRAY_CONFDIR}/50-stats.json"
-XRAY_DOMAIN_FILE="/etc/xray/domain"
-NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
-NGINX_CONF="/etc/nginx/conf.d/xray.conf"
-CERT_DIR="/opt/cert"
-CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
-CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
-WIREPROXY_CONF="/etc/wireproxy/config.conf"
-WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
-WGCF_DIR="/etc/wgcf"
-SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
-XRAY_ASSET_DIR="/usr/local/share/xray"
-CUSTOM_GEOSITE_DAT="${XRAY_ASSET_DIR}/custom.dat"
-ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
+MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=opt/setup/core/env.sh
+if [[ -f "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh" ]]; then
+  . "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh"
+elif [[ -f "/opt/setup/core/env.sh" ]]; then
+  . "/opt/setup/core/env.sh"
+fi
 
-# Domain / ACME / Cloudflare (disamakan dengan setup.sh)
+# Entry-point specific constants (Keep as requested)
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
 PROVIDED_ROOT_DOMAINS=(
 "vyxara1.web.id"
 "vyxara2.web.id"
 )
-ACME_SH_INSTALL_REF="${ACME_SH_INSTALL_REF:-f39d066ced0271d87790dc426556c1e02a88c91b}"
-ACME_SH_SCRIPT_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/acme.sh"
-ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
-ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
 
 # Runtime state untuk Domain Control
 DOMAIN=""
-ACME_CERT_MODE="standalone"
-ACME_ROOT_DOMAIN=""
-CF_ZONE_ID=""
-CF_ACCOUNT_ID=""
-VPS_IPV4=""
-CF_PROXIED="false"
+# (rest of runtime state variables follow ...)
+ACME_CERT_MODE="${ACME_CERT_MODE:-standalone}"
+ACME_ROOT_DOMAIN="${ACME_ROOT_DOMAIN:-}"
+CF_ZONE_ID="${CF_ZONE_ID:-}"
+CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+VPS_IPV4="${VPS_IPV4:-}"
+CF_PROXIED="${CF_PROXIED:-false}"
 declare -ag DOMAIN_CTRL_STOPPED_SERVICES=()
 declare -ag DOMAIN_CTRL_STOP_FAILURES=()
 declare -ag DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES=()
@@ -72,31 +54,16 @@ DOMAIN_CTRL_TXN_CF_ZONE_ID=""
 DOMAIN_CTRL_TXN_CF_IPV4=""
 
 # Account store (read-only source for Menu 2)
-ACCOUNT_ROOT="/opt/account"
-ACCOUNT_PROTO_DIRS=("vless" "vmess" "trojan")
+# ACCOUNT_ROOT, ACCOUNT_PROTO_DIRS, etc are sourced from env.sh
 
 # Quota metadata store (Menu 2 add/delete)
-QUOTA_ROOT="/opt/quota"
-QUOTA_PROTO_DIRS=("vless" "vmess" "trojan")
+# QUOTA_ROOT, QUOTA_PROTO_DIRS are sourced from env.sh
 
 # Speed policy store (fondasi dari setup.sh)
-SPEED_POLICY_ROOT="/opt/speed"
-SPEED_POLICY_PROTO_DIRS=("vless" "vmess" "trojan")
-SPEED_CONFIG_FILE="/etc/xray-speed/config.json"
-SPEED_MARK_MIN=1000
-SPEED_MARK_MAX=59999
-SPEED_OUTBOUND_TAG_PREFIX="speed-mark-"
-SPEED_RULE_MARKER_PREFIX="dummy-speed-user-"
-SPEED_POLICY_LOCK_FILE="/var/lock/xray-speed-policy.lock"
-ACCOUNT_INFO_LOCK_FILE="/run/autoscript/locks/account-info.lock"
-DOMAIN_CONTROL_LOCK_FILE="/run/autoscript/locks/xray-domain-control.lock"
-USER_DATA_MUTATION_LOCK_FILE="/run/autoscript/locks/user-data-mutation.lock"
-XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
-XRAY_DOMAIN_GUARD_CONFIG_FILE="/etc/xray-domain-guard/config.env"
-XRAY_DOMAIN_GUARD_LOG_FILE="/var/log/xray-domain-guard/domain-guard.log"
+# SPEED_POLICY_ROOT, SPEED_POLICY_PROTO_DIRS etc are sourced from env.sh
 
 # Direktori kerja untuk operasi aman (atomic write)
-WORK_DIR="/var/lib/xray-manage"
+WORK_DIR="${WORK_DIR:-/var/lib/xray-manage}"
 MUTATION_TXN_DIR="${WORK_DIR}/txn-journal"
 CERT_RENEW_SERVICE_JOURNAL_FILE="${WORK_DIR}/cert-renew-stopped-services.list"
 CERT_RENEW_CERT_JOURNAL_FILE="${WORK_DIR}/cert-renew-cert-recovery.env"

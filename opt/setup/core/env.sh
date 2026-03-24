@@ -1,13 +1,114 @@
 #!/usr/bin/env bash
-# Shared env/constants for future modular setup refactor.
-#
-# Intended contents:
-# - constant definitions moved from setup.sh
-# - shared directory paths
-# - config defaults and feature toggles
-# - values consumed across install/*.sh modules
-#
-# Notes:
-# - keep `setup.sh` as the single entrypoint
-# - source this file from `${SCRIPT_DIR}/opt/setup/core/env.sh`
-# - avoid side effects beyond readonly/default variable setup
+# Shared env/constants for setup and manage runtime.
+
+# Xray Configs
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+XRAY_CONFDIR="/usr/local/etc/xray/conf.d"
+XRAY_LOG_CONF="${XRAY_CONFDIR}/00-log.json"
+XRAY_API_CONF="${XRAY_CONFDIR}/01-api.json"
+XRAY_DNS_CONF="${XRAY_CONFDIR}/02-dns.json"
+XRAY_INBOUNDS_CONF="${XRAY_CONFDIR}/10-inbounds.json"
+XRAY_OUTBOUNDS_CONF="${XRAY_CONFDIR}/20-outbounds.json"
+XRAY_ROUTING_CONF="${XRAY_CONFDIR}/30-routing.json"
+XRAY_POLICY_CONF="${XRAY_CONFDIR}/40-policy.json"
+XRAY_STATS_CONF="${XRAY_CONFDIR}/50-stats.json"
+XRAY_DOMAIN_FILE="/etc/xray/domain"
+
+# Nginx Configs
+NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
+NGINX_CONF="/etc/nginx/conf.d/xray.conf"
+
+# Certificates
+CERT_DIR="/opt/cert"
+CERT_FULLCHAIN="${CERT_DIR}/fullchain.pem"
+CERT_PRIVKEY="${CERT_DIR}/privkey.pem"
+
+# Wireproxy / WARP
+WIREPROXY_CONF="/etc/wireproxy/config.conf"
+WIREGUARD_DIR="${WIREGUARD_DIR:-/etc/wireguard}"
+WGCF_DIR="/etc/wgcf"
+SSH_WARP_SYNC_BIN="${SSH_WARP_SYNC_BIN:-/usr/local/bin/ssh-warp-sync}"
+SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
+SSH_NETWORK_WARP_BACKEND="${SSH_NETWORK_WARP_BACKEND:-auto}"
+SSH_NETWORK_XRAY_REDIR_PORT="${SSH_NETWORK_XRAY_REDIR_PORT:-12345}"
+SSH_NETWORK_XRAY_REDIR_PORT_V6="${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}"
+WARP_ZEROTRUST_ROOT="${WARP_ZEROTRUST_ROOT:-/etc/autoscript/warp-zerotrust}"
+WARP_ZEROTRUST_CONFIG_FILE="${WARP_ZEROTRUST_ROOT}/config.env"
+WARP_ZEROTRUST_MDM_FILE="${WARP_ZEROTRUST_MDM_FILE:-/var/lib/cloudflare-warp/mdm.xml}"
+WARP_ZEROTRUST_SERVICE="${WARP_ZEROTRUST_SERVICE:-warp-svc}"
+WARP_ZEROTRUST_PROXY_PORT="${WARP_ZEROTRUST_PROXY_PORT:-40000}"
+WARP_STATE_FILE="${WARP_STATE_FILE:-/var/lib/xray-manage/network_state.json}"
+CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
+CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
+
+# SSH WS Ports
+SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
+SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
+SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
+
+# Nginx Signing
+NGINX_SIGNING_KEY_FPRS="${NGINX_SIGNING_KEY_FPRS:-8540A6F18833A80E9C1653A42FD21310B49F6B46 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3}"
+NGINX_SIGNING_KEY_FPR="${NGINX_SIGNING_KEY_FPR:-}"
+
+# Account & Quota
+ACCOUNT_ROOT="/opt/account"
+ACCOUNT_PROTO_DIRS=("vless" "vmess" "trojan")
+QUOTA_ROOT="/opt/quota"
+QUOTA_PROTO_DIRS=("vless" "vmess" "trojan")
+
+# Speed Policy
+SPEED_POLICY_ROOT="/opt/speed"
+SPEED_POLICY_PROTO_DIRS=("vless" "vmess" "trojan")
+SPEED_STATE_DIR="/var/lib/xray-speed"
+SPEED_CONFIG_DIR="/etc/xray-speed"
+SPEED_CONFIG_FILE="${SPEED_CONFIG_DIR}/config.json"
+SPEED_PROTO_DIRS=("vless" "vmess" "trojan")
+SPEED_MARK_MIN=1000
+SPEED_MARK_MAX=59999
+SPEED_OUTBOUND_TAG_PREFIX="speed-mark-"
+SPEED_RULE_MARKER_PREFIX="dummy-speed-user-"
+
+# Domain Guard
+DOMAIN_GUARD_CONFIG_DIR="/etc/xray-domain-guard"
+DOMAIN_GUARD_CONFIG_FILE="${DOMAIN_GUARD_CONFIG_DIR}/config.env"
+DOMAIN_GUARD_LOG_DIR="/var/log/xray-domain-guard"
+XRAY_DOMAIN_GUARD_BIN="/usr/local/bin/xray-domain-guard"
+
+# Locks
+ACCOUNT_INFO_LOCK_FILE="/run/autoscript/locks/account-info.lock"
+DOMAIN_CONTROL_LOCK_FILE="/run/autoscript/locks/xray-domain-control.lock"
+USER_DATA_MUTATION_LOCK_FILE="/run/autoscript/locks/user-data-mutation.lock"
+SPEED_POLICY_LOCK_FILE="/var/lock/xray-speed-policy.lock"
+
+# Xray Assets
+XRAY_ASSET_DIR="/usr/local/share/xray"
+CUSTOM_GEOSITE_DEST="${XRAY_ASSET_DIR}/custom.dat"
+ADBLOCK_GEOSITE_ENTRY="ext:custom.dat:adblock"
+
+# Mutation & Working Dir
+WORK_DIR="/var/lib/xray-manage"
+MUTATION_TXN_DIR="${WORK_DIR}/txn-journal"
+
+# ACME & Installer Refs
+ACME_CERT_MODE="standalone"
+ACME_ROOT_DOMAIN=""
+CF_ZONE_ID=""
+CF_ACCOUNT_ID=""
+VPS_IPV4=""
+CF_PROXIED="false"
+XRAY_INSTALL_REF="${XRAY_INSTALL_REF:-e741a4f56d368afbb9e5be3361b40c4552d3710d}"
+ACME_SH_INSTALL_REF="${ACME_SH_INSTALL_REF:-f39d066ced0271d87790dc426556c1e02a88c91b}"
+ACME_DEFAULT_CA="${ACME_DEFAULT_CA:-letsencrypt}"
+XRAY_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh"
+ACME_SH_TARBALL_URL="https://codeload.github.com/acmesh-official/acme.sh/tar.gz/${ACME_SH_INSTALL_REF}"
+ACME_SH_DNS_CF_HOOK_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/dnsapi/dns_cf.sh"
+ACME_SH_SCRIPT_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${ACME_SH_INSTALL_REF}/acme.sh"
+
+# Paths for manage/setup modules
+MANAGE_MODULES_DST_DIR="/opt/manage"
+MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
+MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
+MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
+SETUP_FALLBACK_ROOT="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
+SETUP_FALLBACK_SCRIPT="${SETUP_FALLBACK_SCRIPT:-${SETUP_FALLBACK_ROOT}/setup.sh}"
+SETUP_FALLBACK_MODULES_ROOT="${SETUP_FALLBACK_MODULES_ROOT:-${SETUP_FALLBACK_ROOT}/opt/setup}"
