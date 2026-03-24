@@ -10,6 +10,7 @@ const (
 	defaultResolveAttempts = 100
 	defaultResolveDelay    = 100 * time.Millisecond
 	defaultRefreshInterval = 2 * time.Second
+	initialResolveWait     = 1500 * time.Millisecond
 	warmupFreeBytes        = 64 * 1024
 	// Allow enough time for dropbear auth logs to become visible so the first
 	// post-auth payload does not escape shaping almost entirely on short-lived
@@ -96,6 +97,29 @@ func (c *SSHSpeedController) WaitForReady(transferred uint64) {
 			return
 		}
 		if !startedAt.IsZero() && time.Since(startedAt) >= warmupMaxWait {
+			return
+		}
+		select {
+		case <-c.done:
+			return
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func (c *SSHSpeedController) WaitForInitialPolicy(timeout time.Duration) {
+	if c == nil || c.ready.Load() {
+		return
+	}
+	if timeout <= 0 {
+		timeout = initialResolveWait
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if c.ready.Load() || c.Username() != "" {
+			return
+		}
+		if time.Now().After(deadline) {
 			return
 		}
 		select {

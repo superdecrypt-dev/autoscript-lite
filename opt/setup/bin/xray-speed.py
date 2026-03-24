@@ -122,6 +122,13 @@ def load_config(path):
   }
 
 
+def load_json_or_default(path, default):
+  data = utils.load_json_file(path)
+  if data is None:
+    return default
+  return data
+
+
 def iter_policy_files(policy_root):
   root = Path(policy_root)
   if not root.exists():
@@ -138,7 +145,7 @@ def load_policies(policy_root):
   policies = []
   seen_mark = set()
   for proto, fp in iter_policy_files(policy_root):
-    data = utils.load_json_file(str(fp), default={})
+    data = load_json_or_default(str(fp), {})
     if not isinstance(data, dict):
       continue
 
@@ -445,7 +452,7 @@ def run_watch(cfg_path, interval):
 
 def show_status(cfg_path):
   cfg = load_config(cfg_path)
-  st = utils.load_json_file(cfg["state_file"], default={}) or {}
+  st = load_json_or_default(cfg["state_file"], {}) or {}
   print(json.dumps(st, ensure_ascii=False, indent=2))
   return 0
 

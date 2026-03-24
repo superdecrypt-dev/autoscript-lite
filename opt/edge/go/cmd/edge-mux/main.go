@@ -822,6 +822,7 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 			speedCtl := accounting.NewSSHSpeedController(logger, quotaCfg, tcpAddr.Port)
 			speedCtl.Start()
 			defer speedCtl.Stop()
+			speedCtl.WaitForInitialPolicy(0)
 			sessionTracker := accounting.NewSSHRuntimeSessionTracker(logger, quotaCfg, tcpAddr.Port, safeRemote(left), contextLabel, func() string {
 				return speedCtl.Username()
 			})

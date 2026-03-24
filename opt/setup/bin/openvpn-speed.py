@@ -81,6 +81,13 @@ def load_config(path):
     "state_file": str(cfg.get("state_file") or "/var/lib/openvpn-speed/state.json").strip() or "/var/lib/openvpn-speed/state.json",
     "default_rate_mbit": default_rate,
   }
+
+
+def load_json_or_default(path, default):
+  data = utils.load_json_file(path)
+  if data is None:
+    return default
+  return data
   if ":" in raw:
     head, _, _ = raw.partition(":")
     return utils.normalize_ip(head)
@@ -220,7 +227,7 @@ def load_speed_events(event_dir):
   stale_paths = []
   for fp in sorted(root.glob("*.json")):
     try:
-      payload = utils.load_json_file(str(fp), default={}) or {}
+      payload = load_json_or_default(str(fp), {}) or {}
     except Exception:
       payload = {}
     if not isinstance(payload, dict):
@@ -322,7 +329,7 @@ def merge_speed_events(sessions, events):
 def load_policies(state_root, sessions):
   policies = []
   for fp in iter_state_files(state_root) or ():
-    data = utils.load_json_file(str(fp), default={})
+    data = load_json_or_default(str(fp), {})
     if not isinstance(data, dict):
       continue
     status = data.get("status")
@@ -566,7 +573,7 @@ def run_watch(cfg_path, interval):
 
 def show_status(cfg_path):
   cfg = load_config(cfg_path)
-  st = utils.load_json_file(cfg["state_file"], default={}) or {}
+  st = load_json_or_default(cfg["state_file"], {}) or {}
   print(json.dumps(st, ensure_ascii=False, indent=2))
   return 0
 

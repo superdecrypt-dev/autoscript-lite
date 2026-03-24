@@ -383,6 +383,29 @@ def extract_ip_from_match(m):
     return None
   return m.group(1) or m.group(2) or m.group(3)
 
+def extract_peer_identity_from_match(m):
+  """Return identity key for ip-limit bucketing.
+
+  Prefer stable remote IP for normal public connections. If the observed source
+  is loopback, Xray is sitting behind a local edge proxy and the real client IP
+  is already masked. In that case fall back to the full endpoint text so each
+  concurrent proxied connection is still counted separately instead of all
+  public clients collapsing into 127.0.0.1.
+  """
+  if m is None:
+    return None
+  ip = extract_ip_from_match(m)
+  if not ip:
+    return None
+  ip_lower = str(ip).strip().lower()
+  if ip_lower in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1"):
+    raw = m.group(0) or ""
+    if not raw:
+      return ip
+    endpoint = raw.split(None, 1)[1].strip() if " " in raw else raw.strip()
+    return endpoint or ip
+  return ip
+
 def safe_int(v, default=0):
   try:
     if v is None:
@@ -639,11 +662,10 @@ def parse_line(line):
   m2 = IP_RE.search(line)
   if not m1 or not m2:
     return None, None
-  # BUG-07 fix: use helper to extract IP from whichever group matched (IPv4/IPv6)
-  ip = extract_ip_from_match(m2)
-  if not ip:
+  peer_identity = extract_peer_identity_from_match(m2)
+  if not peer_identity:
     return None, None
-  return m1.group(1), ip
+  return m1.group(1), peer_identity
 
 def tail_follow(path):
   p = subprocess.Popen(["tail", "-n", "0", "-F", path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
