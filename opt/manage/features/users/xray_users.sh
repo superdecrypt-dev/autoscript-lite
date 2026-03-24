@@ -56,8 +56,25 @@ xray_edge_runtime_public_tls_ports_label() {
   xray_edge_runtime_ports_label "$(xray_edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443")"
 }
 
+xray_edge_runtime_all_public_ports_label() {
+  local tls_ports http_ports merged
+  tls_ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443")"
+  http_ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_HTTP_PORTS EDGE_PUBLIC_HTTP_PORT "80 8080 8880 2052 2082 2086 2095" "80")"
+  merged="$(printf '%s %s\n' "${tls_ports}" "${http_ports}" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          out = out (out ? " " : "") $i
+        }
+      }
+    }
+    END { print out }
+  ')"
+  xray_edge_runtime_ports_label "${merged}"
+}
+
 xray_edge_runtime_ws_ports_label() {
-  printf '%s\n' "443, 80"
+  xray_edge_runtime_all_public_ports_label
 }
 
 xray_edge_runtime_alt_tls_ports_label() {

@@ -1166,8 +1166,33 @@ edge_runtime_enabled_for_public_ports() {
   return 1
 }
 
+ssh_public_all_ports_label() {
+  local tls_ports http_ports merged
+  tls_ports="$(edge_runtime_public_tls_ports 2>/dev/null || echo "443 2053 2083 2087 2096 8443")"
+  http_ports="$(edge_runtime_public_http_ports 2>/dev/null || echo "80 8080 8880 2052 2082 2086 2095")"
+  merged="$(printf '%s %s\n' "${tls_ports}" "${http_ports}" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
+          out = out (out ? " " : "") $i
+        }
+      }
+    }
+    END { print out }
+  ')"
+  if [[ -n "${merged}" ]]; then
+    printf '%s\n' "${merged}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 ssh_ws_public_ports_label() {
-  printf '%s\n' "443, 80"
+  if edge_runtime_enabled_for_public_ports; then
+    ssh_public_all_ports_label
+  else
+    printf '%s\n' "-"
+  fi
 }
 
 ssh_alt_tls_public_ports_label() {
@@ -1539,7 +1564,10 @@ PY
 
   password="${password_override}"
   if [[ -z "${password}" ]]; then
-    password="$(ssh_account_info_password_get "${username}")"
+    password="$(ssh_previous_password_get "${username}")"
+  fi
+  if [[ -z "${password}" || "${password}" == "-" ]]; then
+    return 1
   fi
 
   if ! sshws_token_valid "${sshws_token}"; then
@@ -3465,8 +3493,14 @@ ssh_delete_user_apply_locked() {
     return 1
   fi
   if [[ -n "${cleanup_failed}" ]]; then
+    local linux_state_msg=""
+    if id "${username}" >/dev/null 2>&1; then
+      linux_state_msg="Akun Linux masih ada dan kemungkinan berada dalam status karantina, sedangkan cleanup lanjutan belum sepenuhnya bersih."
+    else
+      linux_state_msg="Akun Linux sudah terhapus, tetapi cleanup lanjutan belum sepenuhnya bersih."
+    fi
     echo "Delete SSH user selesai parsial ⚠"
-    echo "Akun Linux sudah terhapus, tetapi cleanup lanjutan belum sepenuhnya bersih."
+    echo "${linux_state_msg}"
     if (( ${#notes[@]} > 0 )); then
       printf '%s\n' "$(IFS=' | '; echo "${notes[*]}")"
     fi
