@@ -1092,6 +1092,20 @@ ensure_xray_service_user() {
   fi
 }
 
+wait_for_xray_service_stable() {
+  local settle_seconds="${1:-5}"
+  local second
+
+  for (( second=0; second<settle_seconds; second++ )); do
+    sleep 1
+    if ! systemctl is-active --quiet xray; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
 configure_xray_service_confdir() {
   ok "Atur xray.service -> -confdir ..."
 
@@ -1141,7 +1155,12 @@ configure_xray_service_confdir() {
   fi
 
   systemctl enable xray >/dev/null 2>&1 || true
+  systemctl reset-failed xray >/dev/null 2>&1 || true
   systemctl restart xray >/dev/null 2>&1 || { journalctl -u xray -n 200 --no-pager >&2 || true; die "Gagal restart xray"; }
+  if ! wait_for_xray_service_stable 5; then
+    journalctl -u xray -n 200 --no-pager >&2 || true
+    die "xray gagal stabil setelah restart."
+  fi
   ok "xray.service aktif."
 
   # Setelah Xray berjalan menggunakan conf.d, config.json tidak diperlukan lagi.

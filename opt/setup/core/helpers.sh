@@ -39,6 +39,52 @@ is_port_free() {
   ! ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"
 }
 
+_PICK_PORT_MIN=20000
+_PICK_PORT_MAX=59999
+_LOCAL_EPHEMERAL_PORT_LOW=""
+_LOCAL_EPHEMERAL_PORT_HIGH=""
+_LOCAL_EPHEMERAL_PORT_RANGE_LOADED=0
+
+load_local_ephemeral_port_range() {
+  ((_LOCAL_EPHEMERAL_PORT_RANGE_LOADED)) && return 0
+  _LOCAL_EPHEMERAL_PORT_RANGE_LOADED=1
+  if [[ -r /proc/sys/net/ipv4/ip_local_port_range ]]; then
+    local low high
+    if read -r low high < /proc/sys/net/ipv4/ip_local_port_range; then
+      if [[ "${low}" =~ ^[0-9]+$ && "${high}" =~ ^[0-9]+$ ]] && (( low <= high )); then
+        _LOCAL_EPHEMERAL_PORT_LOW="${low}"
+        _LOCAL_EPHEMERAL_PORT_HIGH="${high}"
+      fi
+    fi
+  fi
+}
+
+pick_port_candidate_bounds() {
+  local min_port="${_PICK_PORT_MIN}"
+  local max_port="${_PICK_PORT_MAX}"
+  load_local_ephemeral_port_range
+
+  if [[ -n "${_LOCAL_EPHEMERAL_PORT_LOW:-}" && -n "${_LOCAL_EPHEMERAL_PORT_HIGH:-}" ]]; then
+    if (( _LOCAL_EPHEMERAL_PORT_LOW > min_port )); then
+      local candidate_max=$(( _LOCAL_EPHEMERAL_PORT_LOW - 1 ))
+      if (( candidate_max < max_port )); then
+        max_port="${candidate_max}"
+      fi
+    elif (( _LOCAL_EPHEMERAL_PORT_HIGH < max_port )); then
+      local candidate_min=$(( _LOCAL_EPHEMERAL_PORT_HIGH + 1 ))
+      if (( candidate_min > min_port )); then
+        min_port="${candidate_min}"
+      fi
+    fi
+  fi
+
+  if (( min_port > max_port )); then
+    die "Range port internal kosong setelah mengecualikan ephemeral ports OS."
+  fi
+
+  printf '%s %s\n' "${min_port}" "${max_port}"
+}
+
 # Registry port yang sudah dipesan dalam sesi ini, disimpan di temp file.
 # Wajib pakai temp file karena pick_port dipanggil via $(pick_port) yang
 # berjalan di subshell.
@@ -54,9 +100,13 @@ pick_port() {
   local p tries=0
   local reserved
   local max_tries=10000
+  local min_port max_port span
+
+  read -r min_port max_port < <(pick_port_candidate_bounds)
+  span=$(( max_port - min_port + 1 ))
 
   while (( tries < max_tries )); do
-    p=$(( 20000 + RANDOM % 40000 ))
+    p=$(( min_port + RANDOM % span ))
     for reserved in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
       if [[ "${p}" == "${reserved}" ]]; then
         p=""
