@@ -68,6 +68,23 @@ def normalize_ip(v: Any) -> str:
     except Exception:
         return ""
 
+def normalize_real_address_ip(value: Any) -> str:
+    """Extract and normalize IP from 'IP:PORT' format."""
+    raw = str(value or "").strip()
+    if not raw: return ""
+    if raw.startswith("["):
+        right = raw.find("]")
+        if right > 1:
+            return normalize_ip(raw[1:right])
+    if raw.count(":") > 1:
+        head, sep, tail = raw.rpartition(":")
+        if sep and str(tail).isdigit():
+            return normalize_ip(head)
+    if ":" in raw:
+        head, _, _ = raw.partition(":")
+        return normalize_ip(head)
+    return normalize_ip(raw)
+
 def is_loopback_ip(v: Any) -> bool:
     """Check if an IP is a loopback address."""
     s = normalize_ip(v)

@@ -7,8 +7,18 @@ import os
 import shutil
 import subprocess
 import time
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Add shared library path
+sys.path.append("/opt/setup/lib")
+try:
+    import utils
+except ImportError:
+    # Fallback for development environment
+    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
+    import utils
 
 EVENT_MAX_AGE_SEC = 15
 
@@ -36,45 +46,10 @@ def parse_mbit(v):
   return round(n, 3)
 
 
-def boolify(v):
-  if isinstance(v, bool):
-    return v
-  if isinstance(v, (int, float)):
-    return bool(v)
-  s = str(v or "").strip().lower()
-  return s in ("1", "true", "yes", "on", "y")
-
-
-def load_json(path, default=None):
-  try:
-    with open(path, "r", encoding="utf-8") as f:
-      return json.load(f)
-  except Exception:
-    return default
-
-
-def save_json_atomic(path, data):
-  path = str(path)
-  os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-  tmp = f"{path}.tmp.{os.getpid()}"
-  with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-    f.flush()
-    os.fsync(f.fileno())
-  os.replace(tmp, path)
-
-
 def load_config(path):
-  try:
-    with open(path, "r", encoding="utf-8") as f:
-      cfg = json.load(f)
-  except FileNotFoundError:
-    raise RuntimeError(f"Config openvpn-speed tidak ditemukan: {path}")
-  except json.JSONDecodeError as e:
-    raise RuntimeError(f"Config openvpn-speed invalid JSON di {path} (line {e.lineno}, col {e.colno}): {e.msg}")
-  except Exception as e:
-    raise RuntimeError(f"Gagal membaca config openvpn-speed {path}: {e}")
+  cfg = utils.load_json_file(path)
+  if cfg is None:
+    raise RuntimeError(f"Config openvpn-speed tidak ditemukan atau invalid JSON: {path}")
 
   if not isinstance(cfg, dict):
     raise RuntimeError(f"Config openvpn-speed harus object JSON: {path}")
@@ -96,66 +71,14 @@ def load_config(path):
     "state_file": str(cfg.get("state_file") or "/var/lib/openvpn-speed/state.json").strip() or "/var/lib/openvpn-speed/state.json",
     "default_rate_mbit": default_rate,
   }
-
-
-def to_int(v, default=0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return int(v)
-    if isinstance(v, (int, float)):
-      return int(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return int(float(s))
-  except Exception:
-    return default
-
-
-def norm_user(v):
-  s = str(v or "").strip()
-  if s.endswith("@ssh"):
-    s = s[:-4]
-  if "@" in s:
-    s = s.split("@", 1)[0]
-  return s
-
-
-def normalize_ip(v):
-  s = str(v or "").strip()
-  if not s:
-    return ""
-  if s.startswith("[") and s.endswith("]"):
-    s = s[1:-1].strip()
-  try:
-    import ipaddress
-    return str(ipaddress.ip_address(s))
-  except Exception:
-    return ""
-
-
-def normalize_real_address_ip(value):
-  raw = str(value or "").strip()
-  if not raw:
-    return ""
-  if raw.startswith("["):
-    right = raw.find("]")
-    if right > 1:
-      return normalize_ip(raw[1:right])
-  if raw.count(":") > 1:
-    head, sep, tail = raw.rpartition(":")
-    if sep and str(tail).isdigit():
-      return normalize_ip(head)
   if ":" in raw:
     head, _, _ = raw.partition(":")
-    return normalize_ip(head)
-  return normalize_ip(raw)
+    return utils.normalize_ip(head)
+  return utils.normalize_ip(raw)
 
 
 def session_key(username, real_addr, virtual_ip):
-  return "|".join((str(norm_user(username) or "").strip(), str(real_addr or "").strip(), str(virtual_ip or "").strip()))
+  return "|".join((str(utils.norm_user(username) or "").strip(), str(real_addr or "").strip(), str(virtual_ip or "").strip()))
 
 
 def resolve_cmd(*candidates):
@@ -252,11 +175,11 @@ def load_openvpn_sessions(status_file):
     payload = {}
     for idx, key in enumerate(client_header):
       payload[str(key)] = values[idx] if idx < len(values) else ""
-    username = norm_user(payload.get("Username") or payload.get("Common Name"))
-    virtual_ip = normalize_ip(payload.get("Virtual Address"))
+    username = utils.norm_user(payload.get("Username") or payload.get("Common Name"))
+    virtual_ip = utils.normalize_ip(payload.get("Virtual Address"))
     if not username or not virtual_ip:
       continue
-    real_ip = normalize_real_address_ip(payload.get("Real Address"))
+    real_ip = utils.normalize_real_address_ip(payload.get("Real Address"))
     item = sessions.setdefault(username, {
       "virtual_ips": [],
       "real_ips": [],
@@ -287,18 +210,18 @@ def load_speed_events(event_dir):
   stale_paths = []
   for fp in sorted(root.glob("*.json")):
     try:
-      payload = load_json(str(fp), default={}) or {}
+      payload = utils.load_json_file(str(fp), default={}) or {}
     except Exception:
       payload = {}
     if not isinstance(payload, dict):
       stale_paths.append(fp)
       continue
     event = str(payload.get("event") or "").strip().lower()
-    username = norm_user(payload.get("username"))
-    virtual_ip = normalize_ip(payload.get("virtual_ip"))
+    username = utils.norm_user(payload.get("username"))
+    virtual_ip = utils.normalize_ip(payload.get("virtual_ip"))
     real_addr = str(payload.get("real_addr") or "").strip()
     key = str(payload.get("session_key") or session_key(username, real_addr, virtual_ip)).strip()
-    written_at = to_int(payload.get("written_at"), 0)
+    written_at = utils.to_int(payload.get("written_at"), 0)
     if event not in ("connect", "disconnect") or not username or not virtual_ip or not key:
       stale_paths.append(fp)
       continue
@@ -312,7 +235,7 @@ def load_speed_events(event_dir):
         "username": username,
         "virtual_ip": virtual_ip,
         "real_addr": real_addr,
-        "real_ip": normalize_real_address_ip(real_addr),
+        "real_ip": utils.normalize_real_address_ip(real_addr),
         "session_key": key,
         "written_at": written_at,
         "path": fp,
@@ -337,7 +260,7 @@ def merge_speed_events(sessions, events):
     merged[username] = payload
 
   for event in events or ():
-    username = norm_user(event.get("username"))
+    username = utils.norm_user(event.get("username"))
     if not username:
       continue
     item = merged.setdefault(username, {
@@ -347,8 +270,8 @@ def merge_speed_events(sessions, events):
       "session_keys": [],
     })
     key = str(event.get("session_key") or "").strip()
-    virtual_ip = normalize_ip(event.get("virtual_ip"))
-    real_ip = normalize_ip(event.get("real_ip"))
+    virtual_ip = utils.normalize_ip(event.get("virtual_ip"))
+    real_ip = utils.normalize_ip(event.get("real_ip"))
     keys = set(str(v).strip() for v in item.get("session_keys") or [] if str(v).strip())
     if str(event.get("event")) == "connect":
       if key and key not in keys:
@@ -367,8 +290,8 @@ def merge_speed_events(sessions, events):
         if len(parts) != 3:
           continue
         _, key_real_addr, key_virtual_ip = parts
-        key_real_ip = normalize_real_address_ip(key_real_addr)
-        key_virtual_ip = normalize_ip(key_virtual_ip)
+        key_real_ip = utils.normalize_real_address_ip(key_real_addr)
+        key_virtual_ip = utils.normalize_ip(key_virtual_ip)
         if key_virtual_ip and key_virtual_ip not in rebuilt_virtual:
           rebuilt_virtual.append(key_virtual_ip)
         if key_real_ip and key_real_ip not in rebuilt_real:
@@ -379,8 +302,8 @@ def merge_speed_events(sessions, events):
     item["session_count"] = len(item["session_keys"])
 
   for item in merged.values():
-    item["virtual_ips"] = sorted({normalize_ip(v) for v in item.get("virtual_ips") or [] if normalize_ip(v)})
-    item["real_ips"] = sorted({normalize_ip(v) for v in item.get("real_ips") or [] if normalize_ip(v)})
+    item["virtual_ips"] = sorted({utils.normalize_ip(v) for v in item.get("virtual_ips") or [] if utils.normalize_ip(v)})
+    item["real_ips"] = sorted({utils.normalize_ip(v) for v in item.get("real_ips") or [] if utils.normalize_ip(v)})
     item["session_keys"] = sorted({str(v).strip() for v in item.get("session_keys") or [] if str(v).strip()})
     item["session_count"] = len(item["session_keys"])
   return merged
@@ -389,15 +312,15 @@ def merge_speed_events(sessions, events):
 def load_policies(state_root, sessions):
   policies = []
   for fp in iter_state_files(state_root) or ():
-    data = load_json(str(fp), default={})
+    data = utils.load_json_file(str(fp), default={})
     if not isinstance(data, dict):
       continue
     status = data.get("status")
     if not isinstance(status, dict):
       continue
-    if not boolify(status.get("speed_limit_enabled")):
+    if not utils.to_bool(status.get("speed_limit_enabled")):
       continue
-    username = norm_user(data.get("username") or fp.stem)
+    username = utils.norm_user(data.get("username") or fp.stem)
     if not username:
       continue
     session = sessions.get(username) or {}
@@ -532,7 +455,7 @@ def write_state(state_file, data):
     "updated_at": now_iso(),
     **data,
   }
-  save_json_atomic(state_file, payload)
+  utils.write_json_atomic(state_file, payload)
 
 
 def build_snapshot(cfg):
@@ -633,7 +556,7 @@ def run_watch(cfg_path, interval):
 
 def show_status(cfg_path):
   cfg = load_config(cfg_path)
-  st = load_json(cfg["state_file"], default={}) or {}
+  st = utils.load_json_file(cfg["state_file"], default={}) or {}
   print(json.dumps(st, ensure_ascii=False, indent=2))
   return 0
 

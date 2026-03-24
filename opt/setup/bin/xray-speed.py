@@ -9,6 +9,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add shared library path
+sys.path.append("/opt/setup/lib")
+try:
+    import utils
+except ImportError:
+    # Fallback for development environment
+    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
+    import utils
+
 TABLE_NAME = "xray_speed"
 MARK_MIN = 1000
 MARK_MAX = 59999
@@ -78,44 +87,10 @@ def parse_mbit(v):
   return round(n, 3)
 
 
-def boolify(v):
-  if isinstance(v, bool):
-    return v
-  if isinstance(v, (int, float)):
-    return bool(v)
-  s = str(v or "").strip().lower()
-  return s in ("1", "true", "yes", "on", "y")
-
-
-def load_json(path, default=None):
-  try:
-    with open(path, "r", encoding="utf-8") as f:
-      return json.load(f)
-  except Exception:
-    return default
-
-
-def save_json_atomic(path, data):
-  os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-  tmp = f"{path}.tmp.{os.getpid()}"
-  with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-    f.flush()
-    os.fsync(f.fileno())
-  os.replace(tmp, path)
-
-
 def load_config(path):
-  try:
-    with open(path, "r", encoding="utf-8") as f:
-      cfg = json.load(f)
-  except FileNotFoundError:
-    raise RuntimeError(f"Config xray-speed tidak ditemukan: {path}")
-  except json.JSONDecodeError as e:
-    raise RuntimeError(f"Config xray-speed invalid JSON di {path} (line {e.lineno}, col {e.colno}): {e.msg}")
-  except Exception as e:
-    raise RuntimeError(f"Gagal membaca config xray-speed {path}: {e}")
+  cfg = utils.load_json_file(path)
+  if cfg is None:
+    raise RuntimeError(f"Config xray-speed tidak ditemukan atau invalid JSON: {path}")
 
   if not isinstance(cfg, dict):
     raise RuntimeError(f"Config xray-speed harus object JSON: {path}")
@@ -153,11 +128,11 @@ def load_policies(policy_root):
   policies = []
   seen_mark = set()
   for proto, fp in iter_policy_files(policy_root):
-    data = load_json(str(fp), default={})
+    data = utils.load_json_file(str(fp), default={})
     if not isinstance(data, dict):
       continue
 
-    enabled = boolify(data.get("enabled", True))
+    enabled = utils.to_bool(data.get("enabled", True))
     if not enabled:
       continue
 
@@ -363,7 +338,7 @@ def write_state(state_file, data):
     "updated_at": now_iso(),
     **data,
   }
-  save_json_atomic(state_file, payload)
+  utils.write_json_atomic(state_file, payload)
 
 
 def build_snapshot(cfg):
@@ -460,7 +435,7 @@ def run_watch(cfg_path, interval):
 
 def show_status(cfg_path):
   cfg = load_config(cfg_path)
-  st = load_json(cfg["state_file"], default={}) or {}
+  st = utils.load_json_file(cfg["state_file"], default={}) or {}
   print(json.dumps(st, ensure_ascii=False, indent=2))
   return 0
 
