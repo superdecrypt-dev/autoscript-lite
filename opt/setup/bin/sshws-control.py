@@ -9,156 +9,47 @@ import tempfile
 import time
 from pathlib import Path
 
+# Add shared library path
+sys.path.append("/opt/setup/lib")
+try:
+    import utils
+except ImportError:
+    # Fallback for development environment
+    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
+    import utils
+
 RUNTIME_SESSION_STALE_SEC = max(15, int(float(os.environ.get("SSHWS_RUNTIME_SESSION_STALE_SEC", "90") or 90)))
-SSHWS_TOKEN_RE = re.compile(r"^[a-f0-9]{10}$")
-SSHWS_DIAGNOSTIC_TOKEN = "diagnostic-probe"
-SSHWS_DIAGNOSTIC_USER = "sshws-diagnostic"
-
-
-def norm_user(v):
-    s = str(v or "").strip()
-    if s.endswith("@ssh"):
-        s = s[:-4]
-    if "@" in s:
-        s = s.split("@", 1)[0]
-    return s
-
-
-def normalize_token(v):
-    s = str(v or "").strip().lower()
-    if s == SSHWS_DIAGNOSTIC_TOKEN or SSHWS_TOKEN_RE.fullmatch(s):
-        return s
-    return ""
-
-
-def normalize_ip(v):
-    s = str(v or "").strip()
-    if not s:
-        return ""
-    if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1].strip()
-    try:
-        import ipaddress
-        return str(ipaddress.ip_address(s))
-    except Exception:
-        return ""
-
-
-def is_loopback_ip(v):
-    s = normalize_ip(v)
-    if not s:
-        return False
-    try:
-        import ipaddress
-        return ipaddress.ip_address(s).is_loopback
-    except Exception:
-        return False
-
-
-def to_bool(v):
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(v)
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on", "y")
-
-
-def to_int(v, default=0):
-    try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
-            return int(v)
-        if isinstance(v, (int, float)):
-            return int(v)
-        s = str(v).strip()
-        if not s:
-            return default
-        return int(float(s))
-    except Exception:
-        return default
-
-
-def to_float(v, default=0.0):
-    try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
-            return float(int(v))
-        if isinstance(v, (int, float)):
-            return float(v)
-        s = str(v).strip()
-        if not s:
-            return default
-        return float(s)
-    except Exception:
-        return default
-
-
-def write_json_atomic(path, payload, mode=0o600):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
-        try:
-            os.chmod(str(path), int(mode))
-        except Exception:
-            pass
-    finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except Exception:
-            pass
-
 
 def token_index_dir(state_root):
     return Path(state_root) / ".sshws-token-index"
 
-
 def token_index_path(state_root, token):
-    token_norm = normalize_token(token)
+    token_norm = utils.normalize_token(token)
     if not token_norm:
         return None
     return token_index_dir(state_root) / f"{token_norm}.json"
 
-
 def user_index_dir(session_root):
     return Path(session_root) / ".by-user"
 
-
 def user_index_path(session_root, username):
-    user = norm_user(username)
+    user = utils.norm_user(username)
     if not user:
         return None
     return user_index_dir(session_root) / f"{user}.json"
 
 
-def load_json_file(path):
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def load_user_session_index(session_root, username):
     path = user_index_path(session_root, username)
     if path is None or not path.is_file():
-        return {"username": norm_user(username), "sessions": {}}
-    payload = load_json_file(path)
+        return {"username": utils.norm_user(username), "sessions": {}}
+    payload = utils.load_json_file(path)
     if not isinstance(payload, dict):
-        return {"username": norm_user(username), "sessions": {}}
+        return {"username": utils.norm_user(username), "sessions": {}}
     sessions = payload.get("sessions")
     if not isinstance(sessions, dict):
         sessions = {}
-    return {"username": norm_user(username), "sessions": sessions}
+    return {"username": utils.norm_user(username), "sessions": sessions}
 
 
 def write_user_session_index(session_root, username, payload):
@@ -166,12 +57,12 @@ def write_user_session_index(session_root, username, payload):
     if path is None:
         return
     payload = payload if isinstance(payload, dict) else {}
-    payload["username"] = norm_user(username)
+    payload["username"] = utils.norm_user(username)
     sessions = payload.get("sessions")
     if not isinstance(sessions, dict):
         sessions = {}
     payload["sessions"] = sessions
-    write_json_atomic(path, payload, 0o600)
+    utils.write_json_atomic(path, payload, 0o600)
 
 
 def drop_user_session_index(session_root, username):

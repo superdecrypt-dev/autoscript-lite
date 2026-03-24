@@ -14,6 +14,17 @@ import shutil
 import subprocess
 import tempfile
 import time
+import sys
+
+# Add shared library path
+sys.path.append("/opt/setup/lib")
+try:
+    import utils
+except ImportError:
+    # Fallback for development environment
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
+    import utils
 
 SSH_STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 OPENVPN_STATE_ROOT = pathlib.Path("/opt/quota/openvpn")
@@ -35,99 +46,9 @@ LOCK_SHELL_CANDIDATES = (
 )
 
 def env_int(name, default):
-  try:
-    raw = os.environ.get(name)
-    if raw is None:
-      return int(default)
-    text = str(raw).strip()
-    if not text:
-      return int(default)
-    return int(float(text))
-  except Exception:
-    return int(default)
+  return utils.utils.to_int(os.environ.get(name), default)
 
 RUNTIME_SESSION_STALE_SEC = max(15, env_int("SSHWS_RUNTIME_SESSION_STALE_SEC", 90))
-
-
-def read_env_map(path):
-  data = {}
-  env_path = pathlib.Path(path)
-  if not env_path.is_file():
-    return data
-  try:
-    lines = env_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-  except Exception:
-    return data
-  for raw in lines:
-    line = str(raw or "").strip()
-    if not line or line.startswith("#") or "=" not in line:
-      continue
-    key, value = line.split("=", 1)
-    data[str(key).strip()] = str(value).strip()
-  return data
-
-def to_int(v, default=0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return int(v)
-    if isinstance(v, (int, float)):
-      return int(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return int(float(s))
-  except Exception:
-    return default
-
-def to_float(v, default=0.0):
-  try:
-    if v is None:
-      return default
-    if isinstance(v, bool):
-      return float(int(v))
-    if isinstance(v, (int, float)):
-      return float(v)
-    s = str(v).strip()
-    if not s:
-      return default
-    return float(s)
-  except Exception:
-    return default
-
-def to_bool(v):
-  if isinstance(v, bool):
-    return v
-  if isinstance(v, (int, float)):
-    return bool(v)
-  s = str(v or "").strip().lower()
-  return s in ("1", "true", "yes", "on", "y")
-
-def norm_user(v):
-  s = str(v or "").strip()
-  if s.endswith("@ssh"):
-    s = s[:-4]
-  if "@" in s:
-    s = s.split("@", 1)[0]
-  return s
-
-def normalize_token(v):
-  s = str(v or "").strip().lower()
-  if re.fullmatch(r"[a-f0-9]{10}", s):
-    return s
-  return ""
-
-def normalize_ip(v):
-  s = str(v or "").strip()
-  if not s:
-    return ""
-  if s.startswith("[") and s.endswith("]"):
-    s = s[1:-1].strip()
-  try:
-    return str(ipaddress.ip_address(s))
-  except Exception:
-    return ""
 
 
 def normalize_real_address_ip(value):
@@ -137,15 +58,15 @@ def normalize_real_address_ip(value):
   if raw.startswith("["):
     right = raw.find("]")
     if right > 1:
-      return normalize_ip(raw[1:right])
+      return utils.utils.normalize_ip(raw[1:right])
   if raw.count(":") > 1:
     head, sep, tail = raw.rpartition(":")
     if sep and str(tail).isdigit():
-      return normalize_ip(head)
+      return utils.utils.normalize_ip(head)
   if ":" in raw:
     head, _, _ = raw.partition(":")
-    return normalize_ip(head)
-  return normalize_ip(raw)
+    return utils.utils.normalize_ip(head)
+  return utils.utils.normalize_ip(raw)
 
 
 def openvpn_session_key(username, real_addr, virtual_ip):
@@ -157,7 +78,7 @@ def openvpn_session_key(username, real_addr, virtual_ip):
 
 
 def openvpn_status_file():
-  cfg = read_env_map(OPENVPN_CONFIG_FILE)
+  cfg = utils.read_env_map(OPENVPN_CONFIG_FILE)
   explicit = str(cfg.get("OPENVPN_STATUS_TCP_FILE") or "").strip()
   if explicit:
     return pathlib.Path(explicit)
@@ -181,7 +102,7 @@ def openvpn_qac_cache_store(sessions):
     OPENVPN_QAC_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
   except Exception:
     pass
-  write_json_atomic(OPENVPN_QAC_CACHE_FILE, {"sessions": sessions})
+  utils.write_json_atomic(OPENVPN_QAC_CACHE_FILE, {"sessions": sessions})
   try:
     os.chmod(str(OPENVPN_QAC_CACHE_FILE), 0o600)
   except Exception:
@@ -216,10 +137,10 @@ def openvpn_pending_disconnects():
       except Exception:
         pass
       continue
-    username = norm_user(payload.get("username"))
+    username = utils.norm_user(payload.get("username"))
     real_addr = str(payload.get("real_addr") or "").strip()
-    virtual_ip = normalize_ip(payload.get("virtual_ip"))
-    bytes_total = max(0, to_int(payload.get("bytes_total"), 0))
+    virtual_ip = utils.normalize_ip(payload.get("virtual_ip"))
+    bytes_total = max(0, utils.to_int(payload.get("bytes_total"), 0))
     if not username or not real_addr or not virtual_ip:
       try:
         path.unlink()
@@ -273,15 +194,15 @@ def openvpn_runtime_snapshot():
     payload = {}
     for idx, key in enumerate(client_header):
       payload[str(key)] = values[idx] if idx < len(values) else ""
-    username = norm_user(payload.get("Username") or payload.get("Common Name"))
+    username = utils.norm_user(payload.get("Username") or payload.get("Common Name"))
     if not username:
       continue
     real_addr = str(payload.get("Real Address") or "").strip()
     real_ip = normalize_real_address_ip(real_addr)
-    virtual_ip = normalize_ip(payload.get("Virtual Address"))
-    bytes_total = max(0, to_int(payload.get("Bytes Received"), 0)) + max(0, to_int(payload.get("Bytes Sent"), 0))
+    virtual_ip = utils.normalize_ip(payload.get("Virtual Address"))
+    bytes_total = max(0, utils.to_int(payload.get("Bytes Received"), 0)) + max(0, utils.to_int(payload.get("Bytes Sent"), 0))
     session_key = openvpn_session_key(username, real_addr, virtual_ip)
-    prev_total = to_int(previous_sessions.get(session_key), -1)
+    prev_total = utils.to_int(previous_sessions.get(session_key), -1)
     delta = 0
     if prev_total >= 0 and bytes_total >= prev_total:
       delta = bytes_total - prev_total
@@ -304,12 +225,12 @@ def openvpn_runtime_snapshot():
       continue
     if session_key in current_sessions:
       continue
-    username = norm_user(entry.get("username"))
+    username = utils.norm_user(entry.get("username"))
     if not username:
       consumed_disconnects.append(entry)
       continue
-    bytes_total = max(0, to_int(entry.get("bytes_total"), 0))
-    prev_total = to_int(previous_sessions.get(session_key), -1)
+    bytes_total = max(0, utils.to_int(entry.get("bytes_total"), 0))
+    prev_total = utils.to_int(previous_sessions.get(session_key), -1)
     if prev_total >= 0 and bytes_total >= prev_total:
       delta = bytes_total - prev_total
     else:
@@ -338,16 +259,16 @@ def openvpn_runtime_snapshot():
 
 
 def openvpn_management_target():
-  cfg = read_env_map(OPENVPN_CONFIG_FILE)
+  cfg = utils.read_env_map(OPENVPN_CONFIG_FILE)
   host = str(cfg.get("OPENVPN_MANAGEMENT_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-  port = to_int(cfg.get("OPENVPN_MANAGEMENT_PORT"), 21194)
+  port = utils.to_int(cfg.get("OPENVPN_MANAGEMENT_PORT"), 21194)
   if port < 1 or port > 65535:
     port = 21194
   return host, port
 
 
 def kill_openvpn_sessions(username):
-  user = norm_user(username)
+  user = utils.norm_user(username)
   if not user or not OPENVPN_SESSION_KILL_BIN.is_file():
     return False
   host, port = openvpn_management_target()
@@ -364,7 +285,7 @@ def kill_openvpn_sessions(username):
   return int(getattr(res, "returncode", 1) or 0) == 0
 
 def pid_alive(pid):
-  value = to_int(pid, 0)
+  value = utils.to_int(pid, 0)
   if value <= 0:
     return False
   try:
@@ -382,8 +303,8 @@ def runtime_session_payload_valid(payload):
     return False
   if not pid_alive(payload.get("proxy_pid")):
     return False
-  updated_at = to_int(payload.get("updated_at"), 0)
-  now = to_int(time.time(), 0)
+  updated_at = utils.to_int(payload.get("updated_at"), 0)
+  now = utils.to_int(time.time(), 0)
   if updated_at <= 0 or now <= 0:
     return False
   return (now - updated_at) <= int(RUNTIME_SESSION_STALE_SEC)
@@ -410,7 +331,7 @@ def iter_runtime_sessions(root, prune_stale=False):
 
 
 def session_user_index_path(username):
-  user = norm_user(username)
+  user = utils.norm_user(username)
   if not user:
     return None
   return SESSION_USER_INDEX_ROOT / f"{user}.json"
@@ -419,17 +340,17 @@ def session_user_index_path(username):
 def load_user_session_index(username):
   path = session_user_index_path(username)
   if path is None or not path.is_file():
-    return {"username": norm_user(username), "sessions": {}}
+    return {"username": utils.norm_user(username), "sessions": {}}
   try:
     payload = json.loads(path.read_text(encoding="utf-8"))
   except Exception:
-    return {"username": norm_user(username), "sessions": {}}
+    return {"username": utils.norm_user(username), "sessions": {}}
   if not isinstance(payload, dict):
-    return {"username": norm_user(username), "sessions": {}}
+    return {"username": utils.norm_user(username), "sessions": {}}
   sessions = payload.get("sessions")
   if not isinstance(sessions, dict):
     sessions = {}
-  return {"username": norm_user(username), "sessions": sessions}
+  return {"username": utils.norm_user(username), "sessions": sessions}
 
 
 def write_user_session_index(username, payload):
@@ -438,12 +359,12 @@ def write_user_session_index(username, payload):
     return
   path.parent.mkdir(parents=True, exist_ok=True)
   out = payload if isinstance(payload, dict) else {}
-  out["username"] = norm_user(username)
+  out["username"] = utils.norm_user(username)
   sessions = out.get("sessions")
   if not isinstance(sessions, dict):
     sessions = {}
   out["sessions"] = sessions
-  write_json_atomic(path, out)
+  utils.write_json_atomic(path, out)
 
 
 def drop_user_session_index(username):
@@ -486,7 +407,7 @@ def set_user_shell(username, shell_path):
   return cmd_ok(["usermod", "-s", shell, username])
 
 def runtime_session_stats(username):
-  user = norm_user(username)
+  user = utils.norm_user(username)
   if not user or not SESSION_ROOT.is_dir():
     return None, None, []
   index = load_user_session_index(user)
@@ -496,22 +417,22 @@ def runtime_session_stats(username):
     ips = set()
     fresh_sessions = {}
     for port, meta in sessions.items():
-      session_path = SESSION_ROOT / f"{to_int(port, 0)}.json"
+      session_path = SESSION_ROOT / f"{utils.to_int(port, 0)}.json"
       try:
         payload = json.loads(session_path.read_text(encoding="utf-8"))
       except Exception:
         continue
       if not runtime_session_payload_valid(payload):
         continue
-      if norm_user(payload.get("username") or session_path.stem) != user:
+      if utils.norm_user(payload.get("username") or session_path.stem) != user:
         continue
       total += 1
-      ip = normalize_ip(payload.get("client_ip"))
+      ip = utils.normalize_ip(payload.get("client_ip"))
       if ip:
         ips.add(ip)
-      fresh_sessions[str(to_int(port, 0))] = {
+      fresh_sessions[str(utils.to_int(port, 0))] = {
         "client_ip": ip,
-        "updated_at": to_int(payload.get("updated_at"), 0),
+        "updated_at": utils.to_int(payload.get("updated_at"), 0),
       }
     if fresh_sessions != sessions:
       if fresh_sessions:
@@ -525,15 +446,15 @@ def runtime_session_stats(username):
   fresh_sessions = {}
   try:
     for path, payload in iter_runtime_sessions(SESSION_ROOT, prune_stale=True):
-      session_user = norm_user(payload.get("username") or path.stem)
+      session_user = utils.norm_user(payload.get("username") or path.stem)
       if session_user == user:
         total += 1
-        ip = normalize_ip(payload.get("client_ip"))
+        ip = utils.normalize_ip(payload.get("client_ip"))
         if ip:
           ips.add(ip)
-        fresh_sessions[str(to_int(payload.get("backend_local_port"), 0))] = {
+        fresh_sessions[str(utils.to_int(payload.get("backend_local_port"), 0))] = {
           "client_ip": ip,
-          "updated_at": to_int(payload.get("updated_at"), 0),
+          "updated_at": utils.to_int(payload.get("updated_at"), 0),
         }
   except Exception:
     return None, None, []
@@ -619,7 +540,7 @@ def _parse_dropbear_auth_lines(lines):
       pid = int(m.group(1))
     except Exception:
       continue
-    user = norm_user(m.group(2))
+    user = utils.norm_user(m.group(2))
     if user:
       mapping[pid] = user
   return mapping
@@ -660,7 +581,7 @@ def dropbear_pid_auth_map():
 def active_sessions_from_dropbear(username):
   if not username or not user_exists(username):
     return 0
-  target = norm_user(username)
+  target = utils.norm_user(username)
   if not target:
     return 0
   pid_map = dropbear_pid_auth_map()
@@ -720,23 +641,6 @@ def unlock_user(username, status=None):
       ok = True
   return ok
 
-def write_json_atomic(path, payload):
-  text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-  dirn = str(path.parent)
-  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
-  try:
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-      f.write(text)
-      f.flush()
-      os.fsync(f.fileno())
-    os.replace(tmp, path)
-  finally:
-    try:
-      if os.path.exists(tmp):
-        os.remove(tmp)
-    except Exception:
-      pass
-
 def ensure_openvpn_connect_policy_dir():
   try:
     OPENVPN_CONNECT_POLICY_DIR.mkdir(parents=True, exist_ok=True)
@@ -758,7 +662,7 @@ def ensure_openvpn_connect_policy_dir():
 
 
 def openvpn_connect_policy_path(username):
-  user = norm_user(username)
+  user = utils.norm_user(username)
   if not user:
     return None
   return OPENVPN_CONNECT_POLICY_DIR / f"{user}.json"
@@ -770,7 +674,7 @@ def openvpn_connect_policy_store(username, payload):
     return
   ensure_openvpn_connect_policy_dir()
   data = payload if isinstance(payload, dict) else {}
-  write_json_atomic(path, data)
+  utils.write_json_atomic(path, data)
   try:
     gid = grp.getgrnam("nogroup").gr_gid
   except Exception:
@@ -852,7 +756,7 @@ def ssh_network_sync_snapshot():
       payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
       payload = {}
-    username = norm_user((payload or {}).get("username") or path.stem)
+    username = utils.norm_user((payload or {}).get("username") or path.stem)
     if not username or not user_exists(username):
       continue
     override = ssh_network_user_route_mode(payload)
@@ -865,7 +769,7 @@ def ssh_network_sync_snapshot():
   if warp_user_set:
     pid_map = dropbear_pid_auth_map()
     for pid in active_dropbear_session_pids():
-      username = norm_user(pid_map.get(int(pid)) or "")
+      username = utils.norm_user(pid_map.get(int(pid)) or "")
       if username and username in warp_user_set:
         active_sessions.append(f"{username}:{int(pid)}")
   active_sessions = sorted(set(active_sessions), key=str.lower)
@@ -887,7 +791,7 @@ def ssh_network_sync_cache_store(snapshot):
     SSH_NETWORK_SYNC_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
   except Exception:
     return
-  write_json_atomic(SSH_NETWORK_SYNC_CACHE_FILE, snapshot)
+  utils.write_json_atomic(SSH_NETWORK_SYNC_CACHE_FILE, snapshot)
 
 def iter_ssh_state_files(root):
   root_path = pathlib.Path(root)
@@ -949,30 +853,30 @@ def normalize_payload(path):
     except Exception:
       payload = {}
 
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  username = utils.norm_user(payload.get("username") or path.stem) or utils.norm_user(path.stem) or path.stem
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
   token = pick_unique_sshws_token(path.parent, path, payload.get("sshws_token"))
 
-  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_limit = utils.to_int(payload.get("quota_limit"), 0)
   if quota_limit < 0:
     quota_limit = 0
-  quota_used = to_int(payload.get("quota_used"), 0)
+  quota_used = utils.to_int(payload.get("quota_used"), 0)
   if quota_used < 0:
     quota_used = 0
 
   status_raw = payload.get("status")
   status = status_raw if isinstance(status_raw, dict) else {}
 
-  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+  speed_down = utils.to_float(status.get("speed_down_mbit"), 0.0)
+  speed_up = utils.to_float(status.get("speed_up_mbit"), 0.0)
   if speed_down < 0:
     speed_down = 0.0
   if speed_up < 0:
     speed_up = 0.0
 
-  ip_limit = to_int(status.get("ip_limit"), 0)
+  ip_limit = utils.to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
 
@@ -986,25 +890,25 @@ def normalize_payload(path):
   payload["quota_unit"] = unit
   payload["quota_used"] = quota_used
   payload["status"] = {
-    "manual_block": to_bool(status.get("manual_block")),
-    "quota_exhausted": to_bool(status.get("quota_exhausted")),
-    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+    "manual_block": utils.to_bool(status.get("manual_block")),
+    "quota_exhausted": utils.to_bool(status.get("quota_exhausted")),
+    "ip_limit_enabled": utils.to_bool(status.get("ip_limit_enabled")),
     "ip_limit": ip_limit,
-    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-    "ip_limit_metric": to_int(status.get("ip_limit_metric"), 0),
-    "distinct_ip_count": to_int(status.get("distinct_ip_count"), 0),
+    "ip_limit_locked": utils.to_bool(status.get("ip_limit_locked")),
+    "ip_limit_metric": utils.to_int(status.get("ip_limit_metric"), 0),
+    "distinct_ip_count": utils.to_int(status.get("distinct_ip_count"), 0),
     "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
-    "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
-    "active_sessions_runtime": to_int(status.get("active_sessions_runtime"), 0),
-    "active_sessions_dropbear": to_int(status.get("active_sessions_dropbear"), 0),
-    "active_sessions_openvpn": to_int(status.get("active_sessions_openvpn"), 0),
-    "distinct_ip_count_openvpn": to_int(status.get("distinct_ip_count_openvpn"), 0),
+    "active_sessions_total": utils.to_int(status.get("active_sessions_total"), 0),
+    "active_sessions_runtime": utils.to_int(status.get("active_sessions_runtime"), 0),
+    "active_sessions_dropbear": utils.to_int(status.get("active_sessions_dropbear"), 0),
+    "active_sessions_openvpn": utils.to_int(status.get("active_sessions_openvpn"), 0),
+    "distinct_ip_count_openvpn": utils.to_int(status.get("distinct_ip_count_openvpn"), 0),
     "distinct_ips_openvpn": status.get("distinct_ips_openvpn") if isinstance(status.get("distinct_ips_openvpn"), list) else [],
-    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+    "speed_limit_enabled": utils.to_bool(status.get("speed_limit_enabled")),
     "speed_down_mbit": speed_down,
     "speed_up_mbit": speed_up,
     "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-    "account_locked": to_bool(status.get("account_locked")),
+    "account_locked": utils.to_bool(status.get("account_locked")),
     "lock_owner": str(status.get("lock_owner") or "").strip(),
     "lock_shell_restore": str(status.get("lock_shell_restore") or "").strip(),
   }
@@ -1021,27 +925,27 @@ def normalize_openvpn_payload(path):
     except Exception:
       payload = {}
 
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  username = utils.norm_user(payload.get("username") or path.stem) or utils.norm_user(path.stem) or path.stem
   unit = str(payload.get("quota_unit") or "binary").strip().lower()
   if unit not in ("binary", "decimal"):
     unit = "binary"
 
-  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_limit = utils.to_int(payload.get("quota_limit"), 0)
   if quota_limit < 0:
     quota_limit = 0
-  quota_used = to_int(payload.get("quota_used"), 0)
+  quota_used = utils.to_int(payload.get("quota_used"), 0)
   if quota_used < 0:
     quota_used = 0
 
   status_raw = payload.get("status")
   status = status_raw if isinstance(status_raw, dict) else {}
-  speed_down = to_float(status.get("speed_down_mbit"), 0.0)
-  speed_up = to_float(status.get("speed_up_mbit"), 0.0)
+  speed_down = utils.to_float(status.get("speed_down_mbit"), 0.0)
+  speed_up = utils.to_float(status.get("speed_up_mbit"), 0.0)
   if speed_down < 0:
     speed_down = 0.0
   if speed_up < 0:
     speed_up = 0.0
-  ip_limit = to_int(status.get("ip_limit"), 0)
+  ip_limit = utils.to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
 
@@ -1054,23 +958,23 @@ def normalize_openvpn_payload(path):
   payload["quota_unit"] = unit
   payload["quota_used"] = quota_used
   payload["status"] = {
-    "manual_block": to_bool(status.get("manual_block")),
-    "quota_exhausted": to_bool(status.get("quota_exhausted")),
-    "ip_limit_enabled": to_bool(status.get("ip_limit_enabled")),
+    "manual_block": utils.to_bool(status.get("manual_block")),
+    "quota_exhausted": utils.to_bool(status.get("quota_exhausted")),
+    "ip_limit_enabled": utils.to_bool(status.get("ip_limit_enabled")),
     "ip_limit": ip_limit,
-    "ip_limit_locked": to_bool(status.get("ip_limit_locked")),
-    "ip_limit_metric": to_int(status.get("ip_limit_metric"), 0),
-    "distinct_ip_count": to_int(status.get("distinct_ip_count"), 0),
+    "ip_limit_locked": utils.to_bool(status.get("ip_limit_locked")),
+    "ip_limit_metric": utils.to_int(status.get("ip_limit_metric"), 0),
+    "distinct_ip_count": utils.to_int(status.get("distinct_ip_count"), 0),
     "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
-    "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
-    "active_sessions_openvpn": to_int(status.get("active_sessions_openvpn"), 0),
-    "distinct_ip_count_openvpn": to_int(status.get("distinct_ip_count_openvpn"), 0),
+    "active_sessions_total": utils.to_int(status.get("active_sessions_total"), 0),
+    "active_sessions_openvpn": utils.to_int(status.get("active_sessions_openvpn"), 0),
+    "distinct_ip_count_openvpn": utils.to_int(status.get("distinct_ip_count_openvpn"), 0),
     "distinct_ips_openvpn": status.get("distinct_ips_openvpn") if isinstance(status.get("distinct_ips_openvpn"), list) else [],
-    "speed_limit_enabled": to_bool(status.get("speed_limit_enabled")),
+    "speed_limit_enabled": utils.to_bool(status.get("speed_limit_enabled")),
     "speed_down_mbit": speed_down,
     "speed_up_mbit": speed_up,
     "lock_reason": str(status.get("lock_reason") or "").strip().lower(),
-    "account_locked": to_bool(status.get("account_locked")),
+    "account_locked": utils.to_bool(status.get("account_locked")),
     "lock_owner": str(status.get("lock_owner") or "").strip(),
     "lock_shell_restore": "",
   }
@@ -1086,9 +990,9 @@ def enforce_user(path, openvpn_stats=None):
   before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
   prev_reason = str(status.get("lock_reason") or "").strip().lower()
 
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  username = utils.norm_user(payload.get("username") or path.stem) or utils.norm_user(path.stem) or path.stem
   ip_enabled = bool(status.get("ip_limit_enabled"))
-  ip_limit = to_int(status.get("ip_limit"), 0)
+  ip_limit = utils.to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
   runtime_count, runtime_ip_count, runtime_ips = runtime_session_stats(username)
@@ -1104,7 +1008,7 @@ def enforce_user(path, openvpn_stats=None):
   ssh_session_total = max(int(runtime_count), int(dropbear_count))
   ssh_ips = sorted(set(runtime_ips or []))
   ssh_ip_count = len(ssh_ips)
-  quota_used = to_int(payload.get("quota_used"), 0)
+  quota_used = utils.to_int(payload.get("quota_used"), 0)
   if quota_used < 0:
     quota_used = 0
   status["active_sessions_runtime"] = int(runtime_count)
@@ -1122,11 +1026,11 @@ def enforce_user(path, openvpn_stats=None):
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    status["ip_limit_locked"] = to_int(status.get("ip_limit_metric"), 0) > ip_limit
+    status["ip_limit_locked"] = utils.to_int(status.get("ip_limit_metric"), 0) > ip_limit
   else:
     status["ip_limit_locked"] = False
 
-  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_limit = utils.to_int(payload.get("quota_limit"), 0)
   status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
 
   reason = ""
@@ -1173,7 +1077,7 @@ def enforce_user(path, openvpn_stats=None):
 
   after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
   if after != before or raw_before.strip() != (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").strip():
-    write_json_atomic(path, payload)
+    utils.write_json_atomic(path, payload)
     try:
       os.chmod(path, 0o600)
     except Exception:
@@ -1190,20 +1094,20 @@ def enforce_openvpn_user(path, openvpn_stats=None):
   before = json.dumps(payload, ensure_ascii=False, sort_keys=True)
   prev_reason = str(status.get("lock_reason") or "").strip().lower()
 
-  username = norm_user(payload.get("username") or path.stem) or norm_user(path.stem) or path.stem
+  username = utils.norm_user(payload.get("username") or path.stem) or utils.norm_user(path.stem) or path.stem
   ovpn = openvpn_stats.get(username) if isinstance(openvpn_stats, dict) else {}
-  ovpn_count = to_int((ovpn or {}).get("session_count"), 0)
+  ovpn_count = utils.to_int((ovpn or {}).get("session_count"), 0)
   ovpn_ips = (ovpn or {}).get("ips")
   if not isinstance(ovpn_ips, list):
     ovpn_ips = []
-  ovpn_ips = [ip for ip in (normalize_ip(value) for value in ovpn_ips) if ip]
-  ovpn_bytes_delta = max(0, to_int((ovpn or {}).get("bytes_delta"), 0))
+  ovpn_ips = [ip for ip in (utils.normalize_ip(value) for value in ovpn_ips) if ip]
+  ovpn_bytes_delta = max(0, utils.to_int((ovpn or {}).get("bytes_delta"), 0))
   ip_enabled = bool(status.get("ip_limit_enabled"))
-  ip_limit = to_int(status.get("ip_limit"), 0)
+  ip_limit = utils.to_int(status.get("ip_limit"), 0)
   if ip_limit < 0:
     ip_limit = 0
 
-  quota_used = to_int(payload.get("quota_used"), 0)
+  quota_used = utils.to_int(payload.get("quota_used"), 0)
   if quota_used < 0:
     quota_used = 0
   if ovpn_bytes_delta > 0:
@@ -1223,11 +1127,11 @@ def enforce_openvpn_user(path, openvpn_stats=None):
   if not ip_enabled:
     status["ip_limit_locked"] = False
   elif ip_limit > 0:
-    status["ip_limit_locked"] = to_int(status.get("ip_limit_metric"), 0) > ip_limit
+    status["ip_limit_locked"] = utils.to_int(status.get("ip_limit_metric"), 0) > ip_limit
   else:
     status["ip_limit_locked"] = False
 
-  quota_limit = to_int(payload.get("quota_limit"), 0)
+  quota_limit = utils.to_int(payload.get("quota_limit"), 0)
   status["quota_exhausted"] = bool(quota_limit > 0 and quota_used >= quota_limit)
 
   reason = ""
@@ -1253,11 +1157,11 @@ def enforce_openvpn_user(path, openvpn_stats=None):
       "manual_block": bool(status.get("manual_block")),
       "quota_exhausted": bool(status.get("quota_exhausted")),
       "ip_limit_enabled": bool(status.get("ip_limit_enabled")),
-      "ip_limit": to_int(status.get("ip_limit"), 0),
+      "ip_limit": utils.to_int(status.get("ip_limit"), 0),
       "ip_limit_locked": bool(status.get("ip_limit_locked")),
       "account_locked": bool(status.get("account_locked")),
       "lock_owner": str(status.get("lock_owner") or "").strip(),
-      "active_sessions_total": to_int(status.get("active_sessions_total"), 0),
+      "active_sessions_total": utils.to_int(status.get("active_sessions_total"), 0),
       "distinct_ips": status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else [],
       "distinct_ips_openvpn": status.get("distinct_ips_openvpn") if isinstance(status.get("distinct_ips_openvpn"), list) else [],
     },
@@ -1265,7 +1169,7 @@ def enforce_openvpn_user(path, openvpn_stats=None):
 
   after = json.dumps(payload, ensure_ascii=False, sort_keys=True)
   if after != before or raw_before.strip() != (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").strip():
-    write_json_atomic(path, payload)
+    utils.write_json_atomic(path, payload)
     try:
       os.chmod(path, 0o600)
     except Exception:
@@ -1285,28 +1189,28 @@ def run_once(target_user):
       ssh_paths = sorted(SSH_STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower()) if SSH_STATE_ROOT.exists() else []
       openvpn_paths = sorted(OPENVPN_STATE_ROOT.glob("*.json"), key=lambda p: p.name.lower()) if OPENVPN_STATE_ROOT.exists() else []
       openvpn_stats = openvpn_runtime_snapshot()
-      target_norm = norm_user(target_user)
+      target_norm = utils.norm_user(target_user)
       for path in ssh_paths:
         if target_user:
           stem = path.stem
-          stem_norm = norm_user(stem)
+          stem_norm = utils.norm_user(stem)
           try:
             current = json.loads(path.read_text(encoding="utf-8"))
           except Exception:
             current = {}
-          username = norm_user(current.get("username") or stem) or stem_norm or stem
+          username = utils.norm_user(current.get("username") or stem) or stem_norm or stem
           if target_user not in (stem, username) and target_norm not in (stem_norm, username):
             continue
         enforce_user(path, openvpn_stats=openvpn_stats)
       for path in openvpn_paths:
         if target_user:
           stem = path.stem
-          stem_norm = norm_user(stem)
+          stem_norm = utils.norm_user(stem)
           try:
             current = json.loads(path.read_text(encoding="utf-8"))
           except Exception:
             current = {}
-          username = norm_user(current.get("username") or stem) or stem_norm or stem
+          username = utils.norm_user(current.get("username") or stem) or stem_norm or stem
           if target_user not in (stem, username) and target_norm not in (stem_norm, username):
             continue
         enforce_openvpn_user(path, openvpn_stats=openvpn_stats)
@@ -1315,12 +1219,12 @@ def run_once(target_user):
         has_target_state = False
         for path in openvpn_paths:
           stem = path.stem
-          stem_norm = norm_user(stem)
+          stem_norm = utils.norm_user(stem)
           try:
             current = json.loads(path.read_text(encoding="utf-8"))
           except Exception:
             current = {}
-          username = norm_user(current.get("username") or stem) or stem_norm or stem
+          username = utils.norm_user(current.get("username") or stem) or stem_norm or stem
           if target_user in (stem, username) or target_norm in (stem_norm, username):
             has_target_state = True
             break
