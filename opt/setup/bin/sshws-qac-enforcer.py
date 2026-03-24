@@ -46,7 +46,7 @@ LOCK_SHELL_CANDIDATES = (
 )
 
 def env_int(name, default):
-  return utils.utils.to_int(os.environ.get(name), default)
+  return utils.to_int(os.environ.get(name), default)
 
 RUNTIME_SESSION_STALE_SEC = max(15, env_int("SSHWS_RUNTIME_SESSION_STALE_SEC", 90))
 
@@ -58,15 +58,15 @@ def normalize_real_address_ip(value):
   if raw.startswith("["):
     right = raw.find("]")
     if right > 1:
-      return utils.utils.normalize_ip(raw[1:right])
+      return utils.normalize_ip(raw[1:right])
   if raw.count(":") > 1:
     head, sep, tail = raw.rpartition(":")
     if sep and str(tail).isdigit():
-      return utils.utils.normalize_ip(head)
+      return utils.normalize_ip(head)
   if ":" in raw:
     head, _, _ = raw.partition(":")
-    return utils.utils.normalize_ip(head)
-  return utils.utils.normalize_ip(raw)
+    return utils.normalize_ip(head)
+  return utils.normalize_ip(raw)
 
 
 def openvpn_session_key(username, real_addr, virtual_ip):
