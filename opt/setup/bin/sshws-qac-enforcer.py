@@ -15,16 +15,26 @@ import subprocess
 import tempfile
 import time
 import sys
+from pathlib import Path
 
-# Add shared library path
-sys.path.append("/opt/setup/lib")
+_SETUP_LIB_CANDIDATES = (
+    Path(os.environ.get("AUTOSCRIPT_SETUP_LIB", "")).resolve() if os.environ.get("AUTOSCRIPT_SETUP_LIB") else None,
+    Path("/usr/local/lib/autoscript-setup/opt/setup/lib"),
+    Path("/opt/setup/lib"),
+    Path(__file__).resolve().parents[1] / "lib",
+)
+for _candidate in _SETUP_LIB_CANDIDATES:
+    if not isinstance(_candidate, Path):
+        continue
+    if not _candidate.is_dir():
+        continue
+    _candidate_text = str(_candidate)
+    if _candidate_text not in sys.path:
+        sys.path.insert(0, _candidate_text)
 try:
     import utils
-except ImportError:
-    # Fallback for development environment
-    from pathlib import Path
-    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
-    import utils
+except ImportError as exc:
+    raise SystemExit(f"Gagal import setup utils: {exc}")
 
 SSH_STATE_ROOT = pathlib.Path("/opt/quota/ssh")
 OPENVPN_STATE_ROOT = pathlib.Path("/opt/quota/openvpn")
@@ -831,10 +841,10 @@ def pick_unique_sshws_token(root, current_path, current_token):
         continue
     except Exception:
       continue
-    tok = normalize_token(loaded.get("sshws_token"))
+    tok = utils.normalize_token(loaded.get("sshws_token"))
     if tok:
       seen.add(tok)
-  tok = normalize_token(current_token)
+  tok = utils.normalize_token(current_token)
   if tok and tok not in seen:
     return tok
   for _ in range(256):

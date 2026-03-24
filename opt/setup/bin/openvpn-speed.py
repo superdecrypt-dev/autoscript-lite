@@ -11,14 +11,24 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Add shared library path
-sys.path.append("/opt/setup/lib")
+_SETUP_LIB_CANDIDATES = (
+    Path(os.environ.get("AUTOSCRIPT_SETUP_LIB", "")).resolve() if os.environ.get("AUTOSCRIPT_SETUP_LIB") else None,
+    Path("/usr/local/lib/autoscript-setup/opt/setup/lib"),
+    Path("/opt/setup/lib"),
+    Path(__file__).resolve().parents[1] / "lib",
+)
+for _candidate in _SETUP_LIB_CANDIDATES:
+    if not isinstance(_candidate, Path):
+        continue
+    if not _candidate.is_dir():
+        continue
+    _candidate_text = str(_candidate)
+    if _candidate_text not in sys.path:
+        sys.path.insert(0, _candidate_text)
 try:
     import utils
-except ImportError:
-    # Fallback for development environment
-    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
-    import utils
+except ImportError as exc:
+    raise SystemExit(f"Gagal import setup utils: {exc}")
 
 EVENT_MAX_AGE_SEC = 15
 

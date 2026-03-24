@@ -9,14 +9,35 @@ import tempfile
 import time
 from pathlib import Path
 
-# Add shared library path
-sys.path.append("/opt/setup/lib")
+_SETUP_LIB_CANDIDATES = (
+    Path(os.environ.get("AUTOSCRIPT_SETUP_LIB", "")).resolve() if os.environ.get("AUTOSCRIPT_SETUP_LIB") else None,
+    Path("/usr/local/lib/autoscript-setup/opt/setup/lib"),
+    Path("/opt/setup/lib"),
+    Path(__file__).resolve().parents[1] / "lib",
+)
+for _candidate in _SETUP_LIB_CANDIDATES:
+    if not isinstance(_candidate, Path):
+        continue
+    if not _candidate.is_dir():
+        continue
+    _candidate_text = str(_candidate)
+    if _candidate_text not in sys.path:
+        sys.path.insert(0, _candidate_text)
 try:
     import utils
-except ImportError:
-    # Fallback for development environment
-    sys.path.append(str(Path(__file__).resolve().parents[1] / "lib"))
-    import utils
+except ImportError as exc:
+    raise SystemExit(f"Gagal import setup utils: {exc}")
+
+SSHWS_DIAGNOSTIC_TOKEN = getattr(utils, "SSHWS_DIAGNOSTIC_TOKEN", "diagnostic-probe")
+SSHWS_DIAGNOSTIC_USER = "sshws-diagnostic"
+norm_user = utils.norm_user
+normalize_ip = utils.normalize_ip
+is_loopback_ip = utils.is_loopback_ip
+to_bool = utils.to_bool
+to_int = utils.to_int
+to_float = utils.to_float
+load_json_file = utils.load_json_file
+write_json_atomic = utils.write_json_atomic
 
 RUNTIME_SESSION_STALE_SEC = max(15, int(float(os.environ.get("SSHWS_RUNTIME_SESSION_STALE_SEC", "90") or 90)))
 
@@ -103,7 +124,7 @@ def rebuild_token_index(state_root):
         return resolved
     for path in sorted(root.glob("*.json"), key=lambda p: p.name.lower()):
         payload = load_state(path)
-        token = normalize_token(payload.get("sshws_token"))
+        token = utils.normalize_token(payload.get("sshws_token"))
         if not token:
             continue
         user = norm_user(payload.get("username") or path.stem)
@@ -308,14 +329,14 @@ def extract_token_from_path(path, expected_prefix):
             "vless-grpc", "vmess-grpc", "trojan-grpc",
         }:
             return ""
-        return normalize_token(parts[-1])
+        return utils.normalize_token(parts[-1])
     wanted = prefix + "/"
     if not raw_path.startswith(wanted):
         return ""
     suffix = raw_path[len(wanted):].strip("/")
     if not suffix or "/" in suffix:
         return ""
-    return normalize_token(suffix)
+    return utils.normalize_token(suffix)
 
 
 def load_state(path):
@@ -338,7 +359,7 @@ def resolve_state_path(state_root, username):
 
 
 def resolve_token(state_root, token):
-    token_norm = normalize_token(token)
+    token_norm = utils.normalize_token(token)
     if not token_norm:
         return ""
     idx_path = token_index_path(state_root, token_norm)
@@ -348,7 +369,7 @@ def resolve_token(state_root, token):
         if user:
             state_path = resolve_state_path(state_root, user)
             state_payload = load_state(state_path)
-            if normalize_token(state_payload.get("sshws_token")) == token_norm:
+            if utils.normalize_token(state_payload.get("sshws_token")) == token_norm:
                 return user
     resolved = rebuild_token_index(state_root)
     return norm_user(resolved.get(token_norm))

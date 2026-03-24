@@ -398,7 +398,6 @@ write_nginx_main_conf() {
   nginx_capture_live_route_context
 
   rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
-  rm -f "${NGINX_CONF}" 2>/dev/null || true
   nginx_prepare_stream_conf_state
 
   render_setup_template_or_die \
