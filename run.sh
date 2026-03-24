@@ -424,13 +424,13 @@ clone_repo() {
   if [[ -d "${REPO_DIR}/.git" ]]; then
     current_head="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
     if [[ -n "${effective_ref}" ]]; then
+      if repo_has_local_changes "${REPO_DIR}"; then
+        warn "Repo lokal kotor saat ref tersimpan ${effective_ref} aktif."
+        reclone_repo_with_backup "${REPO_DIR}" "${effective_ref}"
+        return 0
+      fi
       if [[ "${current_head}" != "${effective_ref}" ]]; then
         log "Sinkronkan repo ke ref tersimpan ${effective_ref} ..."
-        if repo_has_local_changes "${REPO_DIR}"; then
-          warn "Repo lokal kotor dan ref berbeda dari state tersimpan."
-          reclone_repo_with_backup "${REPO_DIR}" "${effective_ref}"
-          return 0
-        fi
         if ! fetch_err="$(git -C "${REPO_DIR}" fetch --depth=1 origin "${effective_ref}" 2>&1)"; then
           die "Gagal mengambil ref repositori: ${effective_ref}\n  Detail git: ${fetch_err}"
         fi

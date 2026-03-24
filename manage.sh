@@ -3873,23 +3873,45 @@ MANAGE_REQUIRED_MODULES=(
   "app/main.sh"
 )
 
-manage_modules_dir_trusted() {
-  local dir="$1"
-  [[ -d "${dir}" ]] || return 1
+manage_path_chain_trusted() {
+  local target="$1"
+  local modules_dir="${2:-${MANAGE_MODULES_DIR:-}}"
+  local modules_root target_path modules_real target_real current owner mode
+  [[ -n "${modules_dir}" ]] || return 1
+  [[ -e "${target}" ]] || return 1
 
-  # Untuk non-root, fallback ke path yang ada.
+  modules_root="${modules_dir%/}"
+  target_path="${target%/}"
+  [[ "${target_path}" == "${modules_root}" || "${target_path}" == "${modules_root}/"* ]] || return 1
+
+  modules_real="$(readlink -f -- "${modules_dir}" 2>/dev/null || true)"
+  target_real="$(readlink -f -- "${target}" 2>/dev/null || true)"
+  [[ -n "${modules_real}" && -n "${target_real}" ]] || return 1
+  [[ "${target_real}" == "${modules_real}" || "${target_real}" == "${modules_real}/"* ]] || return 1
+
   if [[ "$(id -u)" -ne 0 ]]; then
     return 0
   fi
 
-  local owner mode
-  owner="$(stat -c '%u' "${dir}" 2>/dev/null || echo 1)"
-  mode="$(stat -c '%A' "${dir}" 2>/dev/null || echo '----------')"
-
-  # Saat root, hanya izinkan dir modul yang dimiliki root dan tidak writable oleh group/other.
-  [[ "${owner}" == "0" ]] || return 1
-  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  current="${target_path}"
+  while :; do
+    [[ -e "${current}" ]] || return 1
+    [[ -L "${current}" ]] && return 1
+    owner="$(stat -c '%u' "${current}" 2>/dev/null || echo 1)"
+    mode="$(stat -c '%A' "${current}" 2>/dev/null || echo '----------')"
+    [[ "${owner}" == "0" ]] || return 1
+    [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+    [[ "${current}" == "${modules_root}" ]] && break
+    current="$(dirname -- "${current}")"
+  done
   return 0
+}
+
+manage_modules_dir_trusted() {
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 1
+
+  manage_path_chain_trusted "${dir}" "${dir}"
 }
 
 manage_module_file_trusted() {
@@ -3898,26 +3920,7 @@ manage_module_file_trusted() {
   [[ -n "${modules_dir}" ]] || return 1
   [[ -f "${file}" && -r "${file}" ]] || return 1
 
-  local modules_real file_real
-  modules_real="$(readlink -f -- "${modules_dir}" 2>/dev/null || true)"
-  file_real="$(readlink -f -- "${file}" 2>/dev/null || true)"
-  [[ -n "${modules_real}" && -n "${file_real}" ]] || return 1
-  [[ "${file_real}" == "${modules_real}/"* ]] || return 1
-
-  # Untuk non-root, cukup validasi keberadaan & canonical path.
-  if [[ "$(id -u)" -ne 0 ]]; then
-    return 0
-  fi
-
-  # Saat root, tolak symlink agar source tidak bisa diarahkan ke path lain.
-  [[ -L "${file}" ]] && return 1
-
-  local owner mode
-  owner="$(stat -c '%u' "${file_real}" 2>/dev/null || echo 1)"
-  mode="$(stat -c '%A' "${file_real}" 2>/dev/null || echo '----------')"
-  [[ "${owner}" == "0" ]] || return 1
-  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
-  return 0
+  manage_path_chain_trusted "${file}" "${modules_dir}"
 }
 
 manage_modules_dir_ready() {

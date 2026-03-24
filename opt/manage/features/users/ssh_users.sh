@@ -1791,20 +1791,25 @@ ssh_read_password_confirm() {
   local -n _out_ref="$1"
   _out_ref=""
   local p1="" p2=""
-  if ! read -r -s -p "Password SSH: " p1; then
+  local silent_flag="-s"
+  if [[ ! -t 0 ]]; then
+    silent_flag=""
+  fi
+
+  if ! read -r ${silent_flag} -p "Password SSH: " p1; then
     echo
     return 1
   fi
-  echo
+  [[ -z "${silent_flag}" ]] || echo
   if [[ -z "${p1}" || ${#p1} -lt 6 ]]; then
     warn "Password minimal 6 karakter."
     return 1
   fi
-  if ! read -r -s -p "Ulangi password: " p2; then
+  if ! read -r ${silent_flag} -p "Ulangi password: " p2; then
     echo
     return 1
   fi
-  echo
+  [[ -z "${silent_flag}" ]] || echo
   if [[ "${p1}" != "${p2}" ]]; then
     warn "Password tidak sama."
     return 1

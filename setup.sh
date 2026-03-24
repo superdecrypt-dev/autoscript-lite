@@ -35,54 +35,46 @@ setup_bootstrap_die() {
   exit 1
 }
 
-setup_module_dir_trusted() {
-  local dir="$1"
-  [[ -d "${dir}" ]] || return 1
+setup_path_chain_trusted() {
+  local target="$1"
+  [[ -e "${target}" ]] || return 1
 
-  local root_real dir_real
+  local root_real target_real current owner mode
   root_real="$(readlink -f -- "${SETUP_MODULES_ROOT}" 2>/dev/null || true)"
-  dir_real="$(readlink -f -- "${dir}" 2>/dev/null || true)"
-  [[ -n "${root_real}" && -n "${dir_real}" ]] || return 1
-  [[ "${dir_real}" == "${root_real}" || "${dir_real}" == "${root_real}/"* ]] || return 1
+  target_real="$(readlink -f -- "${target}" 2>/dev/null || true)"
+  [[ -n "${root_real}" && -n "${target_real}" ]] || return 1
+  [[ "${target_real}" == "${root_real}" || "${target_real}" == "${root_real}/"* ]] || return 1
 
   if [[ "$(id -u)" -ne 0 ]]; then
     return 0
   fi
 
-  [[ -L "${dir}" ]] && return 1
-
-  local owner mode
-  owner="$(stat -c '%u' "${dir_real}" 2>/dev/null || echo 1)"
-  mode="$(stat -c '%A' "${dir_real}" 2>/dev/null || echo '----------')"
-  [[ "${owner}" == "0" ]] || return 1
-  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+  current="${target}"
+  while :; do
+    [[ -e "${current}" ]] || return 1
+    [[ -L "${current}" ]] && return 1
+    owner="$(stat -c '%u' "${current}" 2>/dev/null || echo 1)"
+    mode="$(stat -c '%A' "${current}" 2>/dev/null || echo '----------')"
+    [[ "${owner}" == "0" ]] || return 1
+    [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+    [[ "${current}" == "${SETUP_MODULES_ROOT}" ]] && break
+    current="$(dirname -- "${current}")"
+  done
   return 0
+}
+
+setup_module_dir_trusted() {
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 1
+
+  setup_path_chain_trusted "${dir}"
 }
 
 setup_module_file_trusted() {
   local file="$1"
   [[ -f "${file}" && -r "${file}" ]] || return 1
 
-  setup_module_dir_trusted "$(dirname "${file}")" || return 1
-
-  local root_real file_real
-  root_real="$(readlink -f -- "${SETUP_MODULES_ROOT}" 2>/dev/null || true)"
-  file_real="$(readlink -f -- "${file}" 2>/dev/null || true)"
-  [[ -n "${root_real}" && -n "${file_real}" ]] || return 1
-  [[ "${file_real}" == "${root_real}/"* ]] || return 1
-
-  if [[ "$(id -u)" -ne 0 ]]; then
-    return 0
-  fi
-
-  [[ -L "${file}" ]] && return 1
-
-  local owner mode
-  owner="$(stat -c '%u' "${file_real}" 2>/dev/null || echo 1)"
-  mode="$(stat -c '%A' "${file_real}" 2>/dev/null || echo '----------')"
-  [[ "${owner}" == "0" ]] || return 1
-  [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
-  return 0
+  setup_path_chain_trusted "${file}"
 }
 
 source_setup_module() {
