@@ -7,7 +7,8 @@ for _rel in \
   "features/network/adblock.sh" \
   "features/network/dns.sh" \
   "features/network/diagnostics.sh" \
-  "features/network/speedtest.sh"; do
+  "features/network/speedtest.sh" \
+  "features/network/ssh_network.sh"; do
   manage_source_relative "${_rel}"
 done
 unset _rel
