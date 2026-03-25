@@ -367,10 +367,12 @@ ssh_dns_resolver_set_upstreams() {
   local secondary="${2:-}"
   primary="$(dns_server_literal_normalize "${primary}")" || return 1
   secondary="$(dns_server_literal_normalize "${secondary}")" || return 1
-  adblock_config_set_values \
+  ssh_dns_adblock_config_mutate_with_runtime \
+    ssh_dns_resolver_apply_now \
+    adblock_config_set_values \
+    "Perubahan upstream DNS SSH" \
     SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY "${primary}" \
-    SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY "${secondary}" || return 1
-  ssh_dns_resolver_apply_now
+    SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY "${secondary}"
 }
 
 ssh_dns_adblock_config_set_enabled() {
@@ -596,6 +598,61 @@ ssh_dns_adblock_apply_now() {
   "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1
 }
 
+ssh_dns_adblock_config_mutate_with_runtime() {
+  if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
+    adblock_run_locked ssh_dns_adblock_config_mutate_with_runtime "$@"
+    return $?
+  fi
+  local apply_fn="${1:-}" mutate_fn="${2:-}" context="${3:-Perubahan DNS Adblock SSH}"
+  local backup="" had_existing="0"
+  local -a rollback_notes=()
+  shift 3 || true
+
+  declare -F "${apply_fn}" >/dev/null 2>&1 || return 1
+  declare -F "${mutate_fn}" >/dev/null 2>&1 || return 1
+
+  if [[ -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" ]]; then
+    had_existing="1"
+    backup="$(mktemp "${WORK_DIR}/.ssh-adblock-config.rollback.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${backup}" ]] || backup="${WORK_DIR}/.ssh-adblock-config.rollback.$$"
+    if ! cp -a "${SSH_DNS_ADBLOCK_CONFIG_FILE}" "${backup}" 2>/dev/null; then
+      rm -f "${backup}" >/dev/null 2>&1 || true
+      warn "Gagal membuat backup config SSH DNS Adblock sebelum apply."
+      return 1
+    fi
+  fi
+
+  if ! "${mutate_fn}" "$@"; then
+    rm -f "${backup}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  if "${apply_fn}"; then
+    rm -f "${backup}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if [[ "${had_existing}" == "1" ]]; then
+    if ! cp -a "${backup}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" 2>/dev/null; then
+      rollback_notes+=("restore config gagal")
+    fi
+  else
+    rm -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || rollback_notes+=("hapus config baru gagal")
+  fi
+
+  if ! "${apply_fn}" >/dev/null 2>&1; then
+    rollback_notes+=("restore runtime gagal")
+  fi
+
+  rm -f "${backup}" >/dev/null 2>&1 || true
+  if ((${#rollback_notes[@]} > 0)); then
+    warn "${context} gagal; rollback config/runtime tidak sepenuhnya bersih: $(IFS=' | '; echo "${rollback_notes[*]}")."
+  else
+    warn "${context} gagal. Config/runtime dikembalikan ke state sebelumnya."
+  fi
+  return 1
+}
+
 ssh_dns_adblock_set_enabled_now() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
     adblock_run_locked ssh_dns_adblock_set_enabled_now "$@"
@@ -603,8 +660,11 @@ ssh_dns_adblock_set_enabled_now() {
   fi
   local value="${1:-0}"
   [[ "${value}" == "0" || "${value}" == "1" ]] || return 1
-  ssh_dns_adblock_config_set_enabled "${value}" || return 1
-  ssh_dns_adblock_apply_now
+  ssh_dns_adblock_config_mutate_with_runtime \
+    ssh_dns_adblock_apply_now \
+    ssh_dns_adblock_config_set_enabled \
+    "Perubahan status DNS Adblock SSH" \
+    "${value}"
 }
 
 adblock_update_now() {
@@ -2030,4 +2090,3 @@ adblock_menu() {
     esac
   done
 }
-

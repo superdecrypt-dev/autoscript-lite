@@ -578,10 +578,72 @@ openvpn_status_menu() {
   pause
 }
 
+openvpn_restore_service_state_exact() {
+  local svc="${1:-}"
+  local should_be_active="${2:-false}"
+  [[ -n "${svc}" ]] || return 1
+  case "${should_be_active}" in
+    true)
+      svc_exists "${svc}" || return 0
+      if svc_is_active "${svc}"; then
+        return 0
+      fi
+      svc_start_checked "${svc}" 60 >/dev/null 2>&1
+      ;;
+    false)
+      if svc_exists "${svc}" && svc_is_active "${svc}"; then
+        svc_stop_checked "${svc}" 60 >/dev/null 2>&1
+      else
+        return 0
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openvpn_runtime_health_check() {
+  local tcp_svc="${OPENVPN_TCP_SERVICE}"
+  local ws_svc="${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}"
+  local tcp_port="" ws_proxy_port=""
+
+  if svc_exists "${tcp_svc}" && ! svc_is_active "${tcp_svc}"; then
+    warn "${tcp_svc} belum active setelah restart."
+    return 1
+  fi
+  if svc_exists "${ws_svc}" && ! svc_is_active "${ws_svc}"; then
+    warn "${ws_svc} belum active setelah restart."
+    return 1
+  fi
+
+  tcp_port="$(awk -F= '$1=="OPENVPN_PORT_TCP"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  ws_proxy_port="$(awk -F= '$1=="OPENVPN_WS_PROXY_PORT"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE}" 2>/dev/null | tr -d '\r' || true)"
+  [[ "${tcp_port}" =~ ^[0-9]+$ ]] || tcp_port="1194"
+  [[ "${ws_proxy_port}" =~ ^[0-9]+$ ]] || ws_proxy_port="10016"
+
+  if have_cmd ss; then
+    if ! ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${tcp_port}([[:space:]]|$)"; then
+      warn "Backend TCP ${tcp_port} belum listening setelah restart OpenVPN."
+      return 1
+    fi
+    if ! ss -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${ws_proxy_port}([[:space:]]|$)"; then
+      warn "WS proxy ${ws_proxy_port} belum listening setelah restart OpenVPN."
+      return 1
+    fi
+  fi
+  return 0
+}
+
 openvpn_restart_menu() {
   title
   echo "11) Maintenance > Restart OpenVPN"
   hr
+  local tcp_svc="${OPENVPN_TCP_SERVICE}"
+  local ws_svc="${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}"
+  local tcp_was_active="false"
+  local ws_was_active="false"
+  local -a rollback_notes=()
   local confirm_rc=0
   confirm_yn_or_back "Restart semua service OpenVPN sekarang?"
   confirm_rc=$?
@@ -591,14 +653,52 @@ openvpn_restart_menu() {
     pause
     return 0
   fi
-  if ! svc_restart_checked "${OPENVPN_TCP_SERVICE}" 60; then
-    warn "Restart ${OPENVPN_TCP_SERVICE} gagal."
+
+  if ! svc_exists "${tcp_svc}"; then
+    warn "${tcp_svc} tidak ditemukan."
+    hr
+    pause
+    return 0
+  fi
+  if ! svc_exists "${ws_svc}"; then
+    warn "${ws_svc} tidak ditemukan."
+    hr
+    pause
+    return 0
+  fi
+
+  if svc_is_active "${tcp_svc}"; then
+    tcp_was_active="true"
+  fi
+  if svc_is_active "${ws_svc}"; then
+    ws_was_active="true"
+  fi
+
+  if ! svc_restart_checked "${tcp_svc}" 60; then
+    warn "Restart ${tcp_svc} gagal."
     hr
     pause
     return 1
   fi
-  if ! svc_restart_checked "${OPENVPN_WS_SERVICE:-ovpn-ws-proxy}" 60; then
-    warn "Restart ${OPENVPN_WS_SERVICE:-ovpn-ws-proxy} gagal."
+  if ! svc_restart_checked "${ws_svc}" 60; then
+    warn "Restart ${ws_svc} gagal."
+    openvpn_restore_service_state_exact "${tcp_svc}" "${tcp_was_active}" >/dev/null 2>&1 || rollback_notes+=("restore ${tcp_svc} gagal")
+    openvpn_restore_service_state_exact "${ws_svc}" "${ws_was_active}" >/dev/null 2>&1 || rollback_notes+=("restore ${ws_svc} gagal")
+    if ((${#rollback_notes[@]} > 0)); then
+      warn "Rollback restart OpenVPN tidak sepenuhnya bersih: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    fi
+    hr
+    pause
+    return 1
+  fi
+  if ! openvpn_runtime_health_check; then
+    openvpn_restore_service_state_exact "${tcp_svc}" "${tcp_was_active}" >/dev/null 2>&1 || rollback_notes+=("restore ${tcp_svc} gagal")
+    openvpn_restore_service_state_exact "${ws_svc}" "${ws_was_active}" >/dev/null 2>&1 || rollback_notes+=("restore ${ws_svc} gagal")
+    if ((${#rollback_notes[@]} > 0)); then
+      warn "Runtime OpenVPN gagal sehat setelah restart dan rollback juga bermasalah: $(IFS=' | '; echo "${rollback_notes[*]}")."
+    else
+      warn "Runtime OpenVPN gagal sehat setelah restart. State service dikembalikan ke kondisi sebelumnya."
+    fi
     hr
     pause
     return 1

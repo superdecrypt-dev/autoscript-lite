@@ -1268,7 +1268,7 @@ warp_global_menu() {
 
 warp_user_set_effective_mode() {
   local email="$1"
-  local desired="$2" # direct|warp
+  local desired="$2" # direct|warp|inherit
   local candidate_file="${3:-}"
 
   if is_default_xray_email_or_tag "${email}"; then
@@ -1277,7 +1277,11 @@ warp_user_set_effective_mode() {
   fi
 
   case "${desired}" in
-    direct|warp)
+    inherit) desired="off" ;;
+  esac
+
+  case "${desired}" in
+    direct|warp|off)
       if [[ -n "${candidate_file}" ]]; then
         if ! xray_routing_rule_set_user_outbound_mode_in_file "${candidate_file}" "${candidate_file}" "${email}" "${desired}"; then
           warn "Gagal men-stage mode WARP per-user untuk ${email}."
@@ -1290,7 +1294,7 @@ warp_user_set_effective_mode() {
         fi
       fi
       ;;
-    *) warn "Mode user harus direct|warp" ;;
+    *) warn "Mode user harus direct|warp|inherit" ;;
   esac
 }
 
@@ -1405,7 +1409,7 @@ warp_per_user_menu() {
       elif [[ -n "${warp_set[${email}]:-}" ]]; then
         status="warp"
       else
-        status="${default_mode}"
+        status="inherit:${default_mode}"
       fi
 
       printf "%-4s %-32s %-8s\n" "${row}" "${email}" "${status}"
@@ -1509,7 +1513,7 @@ warp_per_user_menu() {
     elif [[ -n "${warp_set[${email}]:-}" ]]; then
       cur_status="warp"
     else
-      cur_status="${default_mode}"
+      cur_status="inherit:${default_mode}"
     fi
 
     while true; do
@@ -1521,6 +1525,7 @@ warp_per_user_menu() {
       hr
       echo "  1) direct"
       echo "  2) warp"
+      echo "  3) inherit (ikut global)"
       echo "  0) kembali"
       hr
       read -r -p "Pilih: " s
@@ -1568,6 +1573,25 @@ warp_per_user_menu() {
           fi
           pause
           ;;
+        3)
+          if ! confirm_yn_or_back "Reset user ${email} ke INHERIT sekarang?"; then
+            warn "Reset WARP per-user dibatalkan."
+            pause
+            continue
+          fi
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_user_set_effective_mode "${email}" inherit "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-user di-stage INHERIT: ${email}"
+            pause
+            break
+          fi
+          pause
+          ;;
         *) warn "Pilihan tidak valid" ; sleep 1 ;;
       esac
     done
@@ -1577,7 +1601,7 @@ warp_per_user_menu() {
 
 warp_inbound_set_effective_mode() {
   local tag="$1"
-  local desired="$2" # direct|warp
+  local desired="$2" # direct|warp|inherit
   local candidate_file="${3:-}"
 
   if [[ "${tag}" == "api" ]]; then
@@ -1586,7 +1610,11 @@ warp_inbound_set_effective_mode() {
   fi
 
   case "${desired}" in
-    direct|warp)
+    inherit) desired="off" ;;
+  esac
+
+  case "${desired}" in
+    direct|warp|off)
       if [[ -n "${candidate_file}" ]]; then
         if ! xray_routing_rule_set_inbound_outbound_mode_in_file "${candidate_file}" "${candidate_file}" "${tag}" "${desired}"; then
           warn "Gagal men-stage mode WARP per-inbound untuk ${tag}."
@@ -1599,7 +1627,7 @@ warp_inbound_set_effective_mode() {
         fi
       fi
       ;;
-    *) warn "Mode inbound harus direct|warp" ;;
+    *) warn "Mode inbound harus direct|warp|inherit" ;;
   esac
 }
 
@@ -1702,14 +1730,14 @@ warp_per_inbounds_menu() {
       elif [[ -n "${warp_set[${t}]:-}" ]]; then
         status="warp"
       else
-        status="${default_mode}"
+        status="inherit:${default_mode}"
       fi
 
       printf "%-4s %-28s %-8s\n" "$((i + 1))" "${t}" "${status}"
     done
 
     hr
-    echo "Pilih No untuk stage (direct/warp), atau apply/discard/0 kembali"
+    echo "Pilih No untuk stage (direct/warp/inherit), atau apply/discard/0 kembali"
     read -r -p "Pilih: " c
 
     if is_back_choice "${c}"; then
@@ -1791,7 +1819,7 @@ warp_per_inbounds_menu() {
     elif [[ -n "${warp_set[${t}]:-}" ]]; then
       cur_status="warp"
     else
-      cur_status="${default_mode}"
+      cur_status="inherit:${default_mode}"
     fi
 
     while true; do
@@ -1803,6 +1831,7 @@ warp_per_inbounds_menu() {
       hr
       echo "  1) direct"
       echo "  2) warp"
+      echo "  3) inherit (ikut global)"
       echo "  0) kembali"
       hr
       read -r -p "Pilih: " s
@@ -1845,6 +1874,25 @@ warp_per_inbounds_menu() {
           if warp_inbound_set_effective_mode "${t}" warp "${routing_candidate}"; then
             pending_changes="true"
             log "Per-inbounds di-stage WARP: ${t}"
+            pause
+            break
+          fi
+	          pause
+	          ;;
+        3)
+          if ! confirm_yn_or_back "Reset inbound ${t} ke INHERIT sekarang?"; then
+            warn "Reset WARP per-inbound dibatalkan."
+            pause
+            continue
+          fi
+          if ! xray_routing_candidate_prepare routing_candidate; then
+            warn "Gagal menyiapkan staging routing."
+            pause
+            continue
+          fi
+          if warp_inbound_set_effective_mode "${t}" inherit "${routing_candidate}"; then
+            pending_changes="true"
+            log "Per-inbounds di-stage INHERIT: ${t}"
             pause
             break
           fi

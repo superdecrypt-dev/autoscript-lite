@@ -789,6 +789,71 @@ ssh_network_user_route_mode_set() {
   ssh_qac_atomic_update_file "${qf}" network_route_mode_set "${mode}"
 }
 
+ssh_network_global_mode_apply_with_runtime() {
+  local target_mode="${1:-}"
+  local prev_mode=""
+  local -a rollback_notes=()
+  case "${target_mode}" in
+    direct|warp) ;;
+    *) return 1 ;;
+  esac
+
+  prev_mode="$(ssh_network_config_get | awk -F'=' '/^global_mode=/{print $2; exit}')"
+  [[ "${prev_mode}" == "direct" || "${prev_mode}" == "warp" ]] || prev_mode="direct"
+
+  if ! ssh_network_global_mode_set "${target_mode}"; then
+    return 1
+  fi
+  if ssh_network_runtime_apply_now; then
+    return 0
+  fi
+
+  if ! ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1; then
+    rollback_notes+=("restore config gagal")
+  elif ! ssh_network_runtime_apply_now >/dev/null 2>&1; then
+    rollback_notes+=("restore runtime gagal")
+  fi
+
+  if ((${#rollback_notes[@]} > 0)); then
+    warn "Routing SSH global gagal diubah ke ${target_mode}; rollback tidak sepenuhnya bersih: $(IFS=' | '; echo "${rollback_notes[*]}")."
+  fi
+  return 1
+}
+
+ssh_network_user_route_mode_apply_with_runtime() {
+  local username="${1:-}"
+  local target_mode="${2:-}"
+  local qf="" prev_mode=""
+  local -a rollback_notes=()
+  [[ -n "${username}" ]] || return 1
+  case "${target_mode}" in
+    inherit|direct|warp) ;;
+    *) return 1 ;;
+  esac
+
+  qf="$(ssh_user_state_resolve_file "${username}")"
+  [[ -n "${qf}" ]] || qf="$(ssh_user_state_file "${username}")"
+  prev_mode="$(ssh_network_user_route_mode_get "${qf}")"
+
+  if ! ssh_network_user_route_mode_set "${username}" "${target_mode}"; then
+    return 1
+  fi
+  if ssh_network_runtime_apply_now; then
+    return 0
+  fi
+
+  if ! ssh_network_user_route_mode_set "${username}" "${prev_mode}" >/dev/null 2>&1; then
+    rollback_notes+=("restore metadata gagal")
+  elif ! ssh_network_runtime_apply_now >/dev/null 2>&1; then
+    rollback_notes+=("restore runtime gagal")
+  fi
+
+  if ((${#rollback_notes[@]} > 0)); then
+    warn "Routing SSH user '${username}' gagal diubah ke ${target_mode}; rollback tidak sepenuhnya bersih: $(IFS=' | '; echo "${rollback_notes[*]}")."
+  fi
+  return 1
+}
+
 ssh_network_effective_rows() {
   local cfg global_mode username uid qf override effective
   cfg="$(ssh_network_config_get)"
@@ -2096,25 +2161,21 @@ ssh_network_route_global_menu() {
     fi
     case "${c}" in
       1)
-        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Set routing SSH global ke DIRECT sekarang?"; then
           warn "Set routing global direct dibatalkan."
-        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_apply_with_runtime direct; then
           log "Routing SSH global diubah ke DIRECT."
         else
-          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "Routing SSH global gagal diubah ke DIRECT."
         fi
         pause
         ;;
       2)
-        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Set routing SSH global ke WARP sekarang?"; then
           warn "Set routing global WARP dibatalkan."
-        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_apply_with_runtime warp; then
           log "Routing SSH global diubah ke WARP."
         else
-          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "Routing SSH global gagal diubah ke WARP."
         fi
         pause
@@ -2215,7 +2276,7 @@ ssh_network_route_user_menu() {
     fi
     case "${c}" in
       1|2|3)
-        local target_user="" target_mode="" target_qf="" prev_mode=""
+        local target_user="" target_mode=""
         case "${c}" in
           1) target_mode="${mode1}" ;;
           2) target_mode="${mode2}" ;;
@@ -2225,8 +2286,6 @@ ssh_network_route_user_menu() {
           pause
           continue
         fi
-        target_qf="$(ssh_user_state_resolve_file "${target_user}")"
-        prev_mode="$(ssh_network_user_route_mode_get "${target_qf}")"
         if [[ "${menu_context}" == "warp" ]]; then
           confirm_prompt="Set mode WARP SSH '${target_user}' ke ${target_mode} sekarang?"
           cancel_msg="Set mode WARP user dibatalkan."
@@ -2240,10 +2299,9 @@ ssh_network_route_user_menu() {
         fi
         if ! confirm_yn_or_back "${confirm_prompt}"; then
           warn "${cancel_msg}"
-        elif ssh_network_user_route_mode_set "${target_user}" "${target_mode}" && ssh_network_runtime_apply_now; then
+        elif ssh_network_user_route_mode_apply_with_runtime "${target_user}" "${target_mode}"; then
           log "${success_msg}"
         else
-          [[ -n "${prev_mode}" ]] && ssh_network_user_route_mode_set "${target_user}" "${prev_mode}" >/dev/null 2>&1 || true
           warn "${fail_msg}"
         fi
         pause
@@ -2318,25 +2376,21 @@ ssh_network_warp_global_menu() {
     fi
     case "${c}" in
       1)
-        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Aktifkan WARP global untuk trafik SSH sekarang?"; then
           warn "Enable WARP SSH global dibatalkan."
-        elif ssh_network_global_mode_set warp && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_apply_with_runtime warp; then
           log "WARP SSH global diaktifkan."
         else
-          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal diaktifkan."
         fi
         pause
         ;;
       2)
-        local prev_mode="${global_mode}"
         if ! confirm_yn_or_back "Matikan WARP global untuk trafik SSH sekarang?"; then
           warn "Disable WARP SSH global dibatalkan."
-        elif ssh_network_global_mode_set direct && ssh_network_runtime_apply_now; then
+        elif ssh_network_global_mode_apply_with_runtime direct; then
           log "WARP SSH global dimatikan."
         else
-          ssh_network_global_mode_set "${prev_mode}" >/dev/null 2>&1 || true
           warn "WARP SSH global gagal dimatikan."
         fi
         pause

@@ -570,6 +570,22 @@ domain_control_cf_sync_pending_exists() {
   [[ -n "$(domain_control_cf_sync_pending_list_files | head -n1 || true)" ]]
 }
 
+domain_control_cf_sync_pending_count() {
+  local domain="${1:-}"
+  local file="" count=0
+  if [[ -n "${domain}" ]]; then
+    file="$(domain_control_cf_sync_pending_find_file "${domain}" 2>/dev/null || true)"
+    [[ -n "${file}" ]] && count=1
+    printf '%s\n' "${count}"
+    return 0
+  fi
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    count=$((count + 1))
+  done < <(domain_control_cf_sync_pending_list_files)
+  printf '%s\n' "${count}"
+}
+
 domain_control_cf_sync_pending_field_get_from_file() {
   local file="${1:-}"
   local key="${2:-}"
@@ -2055,22 +2071,36 @@ domain_control_menu() {
   local compat_prompted="false"
   while true; do
     local -a items=()
-    local cf_pending="false"
+    local cf_pending_total="false"
+    local cf_pending_active="false"
     local cf_pending_count=0
+    local cf_pending_active_count=0
+    local cf_pending_other_count=0
     local pending_prompt_rc=0
     local compat_prompt_rc=0
     local active_domain="" sync_state_domain="" compat_domain=""
-    domain_control_cf_sync_pending_exists && cf_pending="true"
-    if [[ "${cf_pending}" == "true" ]]; then
-      cf_pending_count="$(domain_control_cf_sync_pending_list_files | wc -l | tr -d '[:space:]' || true)"
-      [[ "${cf_pending_count}" =~ ^[0-9]+$ ]] || cf_pending_count=0
-    else
-      pending_prompted="false"
-    fi
     active_domain="$(normalize_domain_token "$(detect_domain 2>/dev/null || true)")"
     sync_state_domain="$(normalize_domain_token "$(account_info_domain_sync_state_read)")"
     compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
     compat_domain="$(normalize_domain_token "${compat_domain}")"
+    cf_pending_count="$(domain_control_cf_sync_pending_count)"
+    [[ "${cf_pending_count}" =~ ^[0-9]+$ ]] || cf_pending_count=0
+    if (( cf_pending_count > 0 )); then
+      cf_pending_total="true"
+    else
+      pending_prompted="false"
+    fi
+    if [[ -n "${active_domain}" ]]; then
+      cf_pending_active_count="$(domain_control_cf_sync_pending_count "${active_domain}")"
+      [[ "${cf_pending_active_count}" =~ ^[0-9]+$ ]] || cf_pending_active_count=0
+      if (( cf_pending_active_count > 0 )); then
+        cf_pending_active="true"
+      fi
+    fi
+    cf_pending_other_count=$((cf_pending_count - cf_pending_active_count))
+    if (( cf_pending_other_count < 0 )); then
+      cf_pending_other_count=0
+    fi
     items=(
       "1|Set Domain"
       "2|Current Domain"
@@ -2078,12 +2108,12 @@ domain_control_menu() {
       "4|Guard Renew (external binary)"
       "5|Refresh Account Info"
       "6|Repair Compat Domain Drift (repair-only)"
-      "7|Repair Target DNS Record (manual repair)$([[ "${cf_pending}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
+      "7|Repair Target DNS Record (manual repair)$([[ "${cf_pending_total}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
       "0|Back"
     )
     ui_menu_screen_begin "8) Domain Control"
-    if [[ "${cf_pending}" == "true" ]]; then
-      warn "Ada ${cf_pending_count} pending repair target DNS Cloudflare. Gunakan 'Repair Target DNS Record' bila ingin menyelesaikannya."
+    if [[ "${cf_pending_active}" == "true" ]]; then
+      warn "Ada ${cf_pending_active_count} pending repair target DNS Cloudflare untuk domain aktif ${active_domain}. Gunakan 'Repair Target DNS Record' bila ingin menyelesaikannya."
       hr
       if [[ "${pending_prompted}" != "true" ]]; then
         pending_prompted="true"
@@ -2097,6 +2127,12 @@ domain_control_menu() {
           hr
         fi
       fi
+    else
+      pending_prompted="false"
+      if (( cf_pending_other_count > 0 )); then
+        warn "Ada ${cf_pending_other_count} pending repair target DNS Cloudflare untuk domain lain. Ini tidak memblokir operasi domain aktif saat ini."
+        hr
+      fi
     fi
     if [[ "${sync_state_domain}" == "-" ]]; then
       warn "Sync state ACCOUNT INFO masih pending. Jalankan 'Refresh Account Info' sampai semua batch selesai."
@@ -2105,7 +2141,7 @@ domain_control_menu() {
       warn "Sync state ACCOUNT INFO terakhir (${sync_state_domain}) belum cocok dengan domain aktif (${active_domain})."
       hr
     fi
-    if [[ "${cf_pending}" != "true" && -n "${active_domain}" && -n "${compat_domain}" && "${compat_domain}" != "${active_domain}" ]]; then
+    if [[ "${cf_pending_active}" != "true" && -n "${active_domain}" && -n "${compat_domain}" && "${compat_domain}" != "${active_domain}" ]]; then
       warn "Compat domain drift terdeteksi: ${compat_domain} != ${active_domain}"
       hr
       if [[ "${compat_prompted}" != "true" ]]; then
@@ -2131,7 +2167,7 @@ domain_control_menu() {
     fi
     case "${c}" in
       1)
-        if [[ "${cf_pending}" == "true" ]]; then
+        if [[ "${cf_pending_active}" == "true" ]]; then
           warn "Set Domain ditahan: masih ada pending repair target DNS Cloudflare untuk domain aktif."
           warn "Selesaikan 'Repair Target DNS Record' dulu agar perubahan domain baru tidak menumpuk di atas pending repair lama."
           pause
@@ -2142,7 +2178,7 @@ domain_control_menu() {
       2) domain_control_show_info ;;
       3) menu_run_isolated_report "Domain Guard Check" domain_control_guard_check ;;
       4)
-        if [[ "${cf_pending}" == "true" ]]; then
+        if [[ "${cf_pending_active}" == "true" ]]; then
           warn "Guard Renew ditahan: masih ada pending repair target DNS Cloudflare."
           warn "Selesaikan repair target DNS dulu agar postflight guard tidak berjalan di atas state Cloudflare yang belum sinkron."
           pause
@@ -2151,7 +2187,7 @@ domain_control_menu() {
         menu_run_isolated_report "Domain Guard Renew (External)" domain_control_guard_renew_if_needed
         ;;
       5)
-        if [[ "${cf_pending}" == "true" ]]; then
+        if [[ "${cf_pending_active}" == "true" ]]; then
           warn "Refresh Account Info ditahan: masih ada pending repair target DNS Cloudflare."
           warn "Selesaikan repair target DNS dulu agar refresh berjalan di atas state domain yang benar-benar final."
           pause
@@ -2160,7 +2196,7 @@ domain_control_menu() {
         menu_run_isolated_report "Refresh Account Info" domain_control_refresh_account_info_now
         ;;
       6)
-        if [[ "${cf_pending}" == "true" ]]; then
+        if [[ "${cf_pending_active}" == "true" ]]; then
           warn "Repair Compat Domain ditahan: masih ada pending repair target DNS Cloudflare."
           warn "Selesaikan repair target DNS dulu agar artefak compat tidak disinkronkan ke state yang belum final."
           pause

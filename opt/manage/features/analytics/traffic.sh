@@ -38,13 +38,15 @@ def to_int(v, default=0):
 
 entries = []
 proto_summary = {p: {"users": 0, "used_bytes": 0, "quota_bytes": 0} for p in protos}
+duplicate_groups_total = 0
+duplicate_files_total = 0
 
 for proto in protos:
   pdir = ssh_quota_dir if proto == "ssh" else os.path.join(quota_root, proto)
   if not os.path.isdir(pdir):
     continue
 
-  chosen = {}
+  grouped = {}
   for name in os.listdir(pdir):
     if not name.endswith(".json"):
       continue
@@ -54,12 +56,6 @@ for proto in protos:
     if not key:
       continue
     has_at = "@" in stem
-    prev = chosen.get(key)
-    if prev is None or (has_at and not prev["has_at"]):
-      chosen[key] = {"name": name, "has_at": has_at}
-
-  for uname in sorted(chosen.keys(), key=lambda x: x.lower()):
-    name = chosen[uname]["name"]
     path = os.path.join(pdir, name)
     try:
       with open(path, "r", encoding="utf-8") as f:
@@ -69,7 +65,7 @@ for proto in protos:
     except Exception:
       data = {}
 
-    username = str(data.get("username") or uname).strip() or uname
+    username = str(data.get("username") or key).strip() or key
     used_bytes = to_int(data.get("quota_used"), 0)
     quota_bytes = to_int(data.get("quota_limit"), 0)
     if used_bytes < 0:
@@ -77,20 +73,46 @@ for proto in protos:
     if quota_bytes < 0:
       quota_bytes = 0
     expired_at = str(data.get("expired_at") or "-")
+    current = grouped.get(key)
+    if current is None:
+      current = {
+        "username": username,
+        "proto": proto,
+        "used_bytes": used_bytes,
+        "quota_bytes": quota_bytes,
+        "expired_at": expired_at,
+        "source_file": path,
+        "source_files": [path],
+        "duplicate_files": 0,
+        "_preferred_has_at": has_at,
+      }
+      grouped[key] = current
+      continue
 
-    entry = {
-      "username": username,
-      "proto": proto,
-      "used_bytes": used_bytes,
-      "quota_bytes": quota_bytes,
-      "expired_at": expired_at,
-      "source_file": path,
-    }
+    current["source_files"].append(path)
+    current["duplicate_files"] += 1
+    current["used_bytes"] = max(int(current.get("used_bytes") or 0), used_bytes)
+    current["quota_bytes"] = max(int(current.get("quota_bytes") or 0), quota_bytes)
+    current_expired = str(current.get("expired_at") or "-")
+    if expired_at != "-" and (current_expired == "-" or expired_at > current_expired):
+      current["expired_at"] = expired_at
+    if has_at and not current.get("_preferred_has_at"):
+      current["username"] = username
+      current["source_file"] = path
+      current["_preferred_has_at"] = True
+    elif current.get("username") in ("", key) and username not in ("", key):
+      current["username"] = username
+
+  for uname in sorted(grouped.keys(), key=lambda x: x.lower()):
+    entry = grouped[uname]
+    if int(entry.get("duplicate_files") or 0) > 0:
+      duplicate_groups_total += 1
+      duplicate_files_total += int(entry.get("duplicate_files") or 0)
+    entry.pop("_preferred_has_at", None)
     entries.append(entry)
-
     proto_summary[proto]["users"] += 1
-    proto_summary[proto]["used_bytes"] += used_bytes
-    proto_summary[proto]["quota_bytes"] += quota_bytes
+    proto_summary[proto]["used_bytes"] += int(entry.get("used_bytes") or 0)
+    proto_summary[proto]["quota_bytes"] += int(entry.get("quota_bytes") or 0)
 
 entries.sort(key=lambda x: (-int(x["used_bytes"]), str(x["username"]).lower(), str(x["proto"]).lower()))
 
@@ -104,6 +126,8 @@ payload = {
   "total_users": total_users,
   "total_used_bytes": total_used_bytes,
   "total_quota_bytes": total_quota_bytes,
+  "duplicate_groups_total": duplicate_groups_total,
+  "duplicate_files_total": duplicate_files_total,
   "protocols": proto_summary,
   "top_users": entries,
 }
@@ -173,6 +197,8 @@ generated = data.get("generated_at_utc") or "-"
 total_users = int(data.get("total_users") or 0)
 total_used = int(data.get("total_used_bytes") or 0)
 total_quota = int(data.get("total_quota_bytes") or 0)
+duplicate_groups = int(data.get("duplicate_groups_total") or 0)
+duplicate_files = int(data.get("duplicate_files_total") or 0)
 avg_used = int(total_used / total_users) if total_users > 0 else 0
 
 print(f"Generated UTC : {generated}")
@@ -180,6 +206,8 @@ print(f"Total Users   : {total_users}")
 print(f"Total Used    : {human_bytes(total_used)}")
 print(f"Total Quota   : {human_bytes(total_quota)}")
 print(f"Avg/User Used : {human_bytes(avg_used)}")
+if duplicate_groups > 0:
+  print(f"Duplicates    : {duplicate_groups} merged group(s), {duplicate_files} extra file(s)")
 print()
 print("By Protocol:")
 
@@ -425,5 +453,4 @@ traffic_analytics_menu() {
     esac
   done
 }
-
 
