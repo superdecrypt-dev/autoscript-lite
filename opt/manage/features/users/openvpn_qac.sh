@@ -17,6 +17,89 @@ openvpn_qac_state_dirs_prepare() {
   chmod 755 "${root}" 2>/dev/null || true
 }
 
+openvpn_qac_sync_metadata_file() {
+  local qf="${1:-}"
+  [[ -f "${qf}" ]] || return 0
+  need_python3
+  python3 - "${qf}" "${OPENVPN_CONFIG_ENV_FILE}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+cfg_path = Path(sys.argv[2])
+
+def read_env_map(candidate: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    if not candidate.is_file():
+        return data
+    try:
+        lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return data
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        data[key.strip()] = value.strip().strip('"').strip("'")
+    return data
+
+def read_json(candidate: Path) -> dict:
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+def norm_date(value: object) -> str:
+    text = str(value or "").strip()
+    return text[:10] if text else "-"
+
+payload = read_json(path)
+username = str(payload.get("username") or path.stem).strip().replace("@openvpn", "")
+if "@" in username:
+    username = username.split("@", 1)[0]
+if not username:
+    raise SystemExit(0)
+
+cfg = read_env_map(cfg_path)
+ssh_root = Path(str(cfg.get("OPENVPN_SSH_STATE_DIR") or "/opt/quota/ssh").strip() or "/opt/quota/ssh")
+source = {}
+for candidate in (ssh_root / f"{username}@ssh.json", ssh_root / f"{username}.json"):
+    if candidate.is_file():
+        source = read_json(candidate)
+        if source:
+            break
+if not source:
+    raise SystemExit(0)
+
+changed = False
+created_at = str(source.get("created_at") or payload.get("created_at") or "-").strip() or "-"
+if str(payload.get("created_at") or "").strip() != created_at:
+    payload["created_at"] = created_at
+    changed = True
+
+expired_at = norm_date(source.get("expired_at"))
+if str(payload.get("expired_at") or "").strip() != expired_at:
+    payload["expired_at"] = expired_at
+    changed = True
+
+if not changed:
+    raise SystemExit(0)
+
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=True, indent=2)
+    handle.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+}
+
 openvpn_qac_need_manage_bin() {
   [[ -x "${OPENVPN_MANAGE_BIN}" ]] || {
     warn "Binary OpenVPN manage tidak ditemukan: ${OPENVPN_MANAGE_BIN}"
@@ -37,6 +120,7 @@ openvpn_qac_collect_files() {
   OPENVPN_QAC_FILES=()
   [[ -d "${root}" ]] || return 0
   while IFS= read -r -d '' path; do
+    openvpn_qac_sync_metadata_file "${path}" >/dev/null 2>&1 || true
     OPENVPN_QAC_FILES+=("${path}")
   done < <(find "${root}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
 }
@@ -280,20 +364,36 @@ elif action == "clear_ip_limit_locked":
 elif action == "set_speed_down":
     if len(args) != 1:
         raise SystemExit("set_speed_down butuh 1 argumen")
-    status["speed_down_mbit"] = max(0.0, to_float(args[0], 0.0))
+    value = max(0.0, to_float(args[0], 0.0))
+    if value <= 0:
+        raise SystemExit("set_speed_down harus > 0")
+    status["speed_down_mbit"] = value
 elif action == "set_speed_up":
     if len(args) != 1:
         raise SystemExit("set_speed_up butuh 1 argumen")
-    status["speed_up_mbit"] = max(0.0, to_float(args[0], 0.0))
+    value = max(0.0, to_float(args[0], 0.0))
+    if value <= 0:
+        raise SystemExit("set_speed_up harus > 0")
+    status["speed_up_mbit"] = value
 elif action == "speed_limit_enabled_set":
     if len(args) != 1:
         raise SystemExit("speed_limit_enabled_set butuh 1 argumen (on/off)")
-    status["speed_limit_enabled"] = to_bool(args[0])
+    enabled = to_bool(args[0])
+    if enabled:
+        down = max(0.0, to_float(status.get("speed_down_mbit"), 0.0))
+        up = max(0.0, to_float(status.get("speed_up_mbit"), 0.0))
+        if down <= 0 or up <= 0:
+            raise SystemExit("Set speed down/up > 0 dulu sebelum ON.")
+    status["speed_limit_enabled"] = enabled
 elif action == "set_speed_all_enable":
     if len(args) != 2:
         raise SystemExit("set_speed_all_enable butuh 2 argumen")
-    status["speed_down_mbit"] = max(0.0, to_float(args[0], 0.0))
-    status["speed_up_mbit"] = max(0.0, to_float(args[1], 0.0))
+    down = max(0.0, to_float(args[0], 0.0))
+    up = max(0.0, to_float(args[1], 0.0))
+    if down <= 0 or up <= 0:
+        raise SystemExit("set_speed_all_enable butuh speed down/up > 0")
+    status["speed_down_mbit"] = down
+    status["speed_up_mbit"] = up
     status["speed_limit_enabled"] = True
 else:
     raise SystemExit(f"action tidak dikenal: {action}")
@@ -328,10 +428,11 @@ PY
 openvpn_qac_enforce_now_user() {
   local username="${1:-}"
   [[ -n "${username}" ]] || return 1
-  if [[ -x "/usr/local/bin/sshws-qac-enforcer" ]]; then
-    /usr/local/bin/sshws-qac-enforcer --once --user "${username}" >/dev/null 2>&1 || return 1
+  if [[ ! -x "/usr/local/bin/sshws-qac-enforcer" ]]; then
+    warn "sshws-qac-enforcer tidak ditemukan."
+    return 1
   fi
-  return 0
+  /usr/local/bin/sshws-qac-enforcer --once --user "${username}" >/dev/null 2>&1
 }
 
 openvpn_qac_refresh_runtime() {
@@ -343,10 +444,27 @@ openvpn_qac_refresh_runtime() {
 openvpn_qac_apply_with_runtime() {
   local username="${1:-}"
   local qf="${2:-}"
+  local backup=""
   shift 2 || true
-  openvpn_qac_atomic_update_file "${qf}" "$@" || return 1
-  openvpn_qac_enforce_now_user "${username}" || return 1
+  backup="$(mktemp "$(dirname "${qf}")/.$(basename "${qf}").rollback.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${backup}" ]] || return 1
+  cp -f -- "${qf}" "${backup}" >/dev/null 2>&1 || {
+    rm -f -- "${backup}" >/dev/null 2>&1 || true
+    return 1
+  }
+  if ! openvpn_qac_atomic_update_file "${qf}" "$@"; then
+    rm -f -- "${backup}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! openvpn_qac_enforce_now_user "${username}"; then
+    install -m 600 "${backup}" "${qf}" >/dev/null 2>&1 || cp -f -- "${backup}" "${qf}" >/dev/null 2>&1 || true
+    openvpn_qac_enforce_now_user "${username}" >/dev/null 2>&1 || true
+    openvpn_qac_refresh_runtime
+    rm -f -- "${backup}" >/dev/null 2>&1 || true
+    return 1
+  fi
   openvpn_qac_refresh_runtime
+  rm -f -- "${backup}" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -354,6 +472,7 @@ openvpn_qac_show_detail() {
   local username="${1:-}"
   local qf="${2:-}"
   [[ -f "${qf}" ]] || return 1
+  openvpn_qac_sync_metadata_file "${qf}" >/dev/null 2>&1 || true
   python3 - "${qf}" <<'PY'
 import json
 import sys
@@ -586,8 +705,9 @@ PY
           break
         fi
         is_back_choice "${speed_down_input}" && continue
-        if [[ -z "${speed_down_input}" || ! "${speed_down_input}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-          warn "Speed download harus angka."
+        if [[ -z "${speed_down_input}" || ! "${speed_down_input}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+          || ! awk -v value="${speed_down_input}" 'BEGIN { exit !(value + 0 > 0) }'; then
+          warn "Speed download harus angka > 0."
           sleep 1
           continue
         fi
@@ -604,8 +724,9 @@ PY
           break
         fi
         is_back_choice "${speed_up_input}" && continue
-        if [[ -z "${speed_up_input}" || ! "${speed_up_input}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-          warn "Speed upload harus angka."
+        if [[ -z "${speed_up_input}" || ! "${speed_up_input}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+          || ! awk -v value="${speed_up_input}" 'BEGIN { exit !(value + 0 > 0) }'; then
+          warn "Speed upload harus angka > 0."
           sleep 1
           continue
         fi
@@ -639,7 +760,7 @@ PY
             log "Speed limit OpenVPN: OFF"
           fi
         else
-          if [[ "${speed_down_now}" == "0" && "${speed_up_now}" == "0" ]]; then
+          if ! awk -v down="${speed_down_now}" -v up="${speed_up_now}" 'BEGIN { exit !(down + 0 > 0 && up + 0 > 0) }'; then
             warn "Set speed down/up dulu sebelum mengaktifkan speed limit."
           elif ! openvpn_qac_apply_with_runtime "${username}" "${qf}" set_speed_all_enable "${speed_down_now}" "${speed_up_now}"; then
             warn "Gagal mengaktifkan speed limit OpenVPN."

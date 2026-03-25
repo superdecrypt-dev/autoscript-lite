@@ -402,65 +402,126 @@ def read_json_file(path: Path) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
+def ssh_policy_source(cfg: dict[str, str], username: str) -> dict[str, object]:
+    for candidate in ssh_state_candidates(cfg, username):
+        if not candidate.exists():
+            continue
+        payload = read_json_file(candidate)
+        if payload:
+            return payload
+    return {}
+
+
+def policy_state_int(value: object, default: int = 0) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except Exception:
+        return default
+
+
+def policy_state_float(value: object, default: float = 0.0) -> float:
+    try:
+        return max(0.0, float(value or 0.0))
+    except Exception:
+        return default
+
+
 def ensure_policy_state(cfg: dict[str, str], username: str) -> Path:
     target = state_path(cfg, username)
-    if target.exists():
-        return target
-    source: dict[str, object] = {}
-    for candidate in ssh_state_candidates(cfg, username):
-        if candidate.exists():
-            source = read_json_file(candidate)
-            if source:
-                break
+    payload = read_json_file(target) if target.exists() else {}
+    creating = not target.exists() or not payload
+    source = ssh_policy_source(cfg, username)
     status_raw = source.get("status") if isinstance(source.get("status"), dict) else {}
-    try:
-        quota_limit = max(0, int(float(source.get("quota_limit") or 0)))
-    except Exception:
-        quota_limit = 0
-    try:
-        ip_limit = max(0, int(float(status_raw.get("ip_limit") or 0)))
-    except Exception:
-        ip_limit = 0
-    try:
-        speed_down = max(0.0, float(status_raw.get("speed_down_mbit") or 0.0))
-    except Exception:
-        speed_down = 0.0
-    try:
-        speed_up = max(0.0, float(status_raw.get("speed_up_mbit") or 0.0))
-    except Exception:
-        speed_up = 0.0
-    payload = {
-        "managed_by": "autoscript-manage",
-        "username": username,
-        "protocol": "openvpn",
-        "created_at": str(source.get("created_at") or time.strftime("%Y-%m-%d %H:%M")).strip() or time.strftime("%Y-%m-%d %H:%M"),
-        "expired_at": str(source.get("expired_at") or "-").strip()[:10] or "-",
-        "quota_limit": quota_limit,
-        "quota_unit": str(source.get("quota_unit") or "binary").strip().lower() or "binary",
-        "quota_used": 0,
-        "status": {
-            "manual_block": bool(status_raw.get("manual_block")),
-            "quota_exhausted": False,
-            "ip_limit_enabled": bool(status_raw.get("ip_limit_enabled")),
-            "ip_limit": ip_limit,
-            "ip_limit_locked": False,
-            "ip_limit_metric": 0,
-            "distinct_ip_count": 0,
-            "distinct_ips": [],
-            "active_sessions_total": 0,
-            "active_sessions_openvpn": 0,
-            "distinct_ip_count_openvpn": 0,
-            "distinct_ips_openvpn": [],
-            "speed_limit_enabled": bool(status_raw.get("speed_limit_enabled")),
-            "speed_down_mbit": speed_down,
-            "speed_up_mbit": speed_up,
-            "lock_reason": "",
-            "account_locked": False,
-            "lock_owner": "",
-            "lock_shell_restore": "",
-        },
-    }
-    write_atomic(target, json.dumps(payload, ensure_ascii=True, indent=2) + "\n", 0o600)
+    existing_status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+
+    if creating:
+        try:
+            quota_limit = max(0, int(float(source.get("quota_limit") or 0)))
+        except Exception:
+            quota_limit = 0
+        try:
+            ip_limit = max(0, int(float(status_raw.get("ip_limit") or 0)))
+        except Exception:
+            ip_limit = 0
+        try:
+            speed_down = max(0.0, float(status_raw.get("speed_down_mbit") or 0.0))
+        except Exception:
+            speed_down = 0.0
+        try:
+            speed_up = max(0.0, float(status_raw.get("speed_up_mbit") or 0.0))
+        except Exception:
+            speed_up = 0.0
+        payload = {
+            "managed_by": "autoscript-manage",
+            "username": username,
+            "protocol": "openvpn",
+            "created_at": str(source.get("created_at") or time.strftime("%Y-%m-%d %H:%M")).strip() or time.strftime("%Y-%m-%d %H:%M"),
+            "expired_at": str(source.get("expired_at") or "-").strip()[:10] or "-",
+            "quota_limit": quota_limit,
+            "quota_unit": str(source.get("quota_unit") or "binary").strip().lower() or "binary",
+            "quota_used": 0,
+            "status": {
+                "manual_block": bool(status_raw.get("manual_block")),
+                "quota_exhausted": False,
+                "ip_limit_enabled": bool(status_raw.get("ip_limit_enabled")),
+                "ip_limit": ip_limit,
+                "ip_limit_locked": False,
+                "ip_limit_metric": 0,
+                "distinct_ip_count": 0,
+                "distinct_ips": [],
+                "active_sessions_total": 0,
+                "active_sessions_openvpn": 0,
+                "distinct_ip_count_openvpn": 0,
+                "distinct_ips_openvpn": [],
+                "speed_limit_enabled": bool(status_raw.get("speed_limit_enabled")),
+                "speed_down_mbit": speed_down,
+                "speed_up_mbit": speed_up,
+                "lock_reason": "",
+                "account_locked": False,
+                "lock_owner": "",
+                "lock_shell_restore": "",
+            },
+        }
+    else:
+        payload["managed_by"] = "autoscript-manage"
+        payload["username"] = username
+        payload["protocol"] = "openvpn"
+        payload["created_at"] = str(payload.get("created_at") or "-").strip() or "-"
+        payload["expired_at"] = str(payload.get("expired_at") or "-").strip()[:10] or "-"
+        payload["quota_limit"] = policy_state_int(payload.get("quota_limit"), 0)
+        payload["quota_unit"] = str(payload.get("quota_unit") or "binary").strip().lower() or "binary"
+        if payload["quota_unit"] not in {"binary", "decimal"}:
+            payload["quota_unit"] = "binary"
+        payload["quota_used"] = policy_state_int(payload.get("quota_used"), 0)
+        payload["status"] = {
+            "manual_block": bool(existing_status.get("manual_block")),
+            "quota_exhausted": bool(existing_status.get("quota_exhausted")),
+            "ip_limit_enabled": bool(existing_status.get("ip_limit_enabled")),
+            "ip_limit": policy_state_int(existing_status.get("ip_limit"), 0),
+            "ip_limit_locked": bool(existing_status.get("ip_limit_locked")),
+            "ip_limit_metric": policy_state_int(existing_status.get("ip_limit_metric"), 0),
+            "distinct_ip_count": policy_state_int(existing_status.get("distinct_ip_count"), 0),
+            "distinct_ips": existing_status.get("distinct_ips") if isinstance(existing_status.get("distinct_ips"), list) else [],
+            "active_sessions_total": policy_state_int(existing_status.get("active_sessions_total"), 0),
+            "active_sessions_openvpn": policy_state_int(existing_status.get("active_sessions_openvpn"), 0),
+            "distinct_ip_count_openvpn": policy_state_int(existing_status.get("distinct_ip_count_openvpn"), 0),
+            "distinct_ips_openvpn": existing_status.get("distinct_ips_openvpn") if isinstance(existing_status.get("distinct_ips_openvpn"), list) else [],
+            "speed_limit_enabled": bool(existing_status.get("speed_limit_enabled")),
+            "speed_down_mbit": policy_state_float(existing_status.get("speed_down_mbit"), 0.0),
+            "speed_up_mbit": policy_state_float(existing_status.get("speed_up_mbit"), 0.0),
+            "lock_reason": str(existing_status.get("lock_reason") or "").strip().lower(),
+            "account_locked": bool(existing_status.get("account_locked")),
+            "lock_owner": str(existing_status.get("lock_owner") or "").strip(),
+            "lock_shell_restore": str(existing_status.get("lock_shell_restore") or "").strip(),
+        }
+
+    if source:
+        payload["created_at"] = str(source.get("created_at") or payload.get("created_at") or "-").strip() or "-"
+        payload["expired_at"] = str(source.get("expired_at") or payload.get("expired_at") or "-").strip()[:10] or "-"
+
+    current_payload = read_json_file(target) if target.exists() else {}
+    if payload != current_payload:
+        write_atomic(target, json.dumps(payload, ensure_ascii=True, indent=2) + "\n", 0o600)
     return target
 
 
@@ -541,6 +602,8 @@ def linked_info(cfg: dict[str, str], username: str) -> dict[str, object]:
     meta = metadata_path(cfg, username)
     ports = openvpn_public_tcp_ports(cfg)
     user_exists = linux_user_exists(username)
+    if user_exists:
+        ensure_policy_state(cfg, username)
     payload: dict[str, object] = {
         "ok": True,
         "enabled": user_exists,
@@ -574,6 +637,7 @@ def profile_download(cfg: dict[str, str], username: str) -> dict[str, object]:
     username = validate_username(username)
     if not linux_user_exists(username):
         die(f"User SSH tidak ditemukan: {username}")
+    ensure_policy_state(cfg, username)
     target = profile_path(cfg, username)
     if not target.exists():
         ensure_user(cfg, username)
