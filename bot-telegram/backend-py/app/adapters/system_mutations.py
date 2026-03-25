@@ -8815,6 +8815,43 @@ def op_network_warp_tier_zero_trust_set_client_secret(client_secret: str) -> tup
     return True, title, "Client secret Zero Trust disimpan."
 
 
+def op_network_warp_tier_zero_trust_setup_credentials(
+    team: str,
+    client_id: str,
+    client_secret: str,
+) -> tuple[bool, str, str]:
+    title = "Network Controls - Zero Trust Setup Credentials"
+    team_n = str(team or "").strip().lower()
+    client_id_n = str(client_id or "").strip()
+    client_secret_n = str(client_secret or "").strip()
+    if not team_n or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", team_n):
+        return False, title, "Team name Zero Trust tidak valid."
+    if not client_id_n:
+        return False, title, "Client ID Zero Trust tidak boleh kosong."
+    if not client_secret_n:
+        return False, title, "Client secret Zero Trust tidak boleh kosong."
+    with file_lock(WARP_LOCK_FILE):
+        current_team = _warp_zero_trust_env_value("WARP_ZEROTRUST_TEAM", "").strip().lower()
+        current_client_id = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_ID", "").strip()
+        current_client_secret = _warp_zero_trust_env_value("WARP_ZEROTRUST_CLIENT_SECRET", "").strip()
+        if (
+            current_team == team_n
+            and current_client_id == client_id_n
+            and current_client_secret == client_secret_n
+        ):
+            return True, title, "Credential Zero Trust sudah sama; config tidak diubah."
+        ok_set, msg_set = _warp_zero_trust_update_env_many(
+            {
+                "WARP_ZEROTRUST_TEAM": team_n,
+                "WARP_ZEROTRUST_CLIENT_ID": client_id_n,
+                "WARP_ZEROTRUST_CLIENT_SECRET": client_secret_n,
+            }
+        )
+        if not ok_set:
+            return False, title, msg_set
+    return True, title, "Credential Zero Trust disimpan."
+
+
 def op_network_warp_tier_zero_trust_apply() -> tuple[bool, str, str]:
     title = "Network Controls - Zero Trust Apply / Connect"
     if shutil.which("warp-cli") is None:

@@ -43,6 +43,33 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("warp_tier_reconnect_failed", title, msg)
 
+    if action == "warp_tier_zero_trust_setup_credentials":
+        ok_team, team_or_err = require_param(params, "team", "WARP Tier - Zero Trust Setup Credentials")
+        if not ok_team:
+            return team_or_err
+        ok_client_id, client_id_or_err = require_param(
+            params,
+            "client_id",
+            "WARP Tier - Zero Trust Setup Credentials",
+        )
+        if not ok_client_id:
+            return client_id_or_err
+        ok_client_secret, client_secret_or_err = require_param(
+            params,
+            "client_secret",
+            "WARP Tier - Zero Trust Setup Credentials",
+        )
+        if not ok_client_secret:
+            return client_secret_or_err
+        ok_op, title, msg = system_mutations.op_network_warp_tier_zero_trust_setup_credentials(
+            str(team_or_err),
+            str(client_id_or_err),
+            str(client_secret_or_err),
+        )
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("warp_tier_zero_trust_setup_credentials_failed", title, msg)
+
     if action == "warp_tier_zero_trust_set_team":
         ok_v, value_or_err = require_param(params, "team", "WARP Tier - Zero Trust Set Team")
         if not ok_v:

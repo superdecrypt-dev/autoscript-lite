@@ -2170,8 +2170,6 @@ warp_trace_field_get() {
     "https://cloudflare.com/cdn-cgi/trace"
     "https://1.1.1.1/cdn-cgi/trace"
     "https://1.0.0.1/cdn-cgi/trace"
-    "http://1.1.1.1/cdn-cgi/trace"
-    "http://1.0.0.1/cdn-cgi/trace"
   )
   [[ -n "${field}" ]] || return 0
   if ! have_cmd curl; then
@@ -2723,11 +2721,16 @@ warp_zero_trust_render_mdm_file() {
   mkdir -p "$(dirname "${WARP_ZEROTRUST_MDM_FILE}")" "${WARP_ZEROTRUST_ROOT}" 2>/dev/null || true
   tmp="$(mktemp "${WORK_DIR}/.warp-zerotrust-mdm.XXXXXX" 2>/dev/null || true)"
   [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.warp-zerotrust-mdm.$$"
-  python3 - <<'PY' "${tmp}" "${team}" "${client_id}" "${client_secret}" "${proxy_port}" || return 1
+  printf '%s\0%s\0%s' "${team}" "${client_id}" "${client_secret}" | python3 -c '
 import sys
 from xml.sax.saxutils import escape
 
-dst, team, client_id, client_secret, proxy_port = sys.argv[1:6]
+dst = sys.argv[1]
+proxy_port = sys.argv[2]
+parts = sys.stdin.buffer.read().split(b"\0")
+if len(parts) < 3:
+    raise SystemExit(1)
+team, client_id, client_secret = [item.decode("utf-8") for item in parts[:3]]
 xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <dict>
   <key>organization</key>
@@ -2750,7 +2753,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 """
 with open(dst, "w", encoding="utf-8") as fh:
   fh.write(xml)
-PY
+' "${tmp}" "${proxy_port}" || return 1
   mv -f "${tmp}" "${WARP_ZEROTRUST_MDM_FILE}" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     return 1
@@ -3022,11 +3025,13 @@ warp_zero_trust_configure_credentials() {
   if is_back_choice "${team_input}"; then
     return 0
   fi
-  read -r -p "Service token client id [ENTER=pakai nilai lama]: " client_id_input
+  read -r -s -p "Service token client id [ENTER=pakai nilai lama]: " client_id_input
+  echo
   if is_back_choice "${client_id_input}"; then
     return 0
   fi
-  read -r -p "Service token client secret [ENTER=pakai nilai lama]: " client_secret_input
+  read -r -s -p "Service token client secret [ENTER=pakai nilai lama]: " client_secret_input
+  echo
   if is_back_choice "${client_secret_input}"; then
     return 0
   fi

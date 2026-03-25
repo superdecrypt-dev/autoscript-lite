@@ -2632,6 +2632,39 @@
           "style": "primary"
         },
         {
+          "id": "warp_tier_zero_trust_setup_credentials",
+          "label": "Setup Credentials",
+          "mode": "modal",
+          "style": "primary",
+          "modal": {
+            "title": "Setup Zero Trust Credentials",
+            "fields": [
+              {
+                "id": "team",
+                "label": "Team Name",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: superdecrypt"
+              },
+              {
+                "id": "client_id",
+                "label": "Client ID",
+                "style": "short",
+                "required": true,
+                "placeholder": "tempel client id"
+              },
+              {
+                "id": "client_secret",
+                "label": "Client Secret",
+                "style": "short",
+                "required": true,
+                "placeholder": "tempel client secret"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
           "id": "warp_tier_zero_trust_set_team",
           "label": "Set Team Name",
           "mode": "modal",

@@ -28,16 +28,25 @@ backup_config_get_value() {
 backup_cli_require_helper() {
   local helper
   helper="$(backup_cli_helper_bin)"
-  if [[ -x "${helper}" ]]; then
-    return 0
+  if [[ ! -x "${helper}" ]]; then
+    warn "Helper backup CLI tidak ditemukan / tidak executable:"
+    echo "  ${helper}"
+    echo
+    echo "Hint: jalankan ulang setup.sh atau sync runtime agar backup-manage ikut terpasang."
+    hr
+    pause
+    return 1
   fi
-  warn "Helper backup CLI tidak ditemukan / tidak executable:"
-  echo "  ${helper}"
-  echo
-  echo "Hint: jalankan ulang setup.sh atau sync runtime agar backup-manage ikut terpasang."
-  hr
-  pause
-  return 1
+  if declare -F manage_bootstrap_path_trusted >/dev/null 2>&1 && ! manage_bootstrap_path_trusted "${helper}"; then
+    warn "Helper backup CLI tidak trusted:"
+    echo "  ${helper}"
+    echo
+    echo "Hint: pastikan owner root, bukan symlink, dan tidak writable oleh group/other."
+    hr
+    pause
+    return 1
+  fi
+  return 0
 }
 
 backup_rclone_require() {
@@ -235,7 +244,7 @@ backup_rclone_upsert_drive_remote() {
   cfg="$(backup_rclone_config_path)"
   [[ -n "${remote}" && -n "${token_input}" ]] || return 1
   mkdir -p "$(dirname "${cfg}")" 2>/dev/null || true
-  python3 - <<'PY' "${cfg}" "${remote}" "${token_input}"
+  printf '%s' "${token_input}" | python3 -c '
 from pathlib import Path
 import configparser
 import base64
@@ -244,7 +253,7 @@ import sys
 
 cfg_path = Path(sys.argv[1])
 remote = sys.argv[2]
-token_input = sys.argv[3].strip()
+token_input = sys.stdin.read().strip()
 
 
 def normalize_token(raw: str) -> str:
@@ -289,7 +298,7 @@ parser.set(remote, "token", token_json)
 with cfg_path.open("w", encoding="utf-8") as fh:
     parser.write(fh)
 cfg_path.chmod(0o600)
-PY
+' "${cfg}" "${remote}"
 }
 
 backup_rclone_upsert_r2_remote() {
@@ -301,16 +310,17 @@ backup_rclone_upsert_r2_remote() {
   cfg="$(backup_rclone_config_path)"
   [[ -n "${remote}" && -n "${account_id}" && -n "${access_key}" && -n "${secret_key}" ]] || return 1
   mkdir -p "$(dirname "${cfg}")" 2>/dev/null || true
-  python3 - <<'PY' "${cfg}" "${remote}" "${account_id}" "${access_key}" "${secret_key}"
+  printf '%s\0%s\0%s' "${account_id}" "${access_key}" "${secret_key}" | python3 -c '
 from pathlib import Path
 import configparser
 import sys
 
 cfg_path = Path(sys.argv[1])
 remote = sys.argv[2]
-account_id = sys.argv[3]
-access_key = sys.argv[4]
-secret_key = sys.argv[5]
+parts = sys.stdin.buffer.read().split(b"\0")
+if len(parts) < 3:
+    raise SystemExit(1)
+account_id, access_key, secret_key = [item.decode("utf-8").strip() for item in parts[:3]]
 parser = configparser.RawConfigParser()
 if cfg_path.exists():
     parser.read(cfg_path, encoding="utf-8")
@@ -326,7 +336,7 @@ parser.set(remote, "no_check_bucket", "true")
 with cfg_path.open("w", encoding="utf-8") as fh:
     parser.write(fh)
 cfg_path.chmod(0o600)
-PY
+' "${cfg}" "${remote}"
 }
 
 backup_rclone_section_value() {
@@ -481,16 +491,17 @@ backup_gdrive_setup_menu() {
         ui_menu_screen_begin "13) Tools > Backup/Restore > Google Drive > Setup > Paste Token"
         echo "Tempel hasil auth Google Drive satu baris, lalu Enter."
         echo "Bisa berupa JSON auth mentah atau blob panjang yang muncul setelah kembali ke rclone."
-        echo "Ketik CANCEL lalu Enter untuk batal dan kembali ke menu setup."
+        echo "Ketik 'kembali' lalu Enter untuk batal dan kembali ke menu setup."
         hr
         token_json=""
         local cancel_input="0"
-        if ! read -r token_json; then
+        if ! read -r -s token_json; then
           echo
         fi
+        echo
         token_json="${token_json%$'\r'}"
         token_json="$(backup_trim "${token_json}")"
-        if [[ "${token_json}" == "CANCEL" ]]; then
+        if is_back_choice "${token_json}" || [[ "${token_json}" == "CANCEL" ]]; then
           cancel_input="1"
           token_json=""
         fi
@@ -671,16 +682,28 @@ backup_r2_setup_menu() {
       1)
         read -r -p "Masukkan Account ID R2: " input || { echo; break; }
         input="$(backup_trim "${input}")"
+        if is_back_choice "${input}"; then
+          continue
+        fi
         [[ -n "${input}" ]] && account_id="${input}"
         read -r -p "Masukkan nama bucket [${bucket}]: " input || { echo; break; }
         input="$(backup_trim "${input}")"
+        if is_back_choice "${input}"; then
+          continue
+        fi
         [[ -n "${input}" ]] && bucket="${input}"
         read -r -p "Masukkan Access Key ID: " input || { echo; break; }
         input="$(backup_trim "${input}")"
+        if is_back_choice "${input}"; then
+          continue
+        fi
         [[ -n "${input}" ]] && access_key="${input}"
         read -r -s -p "Masukkan Secret Access Key: " input || { echo; break; }
         echo
         input="$(backup_trim "${input}")"
+        if is_back_choice "${input}"; then
+          continue
+        fi
         [[ -n "${input}" ]] && secret_key="${input}"
         if [[ -z "${account_id}" || -z "${access_key}" || -z "${secret_key}" || -z "${bucket}" ]]; then
           warn "Masih ada data yang belum diisi. Lengkapi lalu coba lagi."
@@ -788,9 +811,12 @@ backup_restore_local_menu() {
       5)
         ui_menu_screen_begin "13) Tools > Backup/Restore > Local > Restore From File"
         backup_cli_require_helper || return 0
-        read -r -p "Masukkan path arsip .tar.gz: " path || { echo; break; }
+        read -r -p "Masukkan path arsip .tar.gz (atau kembali): " path || { echo; break; }
         path="${path#"${path%%[![:space:]]*}"}"
         path="${path%"${path##*[![:space:]]}"}"
+        if is_back_choice "${path}"; then
+          continue
+        fi
         [[ -n "${path}" ]] || { warn "Path tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Restore dari file ${path} sekarang?"; then
           backup_cli_exec "13) Tools > Backup/Restore > Local > Restore From File" local restore-file "${path}"
@@ -875,8 +901,11 @@ backup_restore_cloud_menu() {
         ui_menu_screen_begin "13) Tools > Backup/Restore > ${label} > Restore Select Backup"
         backup_cli_show_cloud_list "${provider}" || continue
         hr
-        read -r -p "Masukkan NO backup dari hasil List Cloud Backups: " archive_name || { echo; break; }
+        read -r -p "Masukkan NO backup dari hasil List Cloud Backups (atau kembali): " archive_name || { echo; break; }
         archive_name="$(backup_trim "${archive_name}")"
+        if is_back_choice "${archive_name}"; then
+          continue
+        fi
         [[ -n "${archive_name}" ]] || { warn "Nomor backup tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Restore backup nomor ${archive_name} dari ${label} sekarang?"; then
           backup_cli_exec "13) Tools > Backup/Restore > ${label} > Restore Select Backup" cloud restore-file --provider "${provider}" --index "${archive_name}"
@@ -888,8 +917,11 @@ backup_restore_cloud_menu() {
         ui_menu_screen_begin "13) Tools > Backup/Restore > ${label} > Delete Cloud Backup"
         backup_cli_show_cloud_list "${provider}" || continue
         hr
-        read -r -p "Masukkan NO backup dari hasil List Cloud Backups yang akan dihapus: " archive_name || { echo; break; }
+        read -r -p "Masukkan NO backup dari hasil List Cloud Backups yang akan dihapus (atau kembali): " archive_name || { echo; break; }
         archive_name="$(backup_trim "${archive_name}")"
+        if is_back_choice "${archive_name}"; then
+          continue
+        fi
         [[ -n "${archive_name}" ]] || { warn "Nomor backup tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Hapus backup nomor ${archive_name} dari ${label} sekarang?"; then
           backup_cli_exec "13) Tools > Backup/Restore > ${label} > Delete Cloud Backup" cloud delete-file --provider "${provider}" --index "${archive_name}"

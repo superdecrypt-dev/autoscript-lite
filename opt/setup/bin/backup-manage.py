@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -14,11 +15,20 @@ from pathlib import Path
 CONFIG_ENV_FILE = Path(os.getenv("BACKUP_CLOUD_CONFIG_FILE", "/etc/autoscript/backup/config.env"))
 DEFAULT_RCLONE_BIN = os.getenv("BACKUP_RCLONE_BIN", "rclone").strip() or "rclone"
 DOWNLOAD_TMP_DIR = Path(os.getenv("BACKUP_DOWNLOAD_TMP_DIR", "/var/lib/autoscript-backup/tmp"))
-BACKEND_PATH_CANDIDATES = (
-    Path(os.getenv("BOT_BACKEND_ROOT", "/opt/bot-telegram/backend-py")),
-    Path("/opt/autoscript/bot-telegram/backend-py"),
-    Path("/root/project/autoscript/bot-telegram/backend-py"),
-)
+
+
+def _backend_path_candidates() -> tuple[Path, ...]:
+    out: list[Path] = []
+    env_override = (os.getenv("BOT_BACKEND_ROOT") or "").strip()
+    if env_override:
+        out.append(Path(env_override))
+    out.extend(
+        (
+            Path("/opt/bot-telegram/backend-py"),
+            Path("/opt/autoscript/bot-telegram/backend-py"),
+        )
+    )
+    return tuple(out)
 
 
 def _die(msg: str, code: int = 1) -> int:
@@ -72,9 +82,43 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return data
 
 
+def _path_chain_trusted(path: Path, root: Path) -> bool:
+    try:
+        path_real = path.resolve(strict=True)
+        root_real = root.resolve(strict=True)
+    except Exception:
+        return False
+    if path_real != root_real and root_real not in path_real.parents:
+        return False
+    if os.geteuid() != 0:
+        return True
+
+    current = path_real
+    while True:
+        try:
+            st = os.lstat(current)
+        except Exception:
+            return False
+        if stat.S_ISLNK(st.st_mode):
+            return False
+        if st.st_uid != 0:
+            return False
+        if st.st_mode & stat.S_IWGRP or st.st_mode & stat.S_IWOTH:
+            return False
+        if current == root_real:
+            break
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+    return True
+
+
 def _load_backup_restore():
-    for candidate in BACKEND_PATH_CANDIDATES:
+    for candidate in _backend_path_candidates():
         if not candidate.is_dir():
+            continue
+        if not _path_chain_trusted(candidate, candidate):
             continue
         path_text = str(candidate)
         if path_text not in sys.path:

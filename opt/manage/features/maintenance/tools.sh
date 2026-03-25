@@ -5,17 +5,25 @@ tools_external_installer_require_cmd() {
   local installer_cmd="$1"
   local label="$2"
 
-  if [[ -x "${installer_cmd}" ]]; then
-    return 0
+  if [[ ! -x "${installer_cmd}" ]]; then
+    warn "Installer ${label} tidak ditemukan / tidak executable:"
+    echo "  ${installer_cmd}"
+    echo
+    echo "Hint: jalankan ulang run.sh agar installer ikut dipasang."
+    hr
+    pause
+    return 1
   fi
-
-  warn "Installer ${label} tidak ditemukan / tidak executable:"
-  echo "  ${installer_cmd}"
-  echo
-  echo "Hint: jalankan ulang run.sh agar installer ikut dipasang."
-  hr
-  pause
-  return 1
+  if declare -F manage_bootstrap_path_trusted >/dev/null 2>&1 && ! manage_bootstrap_path_trusted "${installer_cmd}"; then
+    warn "Installer ${label} tidak trusted:"
+    echo "  ${installer_cmd}"
+    echo
+    echo "Hint: pastikan owner root, bukan symlink, dan tidak writable oleh group/other."
+    hr
+    pause
+    return 1
+  fi
+  return 0
 }
 
 tools_external_installer_exec() {

@@ -12,6 +12,8 @@ on_err() {
 }
 trap on_err ERR
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
 if [[ -t 1 ]]; then
   UI_RESET='\033[0m'
   UI_BOLD='\033[1m'
@@ -80,6 +82,8 @@ SRC_REPO="${BOT_SOURCE_REPO:-autoscript}"
 SRC_REF="${BOT_SOURCE_REF:-main}"
 SRC_ARCHIVE_DEFAULT_URL="https://github.com/${SRC_OWNER}/${SRC_REPO}/raw/${SRC_REF}/bot_telegram.zip"
 SRC_ARCHIVE_URL="${BOT_SOURCE_ARCHIVE_URL:-${SRC_ARCHIVE_DEFAULT_URL}}"
+SRC_LOCAL_DIR="${BOT_SOURCE_LOCAL_DIR:-}"
+BOT_DIR_MARKER=".bot-telegram-owned"
 
 OS_DEPS=(
   curl
@@ -161,6 +165,13 @@ need_root() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+mark_bot_owned_dir() {
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 0
+  printf 'owned-by=install-telegram-bot\n' > "${dir}/${BOT_DIR_MARKER}"
+  chmod 600 "${dir}/${BOT_DIR_MARKER}" >/dev/null 2>&1 || true
 }
 
 normalize_path() {
@@ -422,6 +433,10 @@ generate_secret() {
 
 ensure_env_file() {
   mkdir -p "${BOT_HOME}" "${BOT_ENV_DIR}" "${BOT_STATE_DIR}" "${BOT_LOG_DIR}"
+  mark_bot_owned_dir "${BOT_HOME}"
+  mark_bot_owned_dir "${BOT_ENV_DIR}"
+  mark_bot_owned_dir "${BOT_STATE_DIR}"
+  mark_bot_owned_dir "${BOT_LOG_DIR}"
 
   if [[ ! -f "${BOT_ENV_FILE}" ]]; then
     cat > "${BOT_ENV_FILE}" <<ENVEOF
@@ -482,8 +497,8 @@ ENVEOF
 
 validate_required_env() {
   local missing=()
-  local key val admin_chat_ids admin_user_ids allow_unrestricted
-  for key in INTERNAL_SHARED_SECRET TELEGRAM_BOT_TOKEN; do
+  local key val admin_user_ids allow_unrestricted
+  for key in INTERNAL_SHARED_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_ADMIN_USER_IDS; do
     val="$(get_env_value "$key" "${BOT_ENV_FILE}")"
     [[ -n "${val}" ]] || missing+=("$key")
   done
@@ -493,11 +508,14 @@ validate_required_env() {
     return 1
   fi
 
-  admin_chat_ids="$(get_env_value TELEGRAM_ADMIN_CHAT_IDS "${BOT_ENV_FILE}")"
   admin_user_ids="$(get_env_value TELEGRAM_ADMIN_USER_IDS "${BOT_ENV_FILE}")"
   allow_unrestricted="$(printf '%s' "$(get_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${BOT_ENV_FILE}")" | tr '[:upper:]' '[:lower:]')"
-  if [[ -z "${admin_chat_ids}" && -z "${admin_user_ids}" && "${allow_unrestricted}" != "true" ]]; then
-    warn "Admin ACL kosong. Isi TELEGRAM_ADMIN_* atau set TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true (tidak direkomendasikan)."
+  if [[ -z "${admin_user_ids}" ]]; then
+    warn "TELEGRAM_ADMIN_USER_IDS wajib diisi agar bot hanya bisa dipakai admin."
+    return 1
+  fi
+  if [[ "${allow_unrestricted}" == "true" ]]; then
+    warn "TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true tidak diizinkan untuk mode admin-only."
     return 1
   fi
   return 0
@@ -591,8 +609,8 @@ configure_env_interactive() {
   ensure_env_file
   CONFIGURE_ENV_CANCELLED=0
 
-  local current_token current_secret current_bot_username current_default_chat_id current_admin_chat_ids current_admin_user_ids current_allow_unrestricted
-  local token bot_username default_chat_id admin_chat_ids admin_user_ids allow_unrestricted secret_input
+  local current_token current_secret current_bot_username current_default_chat_id current_admin_chat_ids current_admin_user_ids
+  local token bot_username default_chat_id admin_chat_ids admin_user_ids secret_input
   local final_token final_secret staged_env
 
   current_token="$(get_env_value TELEGRAM_BOT_TOKEN "${BOT_ENV_FILE}")"
@@ -606,6 +624,8 @@ configure_env_interactive() {
   echo "Konfigurasi env: ${BOT_ENV_FILE}"
   echo "- TELEGRAM_BOT_TOKEN: $(mask_secret "${current_token}")"
   echo "- INTERNAL_SHARED_SECRET: $(mask_secret "${current_secret}")"
+  echo "- TELEGRAM_ADMIN_USER_IDS: ${current_admin_user_ids:-'(kosong)'}"
+  echo "- TELEGRAM_ALLOW_UNRESTRICTED_ACCESS: dipaksa false"
 
   token="$(prompt_secret_or_back "Masukkan TELEGRAM_BOT_TOKEN (kosong=pertahankan yang lama)")"
   if [[ "${token}" == "${BACK_INPUT_SENTINEL}" ]]; then
@@ -623,15 +643,15 @@ configure_env_interactive() {
   bot_username="${current_bot_username}"
   default_chat_id="${current_default_chat_id}"
   admin_chat_ids="${current_admin_chat_ids}"
-  admin_user_ids="$(prompt_with_default_or_back "TELEGRAM_ADMIN_USER_IDS (opsional, pisahkan koma)" "${current_admin_user_ids}")"
+  admin_user_ids="$(prompt_with_default_or_back "TELEGRAM_ADMIN_USER_IDS (wajib, pisahkan koma)" "${current_admin_user_ids}")"
   if [[ "${admin_user_ids}" == "${BACK_INPUT_SENTINEL}" ]]; then
     cancel_env_config
     return 0
   fi
-  allow_unrestricted="$(prompt_with_default_or_back "TELEGRAM_ALLOW_UNRESTRICTED_ACCESS (true/false)" "${current_allow_unrestricted}")"
-  if [[ "${allow_unrestricted}" == "${BACK_INPUT_SENTINEL}" ]]; then
-    cancel_env_config
-    return 0
+  admin_user_ids="$(printf '%s' "${admin_user_ids}" | tr -d '[:space:]')"
+  if [[ -z "${admin_user_ids}" ]]; then
+    warn "TELEGRAM_ADMIN_USER_IDS wajib diisi. Gunakan user ID Telegram numerik admin."
+    return 1
   fi
 
   if [[ -z "${current_secret}" ]]; then
@@ -653,7 +673,7 @@ configure_env_interactive() {
   set_env_value TELEGRAM_DEFAULT_CHAT_ID "${default_chat_id}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_CHAT_IDS "${admin_chat_ids}" "${staged_env}"
   set_env_value TELEGRAM_ADMIN_USER_IDS "${admin_user_ids}" "${staged_env}"
-  set_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${allow_unrestricted:-false}" "${staged_env}"
+  set_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "false" "${staged_env}"
 
   set_env_value BOT_HOME "${BOT_HOME}" "${staged_env}"
   set_env_value BOT_ENV_FILE "${BOT_ENV_FILE}" "${staged_env}"
@@ -726,6 +746,62 @@ validate_source_tree() {
   [[ -f "${src}/systemd/bot-telegram-gateway.service.tpl" ]] || die "Source invalid: template gateway service tidak ditemukan"
 }
 
+source_tree_valid() {
+  local src="$1"
+  [[ -d "${src}" ]] || return 1
+  [[ -f "${src}/gateway-py/requirements.txt" ]] || return 1
+  [[ -f "${src}/gateway-py/requirements.lock.txt" ]] || return 1
+  [[ -f "${src}/gateway-py/app/main.py" ]] || return 1
+  [[ -f "${src}/backend-py/requirements.txt" ]] || return 1
+  [[ -f "${src}/backend-py/requirements.lock.txt" ]] || return 1
+  [[ -f "${src}/shared/commands.json" ]] || return 1
+  [[ -f "${src}/systemd/bot-telegram-backend.service.tpl" ]] || return 1
+  [[ -f "${src}/systemd/bot-telegram-gateway.service.tpl" ]] || return 1
+}
+
+discover_local_source_dir() {
+  local candidate
+  local candidates=(
+    "${SRC_LOCAL_DIR}"
+    "${SCRIPT_DIR}/bot-telegram"
+    "${SCRIPT_DIR}/../bot-telegram"
+    "${BOT_HOME}"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "${candidate}" ]] || continue
+    if source_tree_valid "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_source_dir_from_extract() {
+  local base="$1"
+  local candidate
+
+  if source_tree_valid "${base}"; then
+    printf '%s\n' "${base}"
+    return 0
+  fi
+
+  for candidate in "${base}"/*; do
+    [[ -d "${candidate}" ]] || continue
+    if source_tree_valid "${candidate}/bot-telegram"; then
+      printf '%s\n' "${candidate}/bot-telegram"
+      return 0
+    fi
+    if source_tree_valid "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 resolve_nologin_shell() {
   local shell
   shell="$(command -v nologin 2>/dev/null || true)"
@@ -784,6 +860,8 @@ prepare_gateway_runtime_permissions() {
     chown "${GATEWAY_RUN_USER}:${gateway_group}" "${monitor_lock_file}" || true
     chmod 640 "${monitor_lock_file}" || true
   fi
+  mark_bot_owned_dir "${BOT_STATE_DIR}"
+  mark_bot_owned_dir "${BOT_LOG_DIR}"
 }
 
 extract_source_archive() {
@@ -889,9 +967,16 @@ deploy_or_update_files() {
     command_exists "${cmd}" || die "Dependency '${cmd}' belum tersedia. Jalankan menu 2) Install Dependencies."
   done
 
-  local tmp archive src_root src_dir archive_ext archive_url_no_query
+  local tmp archive src_dir archive_ext archive_url_no_query local_source_dir
   local bot_home_parent stage_dir previous_dir=""
-  tmp="$(mktemp -d /tmp/bot-telegram-src.XXXXXX)"
+  local_source_dir="$(discover_local_source_dir || true)"
+
+  if [[ -n "${local_source_dir}" ]]; then
+    log "Menggunakan source lokal: ${local_source_dir}"
+    src_dir="${local_source_dir}"
+    validate_source_tree "${src_dir}"
+  else
+    tmp="$(mktemp -d /tmp/bot-telegram-src.XXXXXX)"
   archive_url_no_query="${SRC_ARCHIVE_URL%%\?*}"
   archive_ext="tar.gz"
   if [[ "${archive_url_no_query,,}" == *.zip ]]; then
@@ -904,19 +989,9 @@ deploy_or_update_files() {
 
   log "Extract archive..."
   extract_source_archive "${archive}" "${tmp}"
-
-  src_root="$(find "${tmp}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
-  [[ -n "${src_root}" ]] || die "Tidak menemukan root folder hasil extract."
-
-  # Support dua layout archive:
-  # 1) Repo archive: <root>/bot-telegram/...
-  # 2) Bot-only archive: <root>/gateway-py, <root>/backend-py, ...
-  if [[ -d "${src_root}/bot-telegram" ]]; then
-    src_dir="${src_root}/bot-telegram"
-  else
-    src_dir="${src_root}"
+    src_dir="$(resolve_source_dir_from_extract "${tmp}")" || die "Tidak menemukan source bot Telegram yang valid di archive."
+    validate_source_tree "${src_dir}"
   fi
-  validate_source_tree "${src_dir}"
 
   bot_home_parent="$(dirname "${BOT_HOME}")"
   mkdir -p "${bot_home_parent}" "${BOT_STATE_DIR}" "${BOT_LOG_DIR}" "${BOT_ENV_DIR}"
@@ -934,8 +1009,10 @@ deploy_or_update_files() {
     --filter='- /runtime/tmp/***' \
     "${src_dir}/" "${stage_dir}/"
 
-  rm -rf "${tmp}" >/dev/null 2>&1 || true
-  tmp=""
+  if [[ -n "${tmp:-}" ]]; then
+    rm -rf "${tmp}" >/dev/null 2>&1 || true
+    tmp=""
+  fi
 
   log "Install dependency Python backend"
   python3 -m venv "${stage_dir}/.venv"
@@ -971,6 +1048,7 @@ deploy_or_update_files() {
     die "Gagal mengaktifkan instalasi bot Telegram baru."
   fi
   stage_dir=""
+  mark_bot_owned_dir "${BOT_HOME}"
 
   if [[ -n "${previous_dir}" && -e "${previous_dir}" ]]; then
     rm -rf "${previous_dir}" >/dev/null 2>&1 || true
@@ -1031,10 +1109,10 @@ install_or_update_systemd() {
   [[ -f "${monitor_timer_dst}" ]] && chmod 644 "${monitor_timer_dst}"
 
   systemctl daemon-reload
-  systemctl enable "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" >/dev/null 2>&1 || true
+  systemctl enable "${BACKEND_SERVICE}" "${GATEWAY_SERVICE}" >/dev/null 2>&1 || die "Gagal enable service backend/gateway."
   if [[ -f "${monitor_dst}" && -f "${monitor_timer_dst}" ]]; then
-    systemctl enable "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
-    systemctl restart "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || true
+    systemctl enable "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || die "Gagal enable monitor timer."
+    systemctl restart "${MONITOR_SERVICE}.timer" >/dev/null 2>&1 || die "Gagal restart monitor timer."
   fi
 
   ok "Systemd service terpasang/terupdate."
@@ -1100,7 +1178,10 @@ wait_for_backend_ready() {
   attempts=40
 
   for _ in $(seq 1 "${attempts}"); do
-    if curl -fsS --max-time 5 -H "X-Internal-Shared-Secret: ${secret_value}" "${secret_url}" >/dev/null 2>&1; then
+    if curl -fsS --max-time 5 --config - "${secret_url}" >/dev/null 2>&1 <<EOF
+header = "X-Internal-Shared-Secret: ${secret_value}"
+EOF
+    then
       ok "Backend bot siap menerima koneksi."
       return 0
     fi
@@ -1193,7 +1274,29 @@ uninstall_bot() {
   assert_safe_delete_target "${BOT_STATE_DIR}" "BOT_STATE_DIR"
   assert_safe_delete_target "${BOT_LOG_DIR}" "BOT_LOG_DIR"
 
-  rm -rf "${BOT_HOME}" "${BOT_ENV_DIR}" "${BOT_STATE_DIR}" "${BOT_LOG_DIR}"
+  rm -rf "${BOT_HOME}"
+
+  if [[ -f "${BOT_ENV_DIR}/${BOT_DIR_MARKER}" ]]; then
+    rm -rf "${BOT_ENV_DIR}"
+  else
+    rm -f "${BOT_ENV_FILE}" "${BOT_ENV_DIR}/${BOT_DIR_MARKER}"
+    rmdir --ignore-fail-on-non-empty "${BOT_ENV_DIR}" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -f "${BOT_STATE_DIR}/${BOT_DIR_MARKER}" ]]; then
+    rm -rf "${BOT_STATE_DIR}"
+  else
+    rm -rf "${BOT_STATE_DIR}/backups" "${BOT_STATE_DIR}/tmp"
+    rm -f "${BOT_STATE_DIR}/${BOT_DIR_MARKER}"
+    rmdir --ignore-fail-on-non-empty "${BOT_STATE_DIR}" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -f "${BOT_LOG_DIR}/${BOT_DIR_MARKER}" ]]; then
+    rm -rf "${BOT_LOG_DIR}"
+  else
+    rm -f "${BOT_LOG_DIR}/monitor-lite.log" "${BOT_LOG_DIR}/monitor-lite.lock" "${BOT_LOG_DIR}/${BOT_DIR_MARKER}"
+    rmdir --ignore-fail-on-non-empty "${BOT_LOG_DIR}" >/dev/null 2>&1 || true
+  fi
   rm -rf /tmp/bot-telegram-src.* >/dev/null 2>&1 || true
 
   ok "Uninstall bersih selesai (package OS/runtime tetap terpasang)."

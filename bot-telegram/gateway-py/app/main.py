@@ -171,6 +171,15 @@ KEY_LAST_ACTION_TS = "last_action_ts"
 KEY_LAST_CLEANUP_TS = "last_cleanup_ts"
 KEY_QAC_SELECTIONS = "qac_selections"
 KEY_MENU_PARENT_PAGES = "menu_parent_pages"
+NON_SSH_SECRET_FIELD_IDS = frozenset(
+    {
+        "client_id",
+        "client_secret",
+        "token_json",
+        "access_key_id",
+        "secret_access_key",
+    }
+)
 PENDING_STATE_KEYS = (
     KEY_PENDING_FORM,
     KEY_PENDING_CONFIRM,
@@ -322,6 +331,7 @@ def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
             KEY_PENDING_FORM,
             KEY_PENDING_CONFIRM,
             KEY_PENDING_DELETE_PICK,
+            KEY_PENDING_QAC_PICK,
             KEY_PENDING_ACCOUNT_PICK,
             KEY_PENDING_UPLOAD_RESTORE,
         ),
@@ -1075,6 +1085,29 @@ def _field_is_required(pending: dict, field: ActionSpec) -> bool:
         return _is_truthy(str(params.get("speed_limit_enabled") or ""))
 
     return False
+
+
+def _pending_non_ssh_secret_field(runtime: Runtime, pending: dict) -> bool:
+    menu_id = str(pending.get("menu_id") or "").strip()
+    action_id = str(pending.get("action_id") or "").strip()
+    menu = runtime.catalog.get_menu(menu_id)
+    action = runtime.catalog.get_action(menu_id, action_id)
+    if menu is None or action is None or action.modal is None:
+        return False
+    idx = _safe_int(str(pending.get("index") or "0"), default=0)
+    if idx < 0 or idx >= len(action.modal.fields):
+        return False
+    field_id = str(action.modal.fields[idx].id or "").strip()
+    return field_id in NON_SSH_SECRET_FIELD_IDS
+
+
+async def _delete_message_quietly(message) -> None:
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except Exception as exc:
+        LOGGER.debug("Gagal menghapus pesan sensitif: %s", exc)
 
 
 def _pending_choice_options(pending: dict) -> list[dict[str, str]]:
@@ -2076,6 +2109,7 @@ async def on_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.effective_message.reply_text(pending_err)
         return
 
+    delete_input_after_submit = _pending_non_ssh_secret_field(runtime, pending)
     await _submit_pending_form_value(
         runtime=runtime,
         context=context,
@@ -2085,6 +2119,8 @@ async def on_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         query=None,
         reply_message=update.effective_message,
     )
+    if delete_input_after_submit:
+        await _delete_message_quietly(update.effective_message)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

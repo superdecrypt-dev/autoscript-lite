@@ -2205,17 +2205,17 @@ ssh_password_hash_generate() {
     return 0
   fi
   need_python3
-  python3 - <<'PY' "${password}"
+  python3 -c '
 import crypt
 import secrets
 import string
 import sys
 
-password = sys.argv[1]
+password = sys.stdin.read().rstrip("\n")
 alphabet = string.ascii_letters + string.digits + "./"
 salt = "".join(secrets.choice(alphabet) for _ in range(16))
 print(crypt.crypt(password, f"$6${salt}$"))
-PY
+' <<<"${password}"
 }
 
 ssh_home_snapshot_create() {

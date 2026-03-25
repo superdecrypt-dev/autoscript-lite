@@ -6,6 +6,28 @@ SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="${SAFE_PATH}"
 export PATH
 
+manage_bootstrap_path_trusted() {
+  local target="${1:-}" current owner mode
+  [[ -n "${target}" && -e "${target}" ]] || return 1
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  current="$(readlink -f -- "${target}" 2>/dev/null || true)"
+  [[ -n "${current}" ]] || return 1
+  while :; do
+    [[ -e "${current}" ]] || return 1
+    [[ -L "${current}" ]] && return 1
+    owner="$(stat -c '%u' "${current}" 2>/dev/null || echo 1)"
+    mode="$(stat -c '%A' "${current}" 2>/dev/null || echo '----------')"
+    [[ "${owner}" == "0" ]] || return 1
+    [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+    [[ "${current}" == "/" ]] && break
+    current="$(dirname -- "${current}")"
+  done
+  return 0
+}
+
 # ============================================================
 # manage.sh - CLI Menu Manajemen (post-setup)
 # - Tidak mengubah setup.sh
@@ -30,6 +52,10 @@ do
 done
 if [[ -z "${MANAGE_ENV_FILE}" ]]; then
   echo "manage: env.sh tidak ditemukan; cari di source repo, /opt/setup, dan /usr/local/lib/autoscript-setup." >&2
+  exit 1
+fi
+if ! manage_bootstrap_path_trusted "${MANAGE_ENV_FILE}"; then
+  echo "manage: env.sh tidak trusted; pastikan owner root, bukan symlink, dan tidak writable oleh group/other: ${MANAGE_ENV_FILE}" >&2
   exit 1
 fi
 . "${MANAGE_ENV_FILE}"
@@ -1887,9 +1913,9 @@ main_info_ip_quiet_get() {
   local ip=""
   if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && have_cmd curl && have_cmd jq; then
     local json
-    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/?fields=status,query" 2>/dev/null || true)"
+    json="$(curl -fsSL --max-time 6 "https://api.ipify.org?format=json" 2>/dev/null || true)"
     if [[ -n "${json}" ]]; then
-      ip="$(echo "${json}" | jq -r 'if .status == "success" then (.query // "-") else "-" end' 2>/dev/null || true)"
+      ip="$(echo "${json}" | jq -r '.ip // "-"' 2>/dev/null || true)"
     fi
   fi
   if [[ -z "${ip}" || "${ip}" == "-" || "${ip}" == "0.0.0.0" ]]; then
@@ -1923,18 +1949,10 @@ main_info_geo_lookup() {
   esac
 
   if [[ "${MAIN_INFO_REMOTE_LOOKUPS}" == "1" ]] && [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && have_cmd curl && have_cmd jq; then
-    json="$(curl -fsSL --max-time 6 "http://ip-api.com/json/${ip}?fields=status,query,country,isp" 2>/dev/null || true)"
+    json="$(curl -fsSL --max-time 6 "https://ipwho.is/${ip}" 2>/dev/null || true)"
     if [[ -n "${json}" ]]; then
-      ip="$(echo "${json}" | jq -r 'if .status == "success" then (.query // "-") else "'"${ip}"'" end' 2>/dev/null || true)"
-      country="$(echo "${json}" | jq -r 'if .status == "success" then (.country // "-") else "-" end' 2>/dev/null || true)"
-      isp="$(echo "${json}" | jq -r 'if .status == "success" then (.isp // "-") else "-" end' 2>/dev/null || true)"
-    fi
-    if [[ -z "${isp}" || "${isp}" == "-" || -z "${country}" || "${country}" == "-" ]]; then
-      json="$(curl -fsSL --max-time 6 "https://ipwho.is/${ip}" 2>/dev/null || true)"
-      if [[ -n "${json}" ]]; then
-        [[ -z "${country}" || "${country}" == "-" ]] && country="$(echo "${json}" | jq -r 'if .success == true then (.country // "-") else "-" end' 2>/dev/null || true)"
-        [[ -z "${isp}" || "${isp}" == "-" ]] && isp="$(echo "${json}" | jq -r 'if .success == true then (.connection.isp // .isp // "-") else "-" end' 2>/dev/null || true)"
-      fi
+      [[ -z "${country}" || "${country}" == "-" ]] && country="$(echo "${json}" | jq -r 'if .success == true then (.country // "-") else "-" end' 2>/dev/null || true)"
+      [[ -z "${isp}" || "${isp}" == "-" ]] && isp="$(echo "${json}" | jq -r 'if .success == true then (.connection.isp // .isp // "-") else "-" end' 2>/dev/null || true)"
     fi
     if [[ -z "${isp}" || "${isp}" == "-" || -z "${country}" || "${country}" == "-" ]]; then
       json="$(curl -fsSL --max-time 6 "https://ipapi.co/${ip}/json/" 2>/dev/null || true)"
