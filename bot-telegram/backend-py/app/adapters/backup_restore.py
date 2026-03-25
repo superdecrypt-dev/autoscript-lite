@@ -307,7 +307,7 @@ def _create_backup_archive(kind: str) -> tuple[bool, str, dict[str, Any] | None]
     now = datetime.now(timezone.utc)
     backup_id = f"{now.strftime('%Y%m%d%H%M%S%f')}-{uuid.uuid4().hex[:8]}"
     if kind == "manual":
-        base_name = f"backup-{now.strftime('%Y-%m-%d-%H:%M')}"
+        base_name = f"backup-{now.strftime('%Y-%m-%d')}"
     else:
         base_name = f"safety-{now.strftime('%Y-%m-%d-%H%M%S')}"
     filename = f"{base_name}.tar.gz"
