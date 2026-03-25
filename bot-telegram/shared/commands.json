@@ -1536,6 +1536,7 @@
           "label": "Refresh Accounts",
           "mode": "direct",
           "style": "secondary",
+          "confirm": true,
           "dangerous": true
         },
         {
@@ -1954,6 +1955,7 @@
           "label": "Restore Upload",
           "mode": "direct",
           "style": "danger",
+          "confirm": true,
           "dangerous": true
         },
         {
@@ -1961,6 +1963,7 @@
           "label": "Restore Upload Domain Only",
           "mode": "direct",
           "style": "secondary",
+          "confirm": true,
           "dangerous": true
         }
       ],
@@ -2160,6 +2163,7 @@
           "label": "Toggle DNS Cache OFF/Default",
           "mode": "direct",
           "style": "secondary",
+          "confirm": true,
           "dangerous": true
         },
         {
