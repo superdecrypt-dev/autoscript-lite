@@ -1955,6 +1955,13 @@
           "mode": "direct",
           "style": "danger",
           "dangerous": true
+        },
+        {
+          "id": "restore_upload_domain_only",
+          "label": "Restore Upload Domain Only",
+          "mode": "direct",
+          "style": "secondary",
+          "dangerous": true
         }
       ],
       "hidden": true,

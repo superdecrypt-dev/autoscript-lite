@@ -308,12 +308,15 @@ def _is_authorized(runtime: Runtime, update: Update) -> tuple[bool, str]:
 
     user_id = str(update.effective_user.id) if update.effective_user else ""
     chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+    chat_type = str(getattr(update.effective_chat, "type", "") or "").strip().lower()
 
     if runtime.config.admin_user_ids and user_id not in runtime.config.admin_user_ids:
         return False, "Akses ditolak: user Telegram belum terdaftar sebagai admin."
 
     if runtime.config.admin_chat_ids and chat_id not in runtime.config.admin_chat_ids:
         return False, "Akses ditolak: chat ini belum diizinkan untuk menu bot."
+    if not runtime.config.admin_chat_ids and chat_type != "private":
+        return False, "Akses ditolak: gunakan private chat dengan bot untuk command sensitif."
 
     return True, ""
 
@@ -323,7 +326,7 @@ def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(pending_confirm, dict):
         action_id = str(pending_confirm.get("action_id") or "").strip()
         params = pending_confirm.get("params") if isinstance(pending_confirm.get("params"), dict) else {}
-        if action_id == "restore_from_upload" and isinstance(params, dict):
+        if action_id in {"restore_from_upload", "restore_upload_domain_only"} and isinstance(params, dict):
             cleanup_uploaded_archive(str(params.get("upload_path") or ""), UPLOAD_RESTORE_DIRS)
     clear_pending_states(
         context.user_data,
@@ -1433,6 +1436,7 @@ async def _run_action(
     try:
         result = await runtime.backend.run_action(menu_id=menu_id, action=action_id, params=params)
     except BackendError as exc:
+        err_text = html.escape(str(exc)[:1800])
         await _send_or_edit(
             query=query,
             chat_id=chat_id,
@@ -1440,7 +1444,7 @@ async def _run_action(
             text=(
                 "<b>❌ Backend Error</b>\n"
                 "Tidak bisa menjalankan action.\n\n"
-                f"<pre>{str(exc)[:1800]}</pre>"
+                f"<pre>{err_text}</pre>"
             ),
             reply_markup=_result_keyboard(menu_id, page),
         )
@@ -2610,7 +2614,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             page=page,
             query=query,
         )
-        if action_id == "restore_from_upload":
+        if action_id in {"restore_from_upload", "restore_upload_domain_only"}:
             keep_upload = False
             if result is None:
                 keep_upload = True
@@ -2747,7 +2751,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
-        if menu_id == BACKUP_MENU_ID and action_id == "restore_from_upload":
+        if menu_id == BACKUP_MENU_ID and action_id in {"restore_from_upload", "restore_upload_domain_only"}:
+            is_domain_only = action_id == "restore_upload_domain_only"
             _store_pending_state(
                 context,
                 KEY_PENDING_UPLOAD_RESTORE,
@@ -2763,10 +2768,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 chat_id=chat_id,
                 context=context,
                 text=(
-                    "<b>Restore Upload</b>\n"
+                    f"<b>{'Restore Upload Domain Only' if is_domain_only else 'Restore Upload'}</b>\n"
                     "Kirim file backup berekstensi <code>.tar.gz</code> lewat Telegram.\n"
                     f"Ukuran maksimal: <code>{html.escape(format_size(UPLOAD_RESTORE_MAX_BYTES))}</code>\n\n"
-                    "Setelah file diterima, bot akan minta konfirmasi sebelum restore dijalankan."
+                    + (
+                        "Setelah file diterima, bot akan minta konfirmasi sebelum restore domain-only dijalankan."
+                        if is_domain_only
+                        else "Setelah file diterima, bot akan minta konfirmasi sebelum restore dijalankan."
+                    )
                 ),
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("❌ Batal", callback_data=f"cf{CALLBACK_SEP}{menu_id}{CALLBACK_SEP}{page}")]]

@@ -75,7 +75,7 @@ def _visible_menu_count(payload: dict) -> int:
     return count
 
 
-@router.api_route("/ovpn/{token}", methods=["GET", "HEAD"])
+@router.api_route("/ovpn/{token}", methods=["GET", "HEAD"], dependencies=[Depends(verify_shared_secret)])
 def download_openvpn_profile(token: str, request: Request) -> Response:
     token_n = str(token or "").strip()
     if not DOWNLOAD_TOKEN_RE.fullmatch(token_n):

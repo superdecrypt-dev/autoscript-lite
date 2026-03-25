@@ -15,7 +15,7 @@ from ..utils.validators import (
 USER_PROTOCOLS = tuple(system.USER_PROTOCOLS)
 XRAY_ONLY_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
 SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
-PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL, "trojan"}
+PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL}
 
 
 def _fmt_number(value: float) -> str:
@@ -78,12 +78,6 @@ def _mark_account_info_render(data: dict[str, object] | None = None) -> dict[str
     payload = dict(data or {})
     payload["render_mode"] = "account_info"
     return payload
-
-
-def _download_url(download_payload: dict[str, object] | None) -> str:
-    if not isinstance(download_payload, dict):
-        return ""
-    return str(download_payload.get("download_url") or "").strip()
 
 
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
@@ -203,7 +197,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             account_path = _extract_add_user_path(msg_add, "Account")
             quota_path = _extract_add_user_path(msg_add, "Quota")
             _title_info, account_text = system.op_account_info(system.SSH_PROTOCOL, str(user_or_err))
-            ovpn_link = _download_url(download_or_err if ok_download and isinstance(download_or_err, dict) else None)
             lines = [
                 "Add SSH user sukses ✅",
                 "",
@@ -212,13 +205,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 "Metadata file:",
                 f"  {quota_path}",
             ]
-            if ovpn_link:
-                lines.extend(
-                    [
-                        "OpenVPN Download Link:",
-                        ovpn_link,
-                    ]
-                )
             lines.extend(
                 [
                     "",
@@ -294,11 +280,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 data["download_file"] = download_or_err
                 if _proto_requires_sensitive_output(proto):
                     data = _allow_sensitive_output(data)
-                if proto == system.SSH_PROTOCOL:
-                    data = _allow_sensitive_output(data)
-                    ovpn_link = _download_url(download_or_err)
-                    if ovpn_link:
-                        msg_ext = f"{msg_ext}\n\nOpenVPN Download Link:\n{ovpn_link}"
             else:
                 msg_ext = f"{msg_ext}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
             return ok_response(title, msg_ext, data=data)
@@ -344,9 +325,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             ok_download, download_or_err = system_mutations.op_user_account_file_download(system.SSH_PROTOCOL, username)
             if ok_download and isinstance(download_or_err, dict):
                 data["download_file"] = download_or_err
-                ovpn_link = _download_url(download_or_err)
-                if ovpn_link:
-                    msg_reset = f"{msg_reset}\n\nOpenVPN Download Link:\n{ovpn_link}"
             else:
                 msg_reset = f"{msg_reset}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
             return ok_response(title, msg_reset, data=_allow_sensitive_output(data))
@@ -375,9 +353,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         data: dict[str, object] = {
             "download_file": download_or_err,
         }
-        ovpn_link = _download_url(download_or_err)
-        if str(proto_or_err) == system.SSH_PROTOCOL and ovpn_link:
-            msg_info = f"{msg_info}\n\nOpenVPN Download Link:\n{ovpn_link}"
         if _proto_requires_sensitive_output(str(proto_or_err)):
             data = _allow_sensitive_output(data)
         return ok_response(title, msg_info, data=_mark_account_info_render(data))

@@ -13,7 +13,7 @@ XRAY_ONLY_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
 SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
 OPENVPN_ONLY_PROTOCOLS = (getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn"),)
 QAC_PROTOCOLS = tuple(dict.fromkeys((*USER_PROTOCOLS, *OPENVPN_ONLY_PROTOCOLS)))
-PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL, "trojan"}
+PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL}
 
 
 def _scope_title(scope: str, label: str) -> str:
@@ -46,12 +46,6 @@ def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | di
     return require_protocol(params, title, allowed=set(protocols))
 
 
-def _download_url(download_payload: dict[str, object] | None) -> str:
-    if not isinstance(download_payload, dict):
-        return ""
-    return str(download_payload.get("download_url") or "").strip()
-
-
 def _proto_requires_sensitive_output(proto: str) -> bool:
     return str(proto).strip().lower() in PASSWORD_VISIBLE_PROTOCOLS
 
@@ -63,9 +57,6 @@ def _attach_account_download(proto: str, username: str, title: str, message: str
         ok_download, download_or_err = system_mutations.op_openvpn_profile_file_download(username)
         if ok_download and isinstance(download_or_err, dict):
             data["download_file"] = download_or_err
-            ovpn_link = _download_url(download_or_err)
-            if ovpn_link:
-                message = f"{message}\n\nOpenVPN Download Link:\n{ovpn_link}"
         else:
             message = f"{message}\n- Warning: profile OpenVPN terbaru tidak bisa diunduh ({download_or_err})"
         return ok_response(title, message, data=data)
@@ -76,10 +67,6 @@ def _attach_account_download(proto: str, username: str, title: str, message: str
         data["download_file"] = download_or_err
         if _proto_requires_sensitive_output(download_proto):
             data["allow_sensitive_output"] = True
-        if download_proto == system.SSH_PROTOCOL:
-            ovpn_link = _download_url(download_or_err)
-            if ovpn_link:
-                message = f"{message}\n\nOpenVPN Download Link:\n{ovpn_link}"
     else:
         message = f"{message}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
     return ok_response(title, message, data=data)

@@ -3,21 +3,12 @@ from ..utils.response import error_response, ok_response
 from ..utils.validators import require_param
 
 
-def _download_url(download_payload: dict[str, object] | None) -> str:
-    if not isinstance(download_payload, dict):
-        return ""
-    return str(download_payload.get("download_url") or "").strip()
-
-
 def _attach_ssh_account_download(title: str, message: str, username: str) -> dict:
     data: dict[str, object] = {}
     ok_download, download_or_err = system_mutations.op_user_account_file_download(system.SSH_PROTOCOL, username)
     if ok_download and isinstance(download_or_err, dict):
         data["download_file"] = download_or_err
         data["allow_sensitive_output"] = True
-        ovpn_link = _download_url(download_or_err)
-        if ovpn_link:
-            message = f"{message}\n\nOpenVPN Download Link:\n{ovpn_link}"
     else:
         message = f"{message}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
     return ok_response(title, message, data=data)

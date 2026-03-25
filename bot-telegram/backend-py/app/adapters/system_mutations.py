@@ -48,7 +48,7 @@ OPENVPN_MANAGE_BIN = Path("/usr/local/bin/openvpn-manage")
 OPENVPN_PROFILE_DIR = Path("/opt/account/openvpn")
 OPENVPN_METADATA_DIR = Path("/var/lib/openvpn-manage/users")
 OPENVPN_TCP_SERVICE = "openvpn-server@autoscript-tcp"
-OPENVPN_DOWNLOAD_TTL_SECONDS = 3600
+OPENVPN_DOWNLOAD_TTL_SECONDS = 300
 OPENVPN_DOWNLOAD_TOKEN_DIR = Path("/run/autoscript/openvpn-download-tokens")
 ZIVPN_SERVICE = "zivpn"
 ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
@@ -561,9 +561,7 @@ def _openvpn_issue_download_token(username: str, ttl_seconds: int = OPENVPN_DOWN
             continue
         if str(payload.get("username") or "").strip() != username_n:
             continue
-        exp = int(payload.get("exp") or 0)
-        if exp > int(time.time()):
-            return token_path.stem
+        token_path.unlink(missing_ok=True)
     for _ in range(8):
         token = secrets.token_urlsafe(6).rstrip("=")
         if not token:
@@ -582,18 +580,6 @@ def _openvpn_issue_download_token(username: str, ttl_seconds: int = OPENVPN_DOWN
             pass
         return token
     return ""
-
-
-def _openvpn_download_link(username: str, ttl_seconds: int = OPENVPN_DOWNLOAD_TTL_SECONDS) -> str:
-    if not _linux_user_exists(username):
-        return ""
-    host = _openvpn_public_host()
-    if not host or host == "-":
-        return ""
-    token = _openvpn_issue_download_token(username, ttl_seconds=ttl_seconds)
-    if not token:
-        return ""
-    return f"https://{host}/ovpn/{token}"
 
 
 def _openvpn_manage_json(*args: str, timeout: int = 60) -> tuple[bool, dict[str, Any] | str]:
@@ -6046,13 +6032,6 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
         return False, f"Gagal membaca file account: {exc}"
 
     if proto == SSH_PROTOCOL:
-        ovpn_link = ""
-        if _openvpn_runtime_available():
-            ok_profile, payload_or_err = _openvpn_manage_json("profile-download", "--username", username, timeout=300)
-            if ok_profile and isinstance(payload_or_err, dict):
-                profile_path = Path(str(payload_or_err.get("profile_path") or "").strip())
-                if profile_path.exists():
-                    ovpn_link = _openvpn_download_link(username)
         try:
             text = raw.decode("utf-8", errors="ignore")
             text = re.sub(
@@ -6072,7 +6051,6 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
             "filename": f"{username}@{proto}.txt",
             "content_base64": base64.b64encode(raw).decode("ascii"),
             "content_type": "text/plain",
-            "download_url": ovpn_link,
         }
 
     return True, {
@@ -6107,7 +6085,6 @@ def op_openvpn_profile_file_download(username: str) -> tuple[bool, dict[str, str
         "filename": f"{username}@openvpn.ovpn",
         "content_base64": base64.b64encode(raw).decode("ascii"),
         "content_type": "application/x-openvpn-profile",
-        "download_url": _openvpn_download_link(username),
     }
 
 

@@ -3469,6 +3469,29 @@ def op_restart_openvpn() -> tuple[bool, str, str]:
             had_failure = True
             brief = out.splitlines()[-1].strip() if out else "unknown error"
             lines.append(f"- {service}: gagal ({state}) - {brief}")
+    if not had_failure:
+        tcp_port = _openvpn_env_value("OPENVPN_PORT_TCP", "1194") or "1194"
+        ws_proxy_port = _openvpn_ws_proxy_port()
+        health_failures: list[str] = []
+        try:
+            tcp_port_int = int(tcp_port)
+        except Exception:
+            health_failures.append(f"backend tcp invalid ({tcp_port})")
+        else:
+            if not _listener_present(tcp_port_int):
+                health_failures.append(f"backend tcp {tcp_port_int} tidak listening")
+        if not _listener_present(ws_proxy_port, host="127.0.0.1"):
+            health_failures.append(f"ws proxy {ws_proxy_port} tidak listening")
+        if health_failures:
+            return False, title, "\n".join(lines + ["", "Health check gagal:", *[f"- {item}" for item in health_failures]])
+        lines.extend(
+            [
+                "",
+                "Health check: OK",
+                f"- backend tcp {tcp_port} listening",
+                f"- ws proxy {ws_proxy_port} listening",
+            ]
+        )
     return (not had_failure), title, "\n".join(lines)
 
 

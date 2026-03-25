@@ -1,4 +1,5 @@
 import os
+import stat
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ DEFAULT_GDRIVE_REMOTE = "gdrive"
 DEFAULT_GDRIVE_FOLDER = "autoscript-backups"
 DEFAULT_R2_REMOTE = "r2"
 DEFAULT_R2_BUCKET = "autoscript"
+BACKUP_MANAGE_TIMEOUT_SECONDS = max(30, int(os.getenv("BACKUP_MANAGE_TIMEOUT_SECONDS", "480") or "480"))
 
 
 def _backup_manage_path() -> str:
@@ -26,13 +28,72 @@ def _backup_manage_path() -> str:
     return shutil.which(BACKUP_MANAGE_BIN) or BACKUP_MANAGE_BIN
 
 
+def _path_chain_trusted(path: Path) -> bool:
+    try:
+        resolved = path.resolve(strict=True)
+    except Exception:
+        return False
+    if os.geteuid() != 0:
+        return True
+
+    current = resolved
+    while True:
+        try:
+            st = os.lstat(current)
+        except Exception:
+            return False
+        if stat.S_ISLNK(st.st_mode):
+            return False
+        if st.st_uid != 0:
+            return False
+        if st.st_mode & stat.S_IWGRP or st.st_mode & stat.S_IWOTH:
+            return False
+        if current == Path("/"):
+            break
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+    return True
+
+
+def _trusted_backup_manage_path() -> tuple[str | None, str]:
+    candidate = Path(_backup_manage_path())
+    if not candidate.is_absolute():
+        return None, f"Helper backup-manage tidak ditemukan: {candidate}"
+    if not candidate.exists() or not candidate.is_file():
+        return None, f"Helper backup-manage tidak ditemukan: {candidate}"
+    if not os.access(candidate, os.X_OK):
+        return None, f"Helper backup-manage tidak executable: {candidate}"
+    if not _path_chain_trusted(candidate):
+        return None, (
+            "Helper backup-manage tidak trusted. "
+            "Pastikan owner root, bukan symlink, dan tidak writable oleh group/other."
+        )
+    return str(candidate), ""
+
+
 def _run_backup_manage(title: str, args: list[str], *, error_code: str) -> dict:
-    proc = subprocess.run(
-        [_backup_manage_path(), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    helper, helper_err = _trusted_backup_manage_path()
+    if not helper:
+        return error_response(error_code, title, helper_err)
+    try:
+        proc = subprocess.run(
+            [helper, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=BACKUP_MANAGE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(
+            error_code,
+            title,
+            (
+                "Helper backup-manage timeout. "
+                f"Batas saat ini: {BACKUP_MANAGE_TIMEOUT_SECONDS} detik."
+            ),
+        )
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     message = stdout or stderr or "Tidak ada output."
