@@ -2994,6 +2994,94 @@ warp_zero_trust_client_secret_set() {
   warp_zero_trust_config_set_values WARP_ZEROTRUST_CLIENT_SECRET "${value}"
 }
 
+warp_zero_trust_configure_credentials() {
+  local cfg="" current_team="" current_client_id="" current_client_secret=""
+  local team_input="" client_id_input="" client_secret_input=""
+  local final_team="" final_client_id="" final_client_secret=""
+  local masked_client_id="" masked_client_secret=""
+
+  cfg="$(warp_zero_trust_config_get)"
+  current_team="$(printf '%s\n' "${cfg}" | awk -F'=' '/^team=/{print $2; exit}')"
+  current_client_id="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_id=/{print substr($0,11); exit}')"
+  current_client_secret="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_secret=/{print substr($0,15); exit}')"
+  masked_client_id="$(warp_zero_trust_secret_mask "${current_client_id}")"
+  masked_client_secret="$(warp_zero_trust_secret_mask "${current_client_secret}")"
+
+  title
+  echo "$(warp_tier_zero_trust_menu_title "Setup Credentials")"
+  hr
+  printf "Isi tiga field sekaligus. Tekan ENTER untuk mempertahankan nilai lama.\n"
+  printf "Ketik 'kembali' pada field mana pun untuk batal tanpa mengubah config.\n"
+  hr
+  printf "Current Team Name     : %s\n" "${current_team:-"(kosong)"}"
+  printf "Current Client ID     : %s\n" "${masked_client_id}"
+  printf "Current Client Secret : %s\n" "${masked_client_secret}"
+  hr
+
+  read -r -p "Team name Zero Trust [${current_team:-kosong}]: " team_input
+  if is_back_choice "${team_input}"; then
+    return 0
+  fi
+  read -r -p "Service token client id [ENTER=pakai nilai lama]: " client_id_input
+  if is_back_choice "${client_id_input}"; then
+    return 0
+  fi
+  read -r -p "Service token client secret [ENTER=pakai nilai lama]: " client_secret_input
+  if is_back_choice "${client_secret_input}"; then
+    return 0
+  fi
+
+  if [[ -n "${team_input}" ]]; then
+    final_team="$(printf '%s' "${team_input}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  else
+    final_team="${current_team}"
+  fi
+  if [[ -n "${client_id_input}" ]]; then
+    final_client_id="$(printf '%s' "${client_id_input}" | tr -d '[:space:]')"
+  else
+    final_client_id="${current_client_id}"
+  fi
+  if [[ -n "${client_secret_input}" ]]; then
+    final_client_secret="$(printf '%s' "${client_secret_input}" | tr -d '[:space:]')"
+  else
+    final_client_secret="${current_client_secret}"
+  fi
+
+  [[ -n "${final_team}" && "${final_team}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
+    warn "Team name Zero Trust tidak valid."
+    hr
+    pause
+    return 1
+  }
+  [[ -n "${final_client_id}" ]] || {
+    warn "Client ID Zero Trust tidak boleh kosong."
+    hr
+    pause
+    return 1
+  }
+  [[ -n "${final_client_secret}" ]] || {
+    warn "Client secret Zero Trust tidak boleh kosong."
+    hr
+    pause
+    return 1
+  }
+
+  if ! warp_zero_trust_config_set_values \
+    WARP_ZEROTRUST_TEAM "${final_team}" \
+    WARP_ZEROTRUST_CLIENT_ID "${final_client_id}" \
+    WARP_ZEROTRUST_CLIENT_SECRET "${final_client_secret}"; then
+    warn "Gagal menyimpan kredensial Zero Trust."
+    hr
+    pause
+    return 1
+  fi
+
+  log "Kredensial Zero Trust disimpan."
+  hr
+  pause
+  return 0
+}
+
 warp_action_confirm_or_cancel() {
   local prompt="${1:-}"
   local cancel_msg="${2:-Aksi dibatalkan.}"
@@ -3610,14 +3698,12 @@ warp_tier_zero_trust_menu() {
     warp_tier_zero_trust_show_status
     hr
     echo "  1) Show status"
-    echo "  2) Set Team Name"
-    echo "  3) Set Service Token Client ID"
-    echo "  4) Set Service Token Client Secret"
-    echo "  5) Apply / Connect Zero Trust"
-    echo "  6) Disconnect Zero Trust"
-    echo "  7) Return to Free/Plus"
-    echo "  8) Requirements"
-    echo "  9) Rollout notes"
+    echo "  2) Setup Credentials"
+    echo "  3) Apply / Connect Zero Trust"
+    echo "  4) Disconnect Zero Trust"
+    echo "  5) Return to Free/Plus"
+    echo "  6) Requirements"
+    echo "  7) Rollout notes"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
@@ -3631,72 +3717,26 @@ warp_tier_zero_trust_menu() {
         pause
         ;;
       2)
-        local team=""
-        read -r -p "Team name Zero Trust (atau kembali): " team
-        if is_back_choice "${team}"; then
-          continue
+        if ! warp_zero_trust_configure_credentials; then
+          :
         fi
-        team="$(printf '%s' "${team}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-        if ! warp_zero_trust_team_set "${team}"; then
-          warn "Team name Zero Trust tidak valid."
-          hr
-          pause
-          continue
-        fi
-        log "Team name Zero Trust disimpan: ${team}"
-        hr
-        pause
         ;;
       3)
-        local client_id=""
-        read -r -p "Service token client id (atau kembali): " client_id
-        if is_back_choice "${client_id}"; then
-          continue
-        fi
-        client_id="$(printf '%s' "${client_id}" | tr -d '[:space:]')"
-        if ! warp_zero_trust_client_id_set "${client_id}"; then
-          warn "Client ID Zero Trust tidak valid."
-          hr
-          pause
-          continue
-        fi
-        log "Client ID Zero Trust disimpan."
-        hr
-        pause
-        ;;
-      4)
-        local client_secret=""
-        read -r -p "Service token client secret (atau kembali): " client_secret
-        if is_back_choice "${client_secret}"; then
-          continue
-        fi
-        client_secret="$(printf '%s' "${client_secret}" | tr -d '[:space:]')"
-        if ! warp_zero_trust_client_secret_set "${client_secret}"; then
-          warn "Client secret Zero Trust tidak valid."
-          hr
-          pause
-          continue
-        fi
-        log "Client secret Zero Trust disimpan."
-        hr
-        pause
-        ;;
-      5)
         if ! warp_zero_trust_apply_connect; then
           :
         fi
         ;;
-      6)
+      4)
         if ! warp_zero_trust_disconnect; then
           :
         fi
         ;;
-      7)
+      5)
         if ! warp_zero_trust_return_to_free_plus; then
           :
         fi
         ;;
-      8)
+      6)
         title
         echo "$(warp_tier_zero_trust_menu_title "Requirements")"
         hr
@@ -3704,7 +3744,7 @@ warp_tier_zero_trust_menu() {
         hr
         pause
         ;;
-      9)
+      7)
         title
         echo "$(warp_tier_zero_trust_menu_title "Rollout Notes")"
         hr
