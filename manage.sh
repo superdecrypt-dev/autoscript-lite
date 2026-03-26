@@ -3886,6 +3886,7 @@ MANAGE_REQUIRED_MODULES=(
   "features/maintenance.sh"
   "features/network.sh"
   "features/analytics.sh"
+  "features/backup.sh"
   "menus/maintenance_menu.sh"
   "menus/main_menu.sh"
   "app/main.sh"

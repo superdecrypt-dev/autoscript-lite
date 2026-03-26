@@ -498,6 +498,16 @@ def _openvpn_public_tcp_ports_label() -> str:
     return _edge_runtime_ports_label(merged)
 
 
+def _openvpn_download_link(username: str) -> str:
+    username_n = str(username or "").strip()
+    if not username_n:
+        return "-"
+    host = str(_openvpn_public_host() or "").strip()
+    if not host or host == "-":
+        return "-"
+    return f"https://{host}/ovpn/{username_n}.ovpn"
+
+
 def _openvpn_ws_public_path() -> str:
     path = str(_openvpn_env_value("OPENVPN_WS_PUBLIC_PATH", "") or "").strip()
     if not path:
@@ -2958,6 +2968,7 @@ def _ssh_write_account_info(
                 "OpenVPN WS Path Alt",
                 "OpenVPN WS Port",
                 "OpenVPN TCP",
+                "OpenVPN Link",
                 "Alt Port SSL/TLS",
                 "Alt Port HTTP",
             ]
@@ -3016,6 +3027,7 @@ def _ssh_write_account_info(
                 f"{'OpenVPN WS Path Alt':<{running_label_width}} : {openvpn_ws_alt_path}",
                 f"{'OpenVPN WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
                 f"{'OpenVPN TCP':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
+                f"{'OpenVPN Link':<{running_label_width}} : {_openvpn_download_link(username)}",
                 f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}",
                 f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}",
             ]

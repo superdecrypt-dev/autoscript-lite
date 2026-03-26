@@ -73,6 +73,25 @@ xray_edge_runtime_all_public_ports_label() {
   xray_edge_runtime_ports_label "${merged}"
 }
 
+xray_edge_runtime_primary_ports_label() {
+  local tls_ports http_ports primary=""
+  tls_ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_TLS_PORTS EDGE_PUBLIC_TLS_PORT "443 2053 2083 2087 2096 8443" "443")"
+  http_ports="$(xray_edge_runtime_port_list EDGE_PUBLIC_HTTP_PORTS EDGE_PUBLIC_HTTP_PORT "80 8080 8880 2052 2082 2086 2095" "80")"
+  for port in ${tls_ports}; do
+    primary="${port}"
+    break
+  done
+  for port in ${http_ports}; do
+    if [[ -n "${primary}" && "${port}" != "${primary}" ]]; then
+      primary+=" ${port}"
+    elif [[ -z "${primary}" ]]; then
+      primary="${port}"
+    fi
+    break
+  done
+  xray_edge_runtime_ports_label "${primary}"
+}
+
 xray_edge_runtime_ws_ports_label() {
   xray_edge_runtime_all_public_ports_label
 }
@@ -1515,9 +1534,9 @@ write_account_artifacts() {
   [[ -n "${account_output_override}" ]] && acc_file="${account_output_override}"
   [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_ws_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_primary_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
-acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up, ws_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:24]
+acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up, primary_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:24]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
 ip_enabled = str(ip_enabled).lower() in ("1","true","yes","y","on")
@@ -1766,12 +1785,12 @@ else:
   lines.append("  Speed Limit : OFF")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
-lines.append(section_line(f"{proto_disp} WS", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} XHTTP", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", primary_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
@@ -1877,7 +1896,7 @@ account_info_refresh_for_user() {
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
   set +e
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}" "$(xray_edge_runtime_ws_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}" "$(xray_edge_runtime_primary_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import base64
 import ipaddress
 import json
@@ -1888,7 +1907,7 @@ import tempfile
 import urllib.parse
 from datetime import date, datetime
 
-acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto, cred_override, output_override, ws_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:16]
+acc_file, quota_file, inbounds_file, domain_arg, ip_arg, isp_arg, country_arg, username, proto, cred_override, output_override, primary_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:16]
 email = f"{username}@{proto}"
 forced_cred = str(cred_override or "").strip()
 out_file = str(output_override or "").strip() or acc_file
@@ -2319,12 +2338,12 @@ else:
   lines.append("  Speed Limit : OFF")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
-lines.append(section_line(f"{proto_disp} WS", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} HUP", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} XHTTP", ws_ports_disp, running_label_width))
-lines.append(section_line(f"{proto_disp} gRPC", ws_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
+lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", ws_ports_disp, running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", primary_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))

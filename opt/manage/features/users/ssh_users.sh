@@ -319,6 +319,33 @@ openvpn_public_tcp_ports_label() {
   fi
 }
 
+openvpn_primary_public_ports_label() {
+  local tls_ports http_ports primary="" port
+  if ! edge_runtime_enabled_for_public_ports; then
+    printf '%s\n' "$(openvpn_public_tcp_port)"
+    return 0
+  fi
+  tls_ports="$(edge_runtime_public_tls_ports 2>/dev/null || echo "443 2053 2083 2087 2096 8443")"
+  http_ports="$(edge_runtime_public_http_ports 2>/dev/null || echo "80 8080 8880 2052 2082 2086 2095")"
+  for port in ${tls_ports}; do
+    primary="${port}"
+    break
+  done
+  for port in ${http_ports}; do
+    if [[ -n "${primary}" && "${port}" != "${primary}" ]]; then
+      primary+=" ${port}"
+    elif [[ -z "${primary}" ]]; then
+      primary="${port}"
+    fi
+    break
+  done
+  if [[ -n "${primary}" ]]; then
+    printf '%s\n' "${primary}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 openvpn_ws_public_path() {
   local path
   path="$(openvpn_env_value "OPENVPN_WS_PUBLIC_PATH" "")"
@@ -361,25 +388,12 @@ PY
 
 openvpn_download_link() {
   local username="${1:-}"
+  local host
   openvpn_runtime_available || return 0
-  python3 - "${username}" <<'PY' 2>/dev/null
-import json
-import subprocess
-import sys
-
-username = sys.argv[1]
-cmd = ["/usr/local/bin/openvpn-manage", "--config", "/etc/autoscript/openvpn/config.env", "linked-info", "--username", username]
-proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False, timeout=60)
-if proc.returncode != 0:
-    raise SystemExit(0)
-try:
-    payload = json.loads(proc.stdout or "{}")
-except Exception:
-    raise SystemExit(0)
-value = str(payload.get("download_link") or "").strip()
-if value:
-    print(value)
-PY
+  [[ -n "${username}" ]] || return 0
+  host="$(openvpn_public_host)"
+  [[ -n "${host}" && "${host}" != "-" ]] || return 0
+  printf 'https://%s/ovpn/%s.ovpn\n' "${host}" "${username}"
 }
 
 openvpn_ensure_user_warn() {
@@ -417,9 +431,19 @@ ssh_user_state_file() {
   printf '%s/%s@ssh.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
 }
 
+ssh_user_state_lock_file() {
+  local username="${1:-}"
+  quota_lock_file_path "$(ssh_user_state_file "${username}")"
+}
+
 ssh_user_state_compat_file() {
   local username="${1:-}"
   printf '%s/%s.json\n' "${SSH_USERS_STATE_DIR}" "${username}"
+}
+
+ssh_user_state_compat_lock_file() {
+  local username="${1:-}"
+  quota_lock_file_path "$(ssh_user_state_compat_file "${username}")"
 }
 
 ssh_user_state_resolve_file() {
@@ -444,14 +468,20 @@ ssh_account_info_file() {
 ssh_user_artifacts_cleanup_unlocked() {
   local username="${1:-}"
   local f=""
+  local openvpn_state_file=""
   local -a failed=()
+  openvpn_state_file="$(openvpn_qac_state_file_for_user "${username}" 2>/dev/null || true)"
   for f in \
     "$(ssh_user_state_file "${username}")" \
+    "$(ssh_user_state_lock_file "${username}")" \
     "${SSH_USERS_STATE_DIR}/${username}.json" \
+    "$(ssh_user_state_compat_lock_file "${username}")" \
     "$(ssh_account_info_file "${username}")" \
     "${SSH_ACCOUNT_DIR}/${username}.txt" \
     "$(openvpn_profile_file "${username}")" \
-    "$(openvpn_metadata_file "${username}")"; do
+    "$(openvpn_metadata_file "${username}")" \
+    "${openvpn_state_file}" \
+    "$( [[ -n "${openvpn_state_file}" ]] && quota_lock_file_path "${openvpn_state_file}" )"; do
     [[ -e "${f}" || -L "${f}" ]] || continue
     rm -f "${f}" >/dev/null 2>&1 || true
     if [[ -e "${f}" || -L "${f}" ]]; then
@@ -1187,6 +1217,29 @@ ssh_public_all_ports_label() {
   fi
 }
 
+ssh_primary_public_ports_label() {
+  local tls_ports http_ports primary="" port
+  tls_ports="$(edge_runtime_public_tls_ports 2>/dev/null || echo "443 2053 2083 2087 2096 8443")"
+  http_ports="$(edge_runtime_public_http_ports 2>/dev/null || echo "80 8080 8880 2052 2082 2086 2095")"
+  for port in ${tls_ports}; do
+    primary="${port}"
+    break
+  done
+  for port in ${http_ports}; do
+    if [[ -n "${primary}" && "${port}" != "${primary}" ]]; then
+      primary+=" ${port}"
+    elif [[ -z "${primary}" ]]; then
+      primary="${port}"
+    fi
+    break
+  done
+  if [[ -n "${primary}" ]]; then
+    printf '%s\n' "${primary}" | sed 's/ /, /g'
+  else
+    printf '%s\n' "-"
+  fi
+}
+
 ssh_ws_public_ports_label() {
   if edge_runtime_enabled_for_public_ports; then
     ssh_public_all_ports_label
@@ -1262,7 +1315,7 @@ ssh_account_info_write() {
   ssh_state_dirs_prepare
   password_out="${password_raw:-"-"}"
 
-  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp ssh_alt_tls_ports_disp ssh_alt_http_ports_disp badvpn_port_disp geo
+  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp ssh_alt_tls_ports_disp ssh_alt_http_ports_disp badvpn_port_disp geo ssh_primary_ports_disp
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_ssh_alt_tls running_ssh_alt_http running_badvpn
   local -a account_info_labels
   acc_file="$(ssh_account_info_file "${username}")"
@@ -1375,9 +1428,10 @@ PY
   if [[ "${sshws_alt_path}" == /bebas/* ]]; then
     sshws_alt_path="/<bebas>/${sshws_token}"
   fi
-  sshws_ports_disp="$(ssh_ws_public_ports_label)"
-  ssh_direct_ports_disp="$(ssh_direct_public_ports_label)"
-  ssh_ssl_tls_ports_disp="$(ssh_ssl_tls_public_ports_label)"
+  ssh_primary_ports_disp="$(ssh_primary_public_ports_label)"
+  sshws_ports_disp="$(ssh_primary_public_ports_label)"
+  ssh_direct_ports_disp="$(ssh_primary_public_ports_label)"
+  ssh_ssl_tls_ports_disp="$(ssh_primary_public_ports_label)"
   ssh_alt_tls_ports_disp="$(ssh_alt_tls_public_ports_label)"
   ssh_alt_http_ports_disp="$(ssh_alt_http_public_ports_label)"
   badvpn_port_disp="$(badvpn_public_port_label)"
@@ -1399,6 +1453,7 @@ PY
       "OpenVPN WS Path Alt"
       "OpenVPN WS Port"
       "OpenVPN TCP"
+      "OpenVPN Link"
       "Alt Port SSL/TLS"
       "Alt Port HTTP"
     )
@@ -1428,16 +1483,20 @@ PY
   if openvpn_runtime_available; then
     local openvpn_ws_path openvpn_ws_alt_path
     local openvpn_ws_path_line openvpn_ws_alt_line openvpn_ws_port_line
-    local openvpn_tcp_line openvpn_alt_tls_line openvpn_alt_http_line
+    local openvpn_tcp_line openvpn_link_line openvpn_alt_tls_line openvpn_alt_http_line openvpn_link_disp openvpn_primary_ports_disp
     openvpn_ws_path="$(openvpn_ws_public_path)"
     openvpn_ws_alt_path="$(openvpn_ws_public_alt_path)"
+    openvpn_primary_ports_disp="$(openvpn_primary_public_ports_label)"
+    openvpn_link_disp="$(openvpn_download_link "${username}")"
+    [[ -n "${openvpn_link_disp}" ]] || openvpn_link_disp="-"
     printf -v openvpn_ws_path_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path" "${openvpn_ws_path}"
     printf -v openvpn_ws_alt_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path Alt" "${openvpn_ws_alt_path}"
-    printf -v openvpn_ws_port_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Port" "${sshws_ports_disp}"
-    printf -v openvpn_tcp_line '%-*s : %s' "${running_label_width}" "OpenVPN TCP" "${sshws_ports_disp}"
+    printf -v openvpn_ws_port_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Port" "${openvpn_primary_ports_disp}"
+    printf -v openvpn_tcp_line '%-*s : %s' "${running_label_width}" "OpenVPN TCP" "${openvpn_primary_ports_disp}"
+    printf -v openvpn_link_line '%-*s : %s' "${running_label_width}" "OpenVPN Link" "${openvpn_link_disp}"
     printf -v openvpn_alt_tls_line '%-*s : %s' "${running_label_width}" "Alt Port SSL/TLS" "${ssh_alt_tls_ports_disp}"
     printf -v openvpn_alt_http_line '%-*s : %s' "${running_label_width}" "Alt Port HTTP" "${ssh_alt_http_ports_disp}"
-    openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_alt_tls_line}"$'\n'"${openvpn_alt_http_line}"$'\n'
+    openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_link_line}"$'\n'"${openvpn_alt_tls_line}"$'\n'"${openvpn_alt_http_line}"$'\n'
   fi
   local tmp_acc_file=""
   mkdir -p "$(dirname "${acc_file}")" 2>/dev/null || return 1
