@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+import argparse
+import datetime as dt
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+DEFAULTS = {
+    "AUTOSCRIPT_LICENSE_CONFIG_FILE": "/etc/autoscript/license/config.env",
+    "AUTOSCRIPT_LICENSE_STATE_FILE": "/var/lib/autoscript-license/state.json",
+    "AUTOSCRIPT_LICENSE_CACHE_FILE": "/var/lib/autoscript-license/cache.json",
+    "AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE": "/var/lib/autoscript-license/stopped-services.json",
+    "AUTOSCRIPT_LICENSE_API_URL": "",
+    "AUTOSCRIPT_LICENSE_API_TOKEN": "",
+    "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "86400",
+    "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE": "true",
+    "AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN": "15",
+    "OPENVPN_CONFIG_ENV_FILE": "/etc/autoscript/openvpn/config.env",
+    "EDGE_RUNTIME_ENV_FILE": "/etc/default/edge-runtime",
+}
+
+IP_SOURCES = (
+    "https://api.ipify.org",
+    "https://ipv4.icanhazip.com",
+)
+IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def utcnow():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def isoformat_z(value):
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso8601(value):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def parse_int(value, default):
+    try:
+        return max(1, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def read_env_file(path):
+    result = {}
+    p = Path(path)
+    if not p.is_file():
+        return result
+    for raw_line in p.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+            value = value[1:-1]
+        result[key] = value
+    return result
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    env_cfg_file = os.environ.get("AUTOSCRIPT_LICENSE_CONFIG_FILE") or DEFAULTS["AUTOSCRIPT_LICENSE_CONFIG_FILE"]
+    cfg.update(read_env_file(env_cfg_file))
+    for key, default in DEFAULTS.items():
+        cfg[key] = os.environ.get(key, cfg.get(key, default))
+    cfg["AUTOSCRIPT_LICENSE_CONFIG_FILE"] = os.environ.get("AUTOSCRIPT_LICENSE_CONFIG_FILE", env_cfg_file)
+    cfg["runtime_enforce"] = parse_bool(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE"), True)
+    cfg["cache_ttl_sec"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC"), 86400)
+    cfg["runtime_interval_min"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN"), 15)
+    return cfg
+
+
+def load_json(path):
+    p = Path(path)
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def write_json_atomic(path, payload, mode=0o600):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(p.parent))
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, p)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def fetch_text(url, headers=None, timeout=8):
+    req = urllib.request.Request(url, headers=headers or {}, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        return response.status, body
+
+
+def post_json(url, payload, headers=None, timeout=10):
+    data = json.dumps(payload).encode("utf-8")
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        return response.status, json.loads(body)
+
+
+def detect_public_ipv4():
+    for url in IP_SOURCES:
+        try:
+            _, body = fetch_text(url, timeout=5)
+        except Exception:
+            continue
+        candidate = body.strip()
+        if not IP_RE.fullmatch(candidate):
+            continue
+        try:
+            ip = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            return candidate
+    raise RuntimeError("Gagal mendapatkan public IPv4 VPS.")
+
+
+def state_payload(cfg, *, stage, allowed, status, source, reason, public_ip, checked_at, cache_expires_at="", enforcement_action="none", stopped_services=None):
+    return {
+        "allowed": bool(allowed),
+        "cache_expires_at": cache_expires_at or "",
+        "checked_at": checked_at,
+        "decision_source": source,
+        "enforcement_action": enforcement_action,
+        "public_ip": public_ip or "",
+        "reason": reason or "",
+        "runtime_enforce": bool(cfg["runtime_enforce"]),
+        "stage": stage,
+        "status": status,
+        "stopped_services": list(stopped_services or []),
+    }
+
+
+def save_state(cfg, payload):
+    write_json_atomic(cfg["AUTOSCRIPT_LICENSE_STATE_FILE"], payload)
+
+
+def save_cache(cfg, *, public_ip, reason, checked_at, ttl_sec):
+    expires_at = isoformat_z(utcnow() + dt.timedelta(seconds=ttl_sec))
+    payload = {
+        "allowed": True,
+        "cache_expires_at": expires_at,
+        "checked_at": checked_at,
+        "public_ip": public_ip,
+        "reason": reason or "",
+    }
+    write_json_atomic(cfg["AUTOSCRIPT_LICENSE_CACHE_FILE"], payload)
+    return payload
+
+
+def load_valid_cache(cfg, public_ip):
+    cache = load_json(cfg["AUTOSCRIPT_LICENSE_CACHE_FILE"])
+    if not isinstance(cache, dict):
+        return None
+    if not cache.get("allowed"):
+        return None
+    if (cache.get("public_ip") or "").strip() != public_ip:
+        return None
+    expires_at = parse_iso8601(cache.get("cache_expires_at"))
+    if expires_at is None or expires_at < utcnow():
+        return None
+    return cache
+
+
+def edge_service_candidates(cfg):
+    edge_cfg = read_env_file(cfg["EDGE_RUNTIME_ENV_FILE"])
+    provider = (edge_cfg.get("EDGE_PROVIDER") or "").strip()
+    candidates = []
+    if provider == "go":
+        candidates.append("edge-mux.service")
+    candidates.append("nginx")
+    return candidates
+
+
+def openvpn_service_candidates(cfg):
+    ovpn_cfg = read_env_file(cfg["OPENVPN_CONFIG_ENV_FILE"])
+    tcp_svc = (os.environ.get("OPENVPN_TCP_SERVICE") or ovpn_cfg.get("OPENVPN_TCP_SERVICE") or "openvpn-server@autoscript-tcp").strip()
+    ws_svc = (os.environ.get("OPENVPN_WS_SERVICE") or ovpn_cfg.get("OPENVPN_WS_SERVICE") or "ovpn-ws-proxy").strip()
+    return [tcp_svc, ws_svc]
+
+
+def unique_units(units):
+    resolved = []
+    seen = set()
+    for item in units:
+        unit = (item or "").strip()
+        if not unit:
+            continue
+        if unit.endswith(".timer"):
+            continue
+        if unit not in seen:
+            seen.add(unit)
+            resolved.append(unit)
+    return resolved
+
+
+def service_exists(unit):
+    result = subprocess.run(["systemctl", "list-unit-files", unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return result.returncode == 0
+
+
+def service_is_active(unit):
+    result = subprocess.run(["systemctl", "is-active", "--quiet", unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return result.returncode == 0
+
+
+def service_stop(unit):
+    return subprocess.run(["systemctl", "stop", unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
+
+
+def service_start(unit):
+    return subprocess.run(["systemctl", "start", unit], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
+
+
+def all_public_services(cfg):
+    units = []
+    units.extend(edge_service_candidates(cfg))
+    units.extend(["xray", "sshws-dropbear", "sshws-stunnel", "sshws-proxy"])
+    units.extend(openvpn_service_candidates(cfg))
+    units.append("zivpn.service")
+    return unique_units(units)
+
+
+def load_stopped_services(cfg):
+    payload = load_json(cfg["AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE"])
+    if not isinstance(payload, dict):
+        return []
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return []
+    return unique_units(services)
+
+
+def save_stopped_services(cfg, services):
+    services = unique_units(services)
+    if not services:
+        try:
+            Path(cfg["AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE"]).unlink()
+        except OSError:
+            pass
+        return
+    payload = {
+        "saved_at": isoformat_z(utcnow()),
+        "services": services,
+    }
+    write_json_atomic(cfg["AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE"], payload)
+
+
+def stop_public_services(cfg):
+    stopped = []
+    for unit in all_public_services(cfg):
+        if not service_exists(unit):
+            continue
+        if not service_is_active(unit):
+            continue
+        if service_stop(unit):
+            stopped.append(unit)
+    save_stopped_services(cfg, stopped)
+    return stopped
+
+
+def restore_public_services(cfg):
+    pending = load_stopped_services(cfg)
+    if not pending:
+        return []
+    failed = []
+    for unit in pending:
+        if not service_exists(unit):
+            continue
+        if service_is_active(unit):
+            continue
+        if not service_start(unit):
+            failed.append(unit)
+    save_stopped_services(cfg, failed)
+    return [unit for unit in pending if unit not in failed]
+
+
+def api_headers(cfg):
+    headers = {}
+    token = (cfg.get("AUTOSCRIPT_LICENSE_API_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def evaluate_license(cfg, *, stage, allow_disabled):
+    now = isoformat_z(utcnow())
+    api_url = (cfg.get("AUTOSCRIPT_LICENSE_API_URL") or "").strip()
+    if not api_url:
+        payload = state_payload(
+            cfg,
+            stage=stage,
+            allowed=False,
+            status="disabled",
+            source="disabled",
+            reason="AUTOSCRIPT_LICENSE_API_URL kosong",
+            public_ip="",
+            checked_at=now,
+        )
+        save_state(cfg, payload)
+        return allow_disabled, payload
+
+    public_ip = detect_public_ipv4()
+    req_payload = {
+        "public_ipv4": public_ip,
+        "stage": stage,
+        "product": "autoscript",
+        "hostname": os.uname().nodename,
+    }
+
+    try:
+        status_code, response = post_json(api_url, req_payload, headers=api_headers(cfg))
+        if status_code != 200 or not isinstance(response, dict):
+            raise RuntimeError(f"Respons API tidak valid (HTTP {status_code})")
+        if "allowed" not in response:
+            raise RuntimeError("Respons API tidak memiliki field 'allowed'")
+        allowed = bool(response.get("allowed"))
+        reason = str(response.get("reason") or "")
+        ttl_sec = parse_int(response.get("cache_ttl_sec"), cfg["cache_ttl_sec"])
+        cache_expires_at = ""
+        if allowed:
+            cache = save_cache(cfg, public_ip=public_ip, reason=reason, checked_at=now, ttl_sec=ttl_sec)
+            cache_expires_at = cache["cache_expires_at"]
+        payload = state_payload(
+            cfg,
+            stage=stage,
+            allowed=allowed,
+            status="allowed" if allowed else "denied",
+            source="api",
+            reason=reason or ("allowed" if allowed else "denied by API"),
+            public_ip=public_ip,
+            checked_at=now,
+            cache_expires_at=cache_expires_at,
+        )
+        save_state(cfg, payload)
+        return allowed, payload
+    except Exception as exc:
+        cache = load_valid_cache(cfg, public_ip)
+        if cache is not None:
+            payload = state_payload(
+                cfg,
+                stage=stage,
+                allowed=True,
+                status="cache-allow",
+                source="cache",
+                reason=f"API gagal, memakai cache: {exc}",
+                public_ip=public_ip,
+                checked_at=now,
+                cache_expires_at=cache.get("cache_expires_at") or "",
+            )
+            save_state(cfg, payload)
+            return True, payload
+        payload = state_payload(
+            cfg,
+            stage=stage,
+            allowed=False,
+            status="error",
+            source="api",
+            reason=f"API gagal dan cache tidak valid: {exc}",
+            public_ip=public_ip,
+            checked_at=now,
+        )
+        save_state(cfg, payload)
+        return False, payload
+
+
+def print_status(cfg):
+    state = load_json(cfg["AUTOSCRIPT_LICENSE_STATE_FILE"])
+    stopped = load_stopped_services(cfg)
+    print("Autoscript License Status")
+    print(f"Config file      : {cfg['AUTOSCRIPT_LICENSE_CONFIG_FILE']}")
+    print(f"API configured   : {'yes' if (cfg.get('AUTOSCRIPT_LICENSE_API_URL') or '').strip() else 'no'}")
+    print(f"Runtime enforce  : {'true' if cfg['runtime_enforce'] else 'false'}")
+    print(f"Cache TTL (sec)  : {cfg['cache_ttl_sec']}")
+    if not isinstance(state, dict):
+        print("Last state       : belum ada data")
+    else:
+        print(f"Last state       : {state.get('status', '-')}")
+        print(f"Allowed          : {state.get('allowed', False)}")
+        print(f"Stage            : {state.get('stage', '-')}")
+        print(f"Checked at       : {state.get('checked_at', '-')}")
+        print(f"Decision source  : {state.get('decision_source', '-')}")
+        print(f"Public IPv4      : {state.get('public_ip', '-')}")
+        print(f"Reason           : {state.get('reason', '-')}")
+        print(f"Cache expires at : {state.get('cache_expires_at', '-')}")
+        print(f"Enforcement      : {state.get('enforcement_action', 'none')}")
+    if stopped:
+        print(f"Stopped services : {', '.join(stopped)}")
+    else:
+        print("Stopped services : none")
+    return 0
+
+
+def command_check(args):
+    cfg = load_config()
+    allowed, payload = evaluate_license(cfg, stage=args.stage, allow_disabled=parse_bool(args.allow_disabled, True))
+    if allowed:
+        print(f"[license] {payload['status']}: {payload['reason']}")
+        return 0
+    print(f"[license] {payload['status']}: {payload['reason']}", file=sys.stderr)
+    return 1
+
+
+def command_enforce_runtime(_args):
+    cfg = load_config()
+    allowed, payload = evaluate_license(cfg, stage="runtime", allow_disabled=True)
+    action = "none"
+    stopped = []
+    if payload["status"] == "disabled" or not cfg["runtime_enforce"]:
+        payload["enforcement_action"] = "none"
+        save_state(cfg, payload)
+        print("[license] runtime enforcement disabled")
+        return 0
+    if allowed:
+        restored = restore_public_services(cfg)
+        action = "restored" if restored else "allow"
+        payload["enforcement_action"] = action
+        payload["stopped_services"] = load_stopped_services(cfg)
+        save_state(cfg, payload)
+        print(f"[license] allow: {payload['reason']}")
+        return 0
+
+    stopped = stop_public_services(cfg)
+    action = "stopped-services" if stopped else "deny-no-active-services"
+    payload["enforcement_action"] = action
+    payload["stopped_services"] = stopped
+    save_state(cfg, payload)
+    print(f"[license] deny: {payload['reason']}", file=sys.stderr)
+    return 1
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="autoscript-license-check")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    check = sub.add_parser("check")
+    check.add_argument("--stage", default="runtime", choices=["run", "setup", "manage", "runtime"])
+    check.add_argument("--allow-disabled", default="true")
+
+    sub.add_parser("enforce-runtime")
+    sub.add_parser("status")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    if args.cmd == "check":
+        return command_check(args)
+    if args.cmd == "enforce-runtime":
+        return command_enforce_runtime(args)
+    if args.cmd == "status":
+        return print_status(load_config())
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

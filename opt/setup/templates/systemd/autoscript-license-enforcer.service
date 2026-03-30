@@ -1,0 +1,9 @@
+[Unit]
+Description=Autoscript license runtime enforcer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-__AUTOSCRIPT_LICENSE_CONFIG_FILE__
+ExecStart=__AUTOSCRIPT_LICENSE_BIN__ enforce-runtime

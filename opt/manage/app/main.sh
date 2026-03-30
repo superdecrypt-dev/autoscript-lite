@@ -2,6 +2,9 @@
 
 main() {
   need_root
+  if ! manage_license_guard_preflight "${1:-}"; then
+    return 1
+  fi
   init_runtime_dirs
   ensure_account_quota_dirs
 

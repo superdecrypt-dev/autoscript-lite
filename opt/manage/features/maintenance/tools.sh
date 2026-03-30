@@ -70,3 +70,34 @@ install_telegram_bot_menu() {
     "menu"
   return 0
 }
+
+autoscript_license_status_menu() {
+  local license_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+
+  ui_menu_screen_begin "13) Tools > License Guard"
+  if [[ ! -x "${license_bin}" ]]; then
+    warn "Binary license guard tidak ditemukan / tidak executable:"
+    echo "  ${license_bin}"
+    echo
+    echo "Hint: jalankan ulang run.sh atau setup.sh agar license guard ikut dipasang."
+    hr
+    pause
+    return 0
+  fi
+  if declare -F manage_bootstrap_path_trusted >/dev/null 2>&1 && ! manage_bootstrap_path_trusted "${license_bin}"; then
+    warn "Binary license guard tidak trusted:"
+    echo "  ${license_bin}"
+    echo
+    echo "Hint: pastikan owner root, bukan symlink, dan tidak writable oleh group/other."
+    hr
+    pause
+    return 0
+  fi
+
+  if ! "${license_bin}" status; then
+    warn "Gagal membaca status license guard."
+  fi
+  hr
+  pause
+  return 0
+}

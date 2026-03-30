@@ -17,6 +17,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 Catatan penting:
 - Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
 - Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
+- License guard IP VPS bersifat opsional dan aktif jika `AUTOSCRIPT_LICENSE_API_URL` di-set sebelum menjalankan `run.sh`.
+- Runtime license guard menyimpan cache allow terakhir hingga `24 jam` dan statusnya bisa dilihat dari `manage -> 13) Tools -> License Guard`.
 
 ## Arsitektur Singkat
 ```text
@@ -157,8 +159,35 @@ Internet / Cloudflare
 1) Telegram Bot
 2) WARP Tier
 3) Backup/Restore
+4) License Guard
 0) Back
 ```
+
+## Cloudflare License Portal
+- Portal web lisensi IP VPS sekarang tersedia di [`cloudflare/autoscript-license-portal/`](/root/project/autoscript/cloudflare/autoscript-license-portal)
+- Target deploy:
+  - `Cloudflare Worker` untuk API lisensi publik, admin, dan endpoint check autoscript
+  - `Cloudflare D1` untuk database allowlist, renewal token hash, audit, dan rate limit
+  - `Cloudflare Pages` untuk website publik `/` dan panel admin `/admin/`
+- Workflow deploy yang didukung:
+  - `Connect GitHub` untuk `Pages` dan `Worker`
+  - Pages build sekarang menghasilkan `dist/config.js` dari env build Cloudflare, jadi tidak perlu commit `apiBaseUrl` produksi ke source
+- Flow publik default:
+  - siapa pun bisa membuat izin IP VPS dari website publik
+  - masa aktif awal default `14 hari`
+  - saat expired, renew dilakukan lagi dari website memakai `renewal token`
+- Flow admin:
+  - route `/admin/` tetap untuk operator internal
+  - admin bisa lihat audit, revoke/reactivate, dan edit metadata/expiry
+- Endpoint autoscript yang dipakai VPS:
+  - `POST /api/v1/license/check`
+- Konfigurasi VPS:
+  - `AUTOSCRIPT_LICENSE_API_URL=https://<worker-host>/api/v1/license/check`
+  - `AUTOSCRIPT_LICENSE_API_TOKEN=<shared-bearer-token>`
+- Secret penting untuk deploy portal:
+  - `AUTOSCRIPT_SHARED_BEARER_TOKEN`
+  - `TURNSTILE_SECRET_KEY`
+  - `RENEWAL_TOKEN_PEPPER`
 
 ## Backup/Restore
 - `Backup/Restore` sekarang tersedia di:

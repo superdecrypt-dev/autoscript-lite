@@ -1,0 +1,25 @@
+name = "autoscript-license-api"
+main = "worker/src/index.js"
+compatibility_date = "2026-03-31"
+workers_dev = true
+
+[vars]
+CACHE_TTL_SEC_DEFAULT = "86400"
+PUBLIC_LICENSE_DURATION_DAYS = "14"
+PUBLIC_UI_ORIGIN = "https://your-public-pages-project.pages.dev"
+ADMIN_UI_ORIGIN = "https://your-pages-project.pages.dev"
+TURNSTILE_SITE_KEY = "replace-with-turnstile-site-key"
+PUBLIC_CREATE_LIMIT_MAX = "5"
+PUBLIC_CREATE_WINDOW_SEC = "900"
+PUBLIC_STATUS_LIMIT_MAX = "30"
+PUBLIC_STATUS_WINDOW_SEC = "900"
+PUBLIC_RENEW_LIMIT_MAX = "10"
+PUBLIC_RENEW_WINDOW_SEC = "900"
+CF_ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
+CF_ACCESS_AUD = "replace-with-cloudflare-access-aud"
+
+[[d1_databases]]
+binding = "LICENSE_DB"
+database_name = "autoscript-license"
+database_id = "replace-with-d1-database-id"
+migrations_dir = "migrations"

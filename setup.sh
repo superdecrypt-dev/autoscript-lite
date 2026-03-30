@@ -105,6 +105,8 @@ MANAGE_MODULES_SRC_DIR="${SCRIPT_DIR}/opt/manage"
 source_setup_module "opt/setup/core/logging.sh"
 # shellcheck source=opt/setup/core/helpers.sh
 source_setup_module "opt/setup/core/helpers.sh"
+# shellcheck source=opt/setup/core/license.sh
+source_setup_module "opt/setup/core/license.sh"
 # shellcheck source=opt/setup/install/bootstrap.sh
 source_setup_module "opt/setup/install/bootstrap.sh"
 # shellcheck source=opt/setup/install/domain.sh
@@ -125,6 +127,8 @@ source_setup_module "opt/setup/install/network.sh"
 source_setup_module "opt/setup/install/xray.sh"
 # shellcheck source=opt/setup/install/management.sh
 source_setup_module "opt/setup/install/management.sh"
+# shellcheck source=opt/setup/install/license.sh
+source_setup_module "opt/setup/install/license.sh"
 # shellcheck source=opt/setup/install/sshws.sh
 source_setup_module "opt/setup/install/sshws.sh"
 # shellcheck source=opt/setup/install/openvpn.sh
@@ -200,6 +204,7 @@ setup_post_domain_main() {
   setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
   setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
   setup_run_step "Install management scripts" install_management_scripts
+  setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
   setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
@@ -265,6 +270,7 @@ main() {
   validate_sshws_ports_config
   check_os
   install_base_deps
+  autoscript_license_setup_preflight
   domain_menu_v2
   setup_run_post_domain_with_spinner
 }

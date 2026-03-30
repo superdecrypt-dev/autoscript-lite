@@ -3881,6 +3881,7 @@ MANAGE_REQUIRED_MODULES=(
   "core/env.sh"
   "core/router.sh"
   "core/ui.sh"
+  "core/license.sh"
   "features/users.sh"
   "features/domain.sh"
   "features/maintenance.sh"

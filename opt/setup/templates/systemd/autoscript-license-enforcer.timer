@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Autoscript license runtime enforcer periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=__AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN__min
+Unit=__AUTOSCRIPT_LICENSE_SERVICE__
+Persistent=true
+
+[Install]
+WantedBy=timers.target

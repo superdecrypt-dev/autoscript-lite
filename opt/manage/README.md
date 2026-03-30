@@ -99,10 +99,11 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `12) Traffic`
   Analytics dan ringkasan traffic runtime.
 - `13) Tools`
-  Telegram Bot dan WARP Tier.
+  Telegram Bot, WARP Tier, Backup/Restore, dan `License Guard` status.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
   `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; `SSH Network` kompatibel bila backend WARP SSH memakai `Local Proxy`.
   Fondasi paket/runtime `cloudflare-warp` sekarang dipersiapkan dari `setup.sh`, tetapi mode ini tetap idle sampai diaktifkan operator.
+  `manage` startup juga menjalankan guard lisensi IP bila `AUTOSCRIPT_LICENSE_API_URL` aktif; IP expired atau revoked dari portal Cloudflare akan ditolak sebelum panel dibuka.
 
 ## Guardrail Maintainer
 

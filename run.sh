@@ -25,6 +25,9 @@ if [[ "${RUN_USE_LOCAL_SOURCE}" == "1" ]]; then
 fi
 RUN_STATE_DIR="${RUN_STATE_DIR:-/var/lib/autoscript-run}"
 RUN_REPO_REF_FILE="${RUN_REPO_REF_FILE:-${RUN_STATE_DIR}/repo-ref}"
+AUTOSCRIPT_LICENSE_STATE_DIR="${AUTOSCRIPT_LICENSE_STATE_DIR:-/var/lib/autoscript-license}"
+AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/state.json}"
+AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/cache.json}"
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
@@ -38,12 +41,14 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "install-telegram-bot.sh"
   "opt/setup/core/logging.sh"
   "opt/setup/core/helpers.sh"
+  "opt/setup/core/license.sh"
   "opt/setup/install/bootstrap.sh"
   "opt/setup/install/domain.sh"
   "opt/setup/install/nginx.sh"
   "opt/setup/install/network.sh"
   "opt/setup/install/xray.sh"
   "opt/setup/install/management.sh"
+  "opt/setup/install/license.sh"
   "opt/setup/install/sshws.sh"
   "opt/setup/bin/ssh-expired-cleaner.py"
   "opt/setup/bin/backup-manage.py"
@@ -51,13 +56,17 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/templates/systemd/ssh-expired-cleaner.timer"
   "opt/setup/templates/config/backup-cloud.env"
   "opt/setup/bin/openvpn-speed.py"
+  "opt/setup/bin/autoscript-license-check"
   "opt/setup/bin/openvpn-auth-guard.py"
   "opt/setup/bin/openvpn-connect-guard.py"
   "opt/setup/bin/openvpn-qac-hook.py"
   "opt/setup/templates/config/openvpn-speed-config.json"
+  "opt/setup/templates/config/autoscript-license.env"
   "opt/setup/templates/systemd/openvpn-speed.service"
   "opt/setup/templates/systemd/openvpn-speed-reconcile.service"
   "opt/setup/templates/systemd/openvpn-speed-reconcile.path"
+  "opt/setup/templates/systemd/autoscript-license-enforcer.service"
+  "opt/setup/templates/systemd/autoscript-license-enforcer.timer"
   "opt/setup/templates/tmpfiles/openvpn-qac.conf"
   "opt/setup/install/zivpn.sh"
   "opt/setup/bin/zivpn-password-sync.py"
@@ -72,6 +81,7 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/templates/systemd/badvpn-udpgw.service"
   "opt/manage/features/network.sh"
   "opt/manage/features/analytics.sh"
+  "opt/manage/core/license.sh"
   "opt/manage/features/users/ssh_users.sh"
   "opt/manage/features/users/ssh_qac.sh"
   "opt/manage/features/users/openvpn_qac.sh"
@@ -174,6 +184,233 @@ run_step_with_spinner() {
 ensure_run_state_dir() {
   mkdir -p "${RUN_STATE_DIR}"
   chmod 700 "${RUN_STATE_DIR}" 2>/dev/null || true
+}
+
+license_guard_enabled() {
+  [[ -n "${AUTOSCRIPT_LICENSE_API_URL:-}" ]]
+}
+
+run_license_preflight() {
+  if ! license_guard_enabled; then
+    subtle "License guard: nonaktif (AUTOSCRIPT_LICENSE_API_URL belum di-set)"
+    return 0
+  fi
+
+  ensure_run_state_dir
+  install -d -m 0755 "${AUTOSCRIPT_LICENSE_STATE_DIR}"
+  AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-}" \
+  AUTOSCRIPT_LICENSE_API_TOKEN="${AUTOSCRIPT_LICENSE_API_TOKEN:-}" \
+  AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-86400}" \
+  AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE}" \
+  AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE}" \
+  python3 - <<'PY'
+import datetime as dt
+import ipaddress
+import json
+import os
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+STATE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_STATE_FILE"])
+CACHE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_CACHE_FILE"])
+API_URL = os.environ.get("AUTOSCRIPT_LICENSE_API_URL", "").strip()
+API_TOKEN = os.environ.get("AUTOSCRIPT_LICENSE_API_TOKEN", "").strip()
+TTL_DEFAULT = max(1, int(os.environ.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC", "86400") or "86400"))
+IP_SOURCES = ("https://api.ipify.org", "https://ipv4.icanhazip.com")
+
+
+def now():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def iso(value):
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def read_json(path):
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def save_state(**payload):
+    write_json(STATE_FILE, payload)
+
+
+def save_cache(public_ip, reason, checked_at, ttl_sec):
+    payload = {
+        "allowed": True,
+        "cache_expires_at": iso(now() + dt.timedelta(seconds=ttl_sec)),
+        "checked_at": checked_at,
+        "public_ip": public_ip,
+        "reason": reason,
+    }
+    write_json(CACHE_FILE, payload)
+    return payload
+
+
+def load_valid_cache(public_ip):
+    payload = read_json(CACHE_FILE)
+    if not isinstance(payload, dict):
+        return None
+    if not payload.get("allowed"):
+        return None
+    if (payload.get("public_ip") or "").strip() != public_ip:
+        return None
+    expires_at = parse_iso(payload.get("cache_expires_at"))
+    if expires_at is None or expires_at < now():
+        return None
+    return payload
+
+
+def fetch_text(url, timeout=5):
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def detect_ip():
+    for url in IP_SOURCES:
+        try:
+            body = fetch_text(url)
+        except Exception:
+            continue
+        candidate = body.strip()
+        try:
+            addr = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if addr.version == 4:
+            return candidate
+    raise RuntimeError("Gagal mendapatkan public IPv4 VPS.")
+
+
+def api_call(public_ip):
+    payload = json.dumps({
+        "public_ipv4": public_ip,
+        "stage": "run",
+        "product": "autoscript",
+        "hostname": os.uname().nodename,
+    }).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        data = json.loads(body)
+        if response.status != 200 or "allowed" not in data:
+            raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
+        return data
+
+
+def main():
+    checked_at = iso(now())
+    public_ip = detect_ip()
+    try:
+        data = api_call(public_ip)
+        allowed = bool(data.get("allowed"))
+        reason = str(data.get("reason") or ("allowed" if allowed else "denied by API"))
+        ttl_sec = max(1, int(data.get("cache_ttl_sec") or TTL_DEFAULT))
+        cache_expires = ""
+        if allowed:
+          cache = save_cache(public_ip, reason, checked_at, ttl_sec)
+          cache_expires = cache["cache_expires_at"]
+        save_state(
+            allowed=allowed,
+            cache_expires_at=cache_expires,
+            checked_at=checked_at,
+            decision_source="api",
+            enforcement_action="none",
+            public_ip=public_ip,
+            reason=reason,
+            runtime_enforce=True,
+            stage="run",
+            status="allowed" if allowed else "denied",
+            stopped_services=[],
+        )
+        if allowed:
+            print(f"[license] allowed: {reason}")
+            return 0
+        print(f"[license] denied: {reason}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        cache = load_valid_cache(public_ip)
+        if cache is not None:
+            reason = f"API gagal, memakai cache: {exc}"
+            save_state(
+                allowed=True,
+                cache_expires_at=cache.get("cache_expires_at") or "",
+                checked_at=checked_at,
+                decision_source="cache",
+                enforcement_action="none",
+                public_ip=public_ip,
+                reason=reason,
+                runtime_enforce=True,
+                stage="run",
+                status="cache-allow",
+                stopped_services=[],
+            )
+            print(f"[license] cache-allow: {reason}")
+            return 0
+        save_state(
+            allowed=False,
+            cache_expires_at="",
+            checked_at=checked_at,
+            decision_source="api",
+            enforcement_action="none",
+            public_ip=public_ip,
+            reason=f"API gagal dan cache tidak valid: {exc}",
+            runtime_enforce=True,
+            stage="run",
+            status="error",
+            stopped_services=[],
+        )
+        print(f"[license] error: API gagal dan cache tidak valid: {exc}", file=sys.stderr)
+        return 1
+
+
+raise SystemExit(main())
+PY
 }
 
 load_effective_repo_ref() {
@@ -379,17 +616,23 @@ check_os() {
 
 check_deps() {
   local missing=()
-  for cmd in git bash; do
+  local install_pkgs=()
+  for cmd in git bash python3; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
+      install_pkgs+=("${cmd}")
     fi
   done
 
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    warn "Dependency belum ada: ${missing[*]}"
+  if ! dpkg -s ca-certificates >/dev/null 2>&1; then
+    install_pkgs+=("ca-certificates")
+  fi
+
+  if [[ ${#install_pkgs[@]} -gt 0 ]]; then
+    warn "Dependency belum ada: ${install_pkgs[*]}"
     log "Pasang dependency yang kurang..."
     apt-get update -y >/dev/null 2>&1 || true
-    apt-get install -y "${missing[@]}" || die "Gagal menginstal: ${missing[*]}"
+    apt-get install -y "${install_pkgs[@]}" || die "Gagal menginstal dependency run.sh"
     ok "Dependency siap."
   fi
 }
@@ -609,6 +852,7 @@ main() {
   check_root
   check_os
   run_step_with_spinner "Memeriksa dependency" check_deps
+  run_step_with_spinner "Validasi lisensi IP VPS" run_license_preflight
   run_step_with_spinner "Menyiapkan source repo" clone_repo
   run_setup
   run_step_with_spinner "Memasang panel manage" install_manage
