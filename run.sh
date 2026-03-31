@@ -359,8 +359,8 @@ def main():
             status="disabled",
             stopped_services=[],
         )
-        print("[license] disabled: AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong")
-        return 0
+        print("[license] disabled: AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong", file=sys.stderr)
+        return 1
     checked_at = iso(now())
     public_ip = detect_ip()
     try:

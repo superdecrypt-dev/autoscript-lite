@@ -18,6 +18,10 @@ manage_license_config_get() {
 manage_license_guard_enabled() {
   local api_url="${AUTOSCRIPT_LICENSE_API_URL:-}"
   local default_api_url="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}"
+  local env_file="${AUTOSCRIPT_LICENSE_CONFIG_FILE:-/etc/autoscript/license/config.env}"
+  local license_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+  local license_service="${AUTOSCRIPT_LICENSE_SERVICE:-autoscript-license-enforcer.service}"
+  local license_timer="${AUTOSCRIPT_LICENSE_TIMER:-autoscript-license-enforcer.timer}"
   if [[ -z "${api_url}" ]]; then
     api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
   fi
@@ -27,7 +31,10 @@ manage_license_guard_enabled() {
   if [[ -z "${api_url}" ]]; then
     api_url="${default_api_url}"
   fi
-  [[ -n "${api_url}" ]]
+  if [[ -n "${api_url}" ]]; then
+    return 0
+  fi
+  [[ -e "${env_file}" || -x "${license_bin}" || -e "/etc/systemd/system/${license_service}" || -e "/etc/systemd/system/${license_timer}" ]]
 }
 
 manage_license_stage_for_args() {
@@ -62,7 +69,7 @@ manage_license_guard_preflight() {
     return 1
   fi
 
-  if ! "${license_bin}" check --stage "${stage}" --allow-disabled=true; then
+  if ! "${license_bin}" check --stage "${stage}" --allow-disabled=false; then
     echo "manage: akses ${stage} ditolak oleh license guard." >&2
     return 1
   fi

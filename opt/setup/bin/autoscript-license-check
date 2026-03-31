@@ -463,10 +463,10 @@ def command_check(args):
 
 def command_enforce_runtime(_args):
     cfg = load_config()
-    allowed, payload = evaluate_license(cfg, stage="runtime", allow_disabled=True)
+    allowed, payload = evaluate_license(cfg, stage="runtime", allow_disabled=False)
     action = "none"
     stopped = []
-    if payload["status"] == "disabled" or not cfg["runtime_enforce"]:
+    if not cfg["runtime_enforce"]:
         payload["enforcement_action"] = "none"
         save_state(cfg, payload)
         print("[license] runtime enforcement disabled")
@@ -481,7 +481,12 @@ def command_enforce_runtime(_args):
         return 0
 
     stopped = stop_public_services(cfg)
-    action = "stopped-services" if stopped else "deny-no-active-services"
+    if stopped:
+        action = "stopped-services"
+    elif payload["status"] == "disabled":
+        action = "deny-disabled"
+    else:
+        action = "deny-no-active-services"
     payload["enforcement_action"] = action
     payload["stopped_services"] = stopped
     save_state(cfg, payload)
@@ -495,7 +500,7 @@ def build_parser():
 
     check = sub.add_parser("check")
     check.add_argument("--stage", default="runtime", choices=["run", "setup", "manage", "runtime"])
-    check.add_argument("--allow-disabled", default="true")
+    check.add_argument("--allow-disabled", default="false")
 
     sub.add_parser("enforce-runtime")
     sub.add_parser("status")
