@@ -2,7 +2,8 @@
 # Shared Autoscript license guard helpers for setup runtime.
 
 autoscript_license_enabled() {
-  [[ -n "${AUTOSCRIPT_LICENSE_API_URL:-}" ]]
+  local api_url="${AUTOSCRIPT_LICENSE_API_URL:-${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}}"
+  [[ -n "${api_url}" ]]
 }
 
 autoscript_license_runtime_enforce_enabled() {
@@ -19,8 +20,8 @@ autoscript_license_exec_repo_bin() {
   local license_bin=""
   license_bin="$(autoscript_license_repo_bin_path)"
   [[ -x "${license_bin}" ]] || die "Binary source autoscript-license-check tidak ditemukan: ${license_bin}"
+  AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}" \
   AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-}" \
-  AUTOSCRIPT_LICENSE_API_TOKEN="${AUTOSCRIPT_LICENSE_API_TOKEN:-}" \
   AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-86400}" \
   AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE="${AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE:-true}" \
   AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN="${AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN:-15}" \
@@ -33,7 +34,7 @@ autoscript_license_exec_repo_bin() {
 
 autoscript_license_setup_preflight() {
   if ! autoscript_license_enabled; then
-    ui_subtle "License guard: nonaktif (AUTOSCRIPT_LICENSE_API_URL belum di-set)"
+    ui_subtle "License guard: nonaktif (URL lisensi tidak tersedia)"
     return 0
   fi
 

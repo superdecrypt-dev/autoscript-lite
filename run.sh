@@ -28,6 +28,8 @@ RUN_REPO_REF_FILE="${RUN_REPO_REF_FILE:-${RUN_STATE_DIR}/repo-ref}"
 AUTOSCRIPT_LICENSE_STATE_DIR="${AUTOSCRIPT_LICENSE_STATE_DIR:-/var/lib/autoscript-license}"
 AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/state.json}"
 AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/cache.json}"
+AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-https://autoscript.temp10sgt.workers.dev/api/v1/license/check}"
+AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-${AUTOSCRIPT_LICENSE_DEFAULT_API_URL}}"
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
@@ -187,19 +189,20 @@ ensure_run_state_dir() {
 }
 
 license_guard_enabled() {
-  [[ -n "${AUTOSCRIPT_LICENSE_API_URL:-}" ]]
+  local api_url="${AUTOSCRIPT_LICENSE_API_URL:-${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}}"
+  [[ -n "${api_url}" ]]
 }
 
 run_license_preflight() {
   if ! license_guard_enabled; then
-    subtle "License guard: nonaktif (AUTOSCRIPT_LICENSE_API_URL belum di-set)"
+    subtle "License guard: nonaktif (URL lisensi tidak tersedia)"
     return 0
   fi
 
   ensure_run_state_dir
   install -d -m 0755 "${AUTOSCRIPT_LICENSE_STATE_DIR}"
+  AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}" \
   AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-}" \
-  AUTOSCRIPT_LICENSE_API_TOKEN="${AUTOSCRIPT_LICENSE_API_TOKEN:-}" \
   AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-86400}" \
   AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE}" \
   AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE}" \
@@ -215,8 +218,8 @@ from pathlib import Path
 
 STATE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_STATE_FILE"])
 CACHE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_CACHE_FILE"])
-API_URL = os.environ.get("AUTOSCRIPT_LICENSE_API_URL", "").strip()
-API_TOKEN = os.environ.get("AUTOSCRIPT_LICENSE_API_TOKEN", "").strip()
+DEFAULT_API_URL = os.environ.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL", "").strip()
+API_URL = os.environ.get("AUTOSCRIPT_LICENSE_API_URL", "").strip() or DEFAULT_API_URL
 TTL_DEFAULT = max(1, int(os.environ.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC", "86400") or "86400"))
 IP_SOURCES = ("https://api.ipify.org", "https://ipv4.icanhazip.com")
 
@@ -332,8 +335,6 @@ def api_call(public_ip):
         "hostname": os.uname().nodename,
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if API_TOKEN:
-        headers["Authorization"] = f"Bearer {API_TOKEN}"
     req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=10) as response:
         body = response.read().decode("utf-8", errors="replace")
@@ -344,6 +345,22 @@ def api_call(public_ip):
 
 
 def main():
+    if not API_URL:
+        save_state(
+            allowed=False,
+            cache_expires_at="",
+            checked_at=iso(now()),
+            decision_source="disabled",
+            enforcement_action="none",
+            public_ip="",
+            reason="AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong",
+            runtime_enforce=True,
+            stage="run",
+            status="disabled",
+            stopped_services=[],
+        )
+        print("[license] disabled: AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong")
+        return 0
     checked_at = iso(now())
     public_ip = detect_ip()
     try:

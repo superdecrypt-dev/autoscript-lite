@@ -17,8 +17,15 @@ manage_license_config_get() {
 
 manage_license_guard_enabled() {
   local api_url="${AUTOSCRIPT_LICENSE_API_URL:-}"
+  local default_api_url="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}"
   if [[ -z "${api_url}" ]]; then
     api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
+  fi
+  if [[ -z "${default_api_url}" ]]; then
+    default_api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_DEFAULT_API_URL 2>/dev/null || true)"
+  fi
+  if [[ -z "${api_url}" ]]; then
+    api_url="${default_api_url}"
   fi
   [[ -n "${api_url}" ]]
 }

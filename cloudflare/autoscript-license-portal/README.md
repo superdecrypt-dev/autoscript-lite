@@ -8,7 +8,7 @@ Portal ini adalah sistem lisensi IP untuk autoscript yang ditujukan untuk deploy
 ## Mode Operasi
 - halaman root Pages `/` bersifat publik untuk `create`, `check status`, dan `renew`
 - panel admin ada di `/admin/` dan tetap harus diproteksi `Cloudflare Access`
-- request dari autoscript VPS ke `POST /api/v1/license/check` tetap memakai shared `Bearer` token
+- request dari autoscript VPS ke `POST /api/v1/license/check` diputuskan berdasarkan source IP request (`CF-Connecting-IP`), bukan token client
 
 ## Aturan v1
 - masa aktif default izin IP adalah `14 hari`
@@ -67,7 +67,6 @@ Portal ini adalah sistem lisensi IP untuk autoscript yang ditujukan untuk deploy
 - `CF_ACCESS_AUD`
 
 ### `wrangler secret put`
-- `AUTOSCRIPT_SHARED_BEARER_TOKEN`
 - `TURNSTILE_SECRET_KEY`
 - `RENEWAL_TOKEN_PEPPER`
 
@@ -82,7 +81,6 @@ Portal ini adalah sistem lisensi IP untuk autoscript yang ditujukan untuk deploy
 2. Jalankan migrasi:
    - `npm run d1:migrate:remote`
 3. Set secret Worker:
-   - `wrangler secret put AUTOSCRIPT_SHARED_BEARER_TOKEN`
    - `wrangler secret put TURNSTILE_SECRET_KEY`
    - `wrangler secret put RENEWAL_TOKEN_PEPPER`
 4. Isi vars di [`wrangler.toml`](/root/project/autoscript/cloudflare/autoscript-license-portal/wrangler.toml):
@@ -119,11 +117,10 @@ Portal ini adalah sistem lisensi IP untuk autoscript yang ditujukan untuk deploy
 4. Jika masa aktif habis, pengguna renew dari halaman yang sama memakai `entry_id`, `IP`, dan `renewal_token`.
 
 ## Integrasi Autoscript
-Set env di VPS:
+Autoscript sekarang bisa memakai URL built-in ini tanpa env manual di VPS:
 
 ```bash
-export AUTOSCRIPT_LICENSE_API_URL="https://license-api.example.com/api/v1/license/check"
-export AUTOSCRIPT_LICENSE_API_TOKEN="isi-bearer-token-yang-sama-dengan-worker"
+export AUTOSCRIPT_LICENSE_DEFAULT_API_URL="https://autoscript.temp10sgt.workers.dev/api/v1/license/check"
 ```
 
-`run.sh`, `setup.sh`, `manage.sh`, dan runtime enforcer autoscript memakai endpoint yang sama. Portal publik dan admin hanya berbicara ke Worker API.
+Di repo ini URL itu sudah ditanam sebagai default bawaan. `run.sh`, `setup.sh`, `manage.sh`, dan runtime enforcer autoscript akan memakai endpoint yang sama dan Worker akan mengecek izin berdasarkan IP sumber request VPS.

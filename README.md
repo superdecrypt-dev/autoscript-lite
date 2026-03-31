@@ -17,7 +17,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/
 Catatan penting:
 - Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
 - Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
-- License guard IP VPS bersifat opsional dan aktif jika `AUTOSCRIPT_LICENSE_API_URL` di-set sebelum menjalankan `run.sh`.
+- License guard IP VPS sekarang built-in dan default mengarah ke `https://autoscript.temp10sgt.workers.dev/api/v1/license/check`, jadi user VPS tidak perlu set env manual.
 - Runtime license guard menyimpan cache allow terakhir hingga `24 jam` dan statusnya bisa dilihat dari `manage -> 13) Tools -> License Guard`.
 
 ## Arsitektur Singkat
@@ -176,16 +176,15 @@ Internet / Cloudflare
   - siapa pun bisa membuat izin IP VPS dari website publik
   - masa aktif awal default `14 hari`
   - saat expired, renew dilakukan lagi dari website memakai `renewal token`
+  - user VPS cukup input IP di web lalu langsung jalankan autoscript
 - Flow admin:
   - route `/admin/` tetap untuk operator internal
   - admin bisa lihat audit, revoke/reactivate, dan edit metadata/expiry
 - Endpoint autoscript yang dipakai VPS:
   - `POST /api/v1/license/check`
-- Konfigurasi VPS:
-  - `AUTOSCRIPT_LICENSE_API_URL=https://<worker-host>/api/v1/license/check`
-  - `AUTOSCRIPT_LICENSE_API_TOKEN=<shared-bearer-token>`
+- Endpoint built-in autoscript:
+  - `AUTOSCRIPT_LICENSE_DEFAULT_API_URL=https://autoscript.temp10sgt.workers.dev/api/v1/license/check`
 - Secret penting untuk deploy portal:
-  - `AUTOSCRIPT_SHARED_BEARER_TOKEN`
   - `TURNSTILE_SECRET_KEY`
   - `RENEWAL_TOKEN_PEPPER`
 

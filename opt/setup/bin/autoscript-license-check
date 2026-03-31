@@ -18,8 +18,8 @@ DEFAULTS = {
     "AUTOSCRIPT_LICENSE_STATE_FILE": "/var/lib/autoscript-license/state.json",
     "AUTOSCRIPT_LICENSE_CACHE_FILE": "/var/lib/autoscript-license/cache.json",
     "AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE": "/var/lib/autoscript-license/stopped-services.json",
+    "AUTOSCRIPT_LICENSE_DEFAULT_API_URL": "https://autoscript.temp10sgt.workers.dev/api/v1/license/check",
     "AUTOSCRIPT_LICENSE_API_URL": "",
-    "AUTOSCRIPT_LICENSE_API_TOKEN": "",
     "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "86400",
     "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE": "true",
     "AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN": "15",
@@ -102,10 +102,17 @@ def load_config():
     for key, default in DEFAULTS.items():
         cfg[key] = os.environ.get(key, cfg.get(key, default))
     cfg["AUTOSCRIPT_LICENSE_CONFIG_FILE"] = os.environ.get("AUTOSCRIPT_LICENSE_CONFIG_FILE", env_cfg_file)
+    if not str(cfg.get("AUTOSCRIPT_LICENSE_API_URL") or "").strip():
+        cfg["AUTOSCRIPT_LICENSE_API_URL"] = str(cfg.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL") or "").strip()
     cfg["runtime_enforce"] = parse_bool(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE"), True)
     cfg["cache_ttl_sec"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC"), 86400)
     cfg["runtime_interval_min"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN"), 15)
     return cfg
+
+
+def is_configured_api_url(value):
+    raw = str(value or "").strip()
+    return bool(raw)
 
 
 def load_json(path):
@@ -335,25 +342,17 @@ def restore_public_services(cfg):
     return [unit for unit in pending if unit not in failed]
 
 
-def api_headers(cfg):
-    headers = {}
-    token = (cfg.get("AUTOSCRIPT_LICENSE_API_TOKEN") or "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
 def evaluate_license(cfg, *, stage, allow_disabled):
     now = isoformat_z(utcnow())
     api_url = (cfg.get("AUTOSCRIPT_LICENSE_API_URL") or "").strip()
-    if not api_url:
+    if not is_configured_api_url(api_url):
         payload = state_payload(
             cfg,
             stage=stage,
             allowed=False,
             status="disabled",
             source="disabled",
-            reason="AUTOSCRIPT_LICENSE_API_URL kosong",
+            reason="AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong",
             public_ip="",
             checked_at=now,
         )
@@ -369,7 +368,7 @@ def evaluate_license(cfg, *, stage, allow_disabled):
     }
 
     try:
-        status_code, response = post_json(api_url, req_payload, headers=api_headers(cfg))
+        status_code, response = post_json(api_url, req_payload, headers={})
         if status_code != 200 or not isinstance(response, dict):
             raise RuntimeError(f"Respons API tidak valid (HTTP {status_code})")
         if "allowed" not in response:
@@ -429,7 +428,8 @@ def print_status(cfg):
     stopped = load_stopped_services(cfg)
     print("Autoscript License Status")
     print(f"Config file      : {cfg['AUTOSCRIPT_LICENSE_CONFIG_FILE']}")
-    print(f"API configured   : {'yes' if (cfg.get('AUTOSCRIPT_LICENSE_API_URL') or '').strip() else 'no'}")
+    print(f"Default API URL  : {cfg.get('AUTOSCRIPT_LICENSE_DEFAULT_API_URL') or '-'}")
+    print(f"API configured   : {'yes' if is_configured_api_url(cfg.get('AUTOSCRIPT_LICENSE_API_URL')) else 'no'}")
     print(f"Runtime enforce  : {'true' if cfg['runtime_enforce'] else 'false'}")
     print(f"Cache TTL (sec)  : {cfg['cache_ttl_sec']}")
     if not isinstance(state, dict):

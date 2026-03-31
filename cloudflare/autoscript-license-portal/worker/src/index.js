@@ -135,17 +135,25 @@ function buildPublicConfig(env, workerOrigin) {
 }
 
 async function handleWorkerLicenseCheck(request, env) {
-  const unauthorized = requireWorkerBearer(request, env);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const body = await parseJsonBody(request);
   if (body.error) {
     return body.error;
   }
 
-  const publicIp = normalizeIpv4(body.data.public_ipv4);
+  const requestIp = normalizeIpv4(getVisitorIp(request));
+  if (!requestIp) {
+    return jsonResponse(
+      {
+        error: "invalid_request",
+        message: "Worker tidak menerima source IPv4 request yang valid dari Cloudflare.",
+      },
+      400
+    );
+  }
+
+  const claimedPublicIp = normalizeIpv4(body.data.public_ipv4);
+  const publicIp = requestIp;
+  const ipMatch = !claimedPublicIp || claimedPublicIp === requestIp;
   if (!publicIp) {
     return jsonResponse({ error: "invalid_request", message: "public_ipv4 harus IPv4 literal yang valid" }, 400);
   }
@@ -163,12 +171,15 @@ async function handleWorkerLicenseCheck(request, env) {
     stage,
     decision: decision.allowed ? "allow" : "deny",
     actorEmail: "",
-    requestIp: getVisitorIp(request),
+    requestIp: requestIp,
     userAgent: request.headers.get("User-Agent") || "",
     payload: {
+      claimed_public_ipv4: claimedPublicIp,
       hostname,
+      ip_match: ipMatch,
       product,
       reason: decision.reason,
+      request_public_ipv4: requestIp,
       stage,
     },
   });
@@ -902,19 +913,6 @@ async function requireAdminAccess(request, env) {
       ),
     };
   }
-}
-
-function requireWorkerBearer(request, env) {
-  const expected = String(env.AUTOSCRIPT_SHARED_BEARER_TOKEN || "").trim();
-  if (!expected) {
-    return jsonResponse({ error: "misconfigured", message: "Secret AUTOSCRIPT_SHARED_BEARER_TOKEN belum di-set" }, 500);
-  }
-  const authHeader = request.headers.get("Authorization") || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  if (!token || token !== expected) {
-    return jsonResponse({ error: "unauthorized", message: "Bearer token tidak valid" }, 401);
-  }
-  return null;
 }
 
 async function verifyAccessJwt(token, env) {

@@ -10,8 +10,8 @@ install_autoscript_license_runtime() {
     "config/autoscript-license.env" \
     "${AUTOSCRIPT_LICENSE_CONFIG_FILE}" \
     0600 \
+    "AUTOSCRIPT_LICENSE_DEFAULT_API_URL=${AUTOSCRIPT_LICENSE_DEFAULT_API_URL}" \
     "AUTOSCRIPT_LICENSE_API_URL=${AUTOSCRIPT_LICENSE_API_URL}" \
-    "AUTOSCRIPT_LICENSE_API_TOKEN=${AUTOSCRIPT_LICENSE_API_TOKEN}" \
     "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC=${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC}" \
     "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE=${AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE}" \
     "AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN=${AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN}" \
@@ -50,7 +50,7 @@ install_autoscript_license_runtime() {
   systemctl disable --now "${AUTOSCRIPT_LICENSE_TIMER}" >/dev/null 2>&1 || true
   systemctl stop "${AUTOSCRIPT_LICENSE_SERVICE}" >/dev/null 2>&1 || true
   if ! autoscript_license_enabled; then
-    warn "License guard runtime dipasang tetapi nonaktif karena AUTOSCRIPT_LICENSE_API_URL kosong."
+    warn "License guard runtime dipasang tetapi nonaktif karena URL lisensi tidak tersedia."
   else
     warn "License guard runtime dipasang tetapi timer dinonaktifkan karena AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE=false."
   fi
