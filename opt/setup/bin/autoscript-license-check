@@ -18,7 +18,7 @@ DEFAULTS = {
     "AUTOSCRIPT_LICENSE_STATE_FILE": "/var/lib/autoscript-license/state.json",
     "AUTOSCRIPT_LICENSE_CACHE_FILE": "/var/lib/autoscript-license/cache.json",
     "AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE": "/var/lib/autoscript-license/stopped-services.json",
-    "AUTOSCRIPT_LICENSE_DEFAULT_API_URL": "https://autoscript.temp10sgt.workers.dev/api/v1/license/check",
+    "AUTOSCRIPT_LICENSE_DEFAULT_API_URL": "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check",
     "AUTOSCRIPT_LICENSE_API_URL": "",
     "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "3600",
     "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE": "true",
