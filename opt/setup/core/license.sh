@@ -16,10 +16,28 @@ autoscript_license_repo_bin_path() {
   printf '%s\n' "${SETUP_BIN_SRC_DIR}/autoscript-license-check"
 }
 
+autoscript_license_resolve_bin_path() {
+  local license_bin=""
+  local repo_bin=""
+  local installed_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+
+  if [[ -x "${installed_bin}" ]]; then
+    printf '%s\n' "${installed_bin}"
+    return 0
+  fi
+
+  repo_bin="$(autoscript_license_repo_bin_path)"
+  if [[ -x "${repo_bin}" ]]; then
+    printf '%s\n' "${repo_bin}"
+    return 0
+  fi
+
+  die "Binary autoscript-license-check tidak ditemukan: installed=${installed_bin} repo=${repo_bin}"
+}
+
 autoscript_license_exec_repo_bin() {
   local license_bin=""
-  license_bin="$(autoscript_license_repo_bin_path)"
-  [[ -x "${license_bin}" ]] || die "Binary source autoscript-license-check tidak ditemukan: ${license_bin}"
+  license_bin="$(autoscript_license_resolve_bin_path)"
   AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}" \
   AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-}" \
   AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-3600}" \

@@ -32,6 +32,7 @@ IP_SOURCES = (
     "https://ipv4.icanhazip.com",
 )
 IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+EDGE_ERROR_CODE_RE = re.compile(r"\berror code\s*:\s*(\d{3,5})\b", re.IGNORECASE)
 
 
 def utcnow():
@@ -160,6 +161,19 @@ def parse_json_body(text):
         return None
 
 
+def extract_edge_error_code(payload, body):
+    if isinstance(payload, dict):
+        for key in ("message", "reason", "error"):
+            value = str(payload.get(key) or "").strip()
+            match = EDGE_ERROR_CODE_RE.search(value)
+            if match:
+                return match.group(1)
+    match = EDGE_ERROR_CODE_RE.search(str(body or ""))
+    if match:
+        return match.group(1)
+    return ""
+
+
 def summarize_http_error(status_code, payload, body):
     parts = []
     if isinstance(payload, dict):
@@ -195,9 +209,15 @@ def post_json(url, payload, headers=None, timeout=10):
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         payload = parse_json_body(body)
-        raise RuntimeError(summarize_http_error(exc.code, payload, body)) from exc
+        err = RuntimeError(summarize_http_error(exc.code, payload, body))
+        err.http_status = int(exc.code)
+        err.edge_error_code = extract_edge_error_code(payload, body)
+        raise err from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Koneksi API gagal: {exc.reason}") from exc
+        err = RuntimeError(f"Koneksi API gagal: {exc.reason}")
+        err.http_status = None
+        err.edge_error_code = ""
+        raise err from exc
 
 
 def detect_public_ipv4():
@@ -218,13 +238,30 @@ def detect_public_ipv4():
     raise RuntimeError("Gagal mendapatkan public IPv4 VPS.")
 
 
-def state_payload(cfg, *, stage, allowed, status, source, reason, public_ip, checked_at, cache_expires_at="", enforcement_action="none", stopped_services=None):
+def state_payload(
+    cfg,
+    *,
+    stage,
+    allowed,
+    status,
+    source,
+    reason,
+    public_ip,
+    checked_at,
+    cache_expires_at="",
+    enforcement_action="none",
+    stopped_services=None,
+    http_status=None,
+    edge_error_code="",
+):
     return {
         "allowed": bool(allowed),
         "cache_expires_at": cache_expires_at or "",
         "checked_at": checked_at,
         "decision_source": source,
+        "edge_error_code": str(edge_error_code or ""),
         "enforcement_action": enforcement_action,
+        "http_status": http_status,
         "public_ip": public_ip or "",
         "reason": reason or "",
         "runtime_enforce": bool(cfg["runtime_enforce"]),
@@ -426,10 +463,13 @@ def evaluate_license(cfg, *, stage, allow_disabled):
             public_ip=public_ip,
             checked_at=now,
             cache_expires_at=cache_expires_at,
+            http_status=200,
         )
         save_state(cfg, payload)
         return allowed, payload
     except Exception as exc:
+        http_status = getattr(exc, "http_status", None)
+        edge_error_code = str(getattr(exc, "edge_error_code", "") or "")
         cache = load_valid_cache(cfg, public_ip)
         if cache is not None:
             payload = state_payload(
@@ -442,6 +482,8 @@ def evaluate_license(cfg, *, stage, allow_disabled):
                 public_ip=public_ip,
                 checked_at=now,
                 cache_expires_at=cache.get("cache_expires_at") or "",
+                http_status=http_status,
+                edge_error_code=edge_error_code,
             )
             save_state(cfg, payload)
             return True, payload
@@ -454,6 +496,8 @@ def evaluate_license(cfg, *, stage, allow_disabled):
             reason=f"API gagal dan cache tidak valid: {exc}",
             public_ip=public_ip,
             checked_at=now,
+            http_status=http_status,
+            edge_error_code=edge_error_code,
         )
         save_state(cfg, payload)
         return False, payload
@@ -478,6 +522,8 @@ def print_status(cfg):
         print(f"Decision source  : {state.get('decision_source', '-')}")
         print(f"Public IPv4      : {state.get('public_ip', '-')}")
         print(f"Reason           : {state.get('reason', '-')}")
+        print(f"HTTP status      : {state.get('http_status', '-')}")
+        print(f"Edge error code  : {state.get('edge_error_code', '-')}")
         print(f"Cache expires at : {state.get('cache_expires_at', '-')}")
         print(f"Enforcement      : {state.get('enforcement_action', 'none')}")
     if stopped:

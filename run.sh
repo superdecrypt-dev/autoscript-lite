@@ -223,6 +223,7 @@ DEFAULT_API_URL = os.environ.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL", "").strip
 API_URL = os.environ.get("AUTOSCRIPT_LICENSE_API_URL", "").strip() or DEFAULT_API_URL
 TTL_DEFAULT = max(1, int(os.environ.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC", "3600") or "3600"))
 IP_SOURCES = ("https://api.ipify.org", "https://ipv4.icanhazip.com")
+EDGE_ERROR_CODE_RE = re.compile(r"\berror code\s*:\s*(\d{3,5})\b", re.IGNORECASE)
 
 
 def now():
@@ -319,6 +320,19 @@ def parse_json_body(text):
         return None
 
 
+def extract_edge_error_code(payload, body):
+    if isinstance(payload, dict):
+        for key in ("message", "reason", "error"):
+            value = str(payload.get(key) or "").strip()
+            match = EDGE_ERROR_CODE_RE.search(value)
+            if match:
+                return match.group(1)
+    match = EDGE_ERROR_CODE_RE.search(str(body or ""))
+    if match:
+        return match.group(1)
+    return ""
+
+
 def summarize_http_error(status_code, payload, body):
     parts = []
     if isinstance(payload, dict):
@@ -375,9 +389,15 @@ def api_call(public_ip):
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         payload = parse_json_body(body)
-        raise RuntimeError(summarize_http_error(exc.code, payload, body)) from exc
+        err = RuntimeError(summarize_http_error(exc.code, payload, body))
+        err.http_status = int(exc.code)
+        err.edge_error_code = extract_edge_error_code(payload, body)
+        raise err from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Koneksi API gagal: {exc.reason}") from exc
+        err = RuntimeError(f"Koneksi API gagal: {exc.reason}")
+        err.http_status = None
+        err.edge_error_code = ""
+        raise err from exc
 
 
 def main():
@@ -387,7 +407,9 @@ def main():
             cache_expires_at="",
             checked_at=iso(now()),
             decision_source="disabled",
+            edge_error_code="",
             enforcement_action="none",
+            http_status=None,
             public_ip="",
             reason="AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong",
             runtime_enforce=True,
@@ -413,7 +435,9 @@ def main():
             cache_expires_at=cache_expires,
             checked_at=checked_at,
             decision_source="api",
+            edge_error_code="",
             enforcement_action="none",
+            http_status=200,
             public_ip=public_ip,
             reason=reason,
             runtime_enforce=True,
@@ -427,6 +451,8 @@ def main():
         print(f"[license] denied: {reason}", file=sys.stderr)
         return 1
     except Exception as exc:
+        http_status = getattr(exc, "http_status", None)
+        edge_error_code = str(getattr(exc, "edge_error_code", "") or "")
         cache = load_valid_cache(public_ip)
         if cache is not None:
             reason = f"API gagal, memakai cache: {exc}"
@@ -435,7 +461,9 @@ def main():
                 cache_expires_at=cache.get("cache_expires_at") or "",
                 checked_at=checked_at,
                 decision_source="cache",
+                edge_error_code=edge_error_code,
                 enforcement_action="none",
+                http_status=http_status,
                 public_ip=public_ip,
                 reason=reason,
                 runtime_enforce=True,
@@ -450,7 +478,9 @@ def main():
             cache_expires_at="",
             checked_at=checked_at,
             decision_source="api",
+            edge_error_code=edge_error_code,
             enforcement_action="none",
+            http_status=http_status,
             public_ip=public_ip,
             reason=f"API gagal dan cache tidak valid: {exc}",
             runtime_enforce=True,
