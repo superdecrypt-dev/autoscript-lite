@@ -3,7 +3,8 @@
 
 manage_license_config_get() {
   local key="$1"
-  local env_file="${AUTOSCRIPT_LICENSE_CONFIG_FILE:-/etc/autoscript/license/config.env}"
+  local env_file=""
+  env_file="$(manage_license_guard_config_file)"
   [[ -r "${env_file}" ]] || return 1
   awk -F= -v key="${key}" '
     $1 == key {
@@ -15,22 +16,46 @@ manage_license_config_get() {
   ' "${env_file}"
 }
 
+manage_license_trusted_default_api_url() {
+  printf '%s\n' "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+}
+
+manage_license_guard_config_file() {
+  printf '%s\n' "/etc/autoscript/license/config.env"
+}
+
+manage_license_guard_bin_path() {
+  printf '%s\n' "/usr/local/bin/autoscript-license-check"
+}
+
+manage_license_guard_api_url() {
+  local api_url=""
+  local default_api_url=""
+  local trusted_default=""
+
+  trusted_default="$(manage_license_trusted_default_api_url)"
+  api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
+  default_api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_DEFAULT_API_URL 2>/dev/null || true)"
+  if [[ -n "${api_url}" ]]; then
+    printf '%s\n' "${api_url}"
+    return 0
+  fi
+  if [[ -n "${default_api_url}" ]]; then
+    printf '%s\n' "${default_api_url}"
+    return 0
+  fi
+  printf '%s\n' "${trusted_default}"
+}
+
 manage_license_guard_enabled() {
-  local api_url="${AUTOSCRIPT_LICENSE_API_URL:-}"
-  local default_api_url="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}"
-  local env_file="${AUTOSCRIPT_LICENSE_CONFIG_FILE:-/etc/autoscript/license/config.env}"
-  local license_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+  local api_url=""
+  local env_file=""
+  local license_bin=""
   local license_service="${AUTOSCRIPT_LICENSE_SERVICE:-autoscript-license-enforcer.service}"
   local license_timer="${AUTOSCRIPT_LICENSE_TIMER:-autoscript-license-enforcer.timer}"
-  if [[ -z "${api_url}" ]]; then
-    api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
-  fi
-  if [[ -z "${default_api_url}" ]]; then
-    default_api_url="$(manage_license_config_get AUTOSCRIPT_LICENSE_DEFAULT_API_URL 2>/dev/null || true)"
-  fi
-  if [[ -z "${api_url}" ]]; then
-    api_url="${default_api_url}"
-  fi
+  env_file="$(manage_license_guard_config_file)"
+  license_bin="$(manage_license_guard_bin_path)"
+  api_url="$(manage_license_guard_api_url)"
   if [[ -n "${api_url}" ]]; then
     return 0
   fi
@@ -51,14 +76,17 @@ manage_license_stage_for_args() {
 
 manage_license_guard_preflight() {
   local action="${1:-}"
-  local stage license_bin
+  local stage license_bin api_url config_file default_api_url
 
   if ! manage_license_guard_enabled; then
     return 0
   fi
 
   stage="$(manage_license_stage_for_args "${action}")"
-  license_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+  license_bin="$(manage_license_guard_bin_path)"
+  api_url="$(manage_license_guard_api_url)"
+  config_file="$(manage_license_guard_config_file)"
+  default_api_url="$(manage_license_trusted_default_api_url)"
 
   if [[ ! -x "${license_bin}" ]]; then
     echo "manage: binary license guard tidak ditemukan: ${license_bin}" >&2
@@ -69,7 +97,10 @@ manage_license_guard_preflight() {
     return 1
   fi
 
-  if ! "${license_bin}" check --stage "${stage}" --allow-disabled=false; then
+  if ! AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
+    AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
+    AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
+    "${license_bin}" check --stage "${stage}" --allow-disabled=false; then
     echo "manage: akses ${stage} ditolak oleh license guard." >&2
     return 1
   fi

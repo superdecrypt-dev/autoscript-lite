@@ -14,6 +14,48 @@ trap on_err ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
+telegram_bootstrap_path_trusted() {
+  local target="${1:-}" current owner mode
+  [[ -n "${target}" && -e "${target}" ]] || return 1
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return 0
+  fi
+
+  current="$(readlink -f -- "${target}" 2>/dev/null || true)"
+  [[ -n "${current}" ]] || return 1
+  while :; do
+    [[ -e "${current}" ]] || return 1
+    [[ -L "${current}" ]] && return 1
+    owner="$(stat -c '%u' "${current}" 2>/dev/null || echo 1)"
+    mode="$(stat -c '%A' "${current}" 2>/dev/null || echo '----------')"
+    [[ "${owner}" == "0" ]] || return 1
+    [[ "${mode:5:1}" != "w" && "${mode:8:1}" != "w" ]] || return 1
+    [[ "${current}" == "/" ]] && break
+    current="$(dirname -- "${current}")"
+  done
+  return 0
+}
+
+TELEGRAM_LICENSE_ENV_FILE=""
+for TELEGRAM_LICENSE_ENV_CANDIDATE in \
+  "${SCRIPT_DIR}/opt/setup/core/env.sh" \
+  "/opt/setup/core/env.sh" \
+  "/usr/local/lib/autoscript-setup/opt/setup/core/env.sh"
+do
+  if [[ -f "${TELEGRAM_LICENSE_ENV_CANDIDATE}" ]]; then
+    TELEGRAM_LICENSE_ENV_FILE="${TELEGRAM_LICENSE_ENV_CANDIDATE}"
+    break
+  fi
+done
+if [[ -n "${TELEGRAM_LICENSE_ENV_FILE}" ]]; then
+  if ! telegram_bootstrap_path_trusted "${TELEGRAM_LICENSE_ENV_FILE}"; then
+    echo "[ERROR] env.sh lisensi tidak trusted: ${TELEGRAM_LICENSE_ENV_FILE}" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  . "${TELEGRAM_LICENSE_ENV_FILE}"
+fi
+
 if [[ -t 1 ]]; then
   UI_RESET='\033[0m'
   UI_BOLD='\033[1m'
@@ -105,6 +147,97 @@ warn() { echo -e "${UI_WARN}[WARN]${UI_RESET} $*" >&2; }
 die() { echo -e "${UI_ERR}[ERROR]${UI_RESET} $*" >&2; exit 1; }
 BACK_INPUT_SENTINEL="__BACK__$(date +%s%N)_${RANDOM}_${RANDOM}__"
 CONFIGURE_ENV_CANCELLED=0
+
+telegram_license_guard_bin_path() {
+  printf '%s\n' "/usr/local/bin/autoscript-license-check"
+}
+
+telegram_license_trusted_default_api_url() {
+  printf '%s\n' "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+}
+
+telegram_license_config_file_path() {
+  printf '%s\n' "/etc/autoscript/license/config.env"
+}
+
+telegram_license_config_get() {
+  local key="$1"
+  local env_file=""
+  env_file="$(telegram_license_config_file_path)"
+  [[ -r "${env_file}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[[:space:]]+/, "", $2)
+      sub(/[[:space:]]+$/, "", $2)
+      print $2
+      exit
+    }
+  ' "${env_file}"
+}
+
+telegram_license_guard_api_url() {
+  local api_url=""
+  local default_api_url=""
+  local trusted_default=""
+
+  trusted_default="$(telegram_license_trusted_default_api_url)"
+  api_url="$(telegram_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
+  default_api_url="$(telegram_license_config_get AUTOSCRIPT_LICENSE_DEFAULT_API_URL 2>/dev/null || true)"
+  if [[ -n "${api_url}" ]]; then
+    printf '%s\n' "${api_url}"
+    return 0
+  fi
+  if [[ -n "${default_api_url}" ]]; then
+    printf '%s\n' "${default_api_url}"
+    return 0
+  fi
+  printf '%s\n' "${trusted_default}"
+}
+
+telegram_license_guard_enabled() {
+  local api_url=""
+  local env_file=""
+  local license_bin=""
+  local license_service="${AUTOSCRIPT_LICENSE_SERVICE:-autoscript-license-enforcer.service}"
+  local license_timer="${AUTOSCRIPT_LICENSE_TIMER:-autoscript-license-enforcer.timer}"
+
+  env_file="$(telegram_license_config_file_path)"
+  license_bin="$(telegram_license_guard_bin_path)"
+  api_url="$(telegram_license_guard_api_url)"
+  if [[ -n "${api_url}" ]]; then
+    return 0
+  fi
+  [[ -e "${env_file}" || -x "${license_bin}" || -e "/etc/systemd/system/${license_service}" || -e "/etc/systemd/system/${license_timer}" ]]
+}
+
+telegram_license_guard_preflight() {
+  local action="${1:-menu}"
+  local license_bin=""
+  local api_url=""
+  local config_file=""
+  local default_api_url=""
+
+  if ! telegram_license_guard_enabled; then
+    return 0
+  fi
+
+  license_bin="$(telegram_license_guard_bin_path)"
+  api_url="$(telegram_license_guard_api_url)"
+  config_file="$(telegram_license_config_file_path)"
+  default_api_url="$(telegram_license_trusted_default_api_url)"
+  if [[ ! -x "${license_bin}" ]]; then
+    die "Binary license guard tidak ditemukan: ${license_bin}"
+  fi
+  if ! telegram_bootstrap_path_trusted "${license_bin}"; then
+    die "Binary license guard tidak trusted: ${license_bin}"
+  fi
+  if ! AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
+    AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
+    AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
+    "${license_bin}" check --stage manage --allow-disabled=false >/dev/null; then
+    die "Akses ${action} ditolak oleh license guard."
+  fi
+}
 
 hr() {
   local w="${COLUMNS:-80}"
@@ -1410,6 +1543,14 @@ USAGE
 main() {
   local cmd="${1:-menu}"
   case "${cmd}" in
+    -h|--help|help)
+      usage
+      return 0
+      ;;
+  esac
+  need_root
+  telegram_license_guard_preflight "${cmd}"
+  case "${cmd}" in
     menu) menu_loop ;;
     quick-setup) quick_setup_all_in_one ;;
     install-deps) install_dependencies ;;
@@ -1421,7 +1562,6 @@ main() {
     status) status_services ;;
     logs) view_logs_menu ;;
     uninstall) uninstall_bot ;;
-    -h|--help|help) usage ;;
     *) usage; die "Command tidak dikenal: ${cmd}" ;;
   esac
 }

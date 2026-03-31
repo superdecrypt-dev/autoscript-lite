@@ -28,8 +28,9 @@ RUN_REPO_REF_FILE="${RUN_REPO_REF_FILE:-${RUN_STATE_DIR}/repo-ref}"
 AUTOSCRIPT_LICENSE_STATE_DIR="${AUTOSCRIPT_LICENSE_STATE_DIR:-/var/lib/autoscript-license}"
 AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/state.json}"
 AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE:-${AUTOSCRIPT_LICENSE_STATE_DIR}/cache.json}"
-AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check}"
-AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-${AUTOSCRIPT_LICENSE_DEFAULT_API_URL}}"
+AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL="https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL}"
+AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL}"
 MANAGE_BIN="/usr/local/bin/manage"
 MANAGE_MODULES_SRC_DIR="${REPO_DIR}/opt/manage"
 MANAGE_MODULES_DST_DIR="/opt/manage"
@@ -189,7 +190,7 @@ ensure_run_state_dir() {
 }
 
 license_guard_enabled() {
-  local api_url="${AUTOSCRIPT_LICENSE_API_URL:-${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}}"
+  local api_url="${AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL:-}"
   [[ -n "${api_url}" ]]
 }
 
@@ -201,8 +202,8 @@ run_license_preflight() {
 
   ensure_run_state_dir
   install -d -m 0755 "${AUTOSCRIPT_LICENSE_STATE_DIR}"
-  AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_DEFAULT_API_URL:-}" \
-  AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_API_URL:-}" \
+  AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL}" \
+  AUTOSCRIPT_LICENSE_API_URL="${AUTOSCRIPT_LICENSE_TRUSTED_DEFAULT_API_URL}" \
   AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-3600}" \
   AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE}" \
   AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE}" \
@@ -212,10 +213,12 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import tempfile
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 STATE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_STATE_FILE"])
@@ -278,6 +281,22 @@ def write_json(path, payload):
                 pass
 
 
+@contextmanager
+def force_ipv4_network():
+    original_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        infos = original_getaddrinfo(host, port, family, type, proto, flags)
+        ipv4_infos = [info for info in infos if info[0] == socket.AF_INET]
+        return ipv4_infos or infos
+
+    socket.getaddrinfo = getaddrinfo_ipv4
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
+
 def save_state(**payload):
     write_json(STATE_FILE, payload)
 
@@ -310,8 +329,9 @@ def load_valid_cache(public_ip):
 
 def fetch_text(url, timeout=5):
     req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+    with force_ipv4_network():
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.read().decode("utf-8", errors="replace")
 
 
 def parse_json_body(text):
@@ -379,14 +399,15 @@ def api_call(public_ip):
     }
     req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            data = parse_json_body(body)
-            if not isinstance(data, dict):
-                raise RuntimeError(f"Respons API bukan JSON valid (HTTP {response.status})")
-            if response.status != 200 or "allowed" not in data:
-                raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
-            return data
+        with force_ipv4_network():
+            with urllib.request.urlopen(req, timeout=10) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                data = parse_json_body(body)
+                if not isinstance(data, dict):
+                    raise RuntimeError(f"Respons API bukan JSON valid (HTTP {response.status})")
+                if response.status != 200 or "allowed" not in data:
+                    raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
+                return data
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         payload = parse_json_body(body)
