@@ -164,14 +164,15 @@ Internet / Cloudflare
 ```
 
 ## Cloudflare License Portal
-- Portal web lisensi IP VPS sekarang tersedia di [`cloudflare/autoscript-license-portal/`](/root/project/autoscript/cloudflare/autoscript-license-portal)
+- Source code portal web lisensi IP VPS sudah dipindahkan ke repo terpisah:
+  - `https://github.com/superdecrypt-dev/autoscript-license`
 - Target deploy:
   - `Cloudflare Worker` untuk API lisensi publik dan endpoint check autoscript
   - `Cloudflare D1` untuk database allowlist, audit, dan rate limit
   - `Cloudflare Pages` untuk website publik `/`
 - Workflow deploy yang didukung:
-  - `Connect GitHub` untuk `Pages` dan `Worker`
-  - Pages build sekarang menghasilkan `dist/config.js` dari env build Cloudflare, jadi tidak perlu commit `apiBaseUrl` produksi ke source
+  - `Connect GitHub` untuk `Pages` dan `Worker` dari repo `autoscript-license`
+  - Pages build menghasilkan `dist/config.js` dari env build Cloudflare, jadi tidak perlu commit `apiBaseUrl` produksi ke source
 - Flow publik default:
   - siapa pun bisa mengaktifkan izin IP VPS dari website publik
   - masa aktif awal default `14 hari`
