@@ -153,15 +153,47 @@ def fetch_text(url, headers=None, timeout=8):
         return response.status, body
 
 
+def parse_json_body(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def summarize_http_error(status_code, payload, body):
+    parts = []
+    if isinstance(payload, dict):
+        for key in ("message", "reason", "error"):
+            value = str(payload.get(key) or "").strip()
+            if value and value not in parts:
+                parts.append(value)
+    if parts:
+        return f"HTTP {status_code}: {' | '.join(parts)}"
+    compact_body = " ".join(str(body or "").split())
+    if compact_body:
+        return f"HTTP {status_code}: {compact_body[:220]}"
+    return f"HTTP {status_code}"
+
+
 def post_json(url, payload, headers=None, timeout=10):
     data = json.dumps(payload).encode("utf-8")
     req_headers = {"Content-Type": "application/json"}
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        body = response.read().decode("utf-8", errors="replace")
-        return response.status, json.loads(body)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            payload = parse_json_body(body)
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"Respons API bukan JSON valid (HTTP {response.status})")
+            return response.status, payload
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        payload = parse_json_body(body)
+        raise RuntimeError(summarize_http_error(exc.code, payload, body)) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Koneksi API gagal: {exc.reason}") from exc
 
 
 def detect_public_ipv4():

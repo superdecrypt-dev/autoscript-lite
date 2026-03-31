@@ -213,6 +213,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -311,6 +312,28 @@ def fetch_text(url, timeout=5):
         return response.read().decode("utf-8", errors="replace")
 
 
+def parse_json_body(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def summarize_http_error(status_code, payload, body):
+    parts = []
+    if isinstance(payload, dict):
+        for key in ("message", "reason", "error"):
+            value = str(payload.get(key) or "").strip()
+            if value and value not in parts:
+                parts.append(value)
+    if parts:
+        return f"HTTP {status_code}: {' | '.join(parts)}"
+    compact_body = " ".join(str(body or "").split())
+    if compact_body:
+        return f"HTTP {status_code}: {compact_body[:220]}"
+    return f"HTTP {status_code}"
+
+
 def detect_ip():
     for url in IP_SOURCES:
         try:
@@ -336,12 +359,21 @@ def api_call(public_ip):
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        body = response.read().decode("utf-8", errors="replace")
-        data = json.loads(body)
-        if response.status != 200 or "allowed" not in data:
-            raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
-        return data
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            data = parse_json_body(body)
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Respons API bukan JSON valid (HTTP {response.status})")
+            if response.status != 200 or "allowed" not in data:
+                raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
+            return data
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        payload = parse_json_body(body)
+        raise RuntimeError(summarize_http_error(exc.code, payload, body)) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Koneksi API gagal: {exc.reason}") from exc
 
 
 def main():
