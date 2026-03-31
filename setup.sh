@@ -77,6 +77,10 @@ setup_module_file_trusted() {
   setup_path_chain_trusted "${file}"
 }
 
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  setup_bootstrap_die "setup.sh tidak boleh dijalankan via source."
+fi
+
 source_setup_module() {
   local rel="$1"
   local file="${SCRIPT_DIR}/${rel}"

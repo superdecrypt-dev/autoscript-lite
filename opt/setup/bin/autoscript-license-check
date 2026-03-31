@@ -490,8 +490,9 @@ def evaluate_license(cfg, *, stage, allow_disabled):
     except Exception as exc:
         http_status = getattr(exc, "http_status", None)
         edge_error_code = str(getattr(exc, "edge_error_code", "") or "")
+        cache_allowed = stage == "runtime"
         cache = load_valid_cache(cfg, public_ip)
-        if cache is not None:
+        if cache_allowed and cache is not None:
             payload = state_payload(
                 cfg,
                 stage=stage,

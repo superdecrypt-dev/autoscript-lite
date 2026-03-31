@@ -475,7 +475,7 @@ def main():
     except Exception as exc:
         http_status = getattr(exc, "http_status", None)
         edge_error_code = str(getattr(exc, "edge_error_code", "") or "")
-        cache = load_valid_cache(public_ip)
+        cache = None
         if cache is not None:
             reason = f"API gagal, memakai cache: {exc}"
             save_state(
