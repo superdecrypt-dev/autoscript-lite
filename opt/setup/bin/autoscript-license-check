@@ -177,7 +177,11 @@ def summarize_http_error(status_code, payload, body):
 
 def post_json(url, payload, headers=None, timeout=10):
     data = json.dumps(payload).encode("utf-8")
-    req_headers = {"Content-Type": "application/json"}
+    req_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "autoscript-license-check/1.0",
+    }
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")

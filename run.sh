@@ -357,7 +357,11 @@ def api_call(public_ip):
         "product": "autoscript",
         "hostname": os.uname().nodename,
     }).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "autoscript-license-check/1.0",
+    }
     req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
