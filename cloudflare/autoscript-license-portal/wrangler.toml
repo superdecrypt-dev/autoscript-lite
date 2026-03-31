@@ -6,8 +6,8 @@ workers_dev = true
 [vars]
 CACHE_TTL_SEC_DEFAULT = "86400"
 PUBLIC_LICENSE_DURATION_DAYS = "14"
-PUBLIC_UI_ORIGIN = "https://your-public-pages-project.pages.dev"
-ADMIN_UI_ORIGIN = "https://your-pages-project.pages.dev"
+PUBLIC_UI_ORIGIN = "https://autoscript-2ed.pages.dev/"
+ADMIN_UI_ORIGIN = "https://autoscript-2ed.pages.dev/"
 TURNSTILE_SITE_KEY = "0x4AAAAAACyPSBOFRr6fEZtA"
 PUBLIC_CREATE_LIMIT_MAX = "5"
 PUBLIC_CREATE_WINDOW_SEC = "900"
