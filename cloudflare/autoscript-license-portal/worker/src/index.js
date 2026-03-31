@@ -32,8 +32,12 @@ async function routeRequest(request, env) {
     return withPublicCors(request, env, jsonResponse(buildPublicConfig(env, url.origin)));
   }
 
+  if (request.method === "POST" && pathname === "/api/public/license/activate") {
+    return withPublicCors(request, env, await handlePublicActivate(request, env));
+  }
+
   if (request.method === "POST" && pathname === "/api/public/license/create") {
-    return withPublicCors(request, env, await handlePublicCreate(request, env));
+    return withPublicCors(request, env, await handlePublicActivate(request, env));
   }
 
   if (request.method === "POST" && pathname === "/api/public/license/status") {
@@ -41,7 +45,7 @@ async function routeRequest(request, env) {
   }
 
   if (request.method === "POST" && pathname === "/api/public/license/renew") {
-    return withPublicCors(request, env, await handlePublicRenew(request, env));
+    return withPublicCors(request, env, await handlePublicActivate(request, env));
   }
 
   if (request.method === "POST" && pathname === "/api/v1/license/check") {
@@ -120,7 +124,7 @@ async function handleWorkerLicenseCheck(request, env) {
   });
 }
 
-async function handlePublicCreate(request, env) {
+async function handlePublicActivate(request, env) {
   const body = await parseJsonBody(request);
   if (body.error) {
     return body.error;
@@ -129,14 +133,14 @@ async function handlePublicCreate(request, env) {
   const visitorIp = getVisitorIp(request);
   const limit = await enforcePublicRateLimit(
     env,
-    "public_create",
+    "public_activate",
     visitorIp,
     parseIntSafe(env.PUBLIC_CREATE_LIMIT_MAX, 5),
     parseIntSafe(env.PUBLIC_CREATE_WINDOW_SEC, 900)
   );
   if (!limit.allowed) {
     await insertAuditLog(env, {
-      eventType: "public_create_rate_limited",
+      eventType: "public_activate_rate_limited",
       ip: "",
       entryId: "",
       stage: "public",
@@ -149,7 +153,7 @@ async function handlePublicCreate(request, env) {
     return jsonResponse(
       {
         error: "rate_limited",
-        message: "Terlalu banyak request create. Coba lagi nanti.",
+        message: "Terlalu banyak request aktivasi IP. Coba lagi nanti.",
         retry_after_sec: limit.retryAfterSec,
       },
       429
@@ -162,22 +166,56 @@ async function handlePublicCreate(request, env) {
   }
 
   const existing = await getLicenseEntryByIp(env, publicIp);
-  if (existing) {
-    return jsonResponse(
-      {
-        error: "conflict",
-        message: "IP sudah terdaftar. Gunakan Check Status atau Renew jika Anda pemilik renewal token.",
-      },
-      409
-    );
-  }
-
   const nowIso = nowIsoString();
   const durationDays = getLicenseDurationDays(env);
+
+  if (existing) {
+    if (existing.status === "revoked") {
+      return jsonResponse(
+        {
+          error: "revoked",
+          message: "IP ini sedang diblokir dan tidak bisa diaktifkan dari website publik.",
+        },
+        403
+      );
+    }
+
+    const newExpiresAt = extendExpiryIso(existing.expires_at || "", nowIso, durationDays);
+    await runStatement(
+      env,
+      `
+        UPDATE license_entries
+        SET expires_at = ?, updated_at = ?, updated_by = 'public-activate', last_renewed_at = ?
+        WHERE id = ?
+      `,
+      [newExpiresAt, nowIso, nowIso, existing.id]
+    );
+
+    await insertAuditLog(env, {
+      eventType: "public_activate",
+      ip: publicIp,
+      entryId: existing.id,
+      stage: "public",
+      decision: "allow",
+      actorEmail: "",
+      requestIp: visitorIp,
+      userAgent: request.headers.get("User-Agent") || "",
+      payload: {
+        expires_at: newExpiresAt,
+        previous_expires_at: existing.expires_at || "",
+        source: "public-upsert",
+      },
+    });
+
+    const updated = await getLicenseEntryById(env, existing.id);
+    return jsonResponse({
+      item: serializePublicStatusEntry(updated, nowIso),
+      message: `IP diperpanjang ${durationDays} hari.`,
+    });
+  }
+
   const expiresAt = addDaysIso(nowIso, durationDays);
   const id = crypto.randomUUID();
-  const renewalToken = generateRenewalToken();
-  const renewalTokenHash = await hashRenewalToken(renewalToken, env);
 
   await runStatement(
     env,
@@ -187,13 +225,13 @@ async function handlePublicCreate(request, env) {
         created_at, updated_at, created_by, updated_by, revoked_at,
         entry_source, renewal_token_hash, last_renewed_at, created_request_ip
       )
-      VALUES (?, ?, '', '', '', 'active', ?, ?, ?, 'public', 'public', NULL, 'public', ?, NULL, ?)
+      VALUES (?, ?, '', '', '', 'active', ?, ?, ?, 'public', 'public', NULL, 'public', '', NULL, ?)
     `,
-    [id, publicIp, expiresAt, nowIso, nowIso, renewalTokenHash, visitorIp]
+    [id, publicIp, expiresAt, nowIso, nowIso, visitorIp]
   );
 
   await insertAuditLog(env, {
-    eventType: "public_create",
+    eventType: "public_activate",
     ip: publicIp,
     entryId: id,
     stage: "public",
@@ -211,9 +249,7 @@ async function handlePublicCreate(request, env) {
   return jsonResponse(
     {
       item: serializePublicStatusEntry(created, nowIso),
-      renewal_token: renewalToken,
-      renewal_link: buildRenewalLink(env, id, publicIp),
-      message: `Izin IP aktif selama ${durationDays} hari. Simpan renewal token ini dengan aman.`,
+      message: `IP aktif selama ${durationDays} hari.`,
     },
     201
   );
@@ -278,133 +314,6 @@ async function handlePublicStatus(request, env) {
   });
 
   return jsonResponse(statusPayload);
-}
-
-async function handlePublicRenew(request, env) {
-  const body = await parseJsonBody(request);
-  if (body.error) {
-    return body.error;
-  }
-
-  const visitorIp = getVisitorIp(request);
-  const limit = await enforcePublicRateLimit(
-    env,
-    "public_renew",
-    visitorIp,
-    parseIntSafe(env.PUBLIC_RENEW_LIMIT_MAX, 10),
-    parseIntSafe(env.PUBLIC_RENEW_WINDOW_SEC, 900)
-  );
-  if (!limit.allowed) {
-    await insertAuditLog(env, {
-      eventType: "public_renew_rate_limited",
-      ip: "",
-      entryId: "",
-      stage: "public",
-      decision: "rate_limited",
-      actorEmail: "",
-      requestIp: visitorIp,
-      userAgent: request.headers.get("User-Agent") || "",
-      payload: { retry_after_sec: limit.retryAfterSec },
-    });
-    return jsonResponse(
-      {
-        error: "rate_limited",
-        message: "Terlalu banyak request renew. Coba lagi nanti.",
-        retry_after_sec: limit.retryAfterSec,
-      },
-      429
-    );
-  }
-
-  const publicIp = normalizeIpv4(body.data.ip);
-  const entryId = normalizeShortText(body.data.entry_id, 64);
-  const renewalToken = normalizeShortText(body.data.renewal_token, 255);
-  if (!publicIp || !entryId || !renewalToken) {
-    return jsonResponse(
-      {
-        error: "invalid_request",
-        message: "ip, entry_id, dan renewal_token wajib diisi.",
-      },
-      400
-    );
-  }
-
-  const entry = await getLicenseEntryById(env, entryId);
-  if (!entry || entry.ip !== publicIp) {
-    return jsonResponse(
-      {
-        error: "invalid_credentials",
-        message: "Kombinasi IP, entry, atau renewal token tidak valid.",
-      },
-      403
-    );
-  }
-  if (entry.status === "revoked") {
-    return jsonResponse(
-      {
-        error: "revoked",
-        message: "Entry ini sudah direvoke admin dan tidak bisa di-renew dari website publik.",
-      },
-      403
-    );
-  }
-
-  const expectedHash = entry.renewal_token_hash || "";
-  if (!expectedHash) {
-    return jsonResponse(
-      {
-        error: "invalid_credentials",
-        message: "Entry ini tidak memiliki renewal token aktif.",
-      },
-      403
-    );
-  }
-
-  const actualHash = await hashRenewalToken(renewalToken, env);
-  if (actualHash !== expectedHash) {
-    return jsonResponse(
-      {
-        error: "invalid_credentials",
-        message: "Kombinasi IP, entry, atau renewal token tidak valid.",
-      },
-      403
-    );
-  }
-
-  const nowIso = nowIsoString();
-  const durationDays = getLicenseDurationDays(env);
-  const newExpiresAt = extendExpiryIso(entry.expires_at || "", nowIso, durationDays);
-
-  await runStatement(
-    env,
-    `
-      UPDATE license_entries
-      SET expires_at = ?, updated_at = ?, updated_by = 'public-renew', last_renewed_at = ?
-      WHERE id = ?
-    `,
-    [newExpiresAt, nowIso, nowIso, entryId]
-  );
-
-  await insertAuditLog(env, {
-    eventType: "public_renew",
-    ip: publicIp,
-    entryId,
-    stage: "public",
-    decision: "allow",
-    actorEmail: "",
-    requestIp: visitorIp,
-    userAgent: request.headers.get("User-Agent") || "",
-    payload: {
-      expires_at: newExpiresAt,
-      previous_expires_at: entry.expires_at || "",
-    },
-  });
-
-  const updated = await getLicenseEntryById(env, entryId);
-  return jsonResponse({
-    item: serializePublicStatusEntry(updated, nowIso),
-    message: `Renew berhasil. Masa aktif ditambah ${durationDays} hari.`,
-  });
 }
 
 async function handleAdminListEntries(request, env) {
@@ -706,13 +615,12 @@ function serializePublicStatusEntry(row, nowIso = nowIsoString()) {
   return {
     status: effectiveStatus,
     allowed: effectiveStatus === "active",
-    entry_id: row.id,
-    ip: row.ip,
-    expires_at: row.expires_at || "",
-    days_remaining: calculateDaysRemaining(row.expires_at || "", nowIso),
-    renewable: effectiveStatus !== "revoked" && Boolean(row.renewal_token_hash),
-  };
-}
+      entry_id: row.id,
+      ip: row.ip,
+      expires_at: row.expires_at || "",
+      days_remaining: calculateDaysRemaining(row.expires_at || "", nowIso),
+    };
+  }
 
 function effectiveStatusForRow(row, nowIso) {
   if ((row.status || "active") === "revoked") {
@@ -1030,44 +938,4 @@ function addDaysIso(baseIso, days) {
 function extendExpiryIso(existingIso, nowIso, days) {
   const base = existingIso && existingIso > nowIso ? existingIso : nowIso;
   return addDaysIso(base, days);
-}
-
-function buildRenewalLink(env, entryId, ip) {
-  const origin = String(env.PUBLIC_UI_ORIGIN || "").trim();
-  if (!origin) {
-    return "";
-  }
-  const url = new URL(origin);
-  url.searchParams.set("mode", "renew");
-  url.searchParams.set("entry", entryId);
-  url.searchParams.set("ip", ip);
-  return url.toString();
-}
-
-function generateRenewalToken() {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return base64UrlEncode(bytes);
-}
-
-async function hashRenewalToken(token, env) {
-  const pepper = String(env.RENEWAL_TOKEN_PEPPER || "").trim();
-  if (!pepper) {
-    throw new Error("Secret RENEWAL_TOKEN_PEPPER belum di-set");
-  }
-  const encoder = new TextEncoder();
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`${token}:${pepper}`));
-  return bytesToHex(new Uint8Array(digest));
-}
-
-function base64UrlEncode(bytes) {
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function bytesToHex(bytes) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

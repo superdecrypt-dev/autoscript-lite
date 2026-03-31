@@ -9,24 +9,17 @@ const publicDom = {
   statusBadge: document.getElementById("public-status-badge"),
   createForm: document.getElementById("create-form"),
   statusForm: document.getElementById("status-form"),
-  renewForm: document.getElementById("renew-form"),
   createIp: document.getElementById("create-ip"),
   statusIp: document.getElementById("status-ip"),
-  renewEntryId: document.getElementById("renew-entry-id"),
-  renewIp: document.getElementById("renew-ip"),
-  renewToken: document.getElementById("renew-token"),
   createResult: document.getElementById("create-result"),
   statusResult: document.getElementById("status-result"),
-  renewResult: document.getElementById("renew-result"),
   durationDays: document.getElementById("license-duration-days"),
-  renewDurationDays: document.getElementById("renew-duration-days"),
 };
 
 bootstrapPublicPortal();
 
 async function bootstrapPublicPortal() {
   bindPublicEvents();
-  applyRenewPrefillFromUrl();
   renderDurationDays();
   if (!publicState.apiBaseUrl) {
     setPublicBanner("Operator belum mengisi API base URL di config.js.", "error");
@@ -39,7 +32,6 @@ async function bootstrapPublicPortal() {
 function bindPublicEvents() {
   publicDom.createForm.addEventListener("submit", handleCreateSubmit);
   publicDom.statusForm.addEventListener("submit", handleStatusSubmit);
-  publicDom.renewForm.addEventListener("submit", handleRenewSubmit);
 }
 
 async function loadWorkerPublicConfig() {
@@ -58,18 +50,6 @@ async function loadWorkerPublicConfig() {
 
 function renderDurationDays() {
   publicDom.durationDays.textContent = String(publicState.licenseDurationDays);
-  publicDom.renewDurationDays.textContent = String(publicState.licenseDurationDays);
-}
-
-function applyRenewPrefillFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  if ((params.get("mode") || "").trim().toLowerCase() === "renew") {
-    publicDom.renewEntryId.value = params.get("entry") || "";
-    publicDom.renewIp.value = params.get("ip") || "";
-    window.setTimeout(() => {
-      publicDom.renewEntryId.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 120);
-  }
 }
 
 async function handleCreateSubmit(event) {
@@ -83,8 +63,6 @@ async function handleCreateSubmit(event) {
       }),
     });
     publicDom.createForm.reset();
-    publicDom.renewEntryId.value = payload.item.entry_id || "";
-    publicDom.renewIp.value = payload.item.ip || "";
     showPublicResult(
       publicDom.createResult,
       renderCreateResult(payload),
@@ -112,43 +90,15 @@ async function handleStatusSubmit(event) {
       payload.status === "active" ? "ok" : "error",
       true
     );
-    if (payload.entry_id) {
-      publicDom.renewEntryId.value = payload.entry_id;
-      publicDom.renewIp.value = payload.ip || publicDom.statusIp.value.trim();
-    }
   } catch (error) {
     showPublicResult(publicDom.statusResult, error.message || "Check status gagal.", "error");
   }
 }
 
-async function handleRenewSubmit(event) {
-  event.preventDefault();
-
-  try {
-    const payload = await publicApiFetch("/api/public/license/renew", {
-      method: "POST",
-      body: JSON.stringify({
-        entry_id: publicDom.renewEntryId.value.trim(),
-        ip: publicDom.renewIp.value.trim(),
-        renewal_token: publicDom.renewToken.value.trim(),
-      }),
-    });
-    showPublicResult(
-      publicDom.renewResult,
-      renderRenewResult(payload),
-      "ok",
-      true
-    );
-  } catch (error) {
-    showPublicResult(publicDom.renewResult, error.message || "Renew gagal.", "error");
-  }
-}
-
 function renderCreateResult(payload) {
   const item = payload.item || {};
-  const renewalLink = payload.renewal_link || "";
   return `
-    <h3 class="result-title">License Created</h3>
+    <h3 class="result-title">IP Activated</h3>
     <p>${escapeHtml(payload.message || "")}</p>
     <div class="result-grid">
       <article>
@@ -168,13 +118,7 @@ function renderCreateResult(payload) {
         <span>${escapeHtml(formatDate(item.expires_at) || "-")}</span>
       </article>
     </div>
-    <p>Simpan renewal token berikut. Token ini hanya tampil sekali.</p>
-    <div class="mono-block">${escapeHtml(payload.renewal_token || "")}</div>
-    ${
-      renewalLink
-        ? `<p>Renewal link: <a class="result-link" href="${escapeHtml(renewalLink)}">${escapeHtml(renewalLink)}</a></p>`
-        : ""
-    }
+    <p>Untuk memperpanjang, input IP yang sama lagi di form aktivasi.</p>
   `;
 }
 
@@ -201,36 +145,6 @@ function renderStatusResult(payload) {
       <article>
         <strong>Expires At</strong>
         <span>${escapeHtml(formatDate(payload.expires_at) || "-")}</span>
-      </article>
-      <article>
-        <strong>Renewable</strong>
-        <span>${payload.renewable ? "yes" : "no"}</span>
-      </article>
-    </div>
-  `;
-}
-
-function renderRenewResult(payload) {
-  const item = payload.item || {};
-  return `
-    <h3 class="result-title">Renew Success</h3>
-    <p>${escapeHtml(payload.message || "")}</p>
-    <div class="result-grid">
-      <article>
-        <strong>Entry ID</strong>
-        <span class="mono">${escapeHtml(item.entry_id || "-")}</span>
-      </article>
-      <article>
-        <strong>IPv4</strong>
-        <span class="mono">${escapeHtml(item.ip || "-")}</span>
-      </article>
-      <article>
-        <strong>Status</strong>
-        <span>${escapeHtml(item.status || "-")}</span>
-      </article>
-      <article>
-        <strong>New Expiry</strong>
-        <span>${escapeHtml(formatDate(item.expires_at) || "-")}</span>
       </article>
     </div>
   `;

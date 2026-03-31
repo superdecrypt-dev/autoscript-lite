@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Autoscript License Renew Portal</title>
+    <title>Autoscript IP Access Portal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -20,17 +20,17 @@
           <p class="eyebrow">Public Self-Service</p>
           <h1>Autoscript IP License</h1>
           <p class="hero-text">
-            Website publik untuk membuat izin IP VPS autoscript, cek status masa aktif, dan renew license sendiri.
-            Secara default, setiap license aktif selama <strong><span id="license-duration-days">14</span> hari</strong>.
+            Website publik untuk mengaktifkan atau memperpanjang izin IP VPS autoscript.
+            Setiap aktivasi akan menambah masa aktif <strong><span id="license-duration-days">14</span> hari</strong>.
           </p>
         </div>
         <div class="hero-sidecard">
           <p class="sidecard-label">Portal Rules</p>
           <ul class="rule-list">
-            <li>License aktif default 14 hari.</li>
-            <li>Renew bisa dilakukan kapan saja dengan renewal token.</li>
-            <li>Jika expired, renew dilakukan dari website ini.</li>
-            <li>Renewal token hanya tampil sekali saat create berhasil.</li>
+            <li>Input IP VPS untuk aktifkan akses 14 hari.</li>
+            <li>Input IP yang sama lagi untuk memperpanjang masa aktif.</li>
+            <li>Jika IP sudah expired, aktivasi ulang dari halaman ini.</li>
+            <li>Tidak ada token renew dan tidak ada panel admin.</li>
           </ul>
           <div id="public-status-badge" class="status-pill muted">Waiting for Worker config</div>
         </div>
@@ -44,8 +44,8 @@
         <section class="public-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Create</p>
-              <h2>Buat License Baru</h2>
+              <p class="eyebrow">Activate</p>
+              <h2>Aktifkan / Perpanjang IP</h2>
             </div>
           </div>
           <form id="create-form" class="public-form">
@@ -53,7 +53,7 @@
               <span>IPv4 VPS</span>
               <input id="create-ip" type="text" placeholder="123.45.67.89" required />
             </label>
-            <button class="primary-btn" type="submit">Create License</button>
+            <button class="primary-btn" type="submit">Aktifkan 14 Hari</button>
           </form>
           <div id="create-result" class="result-card hidden"></div>
         </section>
@@ -73,33 +73,6 @@
             <button class="primary-btn" type="submit">Check Status</button>
           </form>
           <div id="status-result" class="result-card hidden"></div>
-        </section>
-
-        <section class="public-panel public-panel-wide">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Renew</p>
-              <h2>Renew License</h2>
-            </div>
-          </div>
-          <form id="renew-form" class="public-form public-form-grid">
-            <label>
-              <span>Entry ID</span>
-              <input id="renew-entry-id" type="text" placeholder="entry id dari create/status" required />
-            </label>
-            <label>
-              <span>IPv4 VPS</span>
-              <input id="renew-ip" type="text" placeholder="123.45.67.89" required />
-            </label>
-            <label class="span-full">
-              <span>Renewal Token</span>
-              <textarea id="renew-token" rows="4" placeholder="Tempel renewal token di sini" required></textarea>
-            </label>
-            <div class="span-full">
-              <button class="primary-btn" type="submit">Renew for <span id="renew-duration-days">14</span> More Days</button>
-            </div>
-          </form>
-          <div id="renew-result" class="result-card hidden"></div>
         </section>
       </main>
     </div>
