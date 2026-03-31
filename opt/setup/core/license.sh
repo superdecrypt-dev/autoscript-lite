@@ -17,17 +17,16 @@ autoscript_license_repo_bin_path() {
 }
 
 autoscript_license_resolve_bin_path() {
-  local license_bin=""
   local repo_bin=""
   local installed_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
 
-  if [[ -x "${installed_bin}" ]]; then
+  if [[ -f "${installed_bin}" ]]; then
     printf '%s\n' "${installed_bin}"
     return 0
   fi
 
   repo_bin="$(autoscript_license_repo_bin_path)"
-  if [[ -x "${repo_bin}" ]]; then
+  if [[ -f "${repo_bin}" ]]; then
     printf '%s\n' "${repo_bin}"
     return 0
   fi
