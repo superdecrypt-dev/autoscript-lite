@@ -3,176 +3,36 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Autoscript License Admin</title>
+    <title>Autoscript License Admin Disabled</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="../public.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="hero">
+    <div class="public-shell">
+      <header class="public-hero">
         <div class="hero-copy">
-          <p class="eyebrow">Cloudflare Access Protected</p>
-          <h1>Autoscript License Admin</h1>
+          <p class="eyebrow">Public Only Mode</p>
+          <h1>Admin Disabled</h1>
           <p class="hero-text">
-            Panel admin untuk melihat seluruh entry lisensi, audit log, revoke/reactivate, dan edit metadata.
+            Portal ini sekarang berjalan tanpa panel admin. Semua flow dilakukan dari halaman publik:
+            create license, cek status, dan renew.
           </p>
         </div>
-        <div class="hero-card">
-          <p class="hero-card-label">Worker API Base URL</p>
-          <div class="api-base-row">
-            <input id="api-base-input" type="url" placeholder="https://license-api.example.com" />
-            <button id="save-api-base-btn" class="primary-btn" type="button">Connect</button>
-          </div>
-          <p class="microcopy">
-            Gunakan URL origin Worker API. Jika `config.js` sudah diisi, halaman ini akan mencoba koneksi otomatis.
-          </p>
-          <div id="session-badge" class="session-badge muted">Disconnected</div>
+        <div class="hero-sidecard">
+          <p class="sidecard-label">Next Step</p>
+          <ul class="rule-list">
+            <li>Kembali ke halaman utama portal.</li>
+            <li>Input IPv4 VPS untuk membuat izin baru.</li>
+            <li>Gunakan renewal token untuk perpanjangan.</li>
+          </ul>
+          <a class="primary-btn" href="../">Open Public Portal</a>
         </div>
       </header>
-
-      <main class="content-grid">
-        <section class="panel panel-wide">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Overview</p>
-              <h2>License Summary</h2>
-            </div>
-            <button id="refresh-dashboard-btn" class="ghost-btn" type="button">Refresh</button>
-          </div>
-          <div class="summary-grid">
-            <article class="metric-card">
-              <span class="metric-label">Active</span>
-              <strong id="metric-active">0</strong>
-            </article>
-            <article class="metric-card">
-              <span class="metric-label">Expired</span>
-              <strong id="metric-expired">0</strong>
-            </article>
-            <article class="metric-card">
-              <span class="metric-label">Revoked</span>
-              <strong id="metric-revoked">0</strong>
-            </article>
-            <article class="metric-card">
-              <span class="metric-label">Audit Rows</span>
-              <strong id="metric-audit">0</strong>
-            </article>
-          </div>
-          <div id="status-banner" class="status-banner muted">
-            Set Worker API Base URL lalu klik Connect.
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Entry Form</p>
-              <h2 id="form-title">Create IP Entry</h2>
-            </div>
-            <button id="reset-form-btn" class="ghost-btn" type="button">Clear</button>
-          </div>
-          <form id="entry-form" class="form-grid">
-            <input id="entry-id" type="hidden" />
-            <label>
-              <span>IPv4 VPS</span>
-              <input id="field-ip" name="ip" type="text" placeholder="123.45.67.89" required />
-            </label>
-            <label>
-              <span>Label</span>
-              <input id="field-label" name="label" type="text" placeholder="Server SG-01" />
-            </label>
-            <label>
-              <span>Owner</span>
-              <input id="field-owner" name="owner" type="text" placeholder="tim-ops" />
-            </label>
-            <label>
-              <span>Expires At</span>
-              <input id="field-expires-at" name="expires_at" type="datetime-local" />
-            </label>
-            <label class="form-span-full">
-              <span>Notes</span>
-              <textarea id="field-notes" name="notes" rows="5" placeholder="Catatan lisensi, project, invoice, atau purpose."></textarea>
-            </label>
-            <div class="form-actions form-span-full">
-              <button id="submit-entry-btn" class="primary-btn" type="submit">Save Entry</button>
-              <button id="cancel-edit-btn" class="ghost-btn" type="button">Cancel Edit</button>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel panel-wide">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Entries</p>
-              <h2>Allowed VPS IPs</h2>
-            </div>
-            <div class="filter-row">
-              <input id="search-input" type="search" placeholder="Cari IP, label, owner, notes" />
-              <select id="status-filter">
-                <option value="all">All Status</option>
-                <option value="active">Active</option>
-                <option value="expired">Expired</option>
-                <option value="revoked">Revoked</option>
-              </select>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>IP</th>
-                  <th>Owner</th>
-                  <th>Status</th>
-                  <th>Expiry</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="entries-body">
-                <tr>
-                  <td colspan="6" class="empty-row">Belum ada data.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel panel-wide">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Audit Trail</p>
-              <h2>Recent Worker Activity</h2>
-            </div>
-            <button id="refresh-audit-btn" class="ghost-btn" type="button">Refresh Audit</button>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Event</th>
-                  <th>IP</th>
-                  <th>Stage</th>
-                  <th>Decision</th>
-                  <th>Actor</th>
-                </tr>
-              </thead>
-              <tbody id="audit-body">
-                <tr>
-                  <td colspan="6" class="empty-row">Belum ada audit log.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
     </div>
-
-    <script src="../config.js"></script>
-    <script src="../app.js" defer></script>
   </body>
 </html>

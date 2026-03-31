@@ -12,9 +12,6 @@ const fallbackConfig = readFileSync(fallbackConfigPath, "utf8");
 const fallbackValues = extractFallbackConfig(fallbackConfig);
 
 const apiBaseUrl = normalizeUrl(process.env.PAGES_API_BASE_URL || fallbackValues.apiBaseUrl);
-const turnstileSiteKey = String(
-  process.env.PAGES_TURNSTILE_SITE_KEY || process.env.TURNSTILE_SITE_KEY || fallbackValues.turnstileSiteKey
-).trim();
 
 rmSync(outputDir, { force: true, recursive: true });
 mkdirSync(outputDir, { recursive: true });
@@ -23,7 +20,6 @@ cpSync(sourceDir, outputDir, { recursive: true });
 const generatedConfig = `window.AUTOSCRIPT_PORTAL_CONFIG = ${JSON.stringify(
   {
     apiBaseUrl,
-    turnstileSiteKey,
   },
   null,
   2
@@ -35,16 +31,11 @@ if (!apiBaseUrl) {
   console.warn("[build:pages] PAGES_API_BASE_URL belum di-set; dist/config.js tetap kosong.");
 }
 
-if (!turnstileSiteKey) {
-  console.warn("[build:pages] PAGES_TURNSTILE_SITE_KEY belum di-set; portal akan mengandalkan /api/public/config.");
-}
-
 console.log(`[build:pages] wrote ${resolve(outputDir, "config.js")}`);
 
 function extractFallbackConfig(source) {
   return {
     apiBaseUrl: matchConfigValue(source, "apiBaseUrl"),
-    turnstileSiteKey: matchConfigValue(source, "turnstileSiteKey"),
   };
 }
 

@@ -12,7 +12,6 @@
     />
     <link rel="stylesheet" href="./public.css" />
     <script src="./config.js"></script>
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
   </head>
   <body>
     <div class="public-shell">
@@ -54,10 +53,6 @@
               <span>IPv4 VPS</span>
               <input id="create-ip" type="text" placeholder="123.45.67.89" required />
             </label>
-            <div class="turnstile-block">
-              <span>Human Check</span>
-              <div id="create-turnstile"></div>
-            </div>
             <button class="primary-btn" type="submit">Create License</button>
           </form>
           <div id="create-result" class="result-card hidden"></div>
@@ -75,10 +70,6 @@
               <span>IPv4 VPS</span>
               <input id="status-ip" type="text" placeholder="123.45.67.89" required />
             </label>
-            <div class="turnstile-block">
-              <span>Human Check</span>
-              <div id="status-turnstile"></div>
-            </div>
             <button class="primary-btn" type="submit">Check Status</button>
           </form>
           <div id="status-result" class="result-card hidden"></div>
@@ -104,10 +95,6 @@
               <span>Renewal Token</span>
               <textarea id="renew-token" rows="4" placeholder="Tempel renewal token di sini" required></textarea>
             </label>
-            <div class="turnstile-block span-full">
-              <span>Human Check</span>
-              <div id="renew-turnstile"></div>
-            </div>
             <div class="span-full">
               <button class="primary-btn" type="submit">Renew for <span id="renew-duration-days">14</span> More Days</button>
             </div>

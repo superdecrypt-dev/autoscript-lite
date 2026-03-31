@@ -1,4 +1,4 @@
-name = "autoscript-license-api"
+name = "autoscript"
 main = "worker/src/index.js"
 compatibility_date = "2026-03-31"
 workers_dev = true
@@ -9,16 +9,12 @@ workers_dev = true
 CACHE_TTL_SEC_DEFAULT = "86400"
 PUBLIC_LICENSE_DURATION_DAYS = "14"
 PUBLIC_UI_ORIGIN = "https://autoscript-2ed.pages.dev"
-ADMIN_UI_ORIGIN = "https://autoscript-2ed.pages.dev"
-TURNSTILE_SITE_KEY = "0x4AAAAAACyPSBOFRr6fEZtA"
 PUBLIC_CREATE_LIMIT_MAX = "5"
 PUBLIC_CREATE_WINDOW_SEC = "900"
 PUBLIC_STATUS_LIMIT_MAX = "30"
 PUBLIC_STATUS_WINDOW_SEC = "900"
 PUBLIC_RENEW_LIMIT_MAX = "10"
 PUBLIC_RENEW_WINDOW_SEC = "900"
-CF_ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
-CF_ACCESS_AUD = "replace-with-cloudflare-access-aud"
 
 [[d1_databases]]
 binding = "LICENSE_DB"

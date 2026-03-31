@@ -1,13 +1,7 @@
 const publicState = {
   apiBaseUrl: (window.AUTOSCRIPT_PORTAL_CONFIG?.apiBaseUrl || "").replace(/\/+$/, ""),
-  turnstileSiteKey: window.AUTOSCRIPT_PORTAL_CONFIG?.turnstileSiteKey || "",
   licenseDurationDays: 14,
   workerConfigLoaded: false,
-  widgets: {
-    create: null,
-    status: null,
-    renew: null,
-  },
 };
 
 const publicDom = {
@@ -26,9 +20,6 @@ const publicDom = {
   renewResult: document.getElementById("renew-result"),
   durationDays: document.getElementById("license-duration-days"),
   renewDurationDays: document.getElementById("renew-duration-days"),
-  createTurnstile: document.getElementById("create-turnstile"),
-  statusTurnstile: document.getElementById("status-turnstile"),
-  renewTurnstile: document.getElementById("renew-turnstile"),
 };
 
 bootstrapPublicPortal();
@@ -43,7 +34,6 @@ async function bootstrapPublicPortal() {
     return;
   }
   await loadWorkerPublicConfig();
-  renderTurnstileWidgetsWhenReady();
 }
 
 function bindPublicEvents() {
@@ -57,11 +47,8 @@ async function loadWorkerPublicConfig() {
     const payload = await publicApiFetch("/api/public/config", { method: "GET" });
     publicState.workerConfigLoaded = true;
     publicState.licenseDurationDays = Number(payload.license_duration_days || 14);
-    if (payload.turnstile_site_key) {
-      publicState.turnstileSiteKey = payload.turnstile_site_key;
-    }
     renderDurationDays();
-    setPublicBanner("Portal siap dipakai. Selesaikan Turnstile untuk setiap aksi publik.", "ok");
+    setPublicBanner("Portal siap dipakai. Input IP VPS untuk create, cek status, atau renew.", "ok");
     setStatusBadge("Worker connected", "ok");
   } catch (error) {
     setPublicBanner(error.message || "Gagal mengambil konfigurasi Worker publik.", "error");
@@ -72,35 +59,6 @@ async function loadWorkerPublicConfig() {
 function renderDurationDays() {
   publicDom.durationDays.textContent = String(publicState.licenseDurationDays);
   publicDom.renewDurationDays.textContent = String(publicState.licenseDurationDays);
-}
-
-function renderTurnstileWidgetsWhenReady() {
-  if (!publicState.turnstileSiteKey) {
-    setPublicBanner("TURNSTILE_SITE_KEY belum tersedia di portal.", "warn");
-    return;
-  }
-  if (!window.turnstile) {
-    window.setTimeout(renderTurnstileWidgetsWhenReady, 250);
-    return;
-  }
-  if (!publicState.widgets.create) {
-    publicState.widgets.create = window.turnstile.render(publicDom.createTurnstile, {
-      sitekey: publicState.turnstileSiteKey,
-      theme: "light",
-    });
-  }
-  if (!publicState.widgets.status) {
-    publicState.widgets.status = window.turnstile.render(publicDom.statusTurnstile, {
-      sitekey: publicState.turnstileSiteKey,
-      theme: "light",
-    });
-  }
-  if (!publicState.widgets.renew) {
-    publicState.widgets.renew = window.turnstile.render(publicDom.renewTurnstile, {
-      sitekey: publicState.turnstileSiteKey,
-      theme: "light",
-    });
-  }
 }
 
 function applyRenewPrefillFromUrl() {
@@ -116,21 +74,14 @@ function applyRenewPrefillFromUrl() {
 
 async function handleCreateSubmit(event) {
   event.preventDefault();
-  const turnstileToken = getTurnstileResponse("create");
-  if (!turnstileToken) {
-    showPublicResult(publicDom.createResult, "Selesaikan Turnstile challenge dulu.", "error");
-    return;
-  }
 
   try {
     const payload = await publicApiFetch("/api/public/license/create", {
       method: "POST",
       body: JSON.stringify({
         ip: publicDom.createIp.value.trim(),
-        turnstile_token: turnstileToken,
       }),
     });
-    resetTurnstile("create");
     publicDom.createForm.reset();
     publicDom.renewEntryId.value = payload.item.entry_id || "";
     publicDom.renewIp.value = payload.item.ip || "";
@@ -141,28 +92,20 @@ async function handleCreateSubmit(event) {
       true
     );
   } catch (error) {
-    resetTurnstile("create");
     showPublicResult(publicDom.createResult, error.message || "Create gagal.", "error");
   }
 }
 
 async function handleStatusSubmit(event) {
   event.preventDefault();
-  const turnstileToken = getTurnstileResponse("status");
-  if (!turnstileToken) {
-    showPublicResult(publicDom.statusResult, "Selesaikan Turnstile challenge dulu.", "error");
-    return;
-  }
 
   try {
     const payload = await publicApiFetch("/api/public/license/status", {
       method: "POST",
       body: JSON.stringify({
         ip: publicDom.statusIp.value.trim(),
-        turnstile_token: turnstileToken,
       }),
     });
-    resetTurnstile("status");
     showPublicResult(
       publicDom.statusResult,
       renderStatusResult(payload),
@@ -174,18 +117,12 @@ async function handleStatusSubmit(event) {
       publicDom.renewIp.value = payload.ip || publicDom.statusIp.value.trim();
     }
   } catch (error) {
-    resetTurnstile("status");
     showPublicResult(publicDom.statusResult, error.message || "Check status gagal.", "error");
   }
 }
 
 async function handleRenewSubmit(event) {
   event.preventDefault();
-  const turnstileToken = getTurnstileResponse("renew");
-  if (!turnstileToken) {
-    showPublicResult(publicDom.renewResult, "Selesaikan Turnstile challenge dulu.", "error");
-    return;
-  }
 
   try {
     const payload = await publicApiFetch("/api/public/license/renew", {
@@ -194,10 +131,8 @@ async function handleRenewSubmit(event) {
         entry_id: publicDom.renewEntryId.value.trim(),
         ip: publicDom.renewIp.value.trim(),
         renewal_token: publicDom.renewToken.value.trim(),
-        turnstile_token: turnstileToken,
       }),
     });
-    resetTurnstile("renew");
     showPublicResult(
       publicDom.renewResult,
       renderRenewResult(payload),
@@ -205,7 +140,6 @@ async function handleRenewSubmit(event) {
       true
     );
   } catch (error) {
-    resetTurnstile("renew");
     showPublicResult(publicDom.renewResult, error.message || "Renew gagal.", "error");
   }
 }
@@ -323,21 +257,6 @@ async function publicApiFetch(path, options = {}) {
     throw new Error(payload.message || `HTTP ${response.status}`);
   }
   return payload;
-}
-
-function getTurnstileResponse(key) {
-  const widgetId = publicState.widgets[key];
-  if (!widgetId || !window.turnstile) {
-    return "";
-  }
-  return window.turnstile.getResponse(widgetId) || "";
-}
-
-function resetTurnstile(key) {
-  const widgetId = publicState.widgets[key];
-  if (widgetId && window.turnstile) {
-    window.turnstile.reset(widgetId);
-  }
 }
 
 function showPublicResult(target, htmlOrText, tone = "ok", isHtml = false) {

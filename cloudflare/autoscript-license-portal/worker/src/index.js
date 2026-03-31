@@ -1,10 +1,4 @@
 const IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-const ACCESS_JWKS_TTL_MS = 5 * 60 * 1000;
-
-let cachedJwks = {
-  fetchedAt: 0,
-  keys: [],
-};
 
 export default {
   async fetch(request, env) {
@@ -28,9 +22,6 @@ async function routeRequest(request, env) {
 
   if (request.method === "OPTIONS" && pathname.startsWith("/api/public/")) {
     return buildPublicCorsResponse(request, env);
-  }
-  if (request.method === "OPTIONS" && pathname.startsWith("/api/admin/")) {
-    return buildAdminCorsResponse(request, env);
   }
 
   if (request.method === "GET" && pathname === "/healthz") {
@@ -58,68 +49,7 @@ async function routeRequest(request, env) {
   }
 
   if (pathname.startsWith("/api/admin/")) {
-    const admin = await requireAdminAccess(request, env);
-    if (admin.response) {
-      return withAdminCors(request, env, admin.response);
-    }
-
-    if (request.method === "GET" && pathname === "/api/admin/session") {
-      return withAdminCors(
-        request,
-        env,
-        jsonResponse({
-          admin_email: admin.email,
-          cache_ttl_sec_default: parseIntSafe(env.CACHE_TTL_SEC_DEFAULT, 86400),
-          license_duration_days: getLicenseDurationDays(env),
-          worker_api_base_url: url.origin,
-        })
-      );
-    }
-
-    if (request.method === "GET" && pathname === "/api/admin/license-entries") {
-      return withAdminCors(request, env, await handleAdminListEntries(request, env));
-    }
-
-    if (request.method === "POST" && pathname === "/api/admin/license-entries") {
-      return withAdminCors(request, env, await handleAdminCreateEntry(request, env, admin.email));
-    }
-
-    if (request.method === "GET" && pathname === "/api/admin/audit-logs") {
-      return withAdminCors(request, env, await handleAdminListAuditLogs(request, env));
-    }
-
-    const entryMatch = pathname.match(/^\/api\/admin\/license-entries\/([^/]+)$/);
-    if (request.method === "PATCH" && entryMatch) {
-      return withAdminCors(
-        request,
-        env,
-        await handleAdminPatchEntry(request, env, admin.email, entryMatch[1])
-      );
-    }
-
-    const revokeMatch = pathname.match(/^\/api\/admin\/license-entries\/([^/]+)\/revoke$/);
-    if (request.method === "POST" && revokeMatch) {
-      return withAdminCors(
-        request,
-        env,
-        await handleAdminToggleEntry(request, env, admin.email, revokeMatch[1], "revoked")
-      );
-    }
-
-    const reactivateMatch = pathname.match(/^\/api\/admin\/license-entries\/([^/]+)\/reactivate$/);
-    if (request.method === "POST" && reactivateMatch) {
-      return withAdminCors(
-        request,
-        env,
-        await handleAdminToggleEntry(request, env, admin.email, reactivateMatch[1], "active")
-      );
-    }
-
-    return withAdminCors(
-      request,
-      env,
-      jsonResponse({ error: "not_found", message: "Admin endpoint tidak ditemukan" }, 404)
-    );
+    return jsonResponse({ error: "not_found", message: "Admin endpoint dinonaktifkan." }, 404);
   }
 
   return jsonResponse({ error: "not_found", message: "Endpoint tidak ditemukan" }, 404);
@@ -127,7 +57,6 @@ async function routeRequest(request, env) {
 
 function buildPublicConfig(env, workerOrigin) {
   return {
-    turnstile_site_key: String(env.TURNSTILE_SITE_KEY || "").trim(),
     license_duration_days: getLicenseDurationDays(env),
     public_ui_origin: String(env.PUBLIC_UI_ORIGIN || "").trim(),
     worker_api_base_url: workerOrigin,
@@ -225,11 +154,6 @@ async function handlePublicCreate(request, env) {
       },
       429
     );
-  }
-
-  const turnstile = await verifyTurnstile(body.data.turnstile_token, request, env);
-  if (!turnstile.ok) {
-    return jsonResponse({ error: "turnstile_failed", message: turnstile.message }, 400);
   }
 
   const publicIp = normalizeIpv4(body.data.ip);
@@ -331,11 +255,6 @@ async function handlePublicStatus(request, env) {
     );
   }
 
-  const turnstile = await verifyTurnstile(body.data.turnstile_token, request, env);
-  if (!turnstile.ok) {
-    return jsonResponse({ error: "turnstile_failed", message: turnstile.message }, 400);
-  }
-
   const publicIp = normalizeIpv4(body.data.ip);
   if (!publicIp) {
     return jsonResponse({ error: "invalid_request", message: "IP harus IPv4 literal yang valid" }, 400);
@@ -395,11 +314,6 @@ async function handlePublicRenew(request, env) {
       },
       429
     );
-  }
-
-  const turnstile = await verifyTurnstile(body.data.turnstile_token, request, env);
-  if (!turnstile.ok) {
-    return jsonResponse({ error: "turnstile_failed", message: turnstile.message }, 400);
   }
 
   const publicIp = normalizeIpv4(body.data.ip);
@@ -889,132 +803,6 @@ function normalizeOptionalIsoDate(value) {
   return parsed.toISOString();
 }
 
-async function requireAdminAccess(request, env) {
-  const token = request.headers.get("Cf-Access-Jwt-Assertion") || "";
-  if (!token) {
-    return {
-      response: jsonResponse({ error: "unauthorized", message: "Cloudflare Access JWT tidak ditemukan" }, 401),
-    };
-  }
-  try {
-    const payload = await verifyAccessJwt(token, env);
-    return {
-      email: String(payload.email || payload.sub || ""),
-      payload,
-    };
-  } catch (error) {
-    return {
-      response: jsonResponse(
-        {
-          error: "unauthorized",
-          message: error instanceof Error ? error.message : "Access JWT tidak valid",
-        },
-        401
-      ),
-    };
-  }
-}
-
-async function verifyAccessJwt(token, env) {
-  const teamDomain = String(env.CF_ACCESS_TEAM_DOMAIN || "").trim();
-  const expectedAud = String(env.CF_ACCESS_AUD || "").trim();
-  if (!teamDomain || !expectedAud) {
-    throw new Error("Worker belum dikonfigurasi untuk validasi Cloudflare Access");
-  }
-
-  const parts = token.split(".");
-  if (parts.length !== 3) {
-    throw new Error("Format JWT Access tidak valid");
-  }
-
-  const header = parseJsonSafe(base64UrlDecode(parts[0]), null);
-  const payload = parseJsonSafe(base64UrlDecode(parts[1]), null);
-  if (!header || !payload) {
-    throw new Error("JWT Access tidak dapat di-parse");
-  }
-
-  const jwk = await getAccessJwk(teamDomain, header.kid);
-  if (!jwk) {
-    throw new Error("Kunci JWT Access tidak ditemukan");
-  }
-
-  const algorithm = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
-  const key = await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["verify"]);
-  const encoder = new TextEncoder();
-  const data = encoder.encode(`${parts[0]}.${parts[1]}`);
-  const signature = base64UrlToUint8Array(parts[2]);
-  const verified = await crypto.subtle.verify(algorithm, key, signature, data);
-  if (!verified) {
-    throw new Error("Signature JWT Access tidak valid");
-  }
-
-  const nowEpoch = Math.floor(Date.now() / 1000);
-  if (!payload.exp || payload.exp <= nowEpoch) {
-    throw new Error("JWT Access sudah expired");
-  }
-
-  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!audiences.includes(expectedAud)) {
-    throw new Error("Audience JWT Access tidak cocok");
-  }
-
-  const expectedIssuer = `https://${teamDomain}`;
-  if (payload.iss && payload.iss !== expectedIssuer) {
-    throw new Error("Issuer JWT Access tidak cocok");
-  }
-
-  return payload;
-}
-
-async function getAccessJwk(teamDomain, kid) {
-  const now = Date.now();
-  if (!cachedJwks.keys.length || now - cachedJwks.fetchedAt > ACCESS_JWKS_TTL_MS) {
-    const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`);
-    if (!response.ok) {
-      throw new Error("Gagal mengambil JWKS Cloudflare Access");
-    }
-    const body = await response.json();
-    cachedJwks = {
-      fetchedAt: now,
-      keys: Array.isArray(body.keys) ? body.keys : [],
-    };
-  }
-  return cachedJwks.keys.find((item) => item.kid === kid) || null;
-}
-
-async function verifyTurnstile(token, request, env) {
-  const secret = String(env.TURNSTILE_SECRET_KEY || "").trim();
-  if (!secret) {
-    return { ok: false, message: "Worker belum dikonfigurasi untuk Turnstile." };
-  }
-  const responseToken = String(token || "").trim();
-  if (!responseToken) {
-    return { ok: false, message: "Turnstile token wajib diisi." };
-  }
-  const form = new URLSearchParams();
-  form.set("secret", secret);
-  form.set("response", responseToken);
-  const remoteIp = getVisitorIp(request);
-  if (remoteIp) {
-    form.set("remoteip", remoteIp);
-  }
-  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form.toString(),
-  });
-  if (!response.ok) {
-    return { ok: false, message: "Verifikasi Turnstile gagal." };
-  }
-  const payload = await response.json();
-  if (!payload.success) {
-    return { ok: false, message: "Turnstile challenge tidak valid." };
-  }
-  return { ok: true };
-}
-
 async function enforcePublicRateLimit(env, endpoint, clientIp, maxRequests, windowSec) {
   const slot = Math.floor(Date.now() / 1000 / windowSec);
   const existing = await firstRow(
@@ -1156,18 +944,6 @@ function buildPublicCorsResponse(request, env) {
   });
 }
 
-function buildAdminCorsResponse(request, env) {
-  return new Response(null, {
-    status: 204,
-    headers: buildCorsHeaders(request, env, {
-      origin: String(env.ADMIN_UI_ORIGIN || "").trim(),
-      allowHeaders: "Content-Type, Cf-Access-Jwt-Assertion",
-      allowMethods: "GET, POST, PATCH, OPTIONS",
-      allowCredentials: true,
-    }),
-  });
-}
-
 function withPublicCors(request, env, response) {
   return withCors(
     request,
@@ -1178,20 +954,6 @@ function withPublicCors(request, env, response) {
       allowHeaders: "Content-Type",
       allowMethods: "GET, POST, OPTIONS",
       allowCredentials: false,
-    }
-  );
-}
-
-function withAdminCors(request, env, response) {
-  return withCors(
-    request,
-    env,
-    response,
-    {
-      origin: String(env.ADMIN_UI_ORIGIN || "").trim(),
-      allowHeaders: "Content-Type, Cf-Access-Jwt-Assertion",
-      allowMethods: "GET, POST, PATCH, OPTIONS",
-      allowCredentials: true,
     }
   );
 }
@@ -1308,21 +1070,4 @@ function base64UrlEncode(bytes) {
 
 function bytesToHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function base64UrlDecode(value) {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const remainder = normalized.length % 4;
-  const padded = normalized + (remainder ? "=".repeat(4 - remainder) : "");
-  const binary = atob(padded);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
-function base64UrlToUint8Array(value) {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const remainder = normalized.length % 4;
-  const padded = normalized + (remainder ? "=".repeat(4 - remainder) : "");
-  const binary = atob(padded);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }

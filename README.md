@@ -166,9 +166,9 @@ Internet / Cloudflare
 ## Cloudflare License Portal
 - Portal web lisensi IP VPS sekarang tersedia di [`cloudflare/autoscript-license-portal/`](/root/project/autoscript/cloudflare/autoscript-license-portal)
 - Target deploy:
-  - `Cloudflare Worker` untuk API lisensi publik, admin, dan endpoint check autoscript
+  - `Cloudflare Worker` untuk API lisensi publik dan endpoint check autoscript
   - `Cloudflare D1` untuk database allowlist, renewal token hash, audit, dan rate limit
-  - `Cloudflare Pages` untuk website publik `/` dan panel admin `/admin/`
+  - `Cloudflare Pages` untuk website publik `/`
 - Workflow deploy yang didukung:
   - `Connect GitHub` untuk `Pages` dan `Worker`
   - Pages build sekarang menghasilkan `dist/config.js` dari env build Cloudflare, jadi tidak perlu commit `apiBaseUrl` produksi ke source
@@ -178,14 +178,12 @@ Internet / Cloudflare
   - saat expired, renew dilakukan lagi dari website memakai `renewal token`
   - user VPS cukup input IP di web lalu langsung jalankan autoscript
 - Flow admin:
-  - route `/admin/` tetap untuk operator internal
-  - admin bisa lihat audit, revoke/reactivate, dan edit metadata/expiry
+  - panel admin tidak dipakai di mode sederhana ini
 - Endpoint autoscript yang dipakai VPS:
   - `POST /api/v1/license/check`
 - Endpoint built-in autoscript:
   - `AUTOSCRIPT_LICENSE_DEFAULT_API_URL=https://autoscript.temp10sgt.workers.dev/api/v1/license/check`
 - Secret penting untuk deploy portal:
-  - `TURNSTILE_SECRET_KEY`
   - `RENEWAL_TOKEN_PEPPER`
 
 ## Backup/Restore
