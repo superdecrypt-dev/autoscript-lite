@@ -7715,20 +7715,19 @@ def _cf_prepare_subdomain_a_record(
     if not ok_name:
         return False, str(name_records_or_err)
     name_records = name_records_or_err if isinstance(name_records_or_err, list) else []
+    target_exists_same_ip = False
 
     rec_ips = [str(r.get("content") or "").strip() for r in name_records if isinstance(r, dict)]
     if rec_ips:
         any_same = any(v == ip for v in rec_ips)
         any_diff = any(v and v != ip for v in rec_ips)
-        if any_same:
-            if allow_existing_same_ip:
-                return True, {
-                    "message": f"A record sudah ada dan sama: {fqdn} -> {ip}",
-                    "rollback": {"changed": False},
-                }
-            return False, f"A record {fqdn} -> {ip} sudah ada. Set allow_existing_same_ip=on untuk lanjut."
         if any_diff:
             return False, f"Subdomain {fqdn} sudah ada di Cloudflare tapi IP berbeda: {', '.join(rec_ips)}"
+        if any_same:
+            if allow_existing_same_ip:
+                target_exists_same_ip = True
+            else:
+                return False, f"A record {fqdn} -> {ip} sudah ada. Set allow_existing_same_ip=on untuk lanjut."
 
     ok_ip, same_ip_or_err = _cf_list_a_records_by_ip(zone_id, ip)
     if not ok_ip:
@@ -7746,6 +7745,16 @@ def _cf_prepare_subdomain_a_record(
         ok_del, del_msg = _cf_delete_record(zone_id, rec_id)
         if not ok_del:
             return False, f"Gagal hapus A record historis {rec_name}: {del_msg}"
+
+    if target_exists_same_ip:
+        return True, {
+            "message": f"A record sudah ada dan sama: {fqdn} -> {ip}",
+            "rollback": {
+                "changed": bool(deleted_records),
+                "created_record_id": "",
+                "deleted_records": deleted_records,
+            },
+        }
 
     ok_create, create_res = _cf_create_a_record_result(zone_id, fqdn, ip, proxied=proxied)
     if not ok_create:

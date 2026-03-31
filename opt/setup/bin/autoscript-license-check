@@ -20,7 +20,7 @@ DEFAULTS = {
     "AUTOSCRIPT_LICENSE_STOPPED_SERVICES_FILE": "/var/lib/autoscript-license/stopped-services.json",
     "AUTOSCRIPT_LICENSE_DEFAULT_API_URL": "https://autoscript.temp10sgt.workers.dev/api/v1/license/check",
     "AUTOSCRIPT_LICENSE_API_URL": "",
-    "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "86400",
+    "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "3600",
     "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE": "true",
     "AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN": "15",
     "OPENVPN_CONFIG_ENV_FILE": "/etc/autoscript/openvpn/config.env",
@@ -105,7 +105,7 @@ def load_config():
     if not str(cfg.get("AUTOSCRIPT_LICENSE_API_URL") or "").strip():
         cfg["AUTOSCRIPT_LICENSE_API_URL"] = str(cfg.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL") or "").strip()
     cfg["runtime_enforce"] = parse_bool(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE"), True)
-    cfg["cache_ttl_sec"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC"), 86400)
+    cfg["cache_ttl_sec"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC"), 3600)
     cfg["runtime_interval_min"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN"), 15)
     return cfg
 

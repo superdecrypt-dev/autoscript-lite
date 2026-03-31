@@ -3,6 +3,12 @@
 
 declare -ag _ACME_RESTORE_SERVICES=()
 declare -gi _ACME_RESTORE_NEEDED=0
+declare -gi _SETUP_CF_DNS_ROLLBACK_ARMED=0
+declare -gi _SETUP_CF_DNS_ROLLBACK_COMMITTED=0
+declare -g _SETUP_CF_DNS_ROLLBACK_ZONE_ID=""
+declare -g _SETUP_CF_DNS_ROLLBACK_FQDN=""
+declare -g _SETUP_CF_DNS_ROLLBACK_IP=""
+declare -g _SETUP_CF_DNS_ROLLBACK_SNAPSHOT=""
 
 acme_append_restore_service() {
   local candidate="$1"
@@ -24,6 +30,46 @@ acme_restore_conflicting_services_on_failure() {
   done
 }
 register_exit_cleanup acme_restore_conflicting_services_on_failure
+
+setup_cf_dns_rollback_reset() {
+  if [[ -n "${_SETUP_CF_DNS_ROLLBACK_SNAPSHOT:-}" ]]; then
+    rm -f -- "${_SETUP_CF_DNS_ROLLBACK_SNAPSHOT}" >/dev/null 2>&1 || true
+  fi
+  _SETUP_CF_DNS_ROLLBACK_ARMED=0
+  _SETUP_CF_DNS_ROLLBACK_COMMITTED=0
+  _SETUP_CF_DNS_ROLLBACK_ZONE_ID=""
+  _SETUP_CF_DNS_ROLLBACK_FQDN=""
+  _SETUP_CF_DNS_ROLLBACK_IP=""
+  _SETUP_CF_DNS_ROLLBACK_SNAPSHOT=""
+}
+
+setup_cf_dns_rollback_mark_committed() {
+  _SETUP_CF_DNS_ROLLBACK_COMMITTED=1
+}
+
+setup_cf_dns_rollback_on_exit() {
+  [[ "${_SETUP_CF_DNS_ROLLBACK_ARMED:-0}" == "1" ]] || return 0
+  if [[ "${_SETUP_CF_DNS_ROLLBACK_COMMITTED:-0}" == "1" ]]; then
+    setup_cf_dns_rollback_reset
+    return 0
+  fi
+  if [[ -z "${_SETUP_CF_DNS_ROLLBACK_SNAPSHOT:-}" || ! -f "${_SETUP_CF_DNS_ROLLBACK_SNAPSHOT}" ]]; then
+    return 0
+  fi
+  warn "Flow dns_cf_wildcard gagal sebelum selesai. Mencoba restore snapshot DNS Cloudflare..."
+  if ! cf_restore_relevant_a_records_snapshot \
+    "${_SETUP_CF_DNS_ROLLBACK_ZONE_ID}" \
+    "${_SETUP_CF_DNS_ROLLBACK_FQDN}" \
+    "${_SETUP_CF_DNS_ROLLBACK_IP}" \
+    "${_SETUP_CF_DNS_ROLLBACK_SNAPSHOT}"; then
+    warn "Restore snapshot DNS Cloudflare gagal."
+  else
+    warn "Snapshot DNS Cloudflare berhasil dipulihkan."
+  fi
+  setup_cf_dns_rollback_reset
+  return 0
+}
+register_exit_cleanup setup_cf_dns_rollback_on_exit
 
 snapshot_conflicting_services_active() {
   local svc
@@ -280,22 +326,192 @@ cf_delete_record() {
   cf_api DELETE "/zones/${zone_id}/dns_records/${record_id}" >/dev/null || die "Gagal delete DNS record Cloudflare: ${record_id}"
 }
 
+cf_delete_record_try() {
+  local zone_id="$1"
+  local record_id="$2"
+  cf_api DELETE "/zones/${zone_id}/dns_records/${record_id}" >/dev/null
+}
+
 cf_create_a_record() {
   local zone_id="$1"
   local name="$2"
   local ip="$3"
   local proxied="${4:-false}"
+  cf_create_a_record_with_ttl "${zone_id}" "${name}" "${ip}" "${proxied}" 1
+}
+
+cf_create_a_record_with_ttl() {
+  local zone_id="$1"
+  local name="$2"
+  local ip="$3"
+  local proxied="${4:-false}"
+  local ttl="${5:-1}"
 
   if [[ "${proxied}" != "true" && "${proxied}" != "false" ]]; then
     proxied="false"
   fi
+  if [[ ! "${ttl}" =~ ^[0-9]+$ ]] || (( ttl < 1 )); then
+    ttl=1
+  fi
 
   local payload
   payload="$(cat <<EOF
-{"type":"A","name":"${name}","content":"${ip}","ttl":1,"proxied":${proxied}}
+{"type":"A","name":"${name}","content":"${ip}","ttl":${ttl},"proxied":${proxied}}
 EOF
 )"
   cf_api POST "/zones/${zone_id}/dns_records" "${payload}" >/dev/null || die "Gagal membuat A record Cloudflare untuk ${name}"
+}
+
+cf_create_a_record_with_ttl_try() {
+  local zone_id="$1"
+  local name="$2"
+  local ip="$3"
+  local proxied="${4:-false}"
+  local ttl="${5:-1}"
+
+  if [[ "${proxied}" != "true" && "${proxied}" != "false" ]]; then
+    proxied="false"
+  fi
+  if [[ ! "${ttl}" =~ ^[0-9]+$ ]] || (( ttl < 1 )); then
+    ttl=1
+  fi
+
+  local payload
+  payload="$(cat <<EOF
+{"type":"A","name":"${name}","content":"${ip}","ttl":${ttl},"proxied":${proxied}}
+EOF
+)"
+  cf_api POST "/zones/${zone_id}/dns_records" "${payload}" >/dev/null
+}
+
+cf_snapshot_relevant_a_records() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local outfile="${4:-}"
+  local target_file="" same_file="" target_json="" same_json=""
+  local empty_json='{"result":[]}'
+
+  [[ -n "${outfile}" ]] || return 1
+  target_file="$(mktemp 2>/dev/null || true)"
+  same_file="$(mktemp 2>/dev/null || true)"
+  [[ -n "${target_file}" && -n "${same_file}" ]] || {
+    rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  target_json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" 2>/dev/null || true)"
+  same_json="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&content=${ip}&per_page=100" 2>/dev/null || true)"
+  printf '%s\n' "${target_json:-${empty_json}}" > "${target_file}" || return 1
+  printf '%s\n' "${same_json:-${empty_json}}" > "${same_file}" || return 1
+
+  if ! jq -s '
+    [.[0].result // [], .[1].result // []]
+    | add
+    | map(select((.type // "A") == "A"))
+    | unique_by(.id)
+    | map({
+        id: (.id // ""),
+        name: (.name // ""),
+        content: (.content // ""),
+        proxied: (.proxied // false),
+        ttl: (.ttl // 1)
+      })
+  ' "${target_file}" "${same_file}" > "${outfile}" 2>/dev/null; then
+    rm -f -- "${outfile}" "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  chmod 600 "${outfile}" >/dev/null 2>&1 || true
+  rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+  return 0
+}
+
+cf_restore_relevant_a_records_snapshot() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local snapshot_file="${4:-}"
+  local target_file="" same_file="" current_target="" current_same=""
+  local empty_json='{"result":[]}'
+  local -a current_ids=()
+
+  [[ -f "${snapshot_file}" ]] || return 1
+  target_file="$(mktemp 2>/dev/null || true)"
+  same_file="$(mktemp 2>/dev/null || true)"
+  [[ -n "${target_file}" && -n "${same_file}" ]] || {
+    rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+    return 1
+  }
+
+  current_target="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${fqdn}&per_page=100" 2>/dev/null || true)"
+  current_same="$(cf_api GET "/zones/${zone_id}/dns_records?type=A&content=${ip}&per_page=100" 2>/dev/null || true)"
+  printf '%s\n' "${current_target:-${empty_json}}" > "${target_file}" || return 1
+  printf '%s\n' "${current_same:-${empty_json}}" > "${same_file}" || return 1
+
+  mapfile -t current_ids < <(
+    jq -s -r '
+      [.[0].result // [], .[1].result // []]
+      | add
+      | map(select((.type // "A") == "A"))
+      | unique_by(.id)
+      | .[] | (.id // empty)
+    ' "${target_file}" "${same_file}" 2>/dev/null || true
+  )
+
+  local rid name content proxied ttl
+  for rid in "${current_ids[@]}"; do
+    [[ -n "${rid}" ]] || continue
+    if ! cf_delete_record_try "${zone_id}" "${rid}"; then
+      rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done
+
+  while IFS=$'\t' read -r name content proxied ttl; do
+    [[ -n "${name}" && -n "${content}" ]] || continue
+    if ! cf_create_a_record_with_ttl_try "${zone_id}" "${name}" "${content}" "${proxied}" "${ttl}"; then
+      rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+      return 1
+    fi
+  done < <(
+    jq -r '
+      .[]
+      | [
+          (.name // ""),
+          (.content // ""),
+          ((.proxied // false) | tostring),
+          ((.ttl // 1) | tostring)
+        ]
+      | @tsv
+    ' "${snapshot_file}" 2>/dev/null || true
+  )
+
+  rm -f -- "${target_file}" "${same_file}" >/dev/null 2>&1 || true
+  return 0
+}
+
+setup_cf_dns_prepare_rollback() {
+  local zone_id="$1"
+  local fqdn="$2"
+  local ip="$3"
+  local snapshot_file=""
+
+  setup_cf_dns_rollback_reset
+  snapshot_file="$(mktemp 2>/dev/null || true)"
+  [[ -n "${snapshot_file}" ]] || return 1
+  if ! cf_snapshot_relevant_a_records "${zone_id}" "${fqdn}" "${ip}" "${snapshot_file}"; then
+    rm -f -- "${snapshot_file}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  _SETUP_CF_DNS_ROLLBACK_ZONE_ID="${zone_id}"
+  _SETUP_CF_DNS_ROLLBACK_FQDN="${fqdn}"
+  _SETUP_CF_DNS_ROLLBACK_IP="${ip}"
+  _SETUP_CF_DNS_ROLLBACK_SNAPSHOT="${snapshot_file}"
+  _SETUP_CF_DNS_ROLLBACK_ARMED=1
+  _SETUP_CF_DNS_ROLLBACK_COMMITTED=0
+  return 0
 }
 
 cf_sync_a_record_proxy_state() {
@@ -552,6 +768,9 @@ domain_menu_v2() {
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
   ok "Domain: ${DOMAIN}"
 
+  if ! setup_cf_dns_prepare_rollback "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}"; then
+    die "Gagal menyiapkan snapshot DNS Cloudflare sebelum ubah target domain."
+  fi
   cf_prepare_subdomain_a_record "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${CF_PROXIED}"
 
   ACME_CERT_MODE="dns_cf_wildcard"
@@ -639,6 +858,9 @@ install_acme_and_issue_cert() {
   acme_restore_conflicting_services_after_success
 
   chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
+  if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
+    setup_cf_dns_rollback_mark_committed
+  fi
 
   ok "Cert saved:"
   ok "  - ${CERT_FULLCHAIN}"

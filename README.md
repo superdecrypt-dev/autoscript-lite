@@ -18,7 +18,7 @@ Catatan penting:
 - Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
 - Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
 - License guard IP VPS sekarang built-in dan default mengarah ke `https://autoscript.temp10sgt.workers.dev/api/v1/license/check`, jadi user VPS tidak perlu set env manual.
-- Runtime license guard menyimpan cache allow terakhir hingga `24 jam` dan statusnya bisa dilihat dari `manage -> 13) Tools -> License Guard`.
+- Runtime license guard menyimpan cache allow terakhir hingga `1 jam` secara default dan statusnya bisa dilihat dari `manage -> 13) Tools -> License Guard`.
 
 ## Arsitektur Singkat
 ```text
