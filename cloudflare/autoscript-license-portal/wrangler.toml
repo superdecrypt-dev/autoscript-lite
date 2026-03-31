@@ -4,10 +4,12 @@ compatibility_date = "2026-03-31"
 workers_dev = true
 
 [vars]
+# Built-in autoscript client now points to:
+# https://autoscript.temp10sgt.workers.dev/api/v1/license/check
 CACHE_TTL_SEC_DEFAULT = "86400"
 PUBLIC_LICENSE_DURATION_DAYS = "14"
-PUBLIC_UI_ORIGIN = "https://autoscript-2ed.pages.dev/"
-ADMIN_UI_ORIGIN = "https://autoscript-2ed.pages.dev/"
+PUBLIC_UI_ORIGIN = "https://autoscript-2ed.pages.dev"
+ADMIN_UI_ORIGIN = "https://autoscript-2ed.pages.dev"
 TURNSTILE_SITE_KEY = "0x4AAAAAACyPSBOFRr6fEZtA"
 PUBLIC_CREATE_LIMIT_MAX = "5"
 PUBLIC_CREATE_WINDOW_SEC = "900"
@@ -20,6 +22,6 @@ CF_ACCESS_AUD = "replace-with-cloudflare-access-aud"
 
 [[d1_databases]]
 binding = "LICENSE_DB"
-database_name = "autoscript"
+database_name = "autoscript-license"
 database_id = "27ee5149-82c5-4be6-8797-25767a3e6e49"
 migrations_dir = "migrations"
