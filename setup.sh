@@ -81,6 +81,10 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   setup_bootstrap_die "setup.sh tidak boleh dijalankan via source."
 fi
 
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  setup_bootstrap_die "Jalankan sebagai root."
+fi
+
 source_setup_module() {
   local rel="$1"
   local file="${SCRIPT_DIR}/${rel}"
@@ -273,8 +277,8 @@ main() {
   ensure_stdin_available
   validate_sshws_ports_config
   check_os
-  install_base_deps
   autoscript_license_setup_preflight
+  install_base_deps
   domain_menu_v2
   setup_run_post_domain_with_spinner
 }

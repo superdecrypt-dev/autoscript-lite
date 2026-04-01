@@ -54,6 +54,12 @@ autoscript_license_resolve_bin_path() {
   local repo_bin=""
   local installed_bin=""
 
+  repo_bin="$(autoscript_license_repo_bin_path)"
+  if [[ -f "${repo_bin}" ]]; then
+    printf '%s\n' "${repo_bin}"
+    return 0
+  fi
+
   installed_bin="$(autoscript_license_installed_bin_path)"
 
   if [[ -f "${installed_bin}" ]]; then
@@ -61,13 +67,11 @@ autoscript_license_resolve_bin_path() {
     return 0
   fi
 
-  repo_bin="$(autoscript_license_repo_bin_path)"
-  if [[ -f "${repo_bin}" ]]; then
-    printf '%s\n' "${repo_bin}"
-    return 0
-  fi
-
   die "Binary autoscript-license-check tidak ditemukan: installed=${installed_bin} repo=${repo_bin}"
+}
+
+autoscript_license_require_python3() {
+  command -v python3 >/dev/null 2>&1 || die "python3 dibutuhkan untuk validasi lisensi setup. Jalankan host yang sudah punya python3 atau gunakan run.sh."
 }
 
 autoscript_license_exec_repo_bin() {
@@ -97,6 +101,7 @@ autoscript_license_setup_preflight() {
     return 0
   fi
 
+  autoscript_license_require_python3
   ok "Validasi lisensi IP VPS..."
   autoscript_license_exec_repo_bin check --stage setup --allow-disabled=false
 }

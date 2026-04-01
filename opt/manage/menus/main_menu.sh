@@ -19,7 +19,6 @@ tools_menu() {
     "1|Telegram Bot"
     "2|WARP Tier"
     "3|Backup/Restore"
-    "4|License Guard"
     "0|Back"
   )
   while true; do
@@ -34,7 +33,6 @@ tools_menu() {
       1) run_action "Telegram Bot" install_telegram_bot_menu ;;
       2) tools_warp_tier_menu ;;
       3|backup|restore|backup-restore) run_action "Backup/Restore" backup_restore_menu ;;
-      4|license|license-guard) run_action "License Guard" autoscript_license_status_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

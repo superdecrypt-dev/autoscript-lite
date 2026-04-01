@@ -2198,6 +2198,7 @@ main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp license_status license_days
   local vless_count vmess_count trojan_count ssh_count
   local edge_icon nginx_icon xray_icon ssh_icon
+  local info_label_width=20
 
   main_info_cache_refresh
 
@@ -2221,17 +2222,17 @@ main_menu_info_header_print() {
   xray_icon="$(service_status_icon "xray")"
   ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
 
-  printf "%-12s : %s\n" "System OS" "${os}"
-  printf "%-12s : %s\n" "RAM" "${ram}"
-  printf "%-12s : %s\n" "Uptime" "${up}"
-  printf "%-12s : %s\n" "IP VPS" "${ip}"
-  printf "%-12s : %s\n" "ISP" "${isp}"
-  printf "%-12s : %s\n" "Country" "${country}"
-  printf "%-12s : %s\n" "Domain" "${domain}"
-  printf "%-12s : %s\n" "Status Lisensi" "${license_status}"
-  printf "%-12s : %s\n" "Masa Aktif Lisensi" "${license_days}"
-  printf "%-12s : %s\n" "TLS Expired" "${tls}"
-  printf "%-12s : %s\n" "WARP Status" "${warp}"
+  printf "%-*s : %s\n" "${info_label_width}" "System OS" "${os}"
+  printf "%-*s : %s\n" "${info_label_width}" "RAM" "${ram}"
+  printf "%-*s : %s\n" "${info_label_width}" "Uptime" "${up}"
+  printf "%-*s : %s\n" "${info_label_width}" "IP VPS" "${ip}"
+  printf "%-*s : %s\n" "${info_label_width}" "ISP" "${isp}"
+  printf "%-*s : %s\n" "${info_label_width}" "Country" "${country}"
+  printf "%-*s : %s\n" "${info_label_width}" "Domain" "${domain}"
+  printf "%-*s : %s\n" "${info_label_width}" "Status Lisensi" "${license_status}"
+  printf "%-*s : %s\n" "${info_label_width}" "Masa Aktif Lisensi" "${license_days}"
+  printf "%-*s : %s\n" "${info_label_width}" "TLS Expired" "${tls}"
+  printf "%-*s : %s\n" "${info_label_width}" "WARP Status" "${warp}"
   hr
   main_menu_center_line "ACCOUNTS"
   main_menu_center_segments \

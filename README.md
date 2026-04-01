@@ -27,13 +27,6 @@ Kalau lisensi belum aktif, installer akan berhenti di preflight license guard.
 bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/run.sh)
 ```
 
-Catatan penting:
-- Aktivasi/perpanjang lisensi publik dilakukan di `https://autoscript-license.pages.dev`.
-- Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
-- Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
-- License guard IP VPS sekarang built-in dan default mengarah ke `https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check`, jadi user VPS tidak perlu set env manual.
-- Runtime license guard menyimpan cache allow terakhir hingga `1 jam` secara default dan statusnya bisa dilihat dari `manage -> 13) Tools -> License Guard`.
-
 ## Arsitektur Singkat
 ```text
 Internet / Cloudflare
