@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import socket
+import subprocess
 import time
 from dataclasses import dataclass
 import html
@@ -201,6 +202,8 @@ DOWNLOAD_LOCAL_ALLOW_DIRS = (
     BOT_STATE_DIR / "backups" / "archives",
     BOT_HOME / "runtime" / "backups" / "archives",
 )
+AUTOSCRIPT_LICENSE_BIN = Path("/usr/local/bin/autoscript-license-check")
+AUTOSCRIPT_LICENSE_PORTAL_URL = "https://autoscript-license.pages.dev"
 
 
 @dataclass
@@ -217,6 +220,55 @@ def _get_runtime(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
     if not isinstance(runtime, Runtime):
         raise RuntimeError("Runtime belum terinisialisasi.")
     return runtime
+
+
+def _license_block_message(raw_output: str) -> str:
+    last_line = sanitize_secret_text(str(raw_output or "").strip().splitlines()[-1] if raw_output else "").strip()
+    lowered = last_line.lower()
+    if "expired" in lowered:
+        title = "Lisensi VPS sudah habis."
+    elif "revoked" in lowered or "blocked" in lowered:
+        title = "Lisensi VPS diblokir."
+    else:
+        title = "Lisensi VPS tidak aktif."
+
+    if not last_line:
+        return f"{title}\nPerpanjang di: {AUTOSCRIPT_LICENSE_PORTAL_URL}"
+    if AUTOSCRIPT_LICENSE_PORTAL_URL in last_line or "renew at" in lowered or "contact " in lowered:
+        return f"{title}\n{last_line}"
+    return f"{title}\n{last_line}\nPerpanjang di: {AUTOSCRIPT_LICENSE_PORTAL_URL}"
+
+
+def _check_runtime_license_blocking_message_sync() -> str:
+    if not AUTOSCRIPT_LICENSE_BIN.exists():
+        return ""
+    if not os.access(AUTOSCRIPT_LICENSE_BIN, os.X_OK):
+        return ""
+    try:
+        result = subprocess.run(
+            [
+                str(AUTOSCRIPT_LICENSE_BIN),
+                "check",
+                "--stage",
+                "runtime",
+                "--allow-disabled=false",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception as exc:
+        LOGGER.warning("Runtime license check bot gagal: %s", sanitize_secret_text(str(exc)))
+        return ""
+    if result.returncode == 0:
+        return ""
+    return _license_block_message(result.stderr or result.stdout)
+
+
+async def _check_runtime_license_blocking_message() -> str:
+    return await asyncio.to_thread(_check_runtime_license_blocking_message_sync)
 
 
 def _main_menu_message(runtime: Runtime) -> str:
@@ -1660,6 +1712,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not ok:
         await update.effective_message.reply_text(reason)
         return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        await update.effective_message.reply_text(license_block)
+        return
 
     await update.effective_message.reply_text(
         "Selamat datang. Gunakan /menu untuk membuka kontrol server.",
@@ -1687,6 +1743,11 @@ async def cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not ok:
         if update.effective_message:
             await update.effective_message.reply_text(reason)
+        return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        if update.effective_message:
+            await update.effective_message.reply_text(license_block)
         return
 
     chat = update.effective_chat
@@ -1746,6 +1807,10 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ok, reason = _is_authorized(runtime, update)
     if not ok:
         await update.effective_message.reply_text(reason)
+        return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        await update.effective_message.reply_text(license_block)
         return
 
     _clear_pending(context)
@@ -2002,6 +2067,11 @@ async def on_document_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if update.effective_message:
             await update.effective_message.reply_text(reason)
         return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        if update.effective_message:
+            await update.effective_message.reply_text(license_block)
+        return
 
     msg = update.effective_message
     chat = update.effective_chat
@@ -2088,6 +2158,10 @@ async def on_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not ok:
         await update.effective_message.reply_text(reason)
         return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        await update.effective_message.reply_text(license_block)
+        return
 
     pending_upload, pending_upload_err = _get_pending_state(
         context,
@@ -2136,6 +2210,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ok, reason = _is_authorized(runtime, update)
     if not ok:
         await query.answer(reason, show_alert=True)
+        return
+    license_block = await _check_runtime_license_blocking_message()
+    if license_block:
+        await query.answer("Lisensi VPS tidak aktif.", show_alert=True)
+        if update.effective_chat:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=license_block)
         return
 
     data = str(query.data or "")

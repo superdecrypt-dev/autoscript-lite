@@ -32,6 +32,7 @@ DEFAULTS = {
 
 TRUSTED_DEFAULT_API_URL = "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
 RENEW_PORTAL_URL = "https://autoscript-license.pages.dev"
+SUPPORT_EMAIL = "autoscript@atomicmail.io"
 
 IP_SOURCES = (
     "https://api.ipify.org",
@@ -568,10 +569,10 @@ def next_action_for_state(state):
         return "none"
     if status == "denied":
         if "revoked" in reason or "blocked" in reason:
-            return "contact operator"
+            return f"contact {SUPPORT_EMAIL}"
         if "expired" in reason:
             return f"renew at {RENEW_PORTAL_URL}"
-        return f"renew at {RENEW_PORTAL_URL} or contact operator"
+        return f"renew at {RENEW_PORTAL_URL} or contact {SUPPORT_EMAIL}"
     if status == "disabled":
         return "check license config"
     if status == "error":
