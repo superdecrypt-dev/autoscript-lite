@@ -176,21 +176,9 @@ telegram_license_config_get() {
 }
 
 telegram_license_guard_api_url() {
-  local api_url=""
-  local default_api_url=""
   local trusted_default=""
 
   trusted_default="$(telegram_license_trusted_default_api_url)"
-  api_url="$(telegram_license_config_get AUTOSCRIPT_LICENSE_API_URL 2>/dev/null || true)"
-  default_api_url="$(telegram_license_config_get AUTOSCRIPT_LICENSE_DEFAULT_API_URL 2>/dev/null || true)"
-  if [[ -n "${api_url}" ]]; then
-    printf '%s\n' "${api_url}"
-    return 0
-  fi
-  if [[ -n "${default_api_url}" ]]; then
-    printf '%s\n' "${default_api_url}"
-    return 0
-  fi
   printf '%s\n' "${trusted_default}"
 }
 

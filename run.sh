@@ -194,11 +194,19 @@ license_guard_enabled() {
   [[ -n "${api_url}" ]]
 }
 
+run_license_repo_bin_path() {
+  printf '%s\n' "${REPO_DIR}/opt/setup/bin/autoscript-license-check"
+}
+
 run_license_preflight() {
   if ! license_guard_enabled; then
     subtle "License guard: nonaktif (URL lisensi tidak tersedia)"
     return 0
   fi
+
+  local license_bin=""
+  license_bin="$(run_license_repo_bin_path)"
+  [[ -f "${license_bin}" ]] || die "Binary source autoscript-license-check tidak ditemukan: ${license_bin}"
 
   ensure_run_state_dir
   install -d -m 0755 "${AUTOSCRIPT_LICENSE_STATE_DIR}"
@@ -207,315 +215,7 @@ run_license_preflight() {
   AUTOSCRIPT_LICENSE_CACHE_TTL_SEC="${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC:-3600}" \
   AUTOSCRIPT_LICENSE_STATE_FILE="${AUTOSCRIPT_LICENSE_STATE_FILE}" \
   AUTOSCRIPT_LICENSE_CACHE_FILE="${AUTOSCRIPT_LICENSE_CACHE_FILE}" \
-  python3 - <<'PY'
-import datetime as dt
-import ipaddress
-import json
-import os
-import re
-import socket
-import sys
-import tempfile
-import urllib.error
-import urllib.request
-from contextlib import contextmanager
-from pathlib import Path
-
-STATE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_STATE_FILE"])
-CACHE_FILE = Path(os.environ["AUTOSCRIPT_LICENSE_CACHE_FILE"])
-DEFAULT_API_URL = os.environ.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL", "").strip()
-API_URL = os.environ.get("AUTOSCRIPT_LICENSE_API_URL", "").strip() or DEFAULT_API_URL
-TTL_DEFAULT = max(1, int(os.environ.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC", "3600") or "3600"))
-IP_SOURCES = ("https://api.ipify.org", "https://ipv4.icanhazip.com")
-EDGE_ERROR_CODE_RE = re.compile(r"\berror code\s*:\s*(\d{3,5})\b", re.IGNORECASE)
-
-
-def now():
-    return dt.datetime.now(dt.timezone.utc)
-
-
-def iso(value):
-    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def parse_iso(value):
-    if not value:
-        return None
-    raw = str(value).strip()
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        parsed = dt.datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
-
-
-def read_json(path):
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def write_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-
-
-@contextmanager
-def force_ipv4_network():
-    original_getaddrinfo = socket.getaddrinfo
-
-    def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
-        infos = original_getaddrinfo(host, port, family, type, proto, flags)
-        ipv4_infos = [info for info in infos if info[0] == socket.AF_INET]
-        return ipv4_infos or infos
-
-    socket.getaddrinfo = getaddrinfo_ipv4
-    try:
-        yield
-    finally:
-        socket.getaddrinfo = original_getaddrinfo
-
-
-def save_state(**payload):
-    write_json(STATE_FILE, payload)
-
-
-def save_cache(public_ip, reason, checked_at, ttl_sec):
-    payload = {
-        "allowed": True,
-        "cache_expires_at": iso(now() + dt.timedelta(seconds=ttl_sec)),
-        "checked_at": checked_at,
-        "public_ip": public_ip,
-        "reason": reason,
-    }
-    write_json(CACHE_FILE, payload)
-    return payload
-
-
-def load_valid_cache(public_ip):
-    payload = read_json(CACHE_FILE)
-    if not isinstance(payload, dict):
-        return None
-    if not payload.get("allowed"):
-        return None
-    if (payload.get("public_ip") or "").strip() != public_ip:
-        return None
-    expires_at = parse_iso(payload.get("cache_expires_at"))
-    if expires_at is None or expires_at < now():
-        return None
-    return payload
-
-
-def fetch_text(url, timeout=5):
-    req = urllib.request.Request(url, method="GET")
-    with force_ipv4_network():
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return response.read().decode("utf-8", errors="replace")
-
-
-def parse_json_body(text):
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
-
-def extract_edge_error_code(payload, body):
-    if isinstance(payload, dict):
-        for key in ("message", "reason", "error"):
-            value = str(payload.get(key) or "").strip()
-            match = EDGE_ERROR_CODE_RE.search(value)
-            if match:
-                return match.group(1)
-    match = EDGE_ERROR_CODE_RE.search(str(body or ""))
-    if match:
-        return match.group(1)
-    return ""
-
-
-def summarize_http_error(status_code, payload, body):
-    parts = []
-    if isinstance(payload, dict):
-        for key in ("message", "reason", "error"):
-            value = str(payload.get(key) or "").strip()
-            if value and value not in parts:
-                parts.append(value)
-    if parts:
-        return f"HTTP {status_code}: {' | '.join(parts)}"
-    compact_body = " ".join(str(body or "").split())
-    if compact_body:
-        return f"HTTP {status_code}: {compact_body[:220]}"
-    return f"HTTP {status_code}"
-
-
-def detect_ip():
-    for url in IP_SOURCES:
-        try:
-            body = fetch_text(url)
-        except Exception:
-            continue
-        candidate = body.strip()
-        try:
-            addr = ipaddress.ip_address(candidate)
-        except ValueError:
-            continue
-        if addr.version == 4:
-            return candidate
-    raise RuntimeError("Gagal mendapatkan public IPv4 VPS.")
-
-
-def api_call(public_ip):
-    payload = json.dumps({
-        "public_ipv4": public_ip,
-        "stage": "run",
-        "product": "autoscript",
-        "hostname": os.uname().nodename,
-    }).encode("utf-8")
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "autoscript-license-check/1.0",
-    }
-    req = urllib.request.Request(API_URL, data=payload, headers=headers, method="POST")
-    try:
-        with force_ipv4_network():
-            with urllib.request.urlopen(req, timeout=10) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                data = parse_json_body(body)
-                if not isinstance(data, dict):
-                    raise RuntimeError(f"Respons API bukan JSON valid (HTTP {response.status})")
-                if response.status != 200 or "allowed" not in data:
-                    raise RuntimeError(f"Respons API tidak valid (HTTP {response.status})")
-                return data
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        payload = parse_json_body(body)
-        err = RuntimeError(summarize_http_error(exc.code, payload, body))
-        err.http_status = int(exc.code)
-        err.edge_error_code = extract_edge_error_code(payload, body)
-        raise err from exc
-    except urllib.error.URLError as exc:
-        err = RuntimeError(f"Koneksi API gagal: {exc.reason}")
-        err.http_status = None
-        err.edge_error_code = ""
-        raise err from exc
-
-
-def main():
-    if not API_URL:
-        save_state(
-            allowed=False,
-            cache_expires_at="",
-            checked_at=iso(now()),
-            decision_source="disabled",
-            edge_error_code="",
-            enforcement_action="none",
-            http_status=None,
-            public_ip="",
-            reason="AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong",
-            runtime_enforce=True,
-            stage="run",
-            status="disabled",
-            stopped_services=[],
-        )
-        print("[license] disabled: AUTOSCRIPT_LICENSE_DEFAULT_API_URL kosong", file=sys.stderr)
-        return 1
-    checked_at = iso(now())
-    public_ip = detect_ip()
-    try:
-        data = api_call(public_ip)
-        allowed = bool(data.get("allowed"))
-        reason = str(data.get("reason") or ("allowed" if allowed else "denied by API"))
-        ttl_sec = max(1, int(data.get("cache_ttl_sec") or TTL_DEFAULT))
-        cache_expires = ""
-        if allowed:
-          cache = save_cache(public_ip, reason, checked_at, ttl_sec)
-          cache_expires = cache["cache_expires_at"]
-        save_state(
-            allowed=allowed,
-            cache_expires_at=cache_expires,
-            checked_at=checked_at,
-            decision_source="api",
-            edge_error_code="",
-            enforcement_action="none",
-            http_status=200,
-            public_ip=public_ip,
-            reason=reason,
-            runtime_enforce=True,
-            stage="run",
-            status="allowed" if allowed else "denied",
-            stopped_services=[],
-        )
-        if allowed:
-            print(f"[license] allowed: {reason}")
-            return 0
-        print(f"[license] denied: {reason}", file=sys.stderr)
-        return 1
-    except Exception as exc:
-        http_status = getattr(exc, "http_status", None)
-        edge_error_code = str(getattr(exc, "edge_error_code", "") or "")
-        cache = None
-        if cache is not None:
-            reason = f"API gagal, memakai cache: {exc}"
-            save_state(
-                allowed=True,
-                cache_expires_at=cache.get("cache_expires_at") or "",
-                checked_at=checked_at,
-                decision_source="cache",
-                edge_error_code=edge_error_code,
-                enforcement_action="none",
-                http_status=http_status,
-                public_ip=public_ip,
-                reason=reason,
-                runtime_enforce=True,
-                stage="run",
-                status="cache-allow",
-                stopped_services=[],
-            )
-            print(f"[license] cache-allow: {reason}")
-            return 0
-        save_state(
-            allowed=False,
-            cache_expires_at="",
-            checked_at=checked_at,
-            decision_source="api",
-            edge_error_code=edge_error_code,
-            enforcement_action="none",
-            http_status=http_status,
-            public_ip=public_ip,
-            reason=f"API gagal dan cache tidak valid: {exc}",
-            runtime_enforce=True,
-            stage="run",
-            status="error",
-            stopped_services=[],
-        )
-        print(f"[license] error: API gagal dan cache tidak valid: {exc}", file=sys.stderr)
-        return 1
-
-
-raise SystemExit(main())
-PY
+  python3 "${license_bin}" check --stage run --allow-disabled=false
 }
 
 load_effective_repo_ref() {
@@ -957,8 +657,8 @@ main() {
   check_root
   check_os
   run_step_with_spinner "Memeriksa dependency" check_deps
-  run_step_with_spinner "Validasi lisensi IP VPS" run_license_preflight
   run_step_with_spinner "Menyiapkan source repo" clone_repo
+  run_step_with_spinner "Validasi lisensi IP VPS" run_license_preflight
   run_setup
   run_step_with_spinner "Memasang panel manage" install_manage
   run_step_with_spinner "Menyiapkan source Telegram" seed_telegram_bot_home

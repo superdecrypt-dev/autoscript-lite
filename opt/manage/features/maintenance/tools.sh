@@ -72,7 +72,9 @@ install_telegram_bot_menu() {
 }
 
 autoscript_license_status_menu() {
-  local license_bin="${AUTOSCRIPT_LICENSE_BIN:-/usr/local/bin/autoscript-license-check}"
+  local license_bin="/usr/local/bin/autoscript-license-check"
+  local trusted_default_api_url="https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+  local config_file="/etc/autoscript/license/config.env"
 
   ui_menu_screen_begin "13) Tools > License Guard"
   if [[ ! -x "${license_bin}" ]]; then
@@ -94,7 +96,10 @@ autoscript_license_status_menu() {
     return 0
   fi
 
-  if ! "${license_bin}" status; then
+  if ! AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${trusted_default_api_url}" \
+    AUTOSCRIPT_LICENSE_API_URL="${trusted_default_api_url}" \
+    AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
+    "${license_bin}" status; then
     warn "Gagal membaca status license guard."
   fi
   hr

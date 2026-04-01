@@ -29,6 +29,8 @@ DEFAULTS = {
     "EDGE_RUNTIME_ENV_FILE": "/etc/default/edge-runtime",
 }
 
+TRUSTED_DEFAULT_API_URL = "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+
 IP_SOURCES = (
     "https://api.ipify.org",
     "https://ipv4.icanhazip.com",
@@ -105,8 +107,8 @@ def load_config():
     for key, default in DEFAULTS.items():
         cfg[key] = os.environ.get(key, cfg.get(key, default))
     cfg["AUTOSCRIPT_LICENSE_CONFIG_FILE"] = os.environ.get("AUTOSCRIPT_LICENSE_CONFIG_FILE", env_cfg_file)
-    if not str(cfg.get("AUTOSCRIPT_LICENSE_API_URL") or "").strip():
-        cfg["AUTOSCRIPT_LICENSE_API_URL"] = str(cfg.get("AUTOSCRIPT_LICENSE_DEFAULT_API_URL") or "").strip()
+    cfg["AUTOSCRIPT_LICENSE_DEFAULT_API_URL"] = TRUSTED_DEFAULT_API_URL
+    cfg["AUTOSCRIPT_LICENSE_API_URL"] = TRUSTED_DEFAULT_API_URL
     cfg["runtime_enforce"] = parse_bool(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE"), True)
     cfg["cache_ttl_sec"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_CACHE_TTL_SEC"), 3600)
     cfg["runtime_interval_min"] = parse_int(cfg.get("AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN"), 15)
