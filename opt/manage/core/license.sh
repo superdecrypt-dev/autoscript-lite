@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
+MANAGE_LICENSE_BLOCKED=0
+MANAGE_LICENSE_BLOCK_REASON=""
+
 manage_license_config_get() {
   local key="$1"
   local env_file=""
@@ -64,7 +67,10 @@ manage_license_stage_for_args() {
 
 manage_license_guard_preflight() {
   local action="${1:-}"
-  local stage license_bin api_url config_file default_api_url
+  local stage license_bin api_url config_file default_api_url license_output
+
+  MANAGE_LICENSE_BLOCKED=0
+  MANAGE_LICENSE_BLOCK_REASON=""
 
   if ! manage_license_guard_enabled; then
     return 0
@@ -85,10 +91,19 @@ manage_license_guard_preflight() {
     return 1
   fi
 
-  if ! AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
-    AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
-    AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
-    "${license_bin}" check --stage "${stage}" --allow-disabled=false; then
+  if ! license_output="$(
+    AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
+      AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
+      AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
+      "${license_bin}" check --stage "${stage}" --allow-disabled=false 2>&1
+  )"; then
+    printf '%s\n' "${license_output}" >&2
+    if [[ "${stage}" == "manage" && -z "${action}" ]]; then
+      MANAGE_LICENSE_BLOCKED=1
+      MANAGE_LICENSE_BLOCK_REASON="${license_output##*$'\n'}"
+      [[ -n "${MANAGE_LICENSE_BLOCK_REASON}" ]] || MANAGE_LICENSE_BLOCK_REASON="Akses manage ditolak oleh license guard."
+      return 0
+    fi
     echo "manage: akses ${stage} ditolak oleh license guard." >&2
     return 1
   fi

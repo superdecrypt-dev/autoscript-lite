@@ -2097,7 +2097,13 @@ if isinstance(days_remaining, (int, float)):
     days_value = int(math.ceil(float(days_remaining)))
     if days_value < 0:
         days_value = 0
-    days_text = f"{days_value} Hari"
+    if status_text == "aktif":
+        days_text = f"{days_value} Hari lagi"
+    else:
+        days_text = "Tidak aktif"
+
+if status_text == "nonaktif" and days_text == "-":
+    days_text = "Tidak aktif"
 
 print(f"{status_text}|{days_text}")
 PY
@@ -2223,7 +2229,7 @@ main_menu_info_header_print() {
   printf "%-12s : %s\n" "Country" "${country}"
   printf "%-12s : %s\n" "Domain" "${domain}"
   printf "%-12s : %s\n" "Status Lisensi" "${license_status}"
-  printf "%-12s : %s\n" "Masa Aktif" "${license_days}"
+  printf "%-12s : %s\n" "Masa Aktif Lisensi" "${license_days}"
   printf "%-12s : %s\n" "TLS Expired" "${tls}"
   printf "%-12s : %s\n" "WARP Status" "${warp}"
   hr

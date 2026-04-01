@@ -62,10 +62,27 @@ main_menu_render_options() {
   ui_menu_render_two_columns_fixed items
 }
 
+main_menu_render_license_block_notice() {
+  local reason="${MANAGE_LICENSE_BLOCK_REASON:-Akses manage ditolak oleh license guard.}"
+  main_menu_center_line "License Info"
+  hr
+  echo "Lisensi VPS tidak aktif untuk membuka menu utama."
+  echo "${reason}"
+  echo "Perpanjang lisensi di: https://autoscript-license.pages.dev"
+}
+
 main_menu() {
   while true; do
     title
     main_menu_info_header_print
+    if [[ "${MANAGE_LICENSE_BLOCKED:-0}" == "1" ]]; then
+      main_menu_render_license_block_notice
+      hr
+      if ! read -r -p "Tekan Enter untuk keluar... " c; then
+        echo
+      fi
+      exit 1
+    fi
     main_menu_center_line "Main Menu"
     hr
     main_menu_render_options
