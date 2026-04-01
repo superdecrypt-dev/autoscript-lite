@@ -209,7 +209,10 @@ MAIN_INFO_CACHE_IP="-"
 MAIN_INFO_CACHE_ISP="-"
 MAIN_INFO_CACHE_COUNTRY="-"
 MAIN_INFO_CACHE_DOMAIN="-"
+MAIN_INFO_CACHE_LICENSE_STATUS="-"
+MAIN_INFO_CACHE_LICENSE_DAYS="-"
 MAIN_INFO_CACHE_INVALIDATION_FILE="${WORK_DIR}/main-info.cache.invalidate"
+MANAGE_LICENSE_PUBLIC_STATUS_URL="https://autoscript-license.minidecrypt.workers.dev/api/public/license/status"
 ACCOUNT_INFO_DOMAIN_SYNC_STATE_FILE="${WORK_DIR}/account-info-domain.state"
 ACCOUNT_INFO_DOMAIN_SYNC_CHECK_TTL=15
 ACCOUNT_INFO_DOMAIN_SYNC_LAST_CHECK_TS=0
@@ -2031,6 +2034,83 @@ main_info_warp_status_get() {
   esac
 }
 
+main_info_license_state_status_get() {
+  python3 - "${AUTOSCRIPT_LICENSE_STATE_FILE}" <<'PY' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, 'r', encoding='utf-8') as fh:
+        state = json.load(fh)
+except Exception:
+    print("-")
+    raise SystemExit(0)
+status = str(state.get("status") or "").strip().lower()
+if status in {"allowed", "cache-allow"}:
+    print("aktif")
+elif status:
+    print("nonaktif")
+else:
+    print("-")
+PY
+}
+
+main_info_license_summary_get() {
+  local ip="${1:-}"
+  local fallback_status="-"
+  local summary=""
+
+  fallback_status="$(main_info_license_state_status_get)"
+  [[ -n "${fallback_status}" ]] || fallback_status="-"
+
+  if [[ -z "${ip}" || "${ip}" == "-" ]]; then
+    printf '%s|%s\n' "${fallback_status}" "-"
+    return 0
+  fi
+
+  summary="$(
+    python3 - "${MANAGE_LICENSE_PUBLIC_STATUS_URL}" "${ip}" "${fallback_status}" <<'PY' 2>/dev/null || true
+import json, math, sys, urllib.request
+
+url, ip, fallback_status = sys.argv[1:4]
+payload = json.dumps({"ip": ip}).encode("utf-8")
+req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "autoscript-manage/1.0"})
+
+status_text = fallback_status or "-"
+days_text = "-"
+
+try:
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.loads(resp.read().decode("utf-8", "replace"))
+except Exception:
+    print(f"{status_text}|{days_text}")
+    raise SystemExit(0)
+
+remote_status = str(data.get("status") or "").strip().lower()
+days_remaining = data.get("days_remaining")
+
+if remote_status == "active":
+    status_text = "aktif"
+elif remote_status in {"expired", "revoked", "not_found"}:
+    status_text = "nonaktif"
+
+if isinstance(days_remaining, (int, float)):
+    days_value = int(math.ceil(float(days_remaining)))
+    if days_value < 0:
+        days_value = 0
+    days_text = f"{days_value} Hari"
+
+print(f"{status_text}|{days_text}")
+PY
+  )"
+
+  if [[ -z "${summary}" ]]; then
+    printf '%s|%s\n' "${fallback_status}" "-"
+    return 0
+  fi
+
+  printf '%s\n' "${summary}"
+}
+
 account_count_by_proto() {
   # args: proto -> prints number of unique usernames from /opt/account/<proto>/*.txt
   local proto="$1"
@@ -2098,11 +2178,18 @@ main_info_cache_refresh() {
   MAIN_INFO_CACHE_IP="${ip}"
   MAIN_INFO_CACHE_ISP="${isp}"
   MAIN_INFO_CACHE_COUNTRY="${country}"
+  local license_summary license_status license_days
+  license_summary="$(main_info_license_summary_get "${ip}")"
+  IFS='|' read -r license_status license_days <<< "${license_summary}"
+  [[ -n "${license_status}" ]] || license_status="-"
+  [[ -n "${license_days}" ]] || license_days="-"
+  MAIN_INFO_CACHE_LICENSE_STATUS="${license_status}"
+  MAIN_INFO_CACHE_LICENSE_DAYS="${license_days}"
   MAIN_INFO_CACHE_TS="${now}"
 }
 
 main_menu_info_header_print() {
-  local os ram up ip isp country domain tls warp
+  local os ram up ip isp country domain tls warp license_status license_days
   local vless_count vmess_count trojan_count ssh_count
   local edge_icon nginx_icon xray_icon ssh_icon
 
@@ -2115,6 +2202,8 @@ main_menu_info_header_print() {
   isp="${MAIN_INFO_CACHE_ISP}"
   country="${MAIN_INFO_CACHE_COUNTRY}"
   domain="${MAIN_INFO_CACHE_DOMAIN}"
+  license_status="${MAIN_INFO_CACHE_LICENSE_STATUS}"
+  license_days="${MAIN_INFO_CACHE_LICENSE_DAYS}"
   tls="$(main_info_tls_expired_get)"
   warp="$(main_info_warp_status_get)"
   vless_count="$(account_count_by_proto "vless")"
@@ -2133,6 +2222,8 @@ main_menu_info_header_print() {
   printf "%-12s : %s\n" "ISP" "${isp}"
   printf "%-12s : %s\n" "Country" "${country}"
   printf "%-12s : %s\n" "Domain" "${domain}"
+  printf "%-12s : %s\n" "Status Lisensi" "${license_status}"
+  printf "%-12s : %s\n" "Masa Aktif" "${license_days}"
   printf "%-12s : %s\n" "TLS Expired" "${tls}"
   printf "%-12s : %s\n" "WARP Status" "${warp}"
   hr

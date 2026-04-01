@@ -31,6 +31,7 @@ DEFAULTS = {
 }
 
 TRUSTED_DEFAULT_API_URL = "https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
+RENEW_PORTAL_URL = "https://autoscript-license.pages.dev"
 
 IP_SOURCES = (
     "https://api.ipify.org",
@@ -563,7 +564,9 @@ def next_action_for_state(state):
     if status == "denied":
         if "revoked" in reason or "blocked" in reason:
             return "contact operator"
-        return "renew or contact operator"
+        if "expired" in reason:
+            return f"renew at {RENEW_PORTAL_URL}"
+        return f"renew at {RENEW_PORTAL_URL} or contact operator"
     if status == "disabled":
         return "check license config"
     if status == "error":
@@ -599,7 +602,11 @@ def command_check(args):
     if allowed:
         print(f"[license] {payload['status']}: {payload['reason']}")
         return 0
-    print(f"[license] {payload['status']}: {payload['reason']}", file=sys.stderr)
+    next_action = next_action_for_state(payload)
+    message = f"[license] {payload['status']}: {payload['reason']}"
+    if next_action not in {"none", "check license status", "run a license check"}:
+        message = f"{message} (next: {next_action})"
+    print(message, file=sys.stderr)
     return 1
 
 

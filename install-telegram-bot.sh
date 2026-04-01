@@ -204,6 +204,8 @@ telegram_license_guard_preflight() {
   local api_url=""
   local config_file=""
   local default_api_url=""
+  local license_output=""
+  local license_reason=""
 
   if ! telegram_license_guard_enabled; then
     return 0
@@ -219,10 +221,16 @@ telegram_license_guard_preflight() {
   if ! telegram_bootstrap_path_trusted "${license_bin}"; then
     die "Binary license guard tidak trusted: ${license_bin}"
   fi
-  if ! AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
-    AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
-    AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
-    "${license_bin}" check --stage manage --allow-disabled=false >/dev/null; then
+  if ! license_output="$(
+    AUTOSCRIPT_LICENSE_DEFAULT_API_URL="${default_api_url}" \
+      AUTOSCRIPT_LICENSE_API_URL="${api_url}" \
+      AUTOSCRIPT_LICENSE_CONFIG_FILE="${config_file}" \
+      "${license_bin}" check --stage manage --allow-disabled=false 2>&1
+  )"; then
+    license_reason="${license_output##*$'\n'}"
+    if [[ -n "${license_reason}" ]]; then
+      die "Akses ${action} ditolak oleh license guard. ${license_reason}"
+    fi
     die "Akses ${action} ditolak oleh license guard."
   fi
 }
