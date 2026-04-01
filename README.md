@@ -9,12 +9,26 @@ Autoscript dirancang untuk operator yang ingin satu repo untuk:
 - menjalankan ingress publik berbasis `Go edge-mux`
 - mengoperasikan `WARP`, `BadVPN`, `Domain Guard`, dan bot `Telegram`
 
+## Sebelum Install
+Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:
+
+- Website lisensi: `https://autoscript-license.pages.dev`
+- Langkah singkat:
+  1. buka website lisensi
+  2. input public IPv4 VPS
+  3. selesaikan verifikasi bila diminta
+  4. pastikan IP sudah aktif
+  5. baru jalankan `run.sh`
+
+Kalau lisensi belum aktif, installer akan berhenti di preflight license guard.
+
 ## Quick Install
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/run.sh)
 ```
 
 Catatan penting:
+- Aktivasi/perpanjang lisensi publik dilakukan di `https://autoscript-license.pages.dev`.
 - Metadata aktif SSH berada di `/opt/quota/ssh/<username>@ssh.json`.
 - Host lama yang masih memakai flow lain di luar menu resmi sebaiknya recreate akun dari panel saat upgrade besar.
 - License guard IP VPS sekarang built-in dan default mengarah ke `https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check`, jadi user VPS tidak perlu set env manual.
@@ -162,30 +176,6 @@ Internet / Cloudflare
 4) License Guard
 0) Back
 ```
-
-## Cloudflare License Portal
-- Source code portal web lisensi IP VPS sudah dipindahkan ke repo terpisah:
-  - `https://github.com/superdecrypt-dev/autoscript-license`
-- Target deploy:
-  - `Cloudflare Worker` untuk API lisensi publik dan endpoint check autoscript
-  - `Cloudflare D1` untuk database allowlist, audit, dan rate limit
-  - `Cloudflare Pages` untuk website publik `/`
-- Workflow deploy yang didukung:
-  - `Connect GitHub` untuk `Pages` dan `Worker` dari repo `autoscript-license`
-  - Pages build menghasilkan `dist/config.js` dari env build Cloudflare, jadi tidak perlu commit `apiBaseUrl` produksi ke source
-- Flow publik default:
-  - siapa pun bisa mengaktifkan izin IP VPS dari website publik
-  - masa aktif awal default `14 hari`
-  - input IP yang sama lagi akan memperpanjang masa aktif
-  - user VPS cukup input IP di web lalu langsung jalankan autoscript
-- Flow admin:
-  - panel admin tidak dipakai di mode sederhana ini
-- Endpoint autoscript yang dipakai VPS:
-  - `POST /api/v1/license/check`
-- Endpoint built-in autoscript:
-  - `AUTOSCRIPT_LICENSE_DEFAULT_API_URL=https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check`
-- Secret penting untuk deploy portal:
-  - tidak ada secret wajib untuk mode publik super sederhana ini
 
 ## Backup/Restore
 - `Backup/Restore` sekarang tersedia di:

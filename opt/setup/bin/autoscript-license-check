@@ -578,8 +578,7 @@ def next_action_for_state(state):
     return "check license status"
 
 
-def print_status(cfg):
-    state = load_json(cfg["AUTOSCRIPT_LICENSE_STATE_FILE"])
+def print_status_payload(state):
     if not isinstance(state, dict):
         print("Status : unknown")
         print("Reason : no state available")
@@ -594,6 +593,11 @@ def print_status(cfg):
     print(f"Until  : {state.get('cache_expires_at', '-') or '-'}")
     print(f"Next   : {next_action_for_state(state)}")
     return 0
+
+
+def print_status(cfg):
+    state = load_json(cfg["AUTOSCRIPT_LICENSE_STATE_FILE"])
+    return print_status_payload(state)
 
 
 def command_check(args):
@@ -643,6 +647,15 @@ def command_enforce_runtime(_args):
     return 1
 
 
+def command_status(_args):
+    cfg = load_config()
+    try:
+        _, payload = evaluate_license(cfg, stage="manage", allow_disabled=False)
+        return print_status_payload(payload)
+    except Exception:
+        return print_status(cfg)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="autoscript-license-check")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -663,7 +676,7 @@ def main():
     if args.cmd == "enforce-runtime":
         return command_enforce_runtime(args)
     if args.cmd == "status":
-        return print_status(load_config())
+        return command_status(args)
     return 1
 
 
