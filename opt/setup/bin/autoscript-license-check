@@ -526,33 +526,45 @@ def evaluate_license(cfg, *, stage, allow_disabled):
         return False, payload
 
 
+def next_action_for_state(state):
+    if not isinstance(state, dict):
+        return "run a license check"
+
+    status = str(state.get("status") or "").strip().lower()
+    reason = str(state.get("reason") or "").strip().lower()
+
+    if status in {"allowed", "cache-allow"}:
+        return "none"
+    if status == "denied":
+        if "revoked" in reason or "blocked" in reason:
+            return "contact operator"
+        return "renew or contact operator"
+    if status == "disabled":
+        return "check license config"
+    if status == "error":
+        if "public ipv4" in reason or "public ip" in reason:
+            return "check public IP"
+        if "cache" in reason:
+            return "retry after network recovers"
+        return "check network"
+    return "check license status"
+
+
 def print_status(cfg):
     state = load_json(cfg["AUTOSCRIPT_LICENSE_STATE_FILE"])
-    stopped = load_stopped_services(cfg)
-    print("Autoscript License Status")
-    print(f"Config file      : {cfg['AUTOSCRIPT_LICENSE_CONFIG_FILE']}")
-    print(f"Default API URL  : {cfg.get('AUTOSCRIPT_LICENSE_DEFAULT_API_URL') or '-'}")
-    print(f"API configured   : {'yes' if is_configured_api_url(cfg.get('AUTOSCRIPT_LICENSE_API_URL')) else 'no'}")
-    print(f"Runtime enforce  : {'true' if cfg['runtime_enforce'] else 'false'}")
-    print(f"Cache TTL (sec)  : {cfg['cache_ttl_sec']}")
     if not isinstance(state, dict):
-        print("Last state       : belum ada data")
-    else:
-        print(f"Last state       : {state.get('status', '-')}")
-        print(f"Allowed          : {state.get('allowed', False)}")
-        print(f"Stage            : {state.get('stage', '-')}")
-        print(f"Checked at       : {state.get('checked_at', '-')}")
-        print(f"Decision source  : {state.get('decision_source', '-')}")
-        print(f"Public IPv4      : {state.get('public_ip', '-')}")
-        print(f"Reason           : {state.get('reason', '-')}")
-        print(f"HTTP status      : {state.get('http_status', '-')}")
-        print(f"Edge error code  : {state.get('edge_error_code', '-')}")
-        print(f"Cache expires at : {state.get('cache_expires_at', '-')}")
-        print(f"Enforcement      : {state.get('enforcement_action', 'none')}")
-    if stopped:
-        print(f"Stopped services : {', '.join(stopped)}")
-    else:
-        print("Stopped services : none")
+        print("Status : unknown")
+        print("Reason : no state available")
+        print("IP     : -")
+        print("Until  : -")
+        print("Next   : run a license check")
+        return 0
+
+    print(f"Status : {state.get('status', '-')}")
+    print(f"Reason : {state.get('reason', '-')}")
+    print(f"IP     : {state.get('public_ip', '-')}")
+    print(f"Until  : {state.get('cache_expires_at', '-') or '-'}")
+    print(f"Next   : {next_action_for_state(state)}")
     return 0
 
 
