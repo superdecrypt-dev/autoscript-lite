@@ -203,7 +203,7 @@ DOWNLOAD_LOCAL_ALLOW_DIRS = (
     BOT_HOME / "runtime" / "backups" / "archives",
 )
 AUTOSCRIPT_LICENSE_BIN = Path("/usr/local/bin/autoscript-license-check")
-AUTOSCRIPT_LICENSE_PORTAL_URL = "https://autoscript-license.pages.dev"
+AUTOSCRIPT_LICENSE_PORTAL_URL = "https://autoscript.license.dpdns.org"
 
 
 @dataclass
