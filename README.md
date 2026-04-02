@@ -12,8 +12,7 @@ Autoscript dirancang untuk operator yang ingin satu repo untuk:
 ## Sebelum Install
 Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:
 
-- Website lisensi utama: `https://autoscript.license.dpdns.org`
-- Hostname legacy yang masih didukung: `https://autoscript-license.pages.dev`
+- Website lisensi: `https://autoscript.license.dpdns.org`
 - Langkah singkat:
   1. buka website lisensi
   2. input public IPv4 VPS
