@@ -102,24 +102,39 @@ Internet / Cloudflare
 | `OpenVPN TCP` | `443, 80` + alt port Cloudflare |
 | `OpenVPN WS` | `443, 80` + alt port Cloudflare |
 
-## Path Publik
+## Path Runtime
 
-| Transport | Path / Service |
-| --- | --- |
-| `SSH WS` | `/<token>` dan `/<bebas>/<token>/<bebas>` |
-| `OpenVPN WS` | `/<token>` dan `/<bebas>/<token>/<bebas>` |
-| `VLESS WS` | `/vless-ws` dan `/<bebas>/vless-ws` |
-| `VLESS HUP` | `/vless-hup` dan `/<bebas>/vless-hup` |
-| `VLESS XHTTP` | `/vless-xhttp` dan `/<bebas>/vless-xhttp` |
-| `VLESS gRPC` | `vless-grpc` dan `<bebas>/vless-grpc` |
-| `VMess WS` | `/vmess-ws` dan `/<bebas>/vmess-ws` |
-| `VMess HUP` | `/vmess-hup` dan `/<bebas>/vmess-hup` |
-| `VMess XHTTP` | `/vmess-xhttp` dan `/<bebas>/vmess-xhttp` |
-| `VMess gRPC` | `vmess-grpc` dan `<bebas>/vmess-grpc` |
-| `Trojan WS` | `/trojan-ws` dan `/<bebas>/trojan-ws` |
-| `Trojan HUP` | `/trojan-hup` dan `/<bebas>/trojan-hup` |
-| `Trojan XHTTP` | `/trojan-xhttp` dan `/<bebas>/trojan-xhttp` |
-| `Trojan gRPC` | `trojan-grpc` dan `<bebas>/trojan-grpc` |
+Gunakan hanya path publik di bawah ini untuk client.
+Jangan gunakan path internal acak backend `Xray` atau proxy lokal karena nilainya bisa berubah setiap install atau re-render config.
+
+### Path Publik Stabil
+
+| Transport | Path utama | Varian alt yang didukung | Catatan |
+| --- | --- | --- | --- |
+| `SSH WS` | `/<token-hex-10>` atau `/diagnostic-probe` | `/<bebas>/<token-hex-10>/<bebas>` dan `/<bebas>/diagnostic-probe/<bebas>` | token SSH WS adalah 10 karakter heksadesimal |
+| `OpenVPN WS` | `/<token-openvpn>` | `/<bebas>/<token-openvpn>/<bebas>` | token live mengikuti `OPENVPN_WS_PUBLIC_PATH` |
+| `VLESS WS` | `/vless-ws` | `/<bebas>/vless-ws` atau `/<bebas>/vless-ws/<bebas>` | path publik stabil |
+| `VLESS HUP` | `/vless-hup` | `/<bebas>/vless-hup` atau `/<bebas>/vless-hup/<bebas>` | path publik stabil |
+| `VLESS XHTTP` | `/vless-xhttp` | `/<bebas>/vless-xhttp` atau `/<bebas>/vless-xhttp/<bebas>` | path publik stabil |
+| `VLESS gRPC` | `/vless-grpc` | `/<bebas>/vless-grpc` atau `/<bebas>/vless-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+| `VMess WS` | `/vmess-ws` | `/<bebas>/vmess-ws` atau `/<bebas>/vmess-ws/<bebas>` | path publik stabil |
+| `VMess HUP` | `/vmess-hup` | `/<bebas>/vmess-hup` atau `/<bebas>/vmess-hup/<bebas>` | path publik stabil |
+| `VMess XHTTP` | `/vmess-xhttp` | `/<bebas>/vmess-xhttp` atau `/<bebas>/vmess-xhttp/<bebas>` | path publik stabil |
+| `VMess gRPC` | `/vmess-grpc` | `/<bebas>/vmess-grpc` atau `/<bebas>/vmess-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+| `Trojan WS` | `/trojan-ws` | `/<bebas>/trojan-ws` atau `/<bebas>/trojan-ws/<bebas>` | path publik stabil |
+| `Trojan HUP` | `/trojan-hup` | `/<bebas>/trojan-hup` atau `/<bebas>/trojan-hup/<bebas>` | path publik stabil |
+| `Trojan XHTTP` | `/trojan-xhttp` | `/<bebas>/trojan-xhttp` atau `/<bebas>/trojan-xhttp/<bebas>` | path publik stabil |
+| `Trojan gRPC` | `/trojan-grpc` | `/<bebas>/trojan-grpc` atau `/<bebas>/trojan-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+
+### Path Internal
+
+Contoh path internal yang tidak perlu dipakai operator:
+- `Xray WS/HUP` memakai path acak seperti `/h5faaachbphar0`
+- `Xray gRPC` memakai service name acak seperti `24j1m934rp8m`
+- `SSH WS` backend proxy tetap listen internal di `127.0.0.1:10015`
+- `OpenVPN WS` backend proxy tetap listen internal di `127.0.0.1:10016`
+
+Path internal itu hanya dipakai untuk wiring `nginx -> proxy/Xray` di host.
 
 ## Port Internal
 
