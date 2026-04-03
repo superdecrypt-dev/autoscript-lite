@@ -408,6 +408,7 @@ def all_public_services(cfg):
     units.extend(openvpn_service_candidates(cfg))
     units.append("zivpn.service")
     units.extend([
+        "account-portal.service",
         "bot-telegram-monitor.timer",
         "bot-telegram-backend.service",
         "bot-telegram-gateway.service",

@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
+PORTAL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
 DEFAULT_CONFIG_ENV = Path("/etc/autoscript/openvpn/config.env")
 DEFAULT_DOMAIN_FILE = Path("/etc/xray/domain")
 DEFAULT_DOWNLOAD_TOKEN_DIR = Path("/run/autoscript/openvpn-download-tokens")
@@ -131,6 +132,16 @@ def validate_username(username: str) -> str:
     if not SSH_USERNAME_RE.fullmatch(value):
         die("Username OpenVPN tidak valid.")
     return value
+
+
+def generate_portal_token() -> str:
+    import secrets
+
+    for _ in range(128):
+        token = secrets.token_urlsafe(12).rstrip("=")
+        if token and PORTAL_TOKEN_RE.fullmatch(token):
+            return token
+    raise RuntimeError("gagal membuat portal token")
 
 
 def linux_user_exists(username: str) -> bool:
@@ -460,6 +471,7 @@ def ensure_policy_state(cfg: dict[str, str], username: str) -> Path:
             "quota_limit": quota_limit,
             "quota_unit": str(source.get("quota_unit") or "binary").strip().lower() or "binary",
             "quota_used": 0,
+            "portal_token": generate_portal_token(),
             "status": {
                 "manual_block": bool(status_raw.get("manual_block")),
                 "quota_exhausted": False,
@@ -493,6 +505,8 @@ def ensure_policy_state(cfg: dict[str, str], username: str) -> Path:
         if payload["quota_unit"] not in {"binary", "decimal"}:
             payload["quota_unit"] = "binary"
         payload["quota_used"] = policy_state_int(payload.get("quota_used"), 0)
+        token = str(payload.get("portal_token") or "").strip()
+        payload["portal_token"] = token if PORTAL_TOKEN_RE.fullmatch(token) else generate_portal_token()
         payload["status"] = {
             "manual_block": bool(existing_status.get("manual_block")),
             "quota_exhausted": bool(existing_status.get("quota_exhausted")),
@@ -551,12 +565,15 @@ def ensure_user(cfg: dict[str, str], username: str) -> dict[str, object]:
     write_atomic(target, content, 0o600)
     save_metadata(cfg, username, target)
     policy_state = ensure_policy_state(cfg, username)
+    policy_payload = read_json_file(policy_state)
+    portal_token = str(policy_payload.get("portal_token") or "").strip() if isinstance(policy_payload, dict) else ""
     ports = openvpn_public_tcp_ports(cfg)
     return {
         "ok": True,
         "username": username,
         "profile_path": str(target),
         "policy_state_path": str(policy_state),
+        "portal_url": f"https://{detect_public_host(cfg)}/account/{portal_token}" if portal_token else "-",
         "host": detect_public_host(cfg),
         "tcp_port": int(ports[0]),
         "tcp_ports": ports,
@@ -604,6 +621,8 @@ def linked_info(cfg: dict[str, str], username: str) -> dict[str, object]:
     user_exists = linux_user_exists(username)
     if user_exists:
         ensure_policy_state(cfg, username)
+    policy_payload = read_json_file(state_path(cfg, username))
+    portal_token = str(policy_payload.get("portal_token") or "").strip() if isinstance(policy_payload, dict) else ""
     payload: dict[str, object] = {
         "ok": True,
         "enabled": user_exists,
@@ -614,6 +633,7 @@ def linked_info(cfg: dict[str, str], username: str) -> dict[str, object]:
         "profile_path": str(target),
         "profile_exists": target.exists() if user_exists else False,
         "policy_state_path": str(state_path(cfg, username)),
+        "portal_url": f"https://{detect_public_host(cfg)}/account/{portal_token}" if portal_token else "-",
         "host": detect_public_host(cfg),
         "tcp_port": int(ports[0]),
         "tcp_ports": ports,

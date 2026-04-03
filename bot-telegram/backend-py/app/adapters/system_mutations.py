@@ -97,6 +97,7 @@ USER_DATA_MUTATION_LOCK_FILE = "/run/autoscript/locks/user-data-mutation.lock"
 PROTOCOLS = XRAY_PROTOCOLS
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
+PORTAL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
 _GEO_LOOKUP_CACHE: dict[str, tuple[str, str]] = {}
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 SPEED_OUTBOUND_TAG_PREFIX = "speed-mark-"
@@ -2672,6 +2673,52 @@ def _ssh_collect_existing_tokens(state_dir: Path, current_path: Path | None = No
     return tokens
 
 
+def _portal_collect_existing_tokens(current_path: Path | None = None) -> set[str]:
+    tokens: set[str] = set()
+    current_real = current_path.resolve() if current_path and current_path.exists() else None
+    for proto in QAC_PROTOCOLS:
+        state_dir = QUOTA_ROOT / proto
+        try:
+            candidates = sorted(state_dir.glob("*.json"))
+        except Exception:
+            continue
+        for candidate in candidates:
+            try:
+                if current_real is not None and candidate.resolve() == current_real:
+                    continue
+            except Exception:
+                pass
+            ok, payload = _read_json(candidate)
+            if not ok or not isinstance(payload, dict):
+                continue
+            token = str(payload.get("portal_token") or "").strip()
+            if PORTAL_TOKEN_RE.fullmatch(token):
+                tokens.add(token)
+    return tokens
+
+
+def _portal_ensure_token(payload: dict[str, Any], state_path: Path | None = None) -> str:
+    candidate = str(payload.get("portal_token") or "").strip()
+    used = _portal_collect_existing_tokens(current_path=state_path)
+    if PORTAL_TOKEN_RE.fullmatch(candidate) and candidate not in used:
+        return candidate
+    for _ in range(128):
+        token = secrets.token_urlsafe(12).rstrip("=")
+        if token and token not in used and PORTAL_TOKEN_RE.fullmatch(token):
+            return token
+    raise RuntimeError("Gagal membuat portal_token unik.")
+
+
+def _account_portal_url(token: str) -> str:
+    token_n = str(token or "").strip()
+    if not PORTAL_TOKEN_RE.fullmatch(token_n):
+        return "-"
+    host = str(_detect_domain() or "").strip() or str(_detect_public_ipv4() or "").strip()
+    if not host:
+        return "-"
+    return f"https://{host}/account/{token_n}"
+
+
 def _ssh_ensure_state_token(payload: dict[str, Any], state_path: Path | None = None) -> str:
     candidate = str(payload.get("sshws_token") or "").strip().lower()
     state_dir = state_path.parent if state_path is not None else SSH_QUOTA_DIR
@@ -2798,6 +2845,7 @@ def _ssh_normalize_state_payload(
         "quota_unit": quota_unit,
         "quota_used": quota_used,
         "sshws_token": _ssh_ensure_state_token(existing, state_path=state_path),
+        "portal_token": _portal_ensure_token(existing, state_path=state_path),
         "status": {
             "manual_block": bool(status_raw.get("manual_block")),
             "quota_exhausted": bool(status_raw.get("quota_exhausted")),
@@ -2921,6 +2969,7 @@ def _ssh_write_account_info(
     speed_down = max(0.0, _to_float(status.get("speed_down_mbit"), 0.0))
     speed_up = max(0.0, _to_float(status.get("speed_up_mbit"), 0.0))
     sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
+    portal_url = _account_portal_url(str(quota_payload.get("portal_token") or "").strip())
     if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
         sshws_path = f"/{sshws_token}"
         sshws_alt_path = f"/<bebas>/{sshws_token}/<bebas>"
@@ -2961,6 +3010,7 @@ def _ssh_write_account_info(
         openvpn_speed_enabled = bool(openvpn_status.get("speed_limit_enabled"))
         openvpn_speed_down = max(0.0, _to_float(openvpn_status.get("speed_down_mbit"), 0.0))
         openvpn_speed_up = max(0.0, _to_float(openvpn_status.get("speed_up_mbit"), 0.0))
+    openvpn_portal_url = _account_portal_url(str(openvpn_state.get("portal_token") or "").strip()) if openvpn_enabled else "-"
     if openvpn_enabled:
         account_info_labels.extend(
             [
@@ -2969,6 +3019,7 @@ def _ssh_write_account_info(
                 "OpenVPN WS Port",
                 "OpenVPN TCP",
                 "OpenVPN Link",
+                "Portal OpenVPN",
                 "Alt Port SSL/TLS",
                 "Alt Port HTTP",
             ]
@@ -2996,6 +3047,7 @@ def _ssh_write_account_info(
         f"Created     : {created_disp}",
         f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
         f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
+        f"Portal SSH  : {portal_url}",
         "",
         "=== SSH ===",
         running_ssh_ws_path,
@@ -3028,6 +3080,7 @@ def _ssh_write_account_info(
                 f"{'OpenVPN WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
                 f"{'OpenVPN TCP':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
                 f"{'OpenVPN Link':<{running_label_width}} : {_openvpn_download_link(username)}",
+                f"{'Portal OpenVPN':<{running_label_width}} : {openvpn_portal_url}",
                 f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}",
                 f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}",
             ]
@@ -3517,6 +3570,8 @@ def _load_quota(proto: str, username: str) -> tuple[bool, Path | str, dict[str, 
 
 
 def _save_quota(path: Path, payload: dict[str, Any]) -> None:
+    if isinstance(payload, dict):
+        payload["portal_token"] = _portal_ensure_token(payload, state_path=path)
     _write_json_atomic(path, payload)
     _chmod_600(path)
 
@@ -4563,6 +4618,7 @@ def _build_account_text(
     speed_enabled: bool,
     speed_down: float,
     speed_up: float,
+    portal_token: str,
 ) -> str:
     ok_ip, public_ip = _get_public_ipv4()
     ip = (public_ip if ok_ip else str(ip or "").strip() or _detect_public_ipv4() or "-").strip() or "-"
@@ -4571,6 +4627,7 @@ def _build_account_text(
     links = _build_links(proto, username, credential, domain, tcp_tls_host)
     isp, country = _geo_lookup(ip)
     proto_disp = _proto_display_label(proto)
+    portal_url = _account_portal_url(portal_token)
     public_paths = {
         "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
@@ -4639,6 +4696,7 @@ def _build_account_text(
         lines.append(f"  Speed Limit : ON (DOWN {_fmt_number(speed_down)} Mbps | UP {_fmt_number(speed_up)} Mbps)")
     else:
         lines.append("  Speed Limit : OFF")
+    lines.append(f"  Portal Info : {portal_url}")
 
     lines.extend(
         [
@@ -4814,6 +4872,7 @@ def _write_account_artifacts(
 
     account_file = ACCOUNT_ROOT / proto / f"{username}@{proto}.txt"
     quota_file = QUOTA_ROOT / proto / f"{username}@{proto}.json"
+    portal_token = _portal_ensure_token({}, state_path=quota_file)
 
     account_text = _build_account_text(
         proto=proto,
@@ -4830,6 +4889,7 @@ def _write_account_artifacts(
         speed_enabled=bool(speed_enabled),
         speed_down=float(speed_down) if speed_enabled else 0.0,
         speed_up=float(speed_up) if speed_enabled else 0.0,
+        portal_token=portal_token,
     )
 
     quota_payload: dict[str, Any] = {
@@ -4838,6 +4898,7 @@ def _write_account_artifacts(
         "quota_limit": int(max(0, quota_bytes)),
         "quota_unit": "binary",
         "quota_used": 0,
+        "portal_token": portal_token,
         "created_at": created_at,
         "expired_at": expired_at,
         "status": {
@@ -4927,6 +4988,8 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
 
     domain_eff = str(domain or "").strip() or _detect_domain()
     ip_eff = str(ip or "").strip() or account_fields.get("IP", "").strip() or _detect_public_ipv4()
+    portal_token = _portal_ensure_token(quota_data, state_path=quota_target)
+    quota_data["portal_token"] = portal_token
 
     content = _build_account_text(
         proto=proto,
@@ -4943,10 +5006,13 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
         speed_enabled=speed_enabled,
         speed_down=speed_down,
         speed_up=speed_up,
+        portal_token=portal_token,
     )
 
     _write_text_atomic(account_target, content)
     _chmod_600(account_target)
+    if quota_target is not None:
+        _save_quota(quota_target, quota_data)
     return True, "ok"
 
 

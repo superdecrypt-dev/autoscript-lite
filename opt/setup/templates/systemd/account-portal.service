@@ -1,0 +1,16 @@
+[Unit]
+Description=Autoscript Account Portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__ACCOUNT_PORTAL_ROOT__
+ExecStartPre=+/usr/local/bin/autoscript-license-check check --stage runtime --allow-disabled=false
+ExecStart=__ACCOUNT_PORTAL_ROOT__/.venv/bin/python -m uvicorn app.main:app --host __ACCOUNT_PORTAL_HOST__ --port __ACCOUNT_PORTAL_PORT__
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

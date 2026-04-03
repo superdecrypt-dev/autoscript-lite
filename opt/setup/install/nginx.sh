@@ -478,6 +478,7 @@ write_nginx_config() {
     "SSHWS_PROXY_PORT=${SSHWS_PROXY_PORT}"
     "OPENVPN_WS_PROXY_PORT=${OPENVPN_WS_PROXY_PORT:-10016}"
     "OPENVPN_WS_PUBLIC_PATH=${openvpn_ws_public_path}"
+    "ACCOUNT_PORTAL_PORT=${ACCOUNT_PORTAL_PORT:-7082}"
     "NGINX_LISTEN_BLOCK=${nginx_listen_block}"
     "NGINX_TLS_BLOCK=${nginx_tls_block}"
   )

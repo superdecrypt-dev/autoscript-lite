@@ -136,6 +136,23 @@ Contoh path internal yang tidak perlu dipakai operator:
 
 Path internal itu hanya dipakai untuk wiring `nginx -> proxy/Xray` di host.
 
+## Portal Info Akun
+- Setiap akun `Xray`, `SSH`, dan `OpenVPN` sekarang bisa punya link portal read-only sendiri.
+- Portal ini berdiri sebagai service mandiri di host, tidak menumpang backend bot Telegram.
+- Format URL:
+  - `https://<domain-vps>/account/<token>`
+- Portal menampilkan:
+  - status akun
+  - sisa masa aktif
+  - quota limit / quota terpakai / quota tersisa
+  - IP login aktif yang masih terdeteksi runtime
+- API JSON pendukung:
+  - `GET /api/account/<token>/summary`
+- Link portal ikut ditulis ke:
+  - `XRAY ACCOUNT INFO`
+  - `SSH ACCOUNT INFO`
+  - blok `OpenVPN` pada `SSH ACCOUNT INFO`
+
 ## Port Internal
 
 | Komponen | Bind | Keterangan |
@@ -145,6 +162,7 @@ Path internal itu hanya dipakai untuk wiring `nginx -> proxy/Xray` di host.
 | `sshws-stunnel` | `127.0.0.1:22443` | backend SSH TLS |
 | `sshws-proxy` | `127.0.0.1:10015` | Websocket Proxy (Go) untuk SSH WS |
 | `ovpn-ws-proxy` | `127.0.0.1:10016` | Websocket Proxy (Go) untuk OpenVPN WS |
+| `account-portal` | `127.0.0.1:7082` | website read-only info akun |
 | `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot Telegram |
 | `edge-mux metrics` | `127.0.0.1:9910` | metrics dan status edge |
 | `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |
@@ -153,6 +171,7 @@ Path internal itu hanya dipakai untuk wiring `nginx -> proxy/Xray` di host.
 ## Service Highlights
 - `manage.sh` adalah panel CLI modular untuk operasi harian.
 - `run.sh` dan `setup.sh` menangani bootstrap host, install runtime, dan sinkronisasi service.
+- `account-portal/` menyediakan website mandiri untuk status akun per token.
 - `bot-telegram/` menyediakan backend + gateway menu-first untuk operasi dari Telegram.
 - `opt/edge/go/` memuat source `edge-mux` dan `wsproxy`, sedangkan artefak distribusi ada di `opt/edge/dist/` dan `opt/wsproxy/dist/`.
 - `manage_bundle.zip` dan `bot_telegram.zip` dipakai sebagai release artifact untuk installer.

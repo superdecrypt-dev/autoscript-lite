@@ -509,6 +509,11 @@ sshws_token_valid() {
   [[ "${token}" =~ ^[A-Fa-f0-9]{10}$ ]]
 }
 
+portal_token_valid() {
+  local token="${1:-}"
+  [[ "${token}" =~ ^[A-Za-z0-9_-]{10,64}$ ]]
+}
+
 sshws_path_from_token() {
   local token="${1:-}"
   if ! sshws_token_valid "${token}"; then
@@ -725,6 +730,296 @@ if token != str(payload.get("sshws_token") or "").strip().lower():
       pass
 
 print(token)
+PY
+}
+
+ssh_user_state_portal_token_get() {
+  local username="${1:-}"
+  local state_file
+  ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_resolve_file "${username}")"
+  [[ -s "${state_file}" ]] || {
+    echo ""
+    return 0
+  }
+  need_python3
+  python3 - <<'PY' "${state_file}" 2>/dev/null || true
+import json
+import re
+import sys
+
+path = sys.argv[1]
+token = ""
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+  if isinstance(data, dict):
+    token = str(data.get("portal_token") or "").strip()
+except Exception:
+  token = ""
+
+if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token):
+  print(token)
+else:
+  print("")
+PY
+}
+
+ssh_user_state_ensure_portal_token() {
+  local username="${1:-}"
+  local state_file lock_file
+  ssh_state_dirs_prepare
+  state_file="$(ssh_user_state_resolve_file "${username}")"
+  [[ -f "${state_file}" ]] || return 1
+  ssh_qac_lock_prepare
+  lock_file="$(ssh_qac_lock_file)"
+  need_python3
+
+  if have_cmd flock; then
+    (
+      flock -x 200
+      python3 - <<'PY' "${state_file}"
+import json
+import os
+import re
+import secrets
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+  if not isinstance(payload, dict):
+    payload = {}
+except Exception:
+  payload = {}
+
+used = set()
+quota_root = path.parent.parent
+try:
+  for proto_dir in quota_root.iterdir():
+    if not proto_dir.is_dir():
+      continue
+    for entry in sorted(proto_dir.glob("*.json")):
+      try:
+        if entry.resolve() == path.resolve():
+          continue
+      except Exception:
+        pass
+      try:
+        loaded = json.load(open(entry, "r", encoding="utf-8"))
+      except Exception:
+        continue
+      if not isinstance(loaded, dict):
+        continue
+      tok = str(loaded.get("portal_token") or "").strip()
+      if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", tok):
+        used.add(tok)
+except Exception:
+  pass
+
+token = str(payload.get("portal_token") or "").strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) or token in used:
+  token = ""
+for _ in range(256):
+  if token:
+    break
+  candidate = secrets.token_urlsafe(12).rstrip("=")
+  if candidate and re.fullmatch(r"[A-Za-z0-9_-]{10,64}", candidate) and candidate not in used:
+    token = candidate
+    break
+if not token:
+  raise SystemExit(1)
+
+if token != str(payload.get("portal_token") or "").strip():
+  payload["portal_token"] = token
+  dirn = str(path.parent)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(payload, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+print(token)
+PY
+    ) 200>"${lock_file}"
+    return $?
+  fi
+
+  python3 - <<'PY' "${state_file}"
+import json
+import os
+import re
+import secrets
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+  with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+  if not isinstance(payload, dict):
+    payload = {}
+except Exception:
+  payload = {}
+
+used = set()
+quota_root = path.parent.parent
+try:
+  for proto_dir in quota_root.iterdir():
+    if not proto_dir.is_dir():
+      continue
+    for entry in sorted(proto_dir.glob("*.json")):
+      try:
+        if entry.resolve() == path.resolve():
+          continue
+      except Exception:
+        pass
+      try:
+        loaded = json.load(open(entry, "r", encoding="utf-8"))
+      except Exception:
+        continue
+      if not isinstance(loaded, dict):
+        continue
+      tok = str(loaded.get("portal_token") or "").strip()
+      if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", tok):
+        used.add(tok)
+except Exception:
+  pass
+
+token = str(payload.get("portal_token") or "").strip()
+if not re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) or token in used:
+  token = ""
+for _ in range(256):
+  if token:
+    break
+  candidate = secrets.token_urlsafe(12).rstrip("=")
+  if candidate and re.fullmatch(r"[A-Za-z0-9_-]{10,64}", candidate) and candidate not in used:
+    token = candidate
+    break
+if not token:
+  raise SystemExit(1)
+
+if token != str(payload.get("portal_token") or "").strip():
+  payload["portal_token"] = token
+  dirn = str(path.parent)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(payload, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+      os.chmod(path, 0o600)
+    except Exception:
+      pass
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+print(token)
+PY
+}
+
+account_portal_public_host() {
+  local host=""
+  host="$(normalize_domain_token "$(detect_domain 2>/dev/null || true)")"
+  [[ -n "${host}" ]] || host="$(main_info_ip_quiet_get 2>/dev/null || true)"
+  [[ -n "${host}" ]] || host="$(detect_public_ip 2>/dev/null || true)"
+  printf '%s\n' "${host:--}"
+}
+
+ssh_account_portal_link() {
+  local username="${1:-}"
+  local token host
+  [[ -n "${username}" ]] || return 0
+  token="$(ssh_user_state_portal_token_get "${username}")"
+  if ! portal_token_valid "${token}"; then
+    token="$(ssh_user_state_ensure_portal_token "${username}" 2>/dev/null || true)"
+  fi
+  portal_token_valid "${token}" || return 0
+  host="$(account_portal_public_host)"
+  [[ -n "${host}" && "${host}" != "-" ]] || return 0
+  printf 'https://%s/account/%s\n' "${host}" "${token}"
+}
+
+openvpn_account_portal_link() {
+  local username="${1:-}"
+  [[ -n "${username}" ]] || return 0
+  openvpn_runtime_available || return 0
+  need_python3
+  python3 - <<'PY' "${OPENVPN_CONFIG_ENV_FILE}" "${username}"
+import json
+import os
+import sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+username = sys.argv[2].strip()
+
+state_root = "/opt/quota/openvpn"
+host = ""
+if cfg_path.is_file():
+  try:
+    for raw in cfg_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+      line = raw.strip()
+      if not line or line.startswith("#") or "=" not in line:
+        continue
+      key, value = line.split("=", 1)
+      key = key.strip()
+      value = value.strip().strip('"').strip("'")
+      if key == "OPENVPN_STATE_DIR" and value:
+        state_root = value
+      elif key == "OPENVPN_PUBLIC_HOST" and value:
+        host = value
+  except Exception:
+    pass
+
+payload = {}
+for candidate in (Path(state_root) / f"{username}@openvpn.json", Path(state_root) / f"{username}.json"):
+  if not candidate.is_file():
+    continue
+  try:
+    loaded = json.loads(candidate.read_text(encoding="utf-8", errors="ignore"))
+  except Exception:
+    continue
+  if isinstance(loaded, dict):
+    payload = loaded
+    break
+
+token = str(payload.get("portal_token") or "").strip()
+if not token:
+  raise SystemExit(0)
+if not host:
+  host_file = Path("/etc/xray/domain")
+  if host_file.is_file():
+    try:
+      host = host_file.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+      host = ""
+if host:
+  print(f"https://{host}/account/{token}")
 PY
 }
 
@@ -1315,7 +1610,7 @@ ssh_account_info_write() {
   ssh_state_dirs_prepare
   password_out="${password_raw:-"-"}"
 
-  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp ssh_alt_tls_ports_disp ssh_alt_http_ports_disp badvpn_port_disp geo ssh_primary_ports_disp
+  local acc_file domain ip geo_ip isp country quota_limit_disp expired_disp valid_until created_disp ip_disp speed_disp sshws_path sshws_alt_path sshws_main_disp sshws_ports_disp ssh_direct_ports_disp ssh_ssl_tls_ports_disp ssh_alt_tls_ports_disp ssh_alt_http_ports_disp badvpn_port_disp geo ssh_primary_ports_disp portal_ssh_link
   local running_label_width running_ssh_ws_path running_ssh_ws_alt running_ssh_ws_port running_ssh_direct running_ssh_ssl_tls running_ssh_alt_tls running_ssh_alt_http running_badvpn
   local -a account_info_labels
   acc_file="$(ssh_account_info_file "${username}")"
@@ -1428,6 +1723,8 @@ PY
   if [[ "${sshws_alt_path}" == /bebas/*/bebas ]]; then
     sshws_alt_path="/<bebas>/${sshws_token}/<bebas>"
   fi
+  portal_ssh_link="$(ssh_account_portal_link "${username}")"
+  [[ -n "${portal_ssh_link}" ]] || portal_ssh_link="-"
   ssh_primary_ports_disp="$(ssh_primary_public_ports_label)"
   sshws_ports_disp="$(ssh_primary_public_ports_label)"
   ssh_direct_ports_disp="$(ssh_primary_public_ports_label)"
@@ -1445,6 +1742,7 @@ PY
     "Alt Port SSL/TLS"
     "Alt Port HTTP"
     "BadVPN UDPGW"
+    "Portal SSH"
     "ZIVPN Password"
   )
   if openvpn_runtime_available; then
@@ -1454,6 +1752,7 @@ PY
       "OpenVPN WS Port"
       "OpenVPN TCP"
       "OpenVPN Link"
+      "Portal OpenVPN"
       "Alt Port SSL/TLS"
       "Alt Port HTTP"
     )
@@ -1471,6 +1770,8 @@ PY
   printf -v running_ssh_alt_tls '%-*s : %s' "${running_label_width}" "Alt Port SSL/TLS" "${ssh_alt_tls_ports_disp}"
   printf -v running_ssh_alt_http '%-*s : %s' "${running_label_width}" "Alt Port HTTP" "${ssh_alt_http_ports_disp}"
   printf -v running_badvpn '%-*s : %s' "${running_label_width}" "BadVPN UDPGW" "${badvpn_port_disp}"
+  local running_portal_ssh
+  printf -v running_portal_ssh '%-*s : %s' "${running_label_width}" "Portal SSH" "${portal_ssh_link}"
   if zivpn_account_info_enabled; then
     local zivpn_password_line
     if zivpn_user_password_synced "${username}"; then
@@ -1483,20 +1784,23 @@ PY
   if openvpn_runtime_available; then
     local openvpn_ws_path openvpn_ws_alt_path
     local openvpn_ws_path_line openvpn_ws_alt_line openvpn_ws_port_line
-    local openvpn_tcp_line openvpn_link_line openvpn_alt_tls_line openvpn_alt_http_line openvpn_link_disp openvpn_primary_ports_disp
+    local openvpn_tcp_line openvpn_link_line openvpn_portal_line openvpn_alt_tls_line openvpn_alt_http_line openvpn_link_disp openvpn_portal_disp openvpn_primary_ports_disp
     openvpn_ws_path="$(openvpn_ws_public_path)"
     openvpn_ws_alt_path="$(openvpn_ws_public_alt_path)"
     openvpn_primary_ports_disp="$(openvpn_primary_public_ports_label)"
     openvpn_link_disp="$(openvpn_download_link "${username}")"
+    openvpn_portal_disp="$(openvpn_account_portal_link "${username}")"
     [[ -n "${openvpn_link_disp}" ]] || openvpn_link_disp="-"
+    [[ -n "${openvpn_portal_disp}" ]] || openvpn_portal_disp="-"
     printf -v openvpn_ws_path_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path" "${openvpn_ws_path}"
     printf -v openvpn_ws_alt_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Path Alt" "${openvpn_ws_alt_path}"
     printf -v openvpn_ws_port_line '%-*s : %s' "${running_label_width}" "OpenVPN WS Port" "${openvpn_primary_ports_disp}"
     printf -v openvpn_tcp_line '%-*s : %s' "${running_label_width}" "OpenVPN TCP" "${openvpn_primary_ports_disp}"
     printf -v openvpn_link_line '%-*s : %s' "${running_label_width}" "OpenVPN Link" "${openvpn_link_disp}"
+    printf -v openvpn_portal_line '%-*s : %s' "${running_label_width}" "Portal OpenVPN" "${openvpn_portal_disp}"
     printf -v openvpn_alt_tls_line '%-*s : %s' "${running_label_width}" "Alt Port SSL/TLS" "${ssh_alt_tls_ports_disp}"
     printf -v openvpn_alt_http_line '%-*s : %s' "${running_label_width}" "Alt Port HTTP" "${ssh_alt_http_ports_disp}"
-    openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_link_line}"$'\n'"${openvpn_alt_tls_line}"$'\n'"${openvpn_alt_http_line}"$'\n'
+    openvpn_block=$'\n'"=== OPENVPN ==="$'\n'"${openvpn_ws_path_line}"$'\n'"${openvpn_ws_alt_line}"$'\n'"${openvpn_ws_port_line}"$'\n'"${openvpn_tcp_line}"$'\n'"${openvpn_link_line}"$'\n'"${openvpn_portal_line}"$'\n'"${openvpn_alt_tls_line}"$'\n'"${openvpn_alt_http_line}"$'\n'
   fi
   local tmp_acc_file=""
   mkdir -p "$(dirname "${acc_file}")" 2>/dev/null || return 1
@@ -1526,6 +1830,7 @@ ${running_ssh_ssl_tls}
 ${running_ssh_alt_tls}
 ${running_ssh_alt_http}
 ${running_badvpn}
+${running_portal_ssh}
 ${zivpn_block}
 ${openvpn_block}
 EOF

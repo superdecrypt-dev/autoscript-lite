@@ -135,6 +135,8 @@ source_setup_module "opt/setup/install/network.sh"
 source_setup_module "opt/setup/install/xray.sh"
 # shellcheck source=opt/setup/install/management.sh
 source_setup_module "opt/setup/install/management.sh"
+# shellcheck source=opt/setup/install/account_portal.sh
+source_setup_module "opt/setup/install/account_portal.sh"
 # shellcheck source=opt/setup/install/license.sh
 source_setup_module "opt/setup/install/license.sh"
 # shellcheck source=opt/setup/install/sshws.sh
@@ -214,6 +216,7 @@ setup_post_domain_main() {
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
+  setup_run_step "Install portal info akun" install_account_portal
   setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
   setup_run_step "Install domain guard" install_domain_cert_guard
@@ -256,6 +259,13 @@ setup_run_post_domain_with_spinner() {
   rc=$?
   set -e
   if (( rc == 0 )); then
+    # setup_post_domain_main berjalan di subshell background, jadi perubahan state
+    # rollback DNS Cloudflare di child tidak otomatis terlihat oleh parent shell.
+    # Tandai sukses di parent juga agar trap parent tidak memulihkan snapshot DNS
+    # lama setelah setup selesai normal.
+    if [[ "${ACME_CERT_MODE:-}" == "dns_cf_wildcard" ]]; then
+      setup_cf_dns_rollback_mark_committed
+    fi
     rm -f "${setup_status_file}" >/dev/null 2>&1 || true
     ok "Setup selesai."
     ui_subtle "Log setup tersimpan di ${setup_log_file}"

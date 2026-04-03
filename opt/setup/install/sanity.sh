@@ -153,6 +153,15 @@ sanity_check() {
     failed=1
   fi
 
+  if systemctl is-active --quiet "${ACCOUNT_PORTAL_SERVICE}.service"; then
+    ok "check: account portal active"
+  else
+    warn "check: account portal inactive"
+    systemctl status "${ACCOUNT_PORTAL_SERVICE}.service" --no-pager >&2 || true
+    journalctl -u "${ACCOUNT_PORTAL_SERVICE}.service" -n 120 --no-pager >&2 || true
+    failed=1
+  fi
+
   if badvpn_runtime_expected 2>/dev/null; then
     if systemctl is-active --quiet badvpn-udpgw.service; then
       ok "check: badvpn-udpgw active"

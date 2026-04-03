@@ -80,6 +80,12 @@ ALLOWED_SERVICES = (
 
 def _local_today() -> date:
     return datetime.now().astimezone().date()
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
 ALLOWED_RESTART_SERVICES = set(ALLOWED_SERVICES) | {"fail2ban"}
 XRAY_DAEMONS = ("xray-expired", "xray-quota", "xray-limit-ip", "xray-speed")
 SSHWS_SERVICES = ("sshws-dropbear", "sshws-stunnel", "sshws-proxy")
@@ -1648,6 +1654,26 @@ def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str]
         return True, summary
 
     return False, f"File quota tidak ditemukan untuk {user_n} [{proto_n}]"
+
+
+def _parse_date_only(raw: object) -> date | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _display_username(proto: str, username: str) -> str:
+    raw = str(username or "").strip()
+    suffix = f"@{proto}"
+    if raw.endswith(suffix):
+        raw = raw[: -len(suffix)]
+    if "@" in raw and proto in XRAY_PROTOCOLS:
+        raw = raw.split("@", 1)[0]
+    return raw or "-"
 
 
 def op_dns_summary() -> tuple[str, str]:

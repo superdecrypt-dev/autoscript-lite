@@ -1848,9 +1848,11 @@ sync_setup_runtime_layout() {
   local fallback_root="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
   local fallback_modules_root="${SETUP_FALLBACK_MODULES_ROOT:-${fallback_root}/opt/setup}"
   local setup_src="${SETUP_MODULES_ROOT:-${SCRIPT_DIR}/opt/setup}"
+  local account_portal_src="${ACCOUNT_PORTAL_SRC_DIR:-${SCRIPT_DIR}/account-portal}"
   local adblock_src="${SCRIPT_DIR}/opt/adblock"
   local edge_src="${SCRIPT_DIR}/opt/edge"
   local badvpn_src="${SCRIPT_DIR}/opt/badvpn"
+  local fallback_account_portal_root="${fallback_root}/account-portal"
   local fallback_adblock_root="${fallback_root}/opt/adblock"
   local fallback_edge_root="${fallback_root}/opt/edge"
   local fallback_badvpn_root="${fallback_root}/opt/badvpn"
@@ -1859,6 +1861,12 @@ sync_setup_runtime_layout() {
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
 
   sync_tree_atomic "${setup_src}" "${fallback_modules_root}" "modul setup ${fallback_modules_root}"
+  if [[ -d "${account_portal_src}" ]]; then
+    sync_tree_atomic "${account_portal_src}" "${fallback_account_portal_root}" "asset account portal ${fallback_account_portal_root}"
+    find "${fallback_account_portal_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "${fallback_account_portal_root}" -type f -exec chmod 644 {} + 2>/dev/null || true
+    chown -R root:root "${fallback_account_portal_root}" 2>/dev/null || true
+  fi
   if [[ -d "${adblock_src}" ]]; then
     sync_tree_atomic "${adblock_src}" "${fallback_adblock_root}" "asset adblock ${fallback_adblock_root}"
     find "${fallback_adblock_root}" -type d -exec chmod 755 {} + 2>/dev/null || true

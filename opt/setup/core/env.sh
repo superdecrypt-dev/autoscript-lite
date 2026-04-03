@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Shared env/constants for setup and manage runtime.
 
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
+  _AUTOSCRIPT_ENV_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  SCRIPT_DIR="$(cd -- "${_AUTOSCRIPT_ENV_DIR}/../../.." && pwd -P)"
+fi
+
 # Xray Configs
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 XRAY_CONFDIR="/usr/local/etc/xray/conf.d"
@@ -131,6 +136,11 @@ MANAGE_MODULES_DST_DIR="/opt/manage"
 MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
 MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
+ACCOUNT_PORTAL_ROOT="${ACCOUNT_PORTAL_ROOT:-/opt/account-portal}"
+ACCOUNT_PORTAL_SRC_DIR="${ACCOUNT_PORTAL_SRC_DIR:-${SCRIPT_DIR}/account-portal}"
+ACCOUNT_PORTAL_SERVICE="${ACCOUNT_PORTAL_SERVICE:-account-portal}"
+ACCOUNT_PORTAL_HOST="${ACCOUNT_PORTAL_HOST:-127.0.0.1}"
+ACCOUNT_PORTAL_PORT="${ACCOUNT_PORTAL_PORT:-7082}"
 SETUP_FALLBACK_ROOT="${SETUP_FALLBACK_ROOT:-/usr/local/lib/autoscript-setup}"
 SETUP_FALLBACK_SCRIPT="${SETUP_FALLBACK_SCRIPT:-${SETUP_FALLBACK_ROOT}/setup.sh}"
 SETUP_FALLBACK_MODULES_ROOT="${SETUP_FALLBACK_MODULES_ROOT:-${SETUP_FALLBACK_ROOT}/opt/setup}"

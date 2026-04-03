@@ -1664,6 +1664,45 @@ def write_json_atomic(path, obj):
     except Exception:
       pass
 
+def pick_portal_token(quota_file_path, current_token=""):
+  import secrets
+  import re
+  root_dir = os.path.dirname(os.path.dirname(quota_file_path)) or "."
+  used = set()
+  try:
+    for proto_name in sorted(os.listdir(root_dir), key=str.lower):
+      proto_dir = os.path.join(root_dir, proto_name)
+      if not os.path.isdir(proto_dir):
+        continue
+      for name in sorted(os.listdir(proto_dir), key=str.lower):
+        if name.startswith(".") or not name.endswith(".json"):
+          continue
+        entry = os.path.join(proto_dir, name)
+        try:
+          if os.path.realpath(entry) == os.path.realpath(quota_file_path):
+            continue
+        except Exception:
+          pass
+        try:
+          loaded = json.load(open(entry, "r", encoding="utf-8"))
+        except Exception:
+          continue
+        if not isinstance(loaded, dict):
+          continue
+        tok = str(loaded.get("portal_token") or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", tok):
+          used.add(tok)
+  except Exception:
+    pass
+  token = str(current_token or "").strip()
+  if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) and token not in used:
+    return token
+  for _ in range(256):
+    token = secrets.token_urlsafe(12).rstrip("=")
+    if token and re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) and token not in used:
+      return token
+  raise RuntimeError("failed to allocate portal token")
+
 # Public endpoint harus selaras dengan nginx public path (setup.sh).
 PUBLIC_PATHS = {
   "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
@@ -1734,6 +1773,8 @@ for net in nets:
 quota_gb = quota_bytes/(1024**3) if quota_bytes else 0
 quota_gb_disp = fmt_gb(quota_gb)
 proto_disp = proto_label(proto)
+portal_token = pick_portal_token(quota_file, "")
+portal_url = f"https://{domain}/account/{portal_token}" if domain and domain != "-" else "-"
 ws_path = public_proto.get("ws", "") or "/"
 ws_path_alt = path_alt_placeholder(ws_path)
 hup_path = public_proto.get("httpupgrade", "") or "/"
@@ -1783,6 +1824,7 @@ if speed_enabled:
   lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("  Speed Limit : OFF")
+lines.append(f"  Portal Info : {portal_url}")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
 lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
@@ -1822,6 +1864,7 @@ write_text_atomic(acc_file, "\n".join(lines))
 meta={
   "username": username + "@" + proto,
   "protocol": proto,
+  "portal_token": portal_token,
   "quota_limit": quota_bytes,
   "quota_unit": "binary",
   "quota_used": 0,
@@ -2045,6 +2088,65 @@ def read_account_fields(path):
   return fields
 
 
+def write_json_atomic(path, obj):
+  dirn = os.path.dirname(path) or "."
+  os.makedirs(dirn, exist_ok=True)
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      json.dump(obj, f, ensure_ascii=False, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, path)
+  finally:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+
+
+def pick_portal_token(quota_file_path, current_token=""):
+  import secrets
+  import re
+  root_dir = os.path.dirname(os.path.dirname(quota_file_path)) or "."
+  used = set()
+  try:
+    for proto_name in sorted(os.listdir(root_dir), key=str.lower):
+      proto_dir = os.path.join(root_dir, proto_name)
+      if not os.path.isdir(proto_dir):
+        continue
+      for name in sorted(os.listdir(proto_dir), key=str.lower):
+        if name.startswith(".") or not name.endswith(".json"):
+          continue
+        entry = os.path.join(proto_dir, name)
+        try:
+          if os.path.realpath(entry) == os.path.realpath(quota_file_path):
+            continue
+        except Exception:
+          pass
+        try:
+          loaded = json.load(open(entry, "r", encoding="utf-8"))
+        except Exception:
+          continue
+        if not isinstance(loaded, dict):
+          continue
+        tok = str(loaded.get("portal_token") or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", tok):
+          used.add(tok)
+  except Exception:
+    pass
+  token = str(current_token or "").strip()
+  if re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) and token not in used:
+    return token
+  for _ in range(256):
+    token = secrets.token_urlsafe(12).rstrip("=")
+    if token and re.fullmatch(r"[A-Za-z0-9_-]{10,64}", token) and token not in used:
+      return token
+  raise RuntimeError("failed to allocate portal token")
+
+
 def parse_quota_bytes_from_text(s):
   m = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(s or ""))
   if not m:
@@ -2103,6 +2205,7 @@ isp = str(isp_arg or "").strip() or str(existing.get("ISP") or "").strip() or "-
 country = str(country_arg or "").strip() or str(existing.get("Country") or "").strip() or "-"
 
 meta = {}
+meta_dirty = False
 if os.path.isfile(quota_file):
   try:
     loaded = json.load(open(quota_file, "r", encoding="utf-8"))
@@ -2276,6 +2379,11 @@ def vmess_link(net, val):
 links = {}
 public_proto = PUBLIC_PATHS.get(proto, {})
 proto_disp = PROTO_LABELS.get(proto, proto.title() or "Xray")
+portal_token = pick_portal_token(quota_file, meta.get("portal_token") or "")
+if str(meta.get("portal_token") or "").strip() != portal_token:
+  meta["portal_token"] = portal_token
+  meta_dirty = True
+portal_url = f"https://{domain}/account/{portal_token}" if domain and domain != "-" else "-"
 ws_path = public_proto.get("ws", "") or "/"
 ws_path_alt = path_alt_placeholder(ws_path)
 hup_path = public_proto.get("httpupgrade", "") or "/"
@@ -2336,6 +2444,7 @@ if speed_enabled:
   lines.append(f"  Speed Limit : ON (DOWN {fmt_mbit(speed_down_mbit)} Mbps | UP {fmt_mbit(speed_up_mbit)} Mbps)")
 else:
   lines.append("  Speed Limit : OFF")
+lines.append(f"  Portal Info : {portal_url}")
 lines.append("")
 lines.append("=== RUNNING ON PORT & PATH ===")
 lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
@@ -2383,6 +2492,8 @@ finally:
       os.remove(tmp)
   except Exception:
     pass
+if meta_dirty and quota_file:
+  write_json_atomic(quota_file, meta)
 PY
   rc=$?
   set -e
