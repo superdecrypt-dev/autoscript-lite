@@ -361,7 +361,7 @@ openvpn_ws_public_alt_path() {
   path="$(openvpn_ws_public_path)"
   [[ "${path}" == "-" ]] && { printf '%s\n' "-"; return 0; }
   trimmed="${path#/}"
-  printf '/<bebas>/%s\n' "${trimmed}"
+  printf '/<bebas>/%s/<bebas>\n' "${trimmed}"
 }
 
 openvpn_manage_json() {
@@ -528,7 +528,7 @@ sshws_alt_path_from_token() {
   if ! sshws_token_valid "${token}"; then
     return 1
   fi
-  printf '/bebas/%s\n' "${token,,}"
+  printf '/bebas/%s/bebas\n' "${token,,}"
 }
 
 ssh_user_state_token_get() {
@@ -1425,8 +1425,8 @@ PY
     sshws_alt_path="-"
     sshws_main_disp="-"
   fi
-  if [[ "${sshws_alt_path}" == /bebas/* ]]; then
-    sshws_alt_path="/<bebas>/${sshws_token}"
+  if [[ "${sshws_alt_path}" == /bebas/*/bebas ]]; then
+    sshws_alt_path="/<bebas>/${sshws_token}/<bebas>"
   fi
   ssh_primary_ports_disp="$(ssh_primary_public_ports_label)"
   sshws_ports_disp="$(ssh_primary_public_ports_label)"

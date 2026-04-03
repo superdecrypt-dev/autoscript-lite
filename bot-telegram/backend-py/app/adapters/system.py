@@ -575,7 +575,7 @@ def _openvpn_ws_alt_path() -> str:
     path = _openvpn_ws_public_path()
     if path == "-":
         return "-"
-    return f"/<bebas>/{path.lstrip('/')}"
+    return f"/<bebas>/{path.lstrip('/')}/<bebas>"
 
 
 def _openvpn_public_tcp_ports_label() -> str:

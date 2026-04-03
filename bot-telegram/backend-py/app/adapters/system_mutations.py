@@ -2923,7 +2923,7 @@ def _ssh_write_account_info(
     sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
         sshws_path = f"/{sshws_token}"
-        sshws_alt_path = _path_alt_placeholder(sshws_path)
+        sshws_alt_path = f"/<bebas>/{sshws_token}/<bebas>"
         sshws_main = sshws_path
     else:
         sshws_path = "-"

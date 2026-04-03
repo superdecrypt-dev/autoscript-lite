@@ -1204,7 +1204,7 @@ ssh_account_info_compat_needs_refresh() {
     if ! grep -Eq '^SSH WS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSH WS Path Alt[[:space:]]*:[[:space:]]*/<bebas>/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
+    if ! grep -Eq '^SSH WS Path Alt[[:space:]]*:[[:space:]]*/<bebas>/[A-Fa-f0-9]{10}/<bebas>[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
     if ! grep -Eq '^SSH Direct[[:space:]]+Port[[:space:]]*:' "${acc_file}" 2>/dev/null; then

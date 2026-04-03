@@ -106,8 +106,8 @@ Internet / Cloudflare
 
 | Transport | Path / Service |
 | --- | --- |
-| `SSH WS` | `/<token>` dan `/<bebas>/<token>` |
-| `OpenVPN WS` | `/<token>` dan `/<bebas>/<token>` |
+| `SSH WS` | `/<token>` dan `/<bebas>/<token>/<bebas>` |
+| `OpenVPN WS` | `/<token>` dan `/<bebas>/<token>/<bebas>` |
 | `VLESS WS` | `/vless-ws` dan `/<bebas>/vless-ws` |
 | `VLESS HUP` | `/vless-hup` dan `/<bebas>/vless-hup` |
 | `VLESS XHTTP` | `/vless-xhttp` dan `/<bebas>/vless-xhttp` |
