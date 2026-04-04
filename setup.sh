@@ -216,7 +216,7 @@ setup_post_domain_main() {
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
-  setup_run_step "Install portal info akun" install_account_portal
+  setup_run_step "Install portal info akun (FastAPI + React)" install_account_portal
   setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
   setup_run_step "Install domain guard" install_domain_cert_guard

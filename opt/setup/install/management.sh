@@ -2101,6 +2101,8 @@ sync_setup_runtime_layout() {
   sync_tree_atomic "${setup_src}" "${fallback_modules_root}" "modul setup ${fallback_modules_root}"
   if [[ -d "${account_portal_src}" ]]; then
     sync_tree_atomic "${account_portal_src}" "${fallback_account_portal_root}" "asset account portal ${fallback_account_portal_root}"
+    rm -rf "${fallback_account_portal_root}/web/node_modules" "${fallback_account_portal_root}/web/dist" >/dev/null 2>&1 || true
+    find "${fallback_account_portal_root}/web" -type f -name '*.tsbuildinfo' -delete 2>/dev/null || true
     find "${fallback_account_portal_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
     find "${fallback_account_portal_root}" -type f -exec chmod 644 {} + 2>/dev/null || true
     chown -R root:root "${fallback_account_portal_root}" 2>/dev/null || true

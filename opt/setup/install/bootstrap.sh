@@ -114,6 +114,65 @@ install_base_deps() {
   ok "Dependency dasar terpasang."
 }
 
+node_version_satisfies_portal_build() {
+  command -v node >/dev/null 2>&1 || return 1
+  command -v npm >/dev/null 2>&1 || return 1
+
+  local version major minor patch
+  version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+  [[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  patch="${BASH_REMATCH[3]}"
+
+  if (( major > 22 )); then
+    return 0
+  fi
+  if (( major == 22 )); then
+    (( minor > 12 || (minor == 12 && patch >= 0) )) && return 0
+    return 1
+  fi
+  if (( major == 20 )); then
+    (( minor > 19 || (minor == 19 && patch >= 0) )) && return 0
+    return 1
+  fi
+
+  return 1
+}
+
+ensure_nodejs_runtime_for_account_portal() {
+  if node_version_satisfies_portal_build; then
+    ok "Node.js siap untuk build portal React: $(node -v) / npm $(npm -v)"
+    return 0
+  fi
+
+  ok "Menyiapkan Node.js untuk build portal React..."
+  export DEBIAN_FRONTEND=noninteractive
+  ensure_dpkg_consistent
+  apt_get_with_lock_retry install -y ca-certificates curl gpg
+
+  install -d -m 0755 /etc/apt/keyrings
+  if [[ ! -s /etc/apt/keyrings/nodesource.gpg ]]; then
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+      || die "Gagal memasang keyring NodeSource."
+    chmod 0644 /etc/apt/keyrings/nodesource.gpg || true
+  fi
+
+  cat > /etc/apt/sources.list.d/nodesource.list <<'EOF'
+deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main
+EOF
+
+  apt_get_with_lock_retry update -y
+  apt_get_with_lock_retry install -y nodejs
+  hash -r || true
+
+  node_version_satisfies_portal_build \
+    || die "Node.js untuk build portal React tidak memenuhi syarat. Dibutuhkan >=20.19 atau >=22.12, terdeteksi: $(node -v 2>/dev/null || echo 'tidak ada')."
+
+  ok "Node.js siap untuk build portal React: $(node -v) / npm $(npm -v)"
+}
+
 install_extra_deps() {
   export DEBIAN_FRONTEND=noninteractive
 
@@ -133,6 +192,8 @@ install_extra_deps() {
     warn "Paket stunnel tidak tersedia di repo distro. Layanan sshws-stunnel akan dilewati (opsional)."
     ok "Dependency tambahan terpasang (jq, fail2ban, chrony, expect, logrotate, nftables, dropbear, dnsmasq-base, openvpn, easy-rsa, rclone)."
   fi
+
+  ensure_nodejs_runtime_for_account_portal
 }
 
 install_speedtest_snap() {

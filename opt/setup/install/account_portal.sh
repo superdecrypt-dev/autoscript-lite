@@ -9,6 +9,24 @@ install_account_portal() {
   [[ -f "${ACCOUNT_PORTAL_SRC_DIR}/requirements.lock.txt" ]] || die "requirements.lock.txt portal tidak ditemukan."
 
   sync_tree_atomic "${ACCOUNT_PORTAL_SRC_DIR}" "${ACCOUNT_PORTAL_ROOT}" "portal info akun ${ACCOUNT_PORTAL_ROOT}"
+
+  local portal_web_root="${ACCOUNT_PORTAL_ROOT}/web"
+  local portal_web_dist="${portal_web_root}/dist"
+  if [[ -d "${portal_web_root}" ]]; then
+    [[ -f "${portal_web_root}/package.json" ]] || die "package.json portal web tidak ditemukan."
+    [[ -f "${portal_web_root}/package-lock.json" ]] || die "package-lock.json portal web tidak ditemukan."
+
+    ensure_nodejs_runtime_for_account_portal
+    rm -rf "${portal_web_root}/node_modules" "${portal_web_dist}" >/dev/null 2>&1 || true
+    (
+      cd "${portal_web_root}"
+      npm ci --no-audit --no-fund >/dev/null
+      npm run build >/dev/null
+    ) || die "Build frontend portal React gagal."
+    [[ -f "${portal_web_dist}/index.html" ]] || die "Hasil build frontend portal tidak ditemukan: ${portal_web_dist}/index.html"
+    rm -rf "${portal_web_root}/node_modules" >/dev/null 2>&1 || true
+  fi
+
   find "${ACCOUNT_PORTAL_ROOT}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${ACCOUNT_PORTAL_ROOT}" -type f -exec chmod 644 {} + 2>/dev/null || true
   chown -R root:root "${ACCOUNT_PORTAL_ROOT}" 2>/dev/null || true

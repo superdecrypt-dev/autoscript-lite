@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: 34 62% 96%;
+  --foreground: 22 34% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 22 34% 12%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 22 34% 12%;
+  --primary: 24 78% 45%;
+  --primary-foreground: 34 100% 97%;
+  --secondary: 28 30% 92%;
+  --secondary-foreground: 22 34% 12%;
+  --muted: 28 26% 90%;
+  --muted-foreground: 25 18% 38%;
+  --accent: 26 40% 90%;
+  --accent-foreground: 22 34% 12%;
+  --destructive: 1 72% 56%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 27 24% 84%;
+  --input: 27 24% 84%;
+  --ring: 24 78% 45%;
+  --radius: 1.5rem;
+}
+
+.dark {
+  --background: 30 24% 8%;
+  --foreground: 32 60% 94%;
+  --card: 28 22% 12%;
+  --card-foreground: 32 60% 94%;
+  --popover: 28 22% 12%;
+  --popover-foreground: 32 60% 94%;
+  --primary: 32 88% 58%;
+  --primary-foreground: 22 50% 10%;
+  --secondary: 28 18% 16%;
+  --secondary-foreground: 32 60% 94%;
+  --muted: 28 18% 16%;
+  --muted-foreground: 27 16% 68%;
+  --accent: 28 18% 16%;
+  --accent-foreground: 32 60% 94%;
+  --destructive: 0 78% 62%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 29 16% 22%;
+  --input: 29 16% 22%;
+  --ring: 32 88% 58%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-sm: calc(var(--radius) - 0.5rem);
+  --radius-md: calc(var(--radius) - 0.25rem);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 0.5rem);
+}
+
+* {
+  @apply border-border;
+}
+
+html {
+  color-scheme: light;
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background-color: hsl(var(--background));
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  @apply min-h-svh bg-background font-sans text-foreground antialiased;
+  overflow-x: clip;
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(circle at top left, rgba(214, 107, 34, 0.14), transparent 24%),
+    radial-gradient(circle at top right, rgba(242, 178, 79, 0.10), transparent 22%),
+    linear-gradient(180deg, hsl(var(--background)), color-mix(in oklab, hsl(var(--background)) 80%, hsl(var(--foreground))));
+}
+
+#root {
+  @apply min-h-svh;
+  overflow-x: clip;
+}
+
+code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-sm;
+}
+
+@keyframes import-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes import-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

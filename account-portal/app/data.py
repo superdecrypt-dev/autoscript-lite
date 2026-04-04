@@ -978,6 +978,25 @@ def _access_detail_items(proto: str, username: str, fields: dict[str, str] | Non
     return items
 
 
+def _portal_credentials(proto: str, username: str, fields: dict[str, str] | None = None) -> dict[str, str]:
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        bundle_fields = _account_info_bundle(SSH_PROTOCOL, username).get("fields") or {}
+    elif proto == SSH_PROTOCOL:
+        bundle_fields = fields if isinstance(fields, dict) else (_account_info_bundle(proto, username).get("fields") or {})
+    else:
+        return {"username": "", "password": "", "available": ""}
+
+    username_value = _field_lookup(bundle_fields, "Username")
+    password_value = _field_lookup(bundle_fields, "Password")
+    if not username_value or not password_value:
+        return {"username": "", "password": "", "available": ""}
+    return {
+        "username": username_value,
+        "password": password_value,
+        "available": "1",
+    }
+
+
 def build_public_account_summary(token: str) -> dict[str, Any] | None:
     found = _portal_account_lookup(token)
     if found is None:
@@ -1014,6 +1033,7 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
     import_links = account_info.get("import_links") or []
     access_info = _access_summary(proto, username, account_fields, import_links)
     access_details = _access_detail_items(proto, username, account_fields)
+    credentials = _portal_credentials(proto, username, account_fields)
 
     return {
         "ok": True,
@@ -1044,6 +1064,9 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
         "access_ports": access_info.get("ports", "-"),
         "access_path": access_info.get("path", "-"),
         "access_details": access_details,
+        "credentials_available": credentials.get("available") == "1",
+        "credentials_username": credentials.get("username", ""),
+        "credentials_password": credentials.get("password", ""),
         "portal_url": account_portal_url(token),
         "token": str(token or "").strip(),
         "import_links": import_links,
