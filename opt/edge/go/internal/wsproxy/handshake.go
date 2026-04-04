@@ -106,8 +106,23 @@ func SendHandshakeOK(conn net.Conn, accept string) error {
 	return err
 }
 
+func firstForwardedIP(value string) string {
+	for _, item := range strings.Split(value, ",") {
+		if ip := NormalizeIP(item); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
 func ExtractClientIP(headers map[string]string, conn net.Conn) string {
 	if ip := NormalizeIP(headers["cf-connecting-ip"]); ip != "" {
+		return ip
+	}
+	if ip := NormalizeIP(headers["x-real-ip"]); ip != "" {
+		return ip
+	}
+	if ip := firstForwardedIP(headers["x-forwarded-for"]); ip != "" {
 		return ip
 	}
 	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok && addr.IP != nil {

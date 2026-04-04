@@ -814,6 +814,7 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 	if health != nil {
 		health.MarkDialSuccess(backendHealthKey(cfg, target), target, time.Since(started))
 	}
+	leftPrefix = backendIngressPrefix(cfg, target, left, leftPrefix)
 
 	var stats proxy.BridgeStats
 	if target == cfg.SSHBackendAddr() {
@@ -869,6 +870,80 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 		collector.ObserveBridgeError(contextLabel)
 		logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
 	}
+}
+
+func backendIngressPrefix(cfg runtime.Config, target string, left net.Conn, payload []byte) []byte {
+	if !shouldSendProxyHeader(cfg, target) {
+		return payload
+	}
+	header := buildProxyV1Header(left)
+	if len(header) == 0 {
+		return payload
+	}
+	if len(payload) == 0 {
+		return header
+	}
+	merged := make([]byte, 0, len(header)+len(payload))
+	merged = append(merged, header...)
+	merged = append(merged, payload...)
+	return merged
+}
+
+func shouldSendProxyHeader(cfg runtime.Config, target string) bool {
+	switch target {
+	case cfg.HTTPBackendAddr(), cfg.VLESSRawBackendAddr(), cfg.TrojanRawBackendAddr():
+		return true
+	default:
+		return false
+	}
+}
+
+func buildProxyV1Header(conn net.Conn) []byte {
+	if conn == nil {
+		return nil
+	}
+	srcIP, srcPort, srcVer, ok := splitProxyAddr(conn.RemoteAddr())
+	if !ok {
+		return nil
+	}
+	dstIP, dstPort, dstVer, ok := splitProxyAddr(conn.LocalAddr())
+	if !ok || srcVer != dstVer {
+		return nil
+	}
+	family := "TCP4"
+	if srcVer == 6 {
+		family = "TCP6"
+	}
+	return []byte(fmt.Sprintf("PROXY %s %s %s %d %d\r\n", family, srcIP, dstIP, srcPort, dstPort))
+}
+
+func splitProxyAddr(addr net.Addr) (string, int, int, bool) {
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if ok && tcpAddr != nil && tcpAddr.IP != nil {
+		ip := tcpAddr.IP
+		if ip4 := ip.To4(); ip4 != nil {
+			return ip4.String(), tcpAddr.Port, 4, true
+		}
+		if ip16 := ip.To16(); ip16 != nil {
+			return ip16.String(), tcpAddr.Port, 6, true
+		}
+	}
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(fmt.Sprint(addr)))
+	if err != nil {
+		return "", 0, 0, false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return "", 0, 0, false
+	}
+	port, err := net.LookupPort("tcp", portText)
+	if err != nil {
+		return "", 0, 0, false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String(), port, 4, true
+	}
+	return ip.String(), port, 6, true
 }
 
 func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmux.Server, guard *abuse.Guard, collector *observability.Collector, health *backendHealthState, conn net.Conn) {

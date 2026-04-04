@@ -19,7 +19,7 @@ PORTAL_HEADERS = {
 }
 TRAFFIC_WINDOW_SECONDS = 300
 TRAFFIC_MAX_WINDOW_SECONDS = 900
-TRAFFIC_SAMPLE_INTERVAL_SECONDS = 5
+TRAFFIC_SAMPLE_INTERVAL_SECONDS = 1
 TRAFFIC_PRUNE_IDLE_SECONDS = 1800
 TRAFFIC_SOURCE_CACHE_SECONDS = max(1, TRAFFIC_SAMPLE_INTERVAL_SECONDS - 1)
 TRAFFIC_MAX_POINTS = max(2, (TRAFFIC_MAX_WINDOW_SECONDS // TRAFFIC_SAMPLE_INTERVAL_SECONDS) + 4)
@@ -616,9 +616,11 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         const effective = preference === "system" ? (media.matches ? "dark" : "light") : preference;
         document.documentElement.dataset.theme = effective;
         document.documentElement.dataset.themePreference = preference;
+        document.documentElement.style.colorScheme = effective;
       }} catch (_err) {{
         document.documentElement.dataset.theme = "dark";
         document.documentElement.dataset.themePreference = "system";
+        document.documentElement.style.colorScheme = "dark";
       }}
     }})();
   </script>
@@ -860,6 +862,20 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     html[data-theme="light"] .access-group {{
       border-color: rgba(77,44,18,0.12);
     }}
+    html[data-theme="light"] .theme-menu-btn {{
+      background: rgba(255,255,255,0.96);
+      border-color: rgba(77,44,18,0.14);
+      box-shadow: 0 12px 28px rgba(133,95,54,0.12);
+    }}
+    html[data-theme="light"] .theme-popover {{
+      border-color: rgba(77,44,18,0.12);
+      background: linear-gradient(180deg, rgba(255,252,248,0.98), rgba(250,243,235,0.98));
+      box-shadow: 0 18px 44px rgba(133,95,54,0.16);
+    }}
+    html[data-theme="light"] .theme-option:hover,
+    html[data-theme="light"] .theme-option:focus-visible {{
+      background: rgba(180,91,31,0.08);
+    }}
     html[data-theme="light"] .traffic-tooltip {{
       background: rgba(255,252,248,0.96);
       color: #4d2c12;
@@ -1059,13 +1075,13 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       width: min(220px, calc(100vw - 32px));
       padding: 10px;
       border-radius: 18px;
-      border: 1px solid var(--stroke);
-      background: linear-gradient(180deg, var(--surface-strong), var(--surface-soft));
-      box-shadow: 0 18px 44px rgba(0,0,0,0.16);
+      border: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(180deg, rgba(42,26,16,0.98), rgba(31,18,11,0.98));
+      box-shadow: 0 18px 44px rgba(0,0,0,0.28);
       display: grid;
       gap: 6px;
-      z-index: 5;
-      backdrop-filter: blur(18px);
+      z-index: 30;
+      backdrop-filter: blur(8px);
     }}
     .theme-popover[hidden] {{
       display: none;
@@ -1089,12 +1105,12 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     .theme-option:hover {{
       transform: translateY(-1px);
       color: var(--text);
-      background: var(--surface-base);
+      background: rgba(255,255,255,0.06);
     }}
     .theme-option:focus-visible {{
       outline: none;
       color: var(--text);
-      background: var(--surface-base);
+      background: rgba(255,255,255,0.08);
       box-shadow: inset 0 0 0 2px var(--brand-border-strong);
     }}
     .theme-option-label {{
@@ -1616,11 +1632,8 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       box-shadow: 0 10px 22px var(--brand-shadow-soft);
     }}
     .traffic-head {{
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
       gap: 12px;
-      justify-content: space-between;
-      align-items: center;
       margin-bottom: 12px;
     }}
     .traffic-split,
@@ -1632,6 +1645,9 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     .traffic-stat-row {{
       grid-template-columns: repeat(3, minmax(0, 1fr));
       margin-bottom: 12px;
+    }}
+    .traffic-burst-pill {{
+      grid-column: span 1;
     }}
     .traffic-mini {{
       min-width: 0;
@@ -1968,7 +1984,7 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       height: 190px;
     }}
     body[data-device="mobile"] .traffic-head {{
-      align-items: flex-start;
+      gap: 10px;
     }}
     body[data-device="mobile"] .traffic-toolbar {{
       align-items: stretch;
@@ -1984,7 +2000,10 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     }}
     body[data-device="mobile"] .traffic-split,
     body[data-device="mobile"] .traffic-stat-row {{
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    body[data-device="mobile"] .traffic-burst-pill {{
+      grid-column: 1 / -1;
     }}
     body[data-device="mobile"] .traffic-rate {{
       font-size: 24px;
@@ -2100,10 +2119,6 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           <div id="traffic-live-pill" class="traffic-live-pill idle">Tidak ada traffic saat ini</div>
         </div>
         <div class="traffic-head">
-          <div>
-            <p class="traffic-kicker">Rate Saat Ini</p>
-            <p id="traffic-current-rate" class="traffic-rate">0 B/s</p>
-          </div>
           <div class="traffic-split">
             <div class="traffic-mini">
               <span>Download</span>
@@ -2217,11 +2232,19 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           themeMenuBtn.focus();
         }}
       }};
+      const syncEffectiveTheme = (theme, preference) => {{
+        root.dataset.themePreference = preference;
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme;
+        if (document.body) {{
+          document.body.dataset.theme = theme;
+          document.body.style.colorScheme = theme;
+        }}
+      }};
       const applyThemePreference = (preference, persist = true) => {{
         const nextPreference = normalizeThemePreference(preference);
         const nextTheme = effectiveTheme(nextPreference);
-        root.dataset.themePreference = nextPreference;
-        root.dataset.theme = nextTheme;
+        syncEffectiveTheme(nextTheme, nextPreference);
         updateThemeButtons(nextPreference);
         if (persist) {{
           try {{
@@ -2499,7 +2522,7 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         const all = sourcePoints
           .map((item) => ({{
             ts: Number(item?.ts || 0),
-            total: Math.max(0, Number(item?.total_rate_bps ?? item?.rate_bps || 0)),
+            total: Math.max(0, Number((item?.total_rate_bps ?? item?.rate_bps) || 0)),
             down: Math.max(0, Number(item?.down_rate_bps || 0)),
             up: Math.max(0, Number(item?.up_rate_bps || 0)),
           }}))
@@ -2739,7 +2762,6 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           selectedTrafficWindow = availableWindows.includes(defaultWindow) ? defaultWindow : (availableWindows[0] || defaultWindow);
         }}
         updateTrafficRangeButtons();
-        setText("traffic-current-rate", payload?.current_rate_text || "0 B/s");
         setText("traffic-down-rate", payload?.current_down_rate_text || "0 B/s");
         setText("traffic-up-rate", payload?.current_up_rate_text || "0 B/s");
         setText("traffic-window-label", formatWindowLabel(selectedTrafficWindow));

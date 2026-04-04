@@ -33,6 +33,12 @@ XRAY_IP_RE = re.compile(
     r")"
 )
 XRAY_ACCESS_TS_RE = re.compile(r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})")
+XRAY_ROUTE_RE = re.compile(r"\[(?:[^\]@]+@)?([A-Za-z0-9-]+)\s*->")
+EDGE_MUX_ROUTE_RE = re.compile(
+    r"(?P<ts>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}).*?"
+    r"\broute=(?P<route>[a-z0-9-]+)\b.*?"
+    r"\bremote=(?P<remote>\S+)"
+)
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 
 XRAY_ACTIVE_FRESHNESS_SECONDS = 600
@@ -42,6 +48,8 @@ PORTAL_LOOKUP_CACHE_SECONDS = 15
 PORTAL_INDEX_CACHE_SECONDS = 30
 PORTAL_NEGATIVE_CACHE_SECONDS = 10
 XRAY_LAST_SEEN_CACHE_SECONDS = 5
+EDGE_MUX_ROUTE_CACHE_SECONDS = 5
+EDGE_MUX_ROUTE_MATCH_WINDOW_SECONDS = 5
 ACCOUNT_INFO_CACHE_VERSION = 1
 XRAY_IMPORT_SECTION_RE = re.compile(r"^===\s+LINKS IMPORT\s+===$")
 XRAY_IMPORT_LABEL_RE = re.compile(r"^\s{2,}(.+?)\s*:\s*$")
@@ -55,6 +63,8 @@ _PORTAL_INDEX_CACHE: dict[str, object] = {
 }
 _XRAY_LAST_SEEN_CACHE_LOCK = threading.Lock()
 _XRAY_LAST_SEEN_CACHE: dict[str, dict[str, object]] = {}
+_EDGE_MUX_ROUTE_CACHE_LOCK = threading.Lock()
+_EDGE_MUX_ROUTE_CACHE: dict[str, object] = {"expires_at": 0.0, "events": []}
 
 ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
     "vless": (
@@ -325,6 +335,97 @@ def _extract_xray_ip(match: re.Match[str] | None) -> str:
     return str(match.group(1) or match.group(2) or match.group(3) or "").strip()
 
 
+def _is_loopback_ip(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        return ipaddress.ip_address(raw).is_loopback
+    except Exception:
+        lowered = raw.lower()
+        return lowered in {"127.0.0.1", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def _extract_xray_route(line: str) -> str:
+    match = XRAY_ROUTE_RE.search(str(line or ""))
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip().lower()
+
+
+def _parse_edge_mux_remote_ip(raw: str) -> str:
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("[") and "]:" in candidate:
+        return candidate[1:].split("]:", 1)[0].strip()
+    if ":" in candidate:
+        head, tail = candidate.rsplit(":", 1)
+        if tail.isdigit():
+            return head.strip()
+    return candidate
+
+
+def _edge_mux_recent_routes() -> list[dict[str, object]]:
+    now_ts = time.time()
+    with _EDGE_MUX_ROUTE_CACHE_LOCK:
+        cached_expires = float(_EDGE_MUX_ROUTE_CACHE.get("expires_at") or 0.0)
+        cached_events = _EDGE_MUX_ROUTE_CACHE.get("events")
+        if cached_expires > now_ts and isinstance(cached_events, list):
+            return [item for item in cached_events if isinstance(item, dict)]
+
+    since_at = _local_now().timestamp() - (XRAY_ACTIVE_FRESHNESS_SECONDS + 60)
+    since_text = datetime.fromtimestamp(since_at, tz=_local_now().tzinfo).strftime("%Y-%m-%d %H:%M:%S")
+    ok, out = _run_cmd(["journalctl", "-u", "edge-mux", "--since", since_text, "--no-pager", "-o", "cat"], timeout=8)
+    events: list[dict[str, object]] = []
+    if ok and out.strip():
+        for line in out.splitlines():
+            match = EDGE_MUX_ROUTE_RE.search(line)
+            if not match:
+                continue
+            route_name = str(match.group("route") or "").strip().lower()
+            if not route_name or route_name in {"http2", "http-other", "ssh-direct-timeout", "ssh-direct-unknown"}:
+                continue
+            remote_ip = _parse_edge_mux_remote_ip(match.group("remote"))
+            if not remote_ip:
+                continue
+            try:
+                event_ts = datetime.strptime(str(match.group("ts")), "%Y/%m/%d %H:%M:%S").replace(tzinfo=_local_now().tzinfo)
+            except Exception:
+                continue
+            events.append({"ts": event_ts.timestamp(), "route": route_name, "ip": remote_ip})
+
+    with _EDGE_MUX_ROUTE_CACHE_LOCK:
+        _EDGE_MUX_ROUTE_CACHE["expires_at"] = now_ts + EDGE_MUX_ROUTE_CACHE_SECONDS
+        _EDGE_MUX_ROUTE_CACHE["events"] = events
+    return events
+
+
+def _edge_mux_resolve_xray_ip(route_name: str, timestamp: datetime | None) -> str:
+    route_n = str(route_name or "").strip().lower()
+    if not route_n or timestamp is None:
+        return "-"
+    target_ts = timestamp.timestamp()
+    best_ip = "-"
+    best_delta: float | None = None
+    best_event_ts = -1.0
+    for item in _edge_mux_recent_routes():
+        if str(item.get("route") or "").strip().lower() != route_n:
+            continue
+        event_ts = float(item.get("ts") or 0.0)
+        delta = abs(event_ts - target_ts)
+        if delta > EDGE_MUX_ROUTE_MATCH_WINDOW_SECONDS:
+            continue
+        ip_value = str(item.get("ip") or "").strip()
+        if not ip_value:
+            continue
+        if best_delta is None or delta < best_delta or (delta == best_delta and event_ts >= best_event_ts):
+            best_delta = delta
+            best_event_ts = event_ts
+            best_ip = ip_value
+    return best_ip or "-"
+
+
 def _read_tail_lines(path: Path, *, max_bytes: int = XRAY_ACCESS_TAIL_MAX_BYTES, max_lines: int = XRAY_ACCESS_TAIL_MAX_LINES) -> list[str]:
     if not path.exists():
         return []
@@ -386,6 +487,10 @@ def _xray_last_seen_ip(email: str) -> tuple[str, str]:
             return "-", "-"
         ip_match = XRAY_IP_RE.search(line)
         ip_value = _extract_xray_ip(ip_match) or "-"
+        route_name = _extract_xray_route(line)
+        if _is_loopback_ip(ip_value):
+            resolved_ip = _edge_mux_resolve_xray_ip(route_name, timestamp)
+            ip_value = resolved_ip if resolved_ip and resolved_ip != "-" else "-"
         updated_at = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         with _XRAY_LAST_SEEN_CACHE_LOCK:
             _XRAY_LAST_SEEN_CACHE[email_n] = {

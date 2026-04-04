@@ -323,7 +323,10 @@ write_xray_config() {
       },
       "streamSettings": {
         "network": "raw",
-        "security": "none"
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
       },
       "sniffing": {
         "enabled": true,
@@ -349,7 +352,10 @@ write_xray_config() {
       },
       "streamSettings": {
         "network": "raw",
-        "security": "none"
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
       },
       "sniffing": {
         "enabled": true,

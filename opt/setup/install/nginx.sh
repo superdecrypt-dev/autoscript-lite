@@ -420,20 +420,23 @@ write_nginx_config() {
   nginx_ensure_render_context_or_die
   nginx_prepare_stream_conf_state
 
-  local nginx_listen_block nginx_tls_block nginx_mode_desc
+  local nginx_listen_block nginx_tls_block nginx_mode_desc nginx_realip_block
   if nginx_use_internal_edge_backend; then
     if [[ "${EDGE_PROVIDER:-none}" == "nginx-stream" ]] && edge_runtime_activate_requested; then
       nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$';\n  listen '"$(nginx_internal_tls_backend_host)"':'"$(nginx_internal_tls_backend_port)"$' ssl;\n\thttp2 on;'
       nginx_tls_block=$'  ssl_certificate '"${CERT_DIR}"$'/fullchain.pem;\n  ssl_certificate_key '"${CERT_DIR}"$'/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES256-GCM-SHA384;'
+      nginx_realip_block=""
       nginx_mode_desc="internal backend $(nginx_internal_backend_addr) + tls $(nginx_internal_tls_backend_addr)"
     else
-      nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$';\n\thttp2 on;'
+      nginx_listen_block=$'  listen '"$(nginx_internal_backend_host)"':'"$(nginx_internal_backend_port)"$' proxy_protocol;\n\thttp2 on;'
       nginx_tls_block=""
+      nginx_realip_block=$'  set_real_ip_from 127.0.0.1;\n  set_real_ip_from ::1;\n  real_ip_header proxy_protocol;\n  real_ip_recursive on;'
       nginx_mode_desc="internal backend $(nginx_internal_backend_addr)"
     fi
   else
     nginx_listen_block=$'  listen 80;\n  listen [::]:80;\n  listen 443 ssl;\n  listen [::]:443 ssl;\n\thttp2 on;'
     nginx_tls_block=$'  ssl_certificate '"${CERT_DIR}"$'/fullchain.pem;\n  ssl_certificate_key '"${CERT_DIR}"$'/privkey.pem;\n  ssl_protocols TLSv1.2 TLSv1.3;\n  ssl_ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES256-GCM-SHA384;'
+    nginx_realip_block=""
     nginx_mode_desc="public 80/443"
   fi
 
@@ -480,6 +483,7 @@ write_nginx_config() {
     "OPENVPN_WS_PUBLIC_PATH=${openvpn_ws_public_path}"
     "ACCOUNT_PORTAL_PORT=${ACCOUNT_PORTAL_PORT:-7082}"
     "NGINX_LISTEN_BLOCK=${nginx_listen_block}"
+    "NGINX_REALIP_BLOCK=${nginx_realip_block}"
     "NGINX_TLS_BLOCK=${nginx_tls_block}"
   )
 

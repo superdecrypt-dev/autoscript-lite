@@ -349,6 +349,7 @@ EOF
   cat > /usr/local/bin/limit-ip <<'EOF'
 #!/usr/bin/env python3
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -361,6 +362,15 @@ XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
 QUOTA_ROOT = "/opt/quota"
 PROTO_DIRS = ("vless", "vmess", "trojan")
 XRAY_ACCESS_LOG = "/var/log/xray/access.log"
+EDGE_MUX_SERVICE = "edge-mux"
+LOOPBACK_IPS = {"127.0.0.1", "::1", "0:0:0:0:0:0:0:1"}
+EDGE_ROUTE_CACHE_SECONDS = 3
+EDGE_ROUTE_MATCH_WINDOW_SECONDS = 5
+EDGE_ROUTE_FETCH_LOOKBACK_SECONDS = 900
+XRAY_PRELOAD_MAX_BYTES = 16 * 1024 * 1024
+XRAY_PRELOAD_MAX_LINES = 50000
+EDGE_USER_CACHE_SECONDS = 30
+RESET_DIR = "/run/autoscript/limit-ip-reset"
 
 EMAIL_RE = re.compile(r"(?:email|user)\s*[:=]\s*([A-Za-z0-9._%+-]{1,128}@[A-Za-z0-9._-]{1,128})")
 # BUG-07 fix: added IPv6 support. Previously only IPv4 was matched, so clients
@@ -376,6 +386,15 @@ IP_RE = re.compile(
     r"|([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){2,7}):\d{1,5}"  # bare IPv6:port
   r")"
 )
+ROUTE_RE = re.compile(r"\[(?:[^\]@]+@)?([A-Za-z0-9-]+)\s*->")
+EDGE_ROUTE_RE = re.compile(
+  r"(?P<ts>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}).*?"
+  r"\broute=(?P<route>[a-z0-9-]+)\b.*?"
+  r"\bremote=(?P<remote>\S+)"
+)
+
+EDGE_ROUTE_CACHE = {"expires_at": 0.0, "events": []}
+USER_ROUTE_CACHE = {}
 
 def extract_ip_from_match(m):
   """Extract IP string from IP_RE match (handles IPv4 and IPv6 groups)."""
@@ -406,6 +425,153 @@ def extract_peer_identity_from_match(m):
     return endpoint or ip
   return ip
 
+def is_loopback_ip(value):
+  raw = str(value or "").strip().lower()
+  return raw in LOOPBACK_IPS
+
+def parse_access_timestamp(line):
+  try:
+    prefix = str(line or "").strip()[:19]
+    return datetime.strptime(prefix, "%Y/%m/%d %H:%M:%S").timestamp()
+  except Exception:
+    return None
+
+def extract_route_from_line(line):
+  m = ROUTE_RE.search(str(line or ""))
+  if not m:
+    return ""
+  return str(m.group(1) or "").strip().lower()
+
+def parse_remote_ip(raw):
+  value = str(raw or "").strip()
+  if not value:
+    return ""
+  if value.startswith("[") and "]:" in value:
+    return value[1:].split("]:", 1)[0].strip()
+  if ":" in value:
+    head, tail = value.rsplit(":", 1)
+    if tail.isdigit():
+      return head.strip()
+  return value
+
+def read_tail_lines(path, max_bytes=XRAY_PRELOAD_MAX_BYTES, max_lines=XRAY_PRELOAD_MAX_LINES):
+  if not os.path.isfile(path):
+    return []
+  try:
+    with open(path, "rb") as f:
+      f.seek(0, os.SEEK_END)
+      size = f.tell()
+      start = max(0, size - max_bytes)
+      f.seek(start)
+      payload = f.read()
+  except Exception:
+    return []
+  try:
+    lines = payload.decode("utf-8", errors="ignore").splitlines()
+  except Exception:
+    return []
+  if start > 0 and lines:
+    lines = lines[1:]
+  if max_lines > 0:
+    return lines[-max_lines:]
+  return lines
+
+def edge_mux_recent_routes(now_ts=None):
+  if now_ts is None:
+    now_ts = time.time()
+  cached_exp = float(EDGE_ROUTE_CACHE.get("expires_at") or 0.0)
+  cached_events = EDGE_ROUTE_CACHE.get("events")
+  if cached_exp > now_ts and isinstance(cached_events, list):
+    return cached_events
+  since_ts = now_ts - EDGE_ROUTE_FETCH_LOOKBACK_SECONDS
+  since_text = datetime.fromtimestamp(since_ts).strftime("%Y-%m-%d %H:%M:%S")
+  try:
+    proc = subprocess.run(
+      ["journalctl", "-u", EDGE_MUX_SERVICE, "--since", since_text, "--no-pager", "-o", "cat"],
+      capture_output=True,
+      text=True,
+      timeout=8,
+      check=False,
+    )
+    out = ((proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")).strip()
+    if proc.returncode != 0:
+      out = ""
+  except Exception:
+    out = ""
+  events = []
+  if out:
+    for line in out.splitlines():
+      m = EDGE_ROUTE_RE.search(line)
+      if not m:
+        continue
+      route = str(m.group("route") or "").strip().lower()
+      if not route:
+        continue
+      remote_ip = parse_remote_ip(m.group("remote"))
+      if not remote_ip or is_loopback_ip(remote_ip):
+        continue
+      try:
+        event_ts = datetime.strptime(str(m.group("ts")), "%Y/%m/%d %H:%M:%S").timestamp()
+      except Exception:
+        continue
+      events.append({"ts": event_ts, "route": route, "ip": remote_ip})
+  EDGE_ROUTE_CACHE["expires_at"] = now_ts + EDGE_ROUTE_CACHE_SECONDS
+  EDGE_ROUTE_CACHE["events"] = events
+  return events
+
+def resolve_public_ip_from_edge(route_name, line_ts, fallback_identity):
+  route_n = str(route_name or "").strip().lower()
+  if not route_n or line_ts is None:
+    return fallback_identity
+  candidates = []
+  for item in edge_mux_recent_routes(line_ts):
+    if str(item.get("route") or "").strip().lower() != route_n:
+      continue
+    event_ts = float(item.get("ts") or 0.0)
+    delta = abs(event_ts - line_ts)
+    if delta > EDGE_ROUTE_MATCH_WINDOW_SECONDS:
+      continue
+    ip_value = str(item.get("ip") or "").strip()
+    if not ip_value:
+      continue
+    candidates.append((delta, event_ts, ip_value))
+  if not candidates:
+    return fallback_identity
+  unique_ips = {ip for _, _, ip in candidates}
+  if len(unique_ips) != 1:
+    return fallback_identity
+  candidates.sort(key=lambda item: (item[0], -item[1]))
+  _, _, ip_value = candidates[0]
+  return ip_value or fallback_identity
+
+def cache_user_ip(username, route_name, ip_value, now_ts):
+  user = str(username or "").strip()
+  route = str(route_name or "").strip().lower()
+  ip = str(ip_value or "").strip()
+  if not user or not route or not ip or is_loopback_ip(ip):
+    return
+  USER_ROUTE_CACHE[user] = {
+    "ip": ip,
+    "route": route,
+    "expires_at": float(now_ts) + EDGE_USER_CACHE_SECONDS,
+  }
+
+def cached_user_ip(username, route_name, now_ts):
+  user = str(username or "").strip()
+  route = str(route_name or "").strip().lower()
+  entry = USER_ROUTE_CACHE.get(user)
+  if not isinstance(entry, dict):
+    return "-"
+  if float(entry.get("expires_at") or 0.0) <= float(now_ts):
+    USER_ROUTE_CACHE.pop(user, None)
+    return "-"
+  if route and str(entry.get("route") or "").strip().lower() != route:
+    return "-"
+  ip_value = str(entry.get("ip") or "").strip()
+  if not ip_value or is_loopback_ip(ip_value):
+    return "-"
+  return ip_value
+
 def safe_int(v, default=0):
   try:
     if v is None:
@@ -427,6 +593,18 @@ def now_iso():
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
     return json.load(f)
+
+def with_status_lock(path):
+  lock_path = f"{path}.lock"
+  lock_file = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+  fcntl.flock(lock_file, fcntl.LOCK_EX)
+  return lock_file
+
+def release_status_lock(fd):
+  try:
+    fcntl.flock(fd, fcntl.LOCK_UN)
+  finally:
+    os.close(fd)
 
 def save_json_atomic(path, data):
   # BUG-10 fix: use mkstemp (unique name) instead of fixed "{path}.tmp"
@@ -592,70 +770,101 @@ def get_status(username):
     return st
   return {}
 
-def set_status(username, enabled=None, limit=None):
+def update_status_files(username, mutator):
   for p in quota_paths(username):
+    lock_fd = None
     try:
+      lock_fd = with_status_lock(p)
       meta = load_json(p)
+      if not isinstance(meta, dict):
+        continue
+      st_raw = meta.get("status") if isinstance(meta, dict) else {}
+      st = st_raw if isinstance(st_raw, dict) else {}
+      changed = mutator(st)
+      if not changed:
+        continue
+      meta["status"] = st
+      save_json_atomic(p, meta)
     except Exception:
       continue
-    if not isinstance(meta, dict):
-      continue
-    st_raw = meta.get("status") if isinstance(meta, dict) else {}
-    st = st_raw if isinstance(st_raw, dict) else {}
+    finally:
+      if lock_fd is not None:
+        release_status_lock(lock_fd)
+
+def mark_user_reset(username):
+  user = str(username or "").strip()
+  if not user:
+    return
+  os.makedirs(RESET_DIR, exist_ok=True)
+  try:
+    with open(os.path.join(RESET_DIR, user), "w", encoding="utf-8") as f:
+      f.write(str(time.time()))
+  except Exception:
+    pass
+  USER_ROUTE_CACHE.pop(user, None)
+
+def set_status(username, enabled=None, limit=None):
+  def mutator(st):
+    changed = False
     if enabled is not None:
-      st["ip_limit_enabled"] = bool(enabled)
+      value = bool(enabled)
+      if bool(st.get("ip_limit_enabled")) != value:
+        st["ip_limit_enabled"] = value
+        changed = True
     if limit is not None:
-      st["ip_limit"] = int(limit)
-    st.setdefault("ip_limit_locked", False)
-    meta["status"] = st
-    save_json_atomic(p, meta)
+      value = int(limit)
+      if safe_int(st.get("ip_limit"), 0) != value:
+        st["ip_limit"] = value
+        changed = True
+    if "ip_limit_locked" not in st:
+      st["ip_limit_locked"] = False
+      changed = True
+    return changed
+  update_status_files(username, mutator)
+  mark_user_reset(username)
 
 def lock_user(username):
-  for p in quota_paths(username):
-    try:
-      meta = load_json(p)
-    except Exception:
-      continue
-    if not isinstance(meta, dict):
-      continue
-    st_raw = meta.get("status") if isinstance(meta, dict) else {}
-    st = st_raw if isinstance(st_raw, dict) else {}
-    st["ip_limit_locked"] = True
-    # Hanya set lock_reason='ip_limit' jika tidak ada lock prioritas lebih tinggi
-    # BUG-FIX #5: prioritas seragam: manual > quota > ip_limit (komentar sebelumnya salah).
-    # lock_user hanya cek manual_block karena saat ip_limit trigger, quota belum tentu exhausted;
-    # xray-quota akan set lock_reason=quota jika memang quota exhausted juga.
+  def mutator(st):
+    changed = False
+    if not bool(st.get("ip_limit_locked", False)):
+      st["ip_limit_locked"] = True
+      changed = True
     if not bool(st.get("manual_block", False)):
-      st["lock_reason"] = "ip_limit"
-      st["locked_at"] = now_iso()
+      if str(st.get("lock_reason") or "") != "ip_limit":
+        st["lock_reason"] = "ip_limit"
+        changed = True
+      stamp = now_iso()
+      if str(st.get("locked_at") or "").strip() != stamp:
+        st["locked_at"] = stamp
+        changed = True
     elif not st.get("locked_at"):
       st["locked_at"] = now_iso()
-    meta["status"] = st
-    save_json_atomic(p, meta)
+      changed = True
+    return changed
+  update_status_files(username, mutator)
 
 def unlock_user(username):
-  for p in quota_paths(username):
-    try:
-      meta = load_json(p)
-    except Exception:
-      continue
-    if not isinstance(meta, dict):
-      continue
-    st_raw = meta.get("status") if isinstance(meta, dict) else {}
-    st = st_raw if isinstance(st_raw, dict) else {}
-    st["ip_limit_locked"] = False
+  mark_user_reset(username)
+  def mutator(st):
+    changed = False
+    if bool(st.get("ip_limit_locked", False)):
+      st["ip_limit_locked"] = False
+      changed = True
     if st.get("lock_reason") == "ip_limit":
-      # Turunkan lock_reason ke lock lain yang masih aktif (jika ada),
-      # agar status display di manage.sh tetap akurat.
       if bool(st.get("manual_block", False)):
-        st["lock_reason"] = "manual"
+        next_reason = "manual"
       elif bool(st.get("quota_exhausted", False)):
-        st["lock_reason"] = "quota"
+        next_reason = "quota"
       else:
-        st["lock_reason"] = ""
+        next_reason = ""
+      if str(st.get("lock_reason") or "") != next_reason:
+        st["lock_reason"] = next_reason
+        changed = True
+      if not next_reason and st.get("locked_at"):
         st["locked_at"] = ""
-    meta["status"] = st
-    save_json_atomic(p, meta)
+        changed = True
+    return changed
+  update_status_files(username, mutator)
 
 def parse_line(line):
   m1 = EMAIL_RE.search(line)
@@ -665,7 +874,21 @@ def parse_line(line):
   peer_identity = extract_peer_identity_from_match(m2)
   if not peer_identity:
     return None, None
-  return m1.group(1), peer_identity
+  username = m1.group(1)
+  if is_loopback_ip(extract_ip_from_match(m2)):
+    route_name = extract_route_from_line(line)
+    line_ts = parse_access_timestamp(line)
+    cached_ip = cached_user_ip(username, route_name, line_ts or time.time())
+    if cached_ip and cached_ip != "-":
+      peer_identity = cached_ip
+    else:
+      resolved = resolve_public_ip_from_edge(route_name, line_ts, "-")
+      if resolved and resolved != "-":
+        cache_user_ip(username, route_name, resolved, line_ts or time.time())
+        peer_identity = resolved
+      else:
+        return username, None
+  return username, peer_identity
 
 def tail_follow(path):
   p = subprocess.Popen(["tail", "-n", "0", "-F", path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -677,6 +900,55 @@ def tail_follow(path):
       p.terminate()
     except Exception:
       pass
+
+def process_event(config_path, marker, seen, user, ip, now_ts, window_seconds, last_restart, min_restart_interval):
+  reset_path = os.path.join(RESET_DIR, str(user or "").strip())
+  try:
+    reset_ts = os.path.getmtime(reset_path)
+  except Exception:
+    reset_ts = 0.0
+  if reset_ts > 0 and now_ts <= reset_ts:
+    seen.pop(user, None)
+    return last_restart
+  if reset_ts > 0:
+    seen.pop(user, None)
+    try:
+      os.remove(reset_path)
+    except Exception:
+      pass
+  st = get_status(user)
+  if not st:
+    return last_restart
+  if not bool(st.get("ip_limit_enabled", False)):
+    return last_restart
+  lim = safe_int(st.get("ip_limit", 0), 0)
+  if lim <= 0:
+    return last_restart
+  if bool(st.get("ip_limit_locked", False)):
+    return last_restart
+
+  bucket = seen.setdefault(user, {})
+  cutoff = now_ts - float(window_seconds)
+  for ip2 in [k for k, ts in bucket.items() if ts < cutoff]:
+    del bucket[ip2]
+  if not bucket:
+    seen.pop(user, None)
+    bucket = seen.setdefault(user, {})
+  bucket[ip] = now_ts
+
+  if len(bucket) > lim:
+    lock_user(user)
+    seen.pop(user, None)
+    def do_lock(cfg):
+      rule = find_marker_rule(cfg, marker, "blocked")
+      if rule is None:
+        return False
+      return ensure_user(rule, user, marker)
+    changed, _ = load_and_modify_routing_locked(config_path, do_lock)
+    if changed and now_ts - last_restart >= min_restart_interval:
+      restart_xray()
+      last_restart = now_ts
+  return last_restart
 
 def watch(config_path, marker, window_seconds):
   # Verifikasi marker tersedia saat startup
@@ -692,61 +964,26 @@ def watch(config_path, marker, window_seconds):
   seen = {}  # user -> ip -> last_seen_epoch
   last_restart = 0.0
   min_restart_interval = 15.0
-  event_count = 0
-  # Cleanup seluruh seen dict dilakukan setiap N event, bukan setiap event,
-  # untuk menghindari O(users*ips) overhead pada traffic tinggi.
-  CLEANUP_INTERVAL = 200
+
+  preload_cutoff = time.time() - float(window_seconds)
+  for line in read_tail_lines(XRAY_ACCESS_LOG):
+    line_ts = parse_access_timestamp(line)
+    if line_ts is None or line_ts < preload_cutoff:
+      continue
+    user, ip = parse_line(line)
+    if not user or not ip:
+      continue
+    last_restart = process_event(
+      config_path, marker, seen, user, ip, line_ts, window_seconds, last_restart, min_restart_interval
+    )
 
   for line in tail_follow(XRAY_ACCESS_LOG):
     user, ip = parse_line(line)
     if not user or not ip:
       continue
-
-    st = get_status(user)
-    if not st:
-      continue
-    if not bool(st.get("ip_limit_enabled", False)):
-      continue
-    lim = safe_int(st.get("ip_limit", 0), 0)
-    if lim <= 0:
-      continue
-    if bool(st.get("ip_limit_locked", False)):
-      continue
-
-    now = time.time()
-    bucket = seen.setdefault(user, {})
-    bucket[ip] = now
-
-    event_count += 1
-    if event_count >= CLEANUP_INTERVAL:
-      # Periodik cleanup: hapus entry kadaluarsa dari semua user sekaligus
-      event_count = 0
-      cutoff = now - float(window_seconds)
-      for u in list(seen.keys()):
-        ips = seen[u]
-        for ip2 in [k for k, ts in ips.items() if ts < cutoff]:
-          del ips[ip2]
-        if not ips:
-          del seen[u]
-
-    if len(seen.get(user, {})) > lim:
-      lock_user(user)
-      # Setelah lock, hapus entry user dari seen agar tidak lock berulang
-      # sebelum xray-limit-ip service di-restart.
-      seen.pop(user, None)
-      # PENTING: reload config dari disk sebelum save untuk menghindari
-      # overwrite perubahan concurrent dari manage.sh atau daemon lain.
-      # BUG-01 fix: use load_and_modify_routing_locked (read inside lock)
-      def do_lock(cfg):
-        rule = find_marker_rule(cfg, marker, "blocked")
-        if rule is None:
-          return False
-        return ensure_user(rule, user, marker)
-      changed, _ = load_and_modify_routing_locked(config_path, do_lock)
-      if changed:
-        if now - last_restart >= min_restart_interval:
-          restart_xray()
-          last_restart = now
+    last_restart = process_event(
+      config_path, marker, seen, user, ip, time.time(), window_seconds, last_restart, min_restart_interval
+    )
 
   return 0
 
@@ -803,6 +1040,7 @@ def cli():
 
 if __name__ == "__main__":
   raise SystemExit(cli())
+
 EOF
   chmod +x /usr/local/bin/limit-ip
 
