@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 QUOTA_ROOT = Path("/opt/quota")
+ACCOUNT_INFO_ROOT = Path("/opt/account")
 SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
 SSHWS_CONTROL_BIN = Path("/usr/local/bin/sshws-control")
 XRAY_ACCESS_LOG = Path("/var/log/xray/access.log")
@@ -35,6 +36,78 @@ EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 XRAY_ACTIVE_FRESHNESS_SECONDS = 600
 XRAY_ACCESS_TAIL_MAX_BYTES = 1024 * 1024
 XRAY_ACCESS_TAIL_MAX_LINES = 6000
+XRAY_IMPORT_SECTION_RE = re.compile(r"^===\s+LINKS IMPORT\s+===$")
+XRAY_IMPORT_LABEL_RE = re.compile(r"^\s{2,}(.+?)\s*:\s*$")
+
+ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
+    "vless": (
+        "Vless WS",
+        "Vless HUP",
+        "Vless XHTTP",
+        "Vless gRPC",
+        "Vless TCP+TLS Port",
+        "Alt Port SSL/TLS",
+        "Alt Port HTTP",
+        "Vless Path WS",
+        "Vless Path WS Alt",
+        "Vless Path HUP",
+        "Vless Path HUP Alt",
+        "Vless Path XHTTP",
+        "Vless Path XHTTP Alt",
+        "Vless Path Service",
+        "Vless Path Service Alt",
+    ),
+    "vmess": (
+        "Vmess WS",
+        "Vmess HUP",
+        "Vmess XHTTP",
+        "Vmess gRPC",
+        "Alt Port SSL/TLS",
+        "Alt Port HTTP",
+        "Vmess Path WS",
+        "Vmess Path WS Alt",
+        "Vmess Path HUP",
+        "Vmess Path HUP Alt",
+        "Vmess Path XHTTP",
+        "Vmess Path XHTTP Alt",
+        "Vmess Path Service",
+        "Vmess Path Service Alt",
+    ),
+    "trojan": (
+        "Trojan WS",
+        "Trojan HUP",
+        "Trojan XHTTP",
+        "Trojan gRPC",
+        "Alt Port SSL/TLS",
+        "Alt Port HTTP",
+        "Trojan Path WS",
+        "Trojan Path WS Alt",
+        "Trojan Path HUP",
+        "Trojan Path HUP Alt",
+        "Trojan Path XHTTP",
+        "Trojan Path XHTTP Alt",
+        "Trojan Path Service",
+        "Trojan Path Service Alt",
+    ),
+    SSH_PROTOCOL: (
+        "SSH WS Port",
+        "SSH Direct Port",
+        "SSH SSL/TLS Port",
+        "Alt Port SSL/TLS",
+        "Alt Port HTTP",
+        "BadVPN UDPGW",
+        "SSH WS Path",
+        "SSH WS Path Alt",
+    ),
+    OPENVPN_POLICY_PROTOCOL: (
+        "OpenVPN WS Port",
+        "OpenVPN TCP",
+        "Alt Port SSL/TLS",
+        "Alt Port HTTP",
+        "OpenVPN WS Path",
+        "OpenVPN WS Path Alt",
+    ),
+}
 
 
 def _local_today() -> date:
@@ -368,6 +441,102 @@ def _portal_account_lookup(token: str) -> tuple[str, str, Path, dict[str, Any]] 
     return None
 
 
+def _account_info_path(proto: str, username: str) -> Path:
+    account_dir = ACCOUNT_INFO_ROOT / proto
+    return account_dir / f"{username}@{proto}.txt"
+
+
+def _parse_account_info_fields(proto: str, username: str) -> dict[str, str]:
+    path = _account_info_path(proto, username)
+    if not path.exists():
+        return {}
+    fields: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return fields
+    for raw_line in lines:
+        line = str(raw_line or "").rstrip()
+        if not line or line.startswith("==="):
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key_n = key.strip()
+        value_n = value.strip()
+        if key_n:
+            fields[key_n] = value_n
+    return fields
+
+
+def _parse_xray_import_links(proto: str, username: str) -> list[dict[str, str]]:
+    if proto not in XRAY_PROTOCOLS:
+        return []
+    path = _account_info_path(proto, username)
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+
+    in_section = False
+    pending_label = ""
+    items: list[dict[str, str]] = []
+    for raw_line in lines:
+        line = str(raw_line or "")
+        if not in_section:
+            if XRAY_IMPORT_SECTION_RE.match(line.strip()):
+                in_section = True
+            continue
+        if line.startswith("==="):
+            break
+        label_match = XRAY_IMPORT_LABEL_RE.match(line)
+        if label_match:
+            pending_label = str(label_match.group(1) or "").strip()
+            continue
+        link = line.strip()
+        if pending_label and link and "://" in link:
+            items.append({"label": pending_label, "url": link})
+            pending_label = ""
+    return items
+
+
+def _access_summary(proto: str, username: str) -> dict[str, str]:
+    fields = _parse_account_info_fields(proto, username)
+    domain = str(fields.get("Domain") or detect_domain() or "-").strip() or "-"
+    if proto in XRAY_PROTOCOLS:
+        proto_title = proto.title()
+        ports = str(fields.get(f"{proto_title} WS") or fields.get(f"{proto_title} TCP+TLS Port") or "443, 80").strip() or "-"
+        path = str(fields.get(f"{proto_title} Path WS") or "-").strip() or "-"
+    elif proto == SSH_PROTOCOL:
+        ports = str(fields.get("SSH WS Port") or fields.get("SSH Direct Port") or "443, 80").strip() or "-"
+        path = str(fields.get("SSH WS Path") or "-").strip() or "-"
+    elif proto == OPENVPN_POLICY_PROTOCOL:
+        ports = str(fields.get("OpenVPN WS Port") or fields.get("OpenVPN TCP") or "443, 80").strip() or "-"
+        path = str(fields.get("OpenVPN WS Path") or "-").strip() or "-"
+    else:
+        ports = "-"
+        path = "-"
+    return {
+        "domain": domain,
+        "ports": ports,
+        "path": path,
+    }
+
+
+def _access_detail_items(proto: str, username: str) -> list[dict[str, str]]:
+    fields = _parse_account_info_fields(proto, username)
+    selected = ACCESS_DETAIL_FIELDS.get(proto, ())
+    items: list[dict[str, str]] = []
+    for label in selected:
+        value = str(fields.get(label) or "").strip()
+        if not value or value == "-":
+            continue
+        items.append({"label": label, "value": value})
+    return items
+
+
 def build_public_account_summary(token: str) -> dict[str, Any] | None:
     found = _portal_account_lookup(token)
     if found is None:
@@ -380,6 +549,12 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
     quota_limit_bytes = max(0, _to_int(payload.get("quota_limit"), 0))
     quota_used_bytes = max(0, _to_int(payload.get("quota_used"), 0))
     quota_remaining_bytes = max(0, quota_limit_bytes - quota_used_bytes) if quota_limit_bytes > 0 else 0
+    status_payload = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    ip_limit_enabled = bool(status_payload.get("ip_limit_enabled"))
+    ip_limit_value = max(0, _to_int(status_payload.get("ip_limit"), 0))
+    speed_limit_enabled = bool(status_payload.get("speed_limit_enabled"))
+    speed_down_mbit = max(0, _to_int(status_payload.get("speed_down_mbit"), 0))
+    speed_up_mbit = max(0, _to_int(status_payload.get("speed_up_mbit"), 0))
     active_ip = "-"
     active_ip_mode = "none"
     active_ip_updated = "-"
@@ -393,6 +568,9 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
     else:
         active_ip, active_ip_updated = _xray_last_seen_ip(str(payload.get("username") or f"{username}@{proto}"))
         active_ip_mode = "last_seen" if active_ip != "-" else "none"
+    import_links = _parse_xray_import_links(proto, username)
+    access_info = _access_summary(proto, username)
+    access_details = _access_detail_items(proto, username)
 
     return {
         "ok": True,
@@ -408,10 +586,22 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
         "quota_used_bytes": quota_used_bytes,
         "quota_remaining": _human_bytes(quota_remaining_bytes) if quota_limit_bytes > 0 else "Unlimited",
         "quota_remaining_bytes": quota_remaining_bytes,
+        "ip_limit_enabled": ip_limit_enabled,
+        "ip_limit_value": ip_limit_value,
+        "ip_limit_text": str(ip_limit_value) if ip_limit_enabled and ip_limit_value > 0 else "OFF",
+        "speed_limit_enabled": speed_limit_enabled,
+        "speed_down_mbit": speed_down_mbit,
+        "speed_up_mbit": speed_up_mbit,
+        "speed_limit_text": f"DOWN {speed_down_mbit} Mbps / UP {speed_up_mbit} Mbps" if speed_limit_enabled and (speed_down_mbit > 0 or speed_up_mbit > 0) else "OFF",
         "active_ip": active_ip,
         "active_ip_mode": active_ip_mode,
         "active_ip_last_seen_at": active_ip_updated,
+        "access_domain": access_info.get("domain", "-"),
+        "access_ports": access_info.get("ports", "-"),
+        "access_path": access_info.get("path", "-"),
+        "access_details": access_details,
         "portal_url": account_portal_url(token),
         "token": str(token or "").strip(),
+        "import_links": import_links,
         "last_updated": _local_now().strftime("%Y-%m-%d %H:%M:%S"),
     }

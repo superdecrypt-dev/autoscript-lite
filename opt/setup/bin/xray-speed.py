@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +33,11 @@ except ImportError as exc:
 TABLE_NAME = "xray_speed"
 MARK_MIN = 1000
 MARK_MAX = 59999
+SPEED_OUTBOUND_TAG_PREFIX = "speed-mark-"
+SPEED_RULE_MARKER_PREFIX = "dummy-speed-user-"
+HARD_BLOCK_MARKERS = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"}
+DEFAULT_XRAY_OUTBOUNDS_CONF = "/usr/local/etc/xray/conf.d/20-outbounds.json"
+DEFAULT_XRAY_ROUTING_CONF = "/usr/local/etc/xray/conf.d/30-routing.json"
 
 
 def now_iso():
@@ -97,6 +104,46 @@ def parse_mbit(v):
   return round(n, 3)
 
 
+def boolify(v):
+  if isinstance(v, bool):
+    return v
+  if isinstance(v, (int, float)):
+    return bool(v)
+  return str(v or "").strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def norm_tag(v):
+  if not isinstance(v, str):
+    return ""
+  return v.strip()
+
+
+def sanitize_tag(v):
+  s = norm_tag(v)
+  if not s:
+    return "x"
+  return re.sub(r"[^A-Za-z0-9_.-]", "-", s)
+
+
+def load_json_strict(path):
+  with open(path, "r", encoding="utf-8") as f:
+    return json.load(f)
+
+
+def dump_json_atomic(path, obj):
+  tmp = f"{path}.tmp"
+  with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(obj, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp, path)
+
+
+def canonical_json(obj):
+  return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def load_config(path):
   cfg = utils.load_json_file(path)
   if cfg is None:
@@ -119,6 +166,8 @@ def load_config(path):
     "policy_root": str(cfg.get("policy_root") or "/opt/speed").strip() or "/opt/speed",
     "state_file": str(cfg.get("state_file") or "/var/lib/xray-speed/state.json").strip() or "/var/lib/xray-speed/state.json",
     "default_rate_mbit": default_rate,
+    "xray_outbounds_conf": str(cfg.get("xray_outbounds_conf") or DEFAULT_XRAY_OUTBOUNDS_CONF).strip() or DEFAULT_XRAY_OUTBOUNDS_CONF,
+    "xray_routing_conf": str(cfg.get("xray_routing_conf") or DEFAULT_XRAY_ROUTING_CONF).strip() or DEFAULT_XRAY_ROUTING_CONF,
   }
 
 
@@ -181,6 +230,257 @@ def load_policies(policy_root):
 
   policies.sort(key=lambda x: (x["mark"], x["username"]))
   return policies
+
+
+def mark_users_from_policies(policies):
+  mark_users = {}
+  for policy in policies:
+    try:
+      mark = int(policy.get("mark", 0))
+    except Exception:
+      continue
+    if mark < MARK_MIN or mark > MARK_MAX:
+      continue
+    user = str(policy.get("username") or "").strip()
+    if not user:
+      continue
+    mark_users.setdefault(mark, set()).add(user)
+  return {mark: sorted(users) for mark, users in sorted(mark_users.items())}
+
+
+def is_default_rule(rule):
+  if not isinstance(rule, dict):
+    return False
+  if rule.get("type") != "field":
+    return False
+  port = str(rule.get("port", "")).strip()
+  if port not in ("1-65535", "0-65535"):
+    return False
+  if rule.get("user") or rule.get("domain") or rule.get("ip") or rule.get("protocol"):
+    return False
+  return True
+
+
+def is_protected_rule(rule):
+  if not isinstance(rule, dict):
+    return False
+  if rule.get("type") != "field":
+    return False
+  return norm_tag(rule.get("outboundTag")) in ("api", "blocked")
+
+
+def is_hard_block_user_rule(rule):
+  if not isinstance(rule, dict):
+    return False
+  if rule.get("type") != "field":
+    return False
+  if norm_tag(rule.get("outboundTag")) != "blocked":
+    return False
+  users = rule.get("user")
+  if not isinstance(users, list):
+    return False
+  return any(isinstance(user, str) and user in HARD_BLOCK_MARKERS for user in users)
+
+
+def build_synced_xray_configs(out_cfg, rt_cfg, policies):
+  outbounds = out_cfg.get("outbounds")
+  if not isinstance(outbounds, list):
+    raise RuntimeError("Invalid outbounds config: outbounds bukan list")
+
+  routing = rt_cfg.get("routing") or {}
+  rules = routing.get("rules")
+  if not isinstance(rules, list):
+    raise RuntimeError("Invalid routing config: routing.rules bukan list")
+
+  mark_users = mark_users_from_policies(policies)
+  outbounds_by_tag = {}
+  for outbound in outbounds:
+    if not isinstance(outbound, dict):
+      continue
+    tag = norm_tag(outbound.get("tag"))
+    if tag:
+      outbounds_by_tag[tag] = outbound
+
+  default_rule = None
+  for rule in rules:
+    if is_default_rule(rule):
+      default_rule = rule
+      break
+
+  base_selector = []
+  if isinstance(default_rule, dict):
+    outbound_tag = norm_tag(default_rule.get("outboundTag"))
+    if outbound_tag:
+      base_selector = [outbound_tag]
+
+  if not base_selector:
+    if "direct" in outbounds_by_tag:
+      base_selector = ["direct"]
+    else:
+      for tag in outbounds_by_tag.keys():
+        if not tag.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+          base_selector = [tag]
+          break
+
+  if not base_selector:
+    raise RuntimeError("Outbound dasar untuk speed policy tidak ditemukan")
+
+  effective_selector = []
+  seen = set()
+  for tag in base_selector:
+    normed = norm_tag(tag)
+    if not normed:
+      continue
+    if normed in ("api", "blocked"):
+      continue
+    if normed.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+      continue
+    if normed not in outbounds_by_tag:
+      continue
+    if normed in seen:
+      continue
+    seen.add(normed)
+    effective_selector.append(normed)
+
+  if not effective_selector:
+    if "direct" in outbounds_by_tag:
+      effective_selector = ["direct"]
+    else:
+      for tag in outbounds_by_tag.keys():
+        normed = norm_tag(tag)
+        if not normed:
+          continue
+        if normed in ("api", "blocked"):
+          continue
+        if normed.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+          continue
+        effective_selector = [normed]
+        break
+
+  if not effective_selector:
+    raise RuntimeError("Selector outbound dasar untuk speed policy kosong")
+
+  clean_outbounds = []
+  for outbound in outbounds:
+    if isinstance(outbound, dict):
+      tag = norm_tag(outbound.get("tag"))
+      if tag.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+        continue
+    clean_outbounds.append(outbound)
+
+  mark_out_tags = {}
+  for mark in sorted(mark_users.keys()):
+    per_mark = {}
+    for base_tag in effective_selector:
+      src = outbounds_by_tag.get(base_tag)
+      if not isinstance(src, dict):
+        continue
+      clone = copy.deepcopy(src)
+      clone_tag = f"{SPEED_OUTBOUND_TAG_PREFIX}{mark}-{sanitize_tag(base_tag)}"
+      clone["tag"] = clone_tag
+      stream_settings = clone.get("streamSettings")
+      if not isinstance(stream_settings, dict):
+        stream_settings = {}
+      sockopt = stream_settings.get("sockopt")
+      if not isinstance(sockopt, dict):
+        sockopt = {}
+      sockopt["mark"] = int(mark)
+      stream_settings["sockopt"] = sockopt
+      clone["streamSettings"] = stream_settings
+      clean_outbounds.append(clone)
+      per_mark[base_tag] = clone_tag
+    mark_out_tags[mark] = per_mark
+
+  kept_rules = []
+  for rule in rules:
+    if not isinstance(rule, dict):
+      kept_rules.append(rule)
+      continue
+    if rule.get("type") != "field":
+      kept_rules.append(rule)
+      continue
+    users = rule.get("user")
+    outbound_tag = norm_tag(rule.get("outboundTag"))
+    has_speed_marker = isinstance(users, list) and any(
+      isinstance(user, str) and user.startswith(SPEED_RULE_MARKER_PREFIX) for user in users
+    )
+    if has_speed_marker and outbound_tag.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+      continue
+    kept_rules.append(rule)
+
+  speed_rules = []
+  for mark, users in sorted(mark_users.items()):
+    marker = f"{SPEED_RULE_MARKER_PREFIX}{mark}"
+    first_base = effective_selector[0]
+    outbound_tag = mark_out_tags.get(mark, {}).get(first_base, "")
+    if not outbound_tag:
+      continue
+    speed_rules.append({
+      "type": "field",
+      "user": [marker] + users,
+      "outboundTag": outbound_tag,
+    })
+
+  prefix_rules = []
+  hard_block_rules = []
+  other_rules = []
+  for rule in kept_rules:
+    if is_protected_rule(rule) and not is_hard_block_user_rule(rule):
+      prefix_rules.append(rule)
+    elif is_hard_block_user_rule(rule):
+      hard_block_rules.append(rule)
+    else:
+      other_rules.append(rule)
+
+  next_out_cfg = copy.deepcopy(out_cfg)
+  next_out_cfg["outbounds"] = clean_outbounds
+
+  next_rt_cfg = copy.deepcopy(rt_cfg)
+  routing_copy = next_rt_cfg.get("routing") or {}
+  routing_copy["rules"] = prefix_rules + hard_block_rules + speed_rules + other_rules
+  next_rt_cfg["routing"] = routing_copy
+  return next_out_cfg, next_rt_cfg
+
+
+def sync_xray_speed_config(cfg, policies):
+  out_path = str(cfg.get("xray_outbounds_conf") or "").strip()
+  rt_path = str(cfg.get("xray_routing_conf") or "").strip()
+  if not out_path or not rt_path:
+    return False
+  if not os.path.isfile(out_path) or not os.path.isfile(rt_path):
+    return False
+
+  out_cfg = load_json_strict(out_path)
+  rt_cfg = load_json_strict(rt_path)
+  next_out_cfg, next_rt_cfg = build_synced_xray_configs(out_cfg, rt_cfg, policies)
+
+  current_sig = canonical_json(out_cfg) + "\n" + canonical_json(rt_cfg)
+  next_sig = canonical_json(next_out_cfg) + "\n" + canonical_json(next_rt_cfg)
+  if current_sig == next_sig:
+    return False
+
+  dump_json_atomic(out_path, next_out_cfg)
+  dump_json_atomic(rt_path, next_rt_cfg)
+  run(["systemctl", "restart", "xray"], check=True)
+  return True
+
+
+def xray_sync_state_signature(cfg, policies):
+  out_path = str(cfg.get("xray_outbounds_conf") or "").strip()
+  rt_path = str(cfg.get("xray_routing_conf") or "").strip()
+  if not out_path or not rt_path:
+    return "disabled"
+  if not os.path.isfile(out_path) or not os.path.isfile(rt_path):
+    return "missing"
+  try:
+    out_cfg = load_json_strict(out_path)
+    rt_cfg = load_json_strict(rt_path)
+    next_out_cfg, next_rt_cfg = build_synced_xray_configs(out_cfg, rt_cfg, policies)
+  except Exception as exc:
+    return f"error:{exc}"
+  current_sig = canonical_json(out_cfg) + "\n" + canonical_json(rt_cfg)
+  next_sig = canonical_json(next_out_cfg) + "\n" + canonical_json(next_rt_cfg)
+  return "in-sync" if current_sig == next_sig else "drifted"
 
 
 def resolve_cmd(*candidates):
@@ -392,6 +692,11 @@ def apply_snapshot(cfg, snapshot, dry_run=False):
     return 0
 
   ensure_deps()
+  xray_config_synced = False
+  if policies:
+    xray_config_synced = sync_xray_speed_config(cfg, policies)
+  else:
+    xray_config_synced = sync_xray_speed_config(cfg, [])
   tc_cleanup = "none"
   if policies:
     apply_nft()
@@ -414,6 +719,7 @@ def apply_snapshot(cfg, snapshot, dry_run=False):
     "policy_count": len(applied),
     "applied": applied,
     "tc_cleanup": tc_cleanup,
+    "xray_config_sync": "updated" if xray_config_synced else "unchanged",
   })
   return 0
 
@@ -433,9 +739,10 @@ def run_watch(cfg_path, interval):
     try:
       cfg = load_config(cfg_path)
       snapshot, signature = build_snapshot(cfg)
-      if signature != last_signature:
+      runtime_signature = signature + "|" + xray_sync_state_signature(cfg, snapshot["policies"])
+      if runtime_signature != last_signature:
         apply_snapshot(cfg, snapshot, dry_run=False)
-        last_signature = signature
+        last_signature = runtime_signature
     except Exception as e:
       st_file = state_file_fallback
       if isinstance(cfg, dict):
