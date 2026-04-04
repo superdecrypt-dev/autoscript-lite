@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -8,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .data import build_public_account_summary
+from .data import build_public_account_summary, build_public_account_traffic_context
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 PORTAL_HEADERS = {
@@ -16,11 +18,20 @@ PORTAL_HEADERS = {
     "X-Robots-Tag": "noindex, nofollow, noarchive",
 }
 TRAFFIC_WINDOW_SECONDS = 300
+TRAFFIC_MAX_WINDOW_SECONDS = 900
 TRAFFIC_SAMPLE_INTERVAL_SECONDS = 5
 TRAFFIC_PRUNE_IDLE_SECONDS = 1800
-TRAFFIC_MAX_POINTS = max(2, (TRAFFIC_WINDOW_SECONDS // TRAFFIC_SAMPLE_INTERVAL_SECONDS) + 4)
+TRAFFIC_SOURCE_CACHE_SECONDS = max(1, TRAFFIC_SAMPLE_INTERVAL_SECONDS - 1)
+TRAFFIC_MAX_POINTS = max(2, (TRAFFIC_MAX_WINDOW_SECONDS // TRAFFIC_SAMPLE_INTERVAL_SECONDS) + 4)
 _TRAFFIC_LOCK = threading.Lock()
 _TRAFFIC_STATE: dict[str, dict[str, object]] = {}
+XRAY_API_SERVER_FALLBACKS = ("127.0.0.1:10080", "[::1]:10080")
+_XRAY_STATS_CACHE_LOCK = threading.Lock()
+_XRAY_STATS_CACHE: dict[str, object] = {
+    "expires_at": 0.0,
+    "server": "",
+    "totals": {},
+}
 
 app = FastAPI(
     title="autoscript-account-portal",
@@ -135,6 +146,146 @@ def _human_rate(value: float) -> str:
     return f"{amount:.2f} {units[idx]}"
 
 
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        raw = str(value).strip()
+        if not raw:
+            return default
+        return int(float(raw))
+    except Exception:
+        return default
+
+
+def _xray_api_server_candidates(raw: object = None) -> list[str]:
+    ordered: list[str] = []
+    current = str(raw or "").strip()
+    if current:
+        for part in current.split(","):
+            candidate = part.strip()
+            if candidate and candidate not in ordered:
+                ordered.append(candidate)
+    for candidate in XRAY_API_SERVER_FALLBACKS:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
+def _xray_bulk_traffic_totals() -> dict[str, object] | None:
+    now_ts = time.time()
+    with _XRAY_STATS_CACHE_LOCK:
+        expires_at = float(_XRAY_STATS_CACHE.get("expires_at") or 0.0)
+        cached_totals = _XRAY_STATS_CACHE.get("totals")
+        cached_server = str(_XRAY_STATS_CACHE.get("server") or "")
+        if expires_at > now_ts and isinstance(cached_totals, dict):
+            return {
+                "server": cached_server,
+                "totals": cached_totals,
+            }
+
+    last_error = ""
+    for server in _xray_api_server_candidates():
+        try:
+            out = subprocess.check_output(
+                ["xray", "api", "statsquery", f"--server={server}", "--pattern", "user>>>"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
+            )
+            payload = json.loads(out)
+        except FileNotFoundError:
+            return None
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout @ {server}"
+            continue
+        except subprocess.CalledProcessError as exc:
+            last_error = f"exit {exc.returncode} @ {server}"
+            continue
+        except json.JSONDecodeError as exc:
+            last_error = f"json @ {server}: {exc}"
+            continue
+        except Exception as exc:
+            last_error = f"error @ {server}: {exc}"
+            continue
+
+        totals: dict[str, dict[str, int]] = {}
+        for item in payload.get("stat") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            value = max(0, _to_int(item.get("value"), 0))
+            parts = name.split(">>>")
+            if len(parts) < 4 or parts[0] != "user" or parts[2] != "traffic":
+                continue
+            identity = str(parts[1] or "").strip()
+            direction = str(parts[3] or "").strip().lower()
+            if not identity:
+                continue
+            current = totals.setdefault(identity, {"uplink": 0, "downlink": 0})
+            if direction == "uplink":
+                current["uplink"] = value
+            elif direction == "downlink":
+                current["downlink"] = value
+        with _XRAY_STATS_CACHE_LOCK:
+            _XRAY_STATS_CACHE["expires_at"] = now_ts + TRAFFIC_SOURCE_CACHE_SECONDS
+            _XRAY_STATS_CACHE["server"] = server
+            _XRAY_STATS_CACHE["totals"] = totals
+        return {
+            "server": server,
+            "totals": totals,
+        }
+    with _XRAY_STATS_CACHE_LOCK:
+        _XRAY_STATS_CACHE["expires_at"] = now_ts + 1
+        _XRAY_STATS_CACHE["server"] = ""
+        _XRAY_STATS_CACHE["totals"] = {}
+    return {"error": last_error, "totals": {}}
+
+
+def _xray_live_traffic_totals(summary: dict) -> dict[str, object] | None:
+    proto = str(summary.get("protocol") or "").strip().lower()
+    if proto not in {"vless", "vmess", "trojan"}:
+        return None
+    identity = str(summary.get("traffic_account_key") or "").strip()
+    if not identity:
+        username = str(summary.get("username") or "").strip()
+        if username:
+            identity = f"{username}@{proto}"
+    if not identity:
+        return None
+
+    bulk = _xray_bulk_traffic_totals()
+    if not isinstance(bulk, dict):
+        return None
+    totals = bulk.get("totals")
+    if not isinstance(totals, dict):
+        totals = {}
+    metrics = totals.get(identity) if isinstance(totals.get(identity), dict) else None
+    if not isinstance(metrics, dict):
+        return {
+            "source": "quota_delta",
+            "source_text": "Fallback delta quota",
+            "supports_split": False,
+            "error": str(bulk.get("error") or "").strip(),
+        }
+    uplink = max(0, _to_int(metrics.get("uplink"), 0))
+    downlink = max(0, _to_int(metrics.get("downlink"), 0))
+    server = str(bulk.get("server") or "")
+    return {
+        "source": "xray_api_stats",
+        "source_text": "Data live Xray API",
+        "supports_split": True,
+        "uplink_total_bytes": uplink,
+        "downlink_total_bytes": downlink,
+        "total_bytes": uplink + downlink,
+        "detail": f"{identity} via {server}" if server else identity,
+    }
+
+
 def _traffic_prune_locked(now_ts: float) -> None:
     stale_before = now_ts - TRAFFIC_PRUNE_IDLE_SECONDS
     for token in list(_TRAFFIC_STATE.keys()):
@@ -150,57 +301,154 @@ def _traffic_prune_locked(now_ts: float) -> None:
 def _traffic_snapshot(token: str, summary: dict) -> dict[str, object]:
     now_ts = time.time()
     used_bytes = max(0, int(summary.get("quota_used_bytes") or 0))
-    active_ip = str(summary.get("active_ip") or "-").strip() or "-"
     with _TRAFFIC_LOCK:
         _traffic_prune_locked(now_ts)
         state = _TRAFFIC_STATE.setdefault(
             token,
             {
-                "last_used_bytes": used_bytes,
+                "last_total_bytes": used_bytes,
+                "last_downlink_bytes": 0,
+                "last_uplink_bytes": 0,
                 "last_sample_ts": now_ts,
                 "last_seen_at": now_ts,
                 "samples": [],
+                "live_metrics": None,
+                "live_metrics_at": 0.0,
             },
         )
-        last_used_bytes = max(0, int(state.get("last_used_bytes") or 0))
+        cached_metrics = state.get("live_metrics") if isinstance(state.get("live_metrics"), dict) else None
+        cached_metrics_at = float(state.get("live_metrics_at") or 0.0)
+
+    live_metrics = cached_metrics if (cached_metrics is not None and (now_ts - cached_metrics_at) < TRAFFIC_SOURCE_CACHE_SECONDS) else None
+    if live_metrics is None:
+        live_metrics = _xray_live_traffic_totals(summary)
+        with _TRAFFIC_LOCK:
+            state = _TRAFFIC_STATE.setdefault(
+                token,
+                {
+                    "last_total_bytes": used_bytes,
+                    "last_downlink_bytes": 0,
+                    "last_uplink_bytes": 0,
+                    "last_sample_ts": now_ts,
+                    "last_seen_at": now_ts,
+                    "samples": [],
+                    "live_metrics": None,
+                    "live_metrics_at": 0.0,
+                },
+            )
+            state["live_metrics"] = live_metrics if isinstance(live_metrics, dict) else None
+            state["live_metrics_at"] = now_ts
+
+    source = "quota_delta"
+    source_text = "Delta quota"
+    supports_split = False
+    total_bytes = used_bytes
+    downlink_bytes = 0
+    uplink_bytes = 0
+    if isinstance(live_metrics, dict):
+        source = str(live_metrics.get("source") or source)
+        source_text = str(live_metrics.get("source_text") or source_text)
+        supports_split = bool(live_metrics.get("supports_split"))
+        if supports_split:
+            downlink_bytes = max(0, _to_int(live_metrics.get("downlink_total_bytes"), 0))
+            uplink_bytes = max(0, _to_int(live_metrics.get("uplink_total_bytes"), 0))
+            total_bytes = max(0, _to_int(live_metrics.get("total_bytes"), downlink_bytes + uplink_bytes))
+    with _TRAFFIC_LOCK:
+        state = _TRAFFIC_STATE.setdefault(
+            token,
+            {
+                "last_total_bytes": total_bytes,
+                "last_downlink_bytes": downlink_bytes,
+                "last_uplink_bytes": uplink_bytes,
+                "last_sample_ts": now_ts,
+                "last_seen_at": now_ts,
+                "samples": [],
+                "live_metrics": live_metrics if isinstance(live_metrics, dict) else None,
+                "live_metrics_at": now_ts,
+                "source_key": f"{source}:{int(supports_split)}",
+            },
+        )
+        last_total_bytes = max(0, int(state.get("last_total_bytes") or 0))
+        last_downlink_bytes = max(0, int(state.get("last_downlink_bytes") or 0))
+        last_uplink_bytes = max(0, int(state.get("last_uplink_bytes") or 0))
         last_sample_ts = float(state.get("last_sample_ts") or now_ts)
+        previous_source_key = str(state.get("source_key") or "")
+        source_key = f"{source}:{int(supports_split)}"
         samples = state.get("samples")
         if not isinstance(samples, list):
             samples = []
             state["samples"] = samples
 
-        rate_bps = 0.0
+        if previous_source_key != source_key:
+            last_total_bytes = total_bytes
+            last_downlink_bytes = downlink_bytes
+            last_uplink_bytes = uplink_bytes
+            last_sample_ts = now_ts
+            samples = []
+            state["samples"] = samples
+
+        total_rate_bps = 0.0
+        downlink_rate_bps = 0.0
+        uplink_rate_bps = 0.0
         delta_seconds = max(0.0, now_ts - last_sample_ts)
         if delta_seconds > 0:
-            delta_bytes = used_bytes - last_used_bytes
-            if delta_bytes >= 0:
-                rate_bps = max(0.0, delta_bytes / delta_seconds)
+            if supports_split:
+                down_delta = downlink_bytes - last_downlink_bytes
+                up_delta = uplink_bytes - last_uplink_bytes
+                if down_delta >= 0:
+                    downlink_rate_bps = max(0.0, down_delta / delta_seconds)
+                if up_delta >= 0:
+                    uplink_rate_bps = max(0.0, up_delta / delta_seconds)
+                total_rate_bps = max(0.0, downlink_rate_bps + uplink_rate_bps)
+            else:
+                delta_bytes = total_bytes - last_total_bytes
+                if delta_bytes >= 0:
+                    total_rate_bps = max(0.0, delta_bytes / delta_seconds)
 
-        sample = {"ts": int(now_ts), "rate_bps": int(round(rate_bps))}
+        sample = {
+            "ts": int(now_ts),
+            "rate_bps": int(round(total_rate_bps)),
+            "total_rate_bps": int(round(total_rate_bps)),
+            "down_rate_bps": int(round(downlink_rate_bps)),
+            "up_rate_bps": int(round(uplink_rate_bps)),
+        }
         if samples and int(samples[-1].get("ts") or 0) == sample["ts"]:
             samples[-1] = sample
         else:
             samples.append(sample)
 
-        cutoff = int(now_ts - TRAFFIC_WINDOW_SECONDS)
+        cutoff = int(now_ts - TRAFFIC_MAX_WINDOW_SECONDS)
         filtered = [item for item in samples if int(item.get("ts") or 0) >= cutoff]
         if len(filtered) > TRAFFIC_MAX_POINTS:
             filtered = filtered[-TRAFFIC_MAX_POINTS:]
         state["samples"] = filtered
-        state["last_used_bytes"] = used_bytes
+        state["last_total_bytes"] = total_bytes
+        state["last_downlink_bytes"] = downlink_bytes
+        state["last_uplink_bytes"] = uplink_bytes
         state["last_sample_ts"] = now_ts
         state["last_seen_at"] = now_ts
+        state["source_key"] = source_key
 
-        current_rate_bps = int(round(rate_bps))
-        active = current_rate_bps > 0 or active_ip != "-"
+        current_rate_bps = int(round(total_rate_bps))
+        current_down_rate_bps = int(round(downlink_rate_bps))
+        current_up_rate_bps = int(round(uplink_rate_bps))
+        active = current_rate_bps > 0
         return {
             "ok": True,
             "active": active,
-            "source": "quota_delta",
+            "source": source,
+            "source_text": source_text,
+            "supports_split": supports_split,
             "sample_interval_seconds": TRAFFIC_SAMPLE_INTERVAL_SECONDS,
-            "window_seconds": TRAFFIC_WINDOW_SECONDS,
+            "window_seconds": TRAFFIC_MAX_WINDOW_SECONDS,
+            "default_window_seconds": TRAFFIC_WINDOW_SECONDS,
+            "available_windows": [60, 300, 900],
             "current_rate_bps": current_rate_bps,
-            "current_rate_text": _human_rate(rate_bps),
+            "current_rate_text": _human_rate(total_rate_bps),
+            "current_down_rate_bps": current_down_rate_bps,
+            "current_down_rate_text": _human_rate(downlink_rate_bps),
+            "current_up_rate_bps": current_up_rate_bps,
+            "current_up_rate_text": _human_rate(uplink_rate_bps),
             "points": filtered,
         }
 
@@ -440,8 +688,16 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       --chart-fill-bottom: rgba(214,107,34,0);
       --chart-line-a: #f2b24f;
       --chart-line-b: #d66b22;
+      --chart-down-fill-top: rgba(242,178,79,0.20);
+      --chart-down-fill-bottom: rgba(242,178,79,0.02);
+      --chart-down-line: #f2b24f;
+      --chart-up-fill-top: rgba(214,107,34,0.16);
+      --chart-up-fill-bottom: rgba(214,107,34,0.01);
+      --chart-up-line: #d66b22;
       --chart-point: #fff1e3;
       --chart-ring: rgba(255,241,227,0.24);
+      --chart-text: rgba(255,241,227,0.78);
+      --chart-burst: rgba(242,178,79,0.16);
     }}
     html[data-theme="dark"] {{
       color-scheme: dark;
@@ -509,8 +765,16 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       --chart-fill-bottom: rgba(180,91,31,0);
       --chart-line-a: #d98f36;
       --chart-line-b: #9f4e1a;
+      --chart-down-fill-top: rgba(217,143,54,0.14);
+      --chart-down-fill-bottom: rgba(217,143,54,0.01);
+      --chart-down-line: #c87620;
+      --chart-up-fill-top: rgba(159,78,26,0.12);
+      --chart-up-fill-bottom: rgba(159,78,26,0.01);
+      --chart-up-line: #8a4319;
       --chart-point: #2d1d12;
       --chart-ring: rgba(45,29,18,0.18);
+      --chart-text: rgba(77,44,18,0.72);
+      --chart-burst: rgba(200,118,32,0.12);
     }}
     html[data-theme="light"] .sub,
     html[data-theme="light"] .note,
@@ -565,6 +829,10 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       border-color: rgba(77,44,18,0.14);
       background: rgba(255,255,255,0.86);
     }}
+    html[data-theme="light"] .traffic-mini,
+    html[data-theme="light"] .traffic-range {{
+      background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,248,241,0.9));
+    }}
     html[data-theme="light"] .traffic-card {{
       background:
         radial-gradient(circle at top left, rgba(180,91,31,0.05), transparent 40%),
@@ -591,6 +859,15 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     html[data-theme="light"] .spotlight-card,
     html[data-theme="light"] .access-group {{
       border-color: rgba(77,44,18,0.12);
+    }}
+    html[data-theme="light"] .traffic-tooltip {{
+      background: rgba(255,252,248,0.96);
+      color: #4d2c12;
+      border-color: rgba(151,94,49,0.18);
+      box-shadow: 0 16px 36px rgba(77,44,18,0.14);
+    }}
+    html[data-theme="light"] .traffic-tooltip strong {{
+      color: #2f1c11;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -882,6 +1159,16 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     .action-banner.ok {{ color: var(--ok-text); background: var(--ok-bg); border-color: var(--ok-border); }}
     .action-banner.info {{ color: var(--text-soft); background: var(--surface-strong); border-color: var(--stroke); }}
     .action-banner.warning {{ color: var(--warn-text); background: var(--warn-bg); border-color: var(--warn-border); }}
+    .sync-state {{
+      margin-top: 12px;
+      padding: 11px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--warn-border);
+      background: var(--surface-soft);
+      color: var(--warn-text);
+      font-size: 13px;
+      line-height: 1.55;
+    }}
     .problem-state {{
       margin-top: 16px;
       padding: 16px;
@@ -1289,6 +1576,45 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         radial-gradient(circle at top left, var(--brand-bg), transparent 36%),
         linear-gradient(180deg, var(--surface-strong), var(--surface-soft));
     }}
+    .traffic-toolbar {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }}
+    .traffic-range {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--stroke);
+      background: var(--surface-base);
+      box-shadow: inset 0 1px 0 var(--surface-strong);
+    }}
+    .traffic-range-btn {{
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+    }}
+    .traffic-range-btn:hover {{
+      color: var(--text-strong);
+      transform: translateY(-1px);
+    }}
+    .traffic-range-btn.is-active {{
+      background: linear-gradient(90deg, var(--brand-bg-strong), rgba(242,178,79,0.12));
+      color: var(--text-strong);
+      box-shadow: 0 10px 22px var(--brand-shadow-soft);
+    }}
     .traffic-head {{
       display: flex;
       flex-wrap: wrap;
@@ -1296,6 +1622,40 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       justify-content: space-between;
       align-items: center;
       margin-bottom: 12px;
+    }}
+    .traffic-split,
+    .traffic-stat-row {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .traffic-stat-row {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-bottom: 12px;
+    }}
+    .traffic-mini {{
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--stroke);
+      background: linear-gradient(180deg, var(--surface-strong), var(--surface-soft));
+      box-shadow: inset 0 1px 0 var(--surface-strong);
+    }}
+    .traffic-mini span {{
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .traffic-mini strong {{
+      display: block;
+      color: var(--text-strong);
+      font-size: 17px;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
     }}
     .traffic-kicker {{
       margin: 0 0 6px;
@@ -1373,6 +1733,53 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       display: block;
       width: 100%;
       height: 220px;
+    }}
+    .traffic-tooltip {{
+      position: absolute;
+      min-width: 140px;
+      max-width: 220px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--stroke);
+      background: rgba(25, 16, 10, 0.94);
+      color: #fff4e8;
+      font-size: 12px;
+      line-height: 1.45;
+      box-shadow: 0 14px 36px rgba(0,0,0,0.28);
+      pointer-events: none;
+      z-index: 2;
+      transform: translate(-50%, calc(-100% - 14px));
+      backdrop-filter: blur(10px);
+    }}
+    .traffic-tooltip strong {{
+      display: block;
+      margin-bottom: 4px;
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }}
+    .traffic-burst-pill {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--brand-border);
+      background: var(--chart-burst);
+      color: var(--text-accent-strong);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .traffic-burst-pill::before {{
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 8px rgba(242,178,79,0.08);
     }}
     .traffic-meta {{
       display: flex;
@@ -1563,12 +1970,31 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
     body[data-device="mobile"] .traffic-head {{
       align-items: flex-start;
     }}
+    body[data-device="mobile"] .traffic-toolbar {{
+      align-items: stretch;
+    }}
+    body[data-device="mobile"] .traffic-range {{
+      width: 100%;
+      justify-content: space-between;
+    }}
+    body[data-device="mobile"] .traffic-range-btn {{
+      flex: 1 1 0;
+      text-align: center;
+      justify-content: center;
+    }}
+    body[data-device="mobile"] .traffic-split,
+    body[data-device="mobile"] .traffic-stat-row {{
+      grid-template-columns: 1fr;
+    }}
     body[data-device="mobile"] .traffic-rate {{
       font-size: 24px;
     }}
     body[data-device="mobile"] .traffic-live-pill {{
       width: 100%;
       justify-content: center;
+    }}
+    body[data-device="mobile"] .traffic-tooltip {{
+      max-width: calc(100% - 24px);
     }}
   </style>
 </head>
@@ -1605,6 +2031,7 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
             <p id="status-text" class="note">{_escape(summary.get("status_text"))}</p>
           </div>
           <div id="next-action" class="action-banner {action_tone}">{_escape(action_text)}</div>
+          <div id="sync-state" class="sync-state" hidden>Menampilkan data terakhir. Koneksi portal sedang tertunda.</div>
 {"          <div id=\"problem-state\" class=\"problem-state " + ("bad" if status_value == "blocked" else "") + "\"><strong>" + _escape("Akun diblokir" if status_value == "blocked" else "Masa aktif habis") + "</strong>" + _escape("Akses akun dibatasi sampai status dipulihkan." if status_value == "blocked" else "Akun tidak bisa dipakai sampai diperpanjang.") + "</div>" if show_problem_state else ""}
         </div>
         <div class="spotlight">
@@ -1664,18 +2091,48 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           <h2>Traffic Realtime</h2>
           <p id="traffic-state-text">Memantau traffic akun saat digunakan.</p>
         </div>
+        <div class="traffic-toolbar">
+          <div id="traffic-range" class="traffic-range" role="group" aria-label="Rentang traffic realtime">
+            <button class="traffic-range-btn" type="button" data-window="60">1m</button>
+            <button class="traffic-range-btn is-active" type="button" data-window="300">5m</button>
+            <button class="traffic-range-btn" type="button" data-window="900">15m</button>
+          </div>
+          <div id="traffic-live-pill" class="traffic-live-pill idle">Tidak ada traffic saat ini</div>
+        </div>
         <div class="traffic-head">
           <div>
             <p class="traffic-kicker">Rate Saat Ini</p>
             <p id="traffic-current-rate" class="traffic-rate">0 B/s</p>
           </div>
-          <div id="traffic-live-pill" class="traffic-live-pill idle">Tidak ada traffic saat ini</div>
+          <div class="traffic-split">
+            <div class="traffic-mini">
+              <span>Download</span>
+              <strong id="traffic-down-rate">0 B/s</strong>
+            </div>
+            <div class="traffic-mini">
+              <span>Upload</span>
+              <strong id="traffic-up-rate">0 B/s</strong>
+            </div>
+          </div>
+        </div>
+        <div class="traffic-stat-row">
+          <div class="traffic-mini">
+            <span>Peak</span>
+            <strong id="traffic-peak-rate">0 B/s</strong>
+          </div>
+          <div class="traffic-mini">
+            <span>Avg</span>
+            <strong id="traffic-avg-rate">0 B/s</strong>
+          </div>
+          <div id="traffic-burst-pill" class="traffic-burst-pill" hidden>Lonjakan traffic</div>
         </div>
         <div class="traffic-chart-wrap">
           <canvas id="traffic-chart" class="traffic-chart" width="640" height="220"></canvas>
+          <div id="traffic-tooltip" class="traffic-tooltip" hidden></div>
         </div>
         <div class="traffic-meta">
           <span id="traffic-window-label">5 menit terakhir</span>
+          <span id="traffic-source-label">Data live Xray API</span>
           <span id="traffic-sample-label">Sample 5 detik</span>
         </div>
       </article>
@@ -1835,8 +2292,22 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       const importCard = document.getElementById("import-card");
       const trafficCanvas = document.getElementById("traffic-chart");
       const trafficCtx = trafficCanvas?.getContext("2d") || null;
+      const trafficTooltip = document.getElementById("traffic-tooltip");
+      const trafficRange = document.getElementById("traffic-range");
+      const syncState = document.getElementById("sync-state");
       let activeImportKey = importCard?.dataset.activeImportKey || "";
       let latestTrafficPayload = null;
+      let latestTrafficRender = null;
+      let trafficHoverIndex = -1;
+      let selectedTrafficWindow = 300;
+      let trafficTooltipFrame = 0;
+      let pendingTrafficPointer = null;
+      let summaryRefreshFailed = false;
+      let trafficRefreshFailed = false;
+      let summaryRefreshTimer = 0;
+      let trafficRefreshTimer = 0;
+      let summaryRefreshDelay = 15000;
+      let trafficRefreshDelay = {TRAFFIC_SAMPLE_INTERVAL_SECONDS * 1000};
       const importKey = (label) => String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "mode";
       const preferredImportKey = (items) => {{
         const keys = items.map((item) => importKey(item.label));
@@ -1844,6 +2315,36 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           if (keys.includes(preferred)) return preferred;
         }}
         return keys[0] || "mode";
+      }};
+      const updateSyncState = () => {{
+        if (!syncState) return;
+        if (!summaryRefreshFailed && !trafficRefreshFailed) {{
+          syncState.hidden = true;
+          syncState.textContent = "";
+          return;
+        }}
+        syncState.hidden = false;
+        if (summaryRefreshFailed && trafficRefreshFailed) {{
+          syncState.textContent = "Menampilkan data terakhir. Koneksi portal sedang tertunda.";
+          return;
+        }}
+        syncState.textContent = summaryRefreshFailed
+          ? "Info akun belum diperbarui. Menampilkan data terakhir."
+          : "Traffic realtime belum diperbarui. Menampilkan data terakhir.";
+      }};
+      const scheduleSummaryRefresh = (delay = summaryRefreshDelay) => {{
+        if (summaryRefreshTimer) window.clearTimeout(summaryRefreshTimer);
+        summaryRefreshTimer = window.setTimeout(() => {{
+          summaryRefreshTimer = 0;
+          refresh();
+        }}, Math.max(1000, Number(delay || 15000)));
+      }};
+      const scheduleTrafficRefresh = (delay = trafficRefreshDelay) => {{
+        if (trafficRefreshTimer) window.clearTimeout(trafficRefreshTimer);
+        trafficRefreshTimer = window.setTimeout(() => {{
+          trafficRefreshTimer = 0;
+          refreshTraffic();
+        }}, Math.max(1000, Number(delay || {TRAFFIC_SAMPLE_INTERVAL_SECONDS * 1000})));
       }};
       const bindCopyButtons = (root = document) => {{
         root.querySelectorAll(".copy-btn").forEach((button) => {{
@@ -1943,6 +2444,104 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         if (minutes <= 1) return "1 menit terakhir";
         return `${{minutes}} menit terakhir`;
       }};
+      const compactWindowLabel = (seconds) => {{
+        const total = Math.max(0, Number(seconds || 0));
+        if (total < 60) return `${{total}}s`;
+        const minutes = Math.round(total / 60);
+        return `${{Math.max(1, minutes)}}m`;
+      }};
+      const formatClock = (timestampSeconds) => {{
+        const date = new Date(Math.max(0, Number(timestampSeconds || 0)) * 1000);
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleTimeString("id-ID", {{
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }});
+      }};
+      const updateTrafficRangeButtons = () => {{
+        trafficRange?.querySelectorAll(".traffic-range-btn").forEach((button) => {{
+          const active = Number(button.getAttribute("data-window") || 0) === selectedTrafficWindow;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        }});
+      }};
+      const renderTrafficRangeButtons = (payload) => {{
+        if (!trafficRange) return [];
+        const raw = Array.isArray(payload?.available_windows) ? payload.available_windows : [];
+        const windows = raw
+          .map((item) => Math.max(1, Number(item || 0)))
+          .filter((item, index, arr) => Number.isFinite(item) && item > 0 && arr.indexOf(item) === index)
+          .sort((a, b) => a - b);
+        const resolved = windows.length ? windows : [60, 300, 900];
+        const signature = resolved.join(",");
+        if (trafficRange.dataset.signature !== signature) {{
+          trafficRange.dataset.signature = signature;
+          trafficRange.innerHTML = resolved
+            .map((seconds) => `<button class="traffic-range-btn" type="button" data-window="${{seconds}}">${{compactWindowLabel(seconds)}}</button>`)
+            .join("");
+          trafficRange.querySelectorAll(".traffic-range-btn").forEach((button) => {{
+            button.addEventListener("click", () => {{
+              setTrafficWindow(Number(button.getAttribute("data-window") || resolved[0] || 300));
+            }});
+          }});
+        }}
+        return resolved;
+      }};
+      const setTrafficWindow = (seconds) => {{
+        const next = Math.max(60, Number(seconds || 300));
+        selectedTrafficWindow = next;
+        updateTrafficRangeButtons();
+        if (latestTrafficPayload) applyTraffic(latestTrafficPayload);
+      }};
+      const prepareTrafficSeries = (payload) => {{
+        const sourcePoints = Array.isArray(payload?.points) ? payload.points : [];
+        const all = sourcePoints
+          .map((item) => ({{
+            ts: Number(item?.ts || 0),
+            total: Math.max(0, Number(item?.total_rate_bps ?? item?.rate_bps || 0)),
+            down: Math.max(0, Number(item?.down_rate_bps || 0)),
+            up: Math.max(0, Number(item?.up_rate_bps || 0)),
+          }}))
+          .filter((item) => Number.isFinite(item.ts) && item.ts > 0 && Number.isFinite(item.total) && Number.isFinite(item.down) && Number.isFinite(item.up));
+
+        if (!all.length) {{
+          all.push({{ ts: Date.now() / 1000, total: 0, down: 0, up: 0 }});
+        }}
+        const selected = Math.max(60, Number(selectedTrafficWindow || payload?.default_window_seconds || 300));
+        const latestTs = all[all.length - 1].ts;
+        const cutoff = latestTs - selected;
+        let prepared = all.filter((item) => item.ts >= cutoff);
+        if (!prepared.length) {{
+          prepared = [all[all.length - 1]];
+        }}
+        if (prepared.length === 1) {{
+          prepared.unshift({{
+            ts: prepared[0].ts - Math.max(1, Number(payload?.sample_interval_seconds || 5)),
+            total: 0,
+            down: 0,
+            up: 0,
+          }});
+        }}
+        return prepared;
+      }};
+      const trafficStats = (points) => {{
+        const last = points[points.length - 1] || {{ total: 0, down: 0, up: 0 }};
+        const totals = points.map((item) => Math.max(0, Number(item.total || 0)));
+        const peak = Math.max(0, ...totals);
+        const avg = totals.length ? (totals.reduce((sum, value) => sum + value, 0) / totals.length) : 0;
+        const peakIndex = totals.findIndex((value) => value === peak);
+        const burst = peak > 0 && last.total >= Math.max(peak * 0.85, avg * 1.6, 128 * 1024);
+        return {{
+          currentTotal: Math.max(0, Number(last.total || 0)),
+          currentDown: Math.max(0, Number(last.down || 0)),
+          currentUp: Math.max(0, Number(last.up || 0)),
+          peak,
+          avg,
+          peakIndex,
+          burst,
+        }};
+      }};
       const resizeTrafficCanvas = () => {{
         if (!trafficCanvas || !trafficCtx) return;
         const ratio = Math.max(1, window.devicePixelRatio || 1);
@@ -1962,6 +2561,15 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         const value = getComputedStyle(root).getPropertyValue(name).trim();
         return value || fallback;
       }};
+      const hideTrafficTooltip = () => {{
+        if (trafficTooltipFrame) {{
+          window.cancelAnimationFrame(trafficTooltipFrame);
+          trafficTooltipFrame = 0;
+        }}
+        pendingTrafficPointer = null;
+        trafficHoverIndex = -1;
+        if (trafficTooltip) trafficTooltip.hidden = true;
+      }};
       const drawTrafficChart = (payload) => {{
         if (!trafficCanvas || !trafficCtx) return;
         const size = resizeTrafficCanvas();
@@ -1971,10 +2579,16 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
 
         const left = 10;
         const right = width - 10;
-        const top = 12;
-        const bottom = height - 16;
+        const top = 16;
+        const bottom = height - 20;
         const chartHeight = Math.max(20, bottom - top);
         const chartWidth = Math.max(40, right - left);
+        const prepared = prepareTrafficSeries(payload);
+        const stats = trafficStats(prepared);
+        const minTs = prepared[0].ts;
+        const maxTs = prepared[prepared.length - 1].ts;
+        const spanTs = Math.max(1, maxTs - minTs);
+        const maxRate = Math.max(1, ...prepared.map((item) => item.total));
 
         trafficCtx.strokeStyle = cssVar("--chart-grid", "rgba(255,255,255,0.06)");
         trafficCtx.lineWidth = 1;
@@ -1985,75 +2599,155 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
           trafficCtx.lineTo(right, y);
           trafficCtx.stroke();
         }}
-
-        const sourcePoints = Array.isArray(payload?.points) ? payload.points : [];
-        const prepared = sourcePoints
-          .map((item) => ({{
-            ts: Number(item?.ts || 0),
-            rate: Math.max(0, Number(item?.rate_bps || 0)),
-          }}))
-          .filter((item) => Number.isFinite(item.ts) && item.ts > 0 && Number.isFinite(item.rate));
-        if (!prepared.length) {{
-          prepared.push({{ ts: Date.now() / 1000, rate: 0 }});
-        }}
-        if (prepared.length === 1) {{
-          prepared.unshift({{ ts: prepared[0].ts - Number(payload?.sample_interval_seconds || 5), rate: 0 }});
-        }}
-
-        const minTs = prepared[0].ts;
-        const maxTs = prepared[prepared.length - 1].ts;
-        const spanTs = Math.max(1, maxTs - minTs);
-        const maxRate = Math.max(1, ...prepared.map((item) => item.rate));
+        trafficCtx.fillStyle = cssVar("--chart-text", "rgba(255,241,227,0.78)");
+        trafficCtx.font = "12px ui-sans-serif, system-ui, sans-serif";
+        trafficCtx.textAlign = "right";
+        trafficCtx.fillText(formatRate(maxRate), right, top + 2);
+        trafficCtx.fillText("0 B/s", right, bottom - 4);
 
         const points = prepared.map((item) => {{
           const x = left + ((item.ts - minTs) / spanTs) * chartWidth;
-          const y = bottom - (item.rate / maxRate) * chartHeight;
-          return {{ x, y, rate: item.rate }};
+          return {{
+            ts: item.ts,
+            x,
+            total: item.total,
+            down: item.down,
+            up: item.up,
+            yTotal: bottom - (item.total / maxRate) * chartHeight,
+            yDown: bottom - (item.down / maxRate) * chartHeight,
+            yUp: bottom - (item.up / maxRate) * chartHeight,
+          }};
         }});
 
-        const areaGradient = trafficCtx.createLinearGradient(0, top, 0, bottom);
-        areaGradient.addColorStop(0, cssVar("--chart-fill-top", "rgba(214,107,34,0.26)"));
-        areaGradient.addColorStop(1, cssVar("--chart-fill-bottom", "rgba(214,107,34,0)"));
-        trafficCtx.beginPath();
-        trafficCtx.moveTo(points[0].x, bottom);
-        for (const point of points) trafficCtx.lineTo(point.x, point.y);
-        trafficCtx.lineTo(points[points.length - 1].x, bottom);
-        trafficCtx.closePath();
-        trafficCtx.fillStyle = areaGradient;
-        trafficCtx.fill();
+        const drawArea = (seriesKey, fillTopVar, fillBottomVar) => {{
+          const areaGradient = trafficCtx.createLinearGradient(0, top, 0, bottom);
+          areaGradient.addColorStop(0, cssVar(fillTopVar, "rgba(214,107,34,0.26)"));
+          areaGradient.addColorStop(1, cssVar(fillBottomVar, "rgba(214,107,34,0)"));
+          trafficCtx.beginPath();
+          trafficCtx.moveTo(points[0].x, bottom);
+          for (const point of points) trafficCtx.lineTo(point.x, point[seriesKey]);
+          trafficCtx.lineTo(points[points.length - 1].x, bottom);
+          trafficCtx.closePath();
+          trafficCtx.fillStyle = areaGradient;
+          trafficCtx.fill();
+        }};
+        const drawLine = (seriesKey, colorVar, widthLine) => {{
+          trafficCtx.beginPath();
+          trafficCtx.lineWidth = widthLine;
+          trafficCtx.lineJoin = "round";
+          trafficCtx.lineCap = "round";
+          points.forEach((point, index) => {{
+            if (index === 0) trafficCtx.moveTo(point.x, point[seriesKey]);
+            else trafficCtx.lineTo(point.x, point[seriesKey]);
+          }});
+          trafficCtx.strokeStyle = cssVar(colorVar, "#f2b24f");
+          trafficCtx.stroke();
+        }};
+        drawArea("yDown", "--chart-down-fill-top", "--chart-down-fill-bottom");
+        drawArea("yUp", "--chart-up-fill-top", "--chart-up-fill-bottom");
+        drawLine("yDown", "--chart-down-line", 3);
+        drawLine("yUp", "--chart-up-line", 2.2);
 
-        const lineGradient = trafficCtx.createLinearGradient(left, top, right, bottom);
-        lineGradient.addColorStop(0, cssVar("--chart-line-a", "#f2b24f"));
-        lineGradient.addColorStop(1, cssVar("--chart-line-b", "#d66b22"));
-        trafficCtx.beginPath();
-        trafficCtx.lineWidth = 3;
-        trafficCtx.lineJoin = "round";
-        trafficCtx.lineCap = "round";
-        points.forEach((point, index) => {{
-          if (index === 0) trafficCtx.moveTo(point.x, point.y);
-          else trafficCtx.lineTo(point.x, point.y);
+        if (Number.isInteger(stats.peakIndex) && stats.peakIndex >= 0 && points[stats.peakIndex]) {{
+          const peakPoint = points[stats.peakIndex];
+          trafficCtx.beginPath();
+          trafficCtx.arc(peakPoint.x, peakPoint.yTotal, 5, 0, Math.PI * 2);
+          trafficCtx.fillStyle = cssVar("--chart-point", "#fff1e3");
+          trafficCtx.fill();
+          trafficCtx.beginPath();
+          trafficCtx.arc(peakPoint.x, peakPoint.yTotal, 10, 0, Math.PI * 2);
+          trafficCtx.strokeStyle = cssVar("--chart-ring", "rgba(255,241,227,0.24)");
+          trafficCtx.lineWidth = 2;
+          trafficCtx.stroke();
+        }}
+
+        const hoverIndex = trafficHoverIndex >= 0 ? Math.min(trafficHoverIndex, points.length - 1) : -1;
+        if (hoverIndex >= 0 && points[hoverIndex]) {{
+          const hoverPoint = points[hoverIndex];
+          trafficCtx.beginPath();
+          trafficCtx.arc(hoverPoint.x, hoverPoint.yDown, 4, 0, Math.PI * 2);
+          trafficCtx.fillStyle = cssVar("--chart-down-line", "#f2b24f");
+          trafficCtx.fill();
+          trafficCtx.beginPath();
+          trafficCtx.arc(hoverPoint.x, hoverPoint.yUp, 4, 0, Math.PI * 2);
+          trafficCtx.fillStyle = cssVar("--chart-up-line", "#d66b22");
+          trafficCtx.fill();
+        }}
+
+        latestTrafficRender = {{
+          payload,
+          points,
+          stats,
+          width,
+          height,
+          bounds: {{ left, right, top, bottom }},
+        }};
+        return latestTrafficRender;
+      }};
+      const nearestTrafficIndex = (clientX) => {{
+        if (!trafficCanvas || !latestTrafficRender?.points?.length) return -1;
+        const rect = trafficCanvas.getBoundingClientRect();
+        const localX = clientX - rect.left;
+        let bestIndex = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        latestTrafficRender.points.forEach((point, index) => {{
+          const distance = Math.abs(point.x - localX);
+          if (distance < bestDistance) {{
+            bestDistance = distance;
+            bestIndex = index;
+          }}
         }});
-        trafficCtx.strokeStyle = lineGradient;
-        trafficCtx.stroke();
-
-        const lastPoint = points[points.length - 1];
-        trafficCtx.beginPath();
-        trafficCtx.arc(lastPoint.x, lastPoint.y, 4, 0, Math.PI * 2);
-        trafficCtx.fillStyle = cssVar("--chart-point", "#fff1e3");
-        trafficCtx.fill();
-        trafficCtx.beginPath();
-        trafficCtx.arc(lastPoint.x, lastPoint.y, 8, 0, Math.PI * 2);
-        trafficCtx.strokeStyle = cssVar("--chart-ring", "rgba(255,241,227,0.24)");
-        trafficCtx.lineWidth = 2;
-        trafficCtx.stroke();
+        return bestIndex;
+      }};
+      const renderTrafficTooltip = (clientX, clientY) => {{
+        if (!trafficTooltip || !latestTrafficRender?.points?.length) return;
+        const index = nearestTrafficIndex(clientX);
+        if (index < 0) {{
+          hideTrafficTooltip();
+          return;
+        }}
+        const hoverChanged = trafficHoverIndex !== index;
+        trafficHoverIndex = index;
+        const point = latestTrafficRender.points[index];
+        trafficTooltip.hidden = false;
+        trafficTooltip.innerHTML = `<strong>${{formatClock(point.ts)}}</strong>Down: ${{formatRate(point.down)}}<br>Up: ${{formatRate(point.up)}}<br>Total: ${{formatRate(point.total)}}`;
+        const rect = trafficCanvas.getBoundingClientRect();
+        const left = Math.max(12, Math.min(rect.width - 12, clientX - rect.left));
+        const top = Math.max(24, clientY - rect.top);
+        trafficTooltip.style.left = `${{left}}px`;
+        trafficTooltip.style.top = `${{top}}px`;
+        if (hoverChanged && latestTrafficPayload) {{
+          drawTrafficChart(latestTrafficPayload);
+        }}
+      }};
+      const queueTrafficTooltip = (clientX, clientY) => {{
+        pendingTrafficPointer = {{ clientX, clientY }};
+        if (trafficTooltipFrame) return;
+        trafficTooltipFrame = window.requestAnimationFrame(() => {{
+          trafficTooltipFrame = 0;
+          const nextPointer = pendingTrafficPointer;
+          pendingTrafficPointer = null;
+          if (!nextPointer) return;
+          renderTrafficTooltip(nextPointer.clientX, nextPointer.clientY);
+        }});
       }};
       const applyTraffic = (payload) => {{
         latestTrafficPayload = payload;
+        const availableWindows = renderTrafficRangeButtons(payload);
+        const defaultWindow = Math.max(60, Number(payload?.default_window_seconds || 300));
+        if (!availableWindows.includes(selectedTrafficWindow)) {{
+          selectedTrafficWindow = availableWindows.includes(defaultWindow) ? defaultWindow : (availableWindows[0] || defaultWindow);
+        }}
+        updateTrafficRangeButtons();
         setText("traffic-current-rate", payload?.current_rate_text || "0 B/s");
-        setText("traffic-window-label", formatWindowLabel(payload?.window_seconds || 300));
+        setText("traffic-down-rate", payload?.current_down_rate_text || "0 B/s");
+        setText("traffic-up-rate", payload?.current_up_rate_text || "0 B/s");
+        setText("traffic-window-label", formatWindowLabel(selectedTrafficWindow));
+        setText("traffic-source-label", payload?.source_text || "Delta quota");
         setText("traffic-sample-label", `Sample ${{Math.max(1, Number(payload?.sample_interval_seconds || 5))}} detik`);
         const livePill = document.getElementById("traffic-live-pill");
         const stateText = document.getElementById("traffic-state-text");
+        const burstPill = document.getElementById("traffic-burst-pill");
         const active = Boolean(payload?.active);
         if (livePill) {{
           livePill.textContent = active ? "Sedang aktif" : "Tidak ada traffic saat ini";
@@ -2065,7 +2759,13 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
             ? "Traffic realtime terdeteksi untuk akun ini."
             : "Belum ada traffic realtime untuk akun ini.";
         }}
-        drawTrafficChart(payload);
+        const render = drawTrafficChart(payload);
+        const stats = render?.stats || trafficStats(prepareTrafficSeries(payload));
+        setText("traffic-peak-rate", formatRate(stats.peak));
+        setText("traffic-avg-rate", formatRate(stats.avg));
+        if (burstPill) {{
+          burstPill.hidden = !stats.burst;
+        }}
       }};
       const applySummary = (summary) => {{
         const percent = quotaPercent(summary.quota_limit_bytes, summary.quota_used_bytes);
@@ -2139,36 +2839,83 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         }}
       }};
       const refreshTraffic = async () => {{
+        let failed = true;
         try {{
           const response = await fetch(`/api/account/${{token}}/traffic`, {{
             method: "GET",
             cache: "no-store",
             headers: {{ "Accept": "application/json" }},
           }});
-          if (!response.ok) return;
+          if (!response.ok) {{
+            trafficRefreshFailed = true;
+            updateSyncState();
+            return;
+          }}
           const payload = await response.json();
-          if (payload && payload.ok) applyTraffic(payload);
+          if (payload && payload.ok) {{
+            trafficRefreshFailed = false;
+            failed = false;
+            applyTraffic(payload);
+            updateSyncState();
+            return;
+          }}
+          trafficRefreshFailed = true;
+          updateSyncState();
         }} catch (_err) {{
-          // silent traffic refresh
+          trafficRefreshFailed = true;
+          updateSyncState();
+        }} finally {{
+          trafficRefreshDelay = failed
+            ? Math.min(30000, Math.max({TRAFFIC_SAMPLE_INTERVAL_SECONDS * 1000}, Math.round(trafficRefreshDelay * 1.8)))
+            : {TRAFFIC_SAMPLE_INTERVAL_SECONDS * 1000};
+          scheduleTrafficRefresh(trafficRefreshDelay);
         }}
       }};
 
       const refresh = async () => {{
+        let failed = true;
         try {{
           const response = await fetch(`/api/account/${{token}}/summary`, {{
             method: "GET",
             cache: "no-store",
             headers: {{ "Accept": "application/json" }},
           }});
-          if (!response.ok) return;
+          if (!response.ok) {{
+            summaryRefreshFailed = true;
+            updateSyncState();
+            return;
+          }}
           const summary = await response.json();
-          if (summary && summary.ok) applySummary(summary);
+          if (summary && summary.ok) {{
+            summaryRefreshFailed = false;
+            failed = false;
+            applySummary(summary);
+            updateSyncState();
+            return;
+          }}
+          summaryRefreshFailed = true;
+          updateSyncState();
         }} catch (_err) {{
-          // silent background refresh
+          summaryRefreshFailed = true;
+          updateSyncState();
+        }} finally {{
+          summaryRefreshDelay = failed ? Math.min(60000, Math.max(15000, Math.round(summaryRefreshDelay * 1.8))) : 15000;
+          scheduleSummaryRefresh(summaryRefreshDelay);
         }}
       }};
 
       bindCopyButtons(document);
+      trafficCanvas?.addEventListener("pointermove", (event) => {{
+        queueTrafficTooltip(event.clientX, event.clientY);
+      }});
+      trafficCanvas?.addEventListener("pointerleave", () => {{
+        const hadHover = trafficHoverIndex >= 0;
+        hideTrafficTooltip();
+        if (hadHover && latestTrafficPayload) drawTrafficChart(latestTrafficPayload);
+      }});
+      trafficCanvas?.addEventListener("pointerdown", (event) => {{
+        queueTrafficTooltip(event.clientX, event.clientY);
+      }});
       themeMenuBtn?.addEventListener("click", (event) => {{
         event.stopPropagation();
         setThemeMenuOpen(themePopover?.hidden !== false, {{ focusMenu: themePopover?.hidden !== false }});
@@ -2208,6 +2955,7 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
       renderImportTabs({summary.get("import_links")!r});
       applyDevice();
       applyThemePreference(root.dataset.themePreference || "system", false);
+      updateSyncState();
       if (typeof themeMedia.addEventListener === "function") {{
         themeMedia.addEventListener("change", () => {{
           if ((root.dataset.themePreference || "system") === "system") {{
@@ -2226,8 +2974,7 @@ def _render_account_portal(summary: dict, device: str = "desktop") -> str:
         if (latestTrafficPayload) drawTrafficChart(latestTrafficPayload);
       }}, {{ passive: true }});
       refreshTraffic();
-      window.setInterval(refresh, 30000);
-      window.setInterval(refreshTraffic, {TRAFFIC_SAMPLE_INTERVAL_SECONDS * 1000});
+      scheduleSummaryRefresh(15000);
     }})();
   </script>
 </body>
@@ -2253,10 +3000,10 @@ def get_account_summary(token: str) -> JSONResponse:
 
 @app.get("/api/account/{token}/traffic")
 def get_account_traffic(token: str) -> JSONResponse:
-    summary = build_public_account_summary(token)
-    if summary is None:
+    traffic_context = build_public_account_traffic_context(token)
+    if traffic_context is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Portal akun tidak ditemukan.")
-    return JSONResponse(_traffic_snapshot(token, summary), headers=PORTAL_HEADERS)
+    return JSONResponse(_traffic_snapshot(token, traffic_context), headers=PORTAL_HEADERS)
 
 
 @app.get("/account/{token}", response_class=HTMLResponse)
