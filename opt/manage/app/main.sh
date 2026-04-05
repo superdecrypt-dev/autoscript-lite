@@ -9,24 +9,14 @@ main() {
   ensure_account_quota_dirs
 
   case "${1:-}" in
-    __apply-ssh-network)
-      if ! declare -F ssh_network_runtime_apply_now >/dev/null 2>&1; then
-        warn "Hidden apply SSH Network tidak tersedia."
         return 1
       fi
-      if ! ssh_network_runtime_apply_now; then
-        warn "Apply runtime SSH Network gagal."
         return 1
       fi
       return 0
       ;;
-    __sync-ssh-network-session-targets)
-      if ! declare -F ssh_network_runtime_sync_session_targets_now >/dev/null 2>&1; then
-        warn "Hidden sync target sesi SSH Network tidak tersedia."
         return 1
       fi
-      if ! ssh_network_runtime_sync_session_targets_now; then
-        warn "Sinkron target sesi SSH Network gagal."
         return 1
       fi
       return 0

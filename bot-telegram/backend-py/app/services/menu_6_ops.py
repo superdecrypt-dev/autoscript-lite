@@ -10,13 +10,9 @@ MAINTENANCE_ACTIONS = {
     "edge_gateway_status",
     "badvpn_status",
     "daemon_status",
-    "sshws_status",
-    "active_sshws_sessions",
-    "sshws_diagnostics",
     "xray_logs",
     "nginx_logs",
     "xray_daemon_logs",
-    "sshws_combined_logs",
     "restart_xray",
     "restart_nginx",
     "restart_wireproxy",
@@ -24,7 +20,6 @@ MAINTENANCE_ACTIONS = {
     "restart_badvpn",
     "restart_all",
     "restart_xray_daemons",
-    "restart_sshws_stack",
 }
 BACKUP_ACTIONS = {
     "list_backups",

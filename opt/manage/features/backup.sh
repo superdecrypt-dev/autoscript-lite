@@ -457,12 +457,10 @@ backup_gdrive_setup_menu() {
     echo "       - atau satu baris panjang setelah kembali ke rclone"
     echo "    5. Kembali ke sini lalu pilih 'Paste OAuth Token JSON'"
     echo
-    echo "  Opsi B. VPS + SSH tunnel:"
     echo '    1. Di VPS jalankan: rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlIn0"'
     echo "    2. Copy URL lokal yang muncul"
     echo "       contoh: http://127.0.0.1:53682/auth?state=**********"
     echo "    3. Di Termux jalankan tunnel:"
-    echo "       ssh -L 53682:127.0.0.1:53682 root@${tunnel_host}"
     echo "    4. Buka URL tadi di browser HP"
     echo "    5. Login Google lalu copy hasil auth yang muncul"
     echo "       - bisa berupa JSON auth mentah"
@@ -477,7 +475,6 @@ backup_gdrive_setup_menu() {
     echo
     echo "  Catatan:"
     echo "    - jika port 53682 sudah terpakai: pkill -f rclone"
-    echo "    - jika tunnel menampilkan zombie process, itu normal selama koneksi SSH tetap aktif"
     hr
     ui_menu_render_options items 76
     hr

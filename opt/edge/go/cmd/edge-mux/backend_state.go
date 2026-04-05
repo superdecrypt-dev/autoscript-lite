@@ -144,8 +144,7 @@ func monitorBackendState(ctx context.Context, logger *log.Logger, live *runtime.
 			live.Set(refreshed)
 			if logger != nil {
 				logger.Printf(
-					"edge-mux backend discovery updated openvpn_raw_backend=%s vless_raw_backend=%s source=%s trojan_raw_backend=%s source=%s",
-					refreshed.OpenVPNRawBackendAddr(),
+					"edge-mux backend discovery updated vless_raw_backend=%s source=%s trojan_raw_backend=%s source=%s",
 					refreshed.VLESSRawBackendAddr(),
 					refreshed.VLESSRawSource,
 					refreshed.TrojanRawBackendAddr(),
@@ -161,14 +160,6 @@ func backendHealthKey(cfg runtime.Config, target string) string {
 	switch target {
 	case cfg.HTTPBackendAddr():
 		return "http"
-	case cfg.SSHBackendAddr():
-		return "ssh-direct"
-	case cfg.SSHTLSBackendAddr():
-		return "ssh-tls"
-	case cfg.SSHWSBackendAddr():
-		return "ssh-ws"
-	case cfg.OpenVPNRawBackendAddr():
-		return "openvpn"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
 	case cfg.TrojanRawBackendAddr():

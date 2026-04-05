@@ -19,24 +19,15 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_badvpn_status()
         return ok_response(title, msg)
 
-    if action == "openvpn_status":
-        title, msg = system.op_openvpn_status()
         return ok_response(title, msg)
 
     if action == "daemon_status":
         title, msg = system.op_daemon_status()
         return ok_response(title, msg)
 
-    if action == "sshws_status":
-        title, msg = system.op_sshws_status()
         return ok_response(title, msg)
 
-    if action == "active_sshws_sessions":
-        title, msg = system.op_sshws_active_sessions()
-        return ok_response("Maintenance - Active SSHWS Sessions", msg)
 
-    if action == "sshws_diagnostics":
-        title, msg = system.op_sshws_diagnostics()
         return ok_response(title, msg)
 
     if action == "xray_logs":
@@ -51,19 +42,12 @@ def handle(action: str, params: dict, settings) -> dict:
         title, msg = system.op_xray_daemon_logs()
         return ok_response(title, msg)
 
-    if action == "sshws_combined_logs":
-        title, msg = system.op_sshws_combined_logs()
         return ok_response(title, msg)
 
-    if action == "openvpn_logs":
-        title, msg = system.op_openvpn_logs()
         return ok_response(title, msg)
 
-    if action in {"restart_xray", "restart_nginx", "restart_wireproxy", "restart_edge_gateway", "restart_badvpn", "restart_openvpn"}:
         if action == "restart_edge_gateway":
             ok, title, msg = system.op_restart_edge_gateway()
-        elif action == "restart_openvpn":
-            ok, title, msg = system.op_restart_openvpn()
         elif action == "restart_wireproxy":
             ok, title, msg = system_mutations.op_network_warp_restart()
         else:
@@ -89,8 +73,6 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("restart_service_failed", title, msg)
 
-    if action == "restart_sshws_stack":
-        ok, title, msg = system.op_restart_sshws_stack()
         if ok:
             return ok_response(title, msg)
         return error_response("restart_service_failed", title, msg)

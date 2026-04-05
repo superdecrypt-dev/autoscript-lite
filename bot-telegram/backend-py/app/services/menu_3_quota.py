@@ -10,17 +10,11 @@ from ..utils.validators import (
 
 USER_PROTOCOLS = tuple(system.USER_PROTOCOLS)
 XRAY_ONLY_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
-SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
-OPENVPN_ONLY_PROTOCOLS = (getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn"),)
-QAC_PROTOCOLS = tuple(dict.fromkeys((*USER_PROTOCOLS, *OPENVPN_ONLY_PROTOCOLS)))
-PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL}
 
 
 def _scope_title(scope: str, label: str) -> str:
     prefix = {
         "xray": "Xray QAC",
-        "ssh": "SSH QAC",
-        "openvpn": "OpenVPN QAC",
     }.get(scope, "Quota & Access Control")
     return f"{prefix} - {label}" if label else prefix
 
@@ -28,15 +22,10 @@ def _scope_title(scope: str, label: str) -> str:
 def _scope_protocols(scope: str) -> tuple[str, ...]:
     if scope == "xray":
         return XRAY_ONLY_PROTOCOLS
-    if scope == "ssh":
-        return SSH_ONLY_PROTOCOLS
-    if scope == "openvpn":
-        return OPENVPN_ONLY_PROTOCOLS
     return QAC_PROTOCOLS
 
 
 def _ip_limit_label(scope: str) -> str:
-    return "IP Limit" if scope == "openvpn" else "IP/Login Limit"
 
 
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
@@ -53,12 +42,9 @@ def _proto_requires_sensitive_output(proto: str) -> bool:
 def _attach_account_download(proto: str, username: str, title: str, message: str) -> dict:
     data: dict[str, object] = {}
     proto_n = str(proto).strip().lower()
-    if proto_n == getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn"):
-        ok_download, download_or_err = system_mutations.op_openvpn_profile_file_download(username)
         if ok_download and isinstance(download_or_err, dict):
             data["download_file"] = download_or_err
         else:
-            message = f"{message}\n- Warning: profile OpenVPN terbaru tidak bisa diunduh ({download_or_err})"
         return ok_response(title, message, data=data)
 
     download_proto = proto_n
@@ -88,7 +74,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if not ok_u:
             return user_or_err
         _title, msg = system.op_quota_detail(str(proto_or_err).lower(), str(user_or_err))
-        data = {"allow_sensitive_output": True} if str(proto_or_err).lower() == system.SSH_PROTOCOL else None
         return ok_response(title, msg, data=data)
 
     if action == "set_quota_limit":

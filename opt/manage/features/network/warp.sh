@@ -1095,10 +1095,6 @@ warp_runtime_snapshot_restore() {
   return 0
 }
 
-warp_runtime_refresh_ssh_network_after_profile_change() {
-  declare -F ssh_network_runtime_refresh_if_available >/dev/null 2>&1 || return 0
-  if ! ssh_network_runtime_refresh_if_available; then
-    warn "Runtime SSH Network gagal disegarkan sesudah profile WARP berubah."
     return 1
   fi
   return 0
@@ -1109,7 +1105,6 @@ warp_runtime_snapshot_restore_or_fail() {
   local snap_dir="$1"
   local primary_message="$2"
   if warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 \
-    && warp_runtime_refresh_ssh_network_after_profile_change >/dev/null 2>&1; then
     warn "${primary_message}"
   else
     warn "${primary_message}"
@@ -1125,7 +1120,6 @@ warp_runtime_snapshot_restore_on_abort() {
   local snap_dir="${1:-}"
   [[ -n "${snap_dir}" && -d "${snap_dir}" ]] || return 0
   if warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 \
-    && warp_runtime_refresh_ssh_network_after_profile_change >/dev/null 2>&1; then
     warn "Transaksi WARP terputus sebelum selesai. Snapshot runtime dipulihkan."
   else
     warn "Transaksi WARP terputus sebelum selesai dan rollback snapshot gagal."
@@ -2671,13 +2665,10 @@ warp_zero_trust_cli_registration_line_get() {
   printf '%s\n' "${line}"
 }
 
-warp_zero_trust_ssh_guard_state_get() {
   local st="" effective="0" backend_applied="" backend_effective=""
-  if ! declare -F ssh_network_runtime_status_get >/dev/null 2>&1; then
     printf 'unknown\n'
     return 0
   fi
-  st="$(ssh_network_runtime_status_get 2>/dev/null || true)"
   effective="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
   backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
   backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
@@ -2697,14 +2688,10 @@ warp_zero_trust_ssh_guard_state_get() {
   fi
 }
 
-warp_zero_trust_require_ssh_compatible() {
   local guard=""
-  guard="$(warp_zero_trust_ssh_guard_state_get)"
   case "${guard}" in
     ok*|unknown) return 0 ;;
   esac
-  warn "Zero Trust untuk SSH hanya didukung bila runtime SSH Network sudah applied sehat di backend Local Proxy."
-  warn "Set SSH Network ke backend Local Proxy lalu apply, atau kosongkan effective WARP users dulu."
   warn "Status guard: ${guard}"
   return 1
 }
@@ -2904,7 +2891,6 @@ warp_tier_free_plus_show_status() {
 warp_tier_zero_trust_show_status() {
   local cfg team client_id client_secret proxy_port config_state="" active_mode="" active_mode_display=""
   local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
-  local cli_status="unknown" reg_status="unknown" ssh_guard="unknown"
   cfg="$(warp_zero_trust_config_get)"
   active_mode="$(warp_mode_state_get)"
   active_mode_display="$(warp_mode_display_get 2>/dev/null || true)"
@@ -2923,7 +2909,6 @@ warp_tier_zero_trust_show_status() {
     cli_status="$(warp_zero_trust_cli_status_line_get)"
     reg_status="$(warp_zero_trust_cli_registration_line_get)"
   fi
-  ssh_guard="$(warp_zero_trust_ssh_guard_state_get)"
 
   printf "Mode          : %s\n" "${active_mode_display:-Zero Trust}"
   printf "Backend       : cloudflare-warp (Zero Trust proxy)\n"
@@ -2937,7 +2922,6 @@ warp_tier_zero_trust_show_status() {
   printf "Proxy State   : %s\n" "${proxy_state}"
   printf "CLI Status    : %s\n" "${cli_status}"
   printf "Registration  : %s\n" "${reg_status}"
-  printf "SSH Guard     : %s\n" "${ssh_guard}"
 }
 
 warp_tier_zero_trust_show_requirements() {
@@ -2946,15 +2930,11 @@ warp_tier_zero_trust_show_requirements() {
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
   printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
-  printf "Requirement   : bila ada effective WARP users di SSH Network, runtime SSH wajib applied sehat di backend Local Proxy sebelum Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
-  printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan SSH Network via Local Proxy\n"
-  printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
-  printf "Rollout Note  : Dedicated interface SSH tetap dipertahankan sebagai fallback Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_free_plus_backend_prepare_activate_unlocked() {
@@ -3139,7 +3119,6 @@ warp_zero_trust_apply_connect() {
       pause
       exit 1
     fi
-    if ! warp_zero_trust_require_ssh_compatible; then
       hr
       pause
       exit 1
@@ -3356,8 +3335,6 @@ warp_tier_switch_free() {
     if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "free" "warp_tier_last_verified" "free" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah switch WARP free."
     fi
     log "WARP tier target di-set: free"
     warp_txn_success="true"
@@ -3479,8 +3456,6 @@ warp_tier_switch_plus() {
       "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP plus."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah switch WARP plus."
     fi
     log "WARP tier target di-set: plus"
     warp_txn_success="true"
@@ -3599,8 +3574,6 @@ warp_tier_reconnect_regenerate() {
     if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "${target}" "warp_tier_last_verified" "${target}" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')" >/dev/null 2>&1; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah reconnect/regenerate WARP."
     fi
     warp_txn_success="true"
     trap - EXIT

@@ -125,23 +125,6 @@ WARP_ZEROTRUST_CONFIG_FILE="${WARP_ZEROTRUST_ROOT}/config.env"
 WARP_ZEROTRUST_MDM_FILE="${WARP_ZEROTRUST_MDM_FILE:-/var/lib/cloudflare-warp/mdm.xml}"
 WARP_ZEROTRUST_SERVICE="${WARP_ZEROTRUST_SERVICE:-warp-svc}"
 WARP_ZEROTRUST_PROXY_PORT="${WARP_ZEROTRUST_PROXY_PORT:-40000}"
-SSH_ACCOUNT_DIR="${ACCOUNT_ROOT}/ssh"
-SSH_QUOTA_DIR="${QUOTA_ROOT}/ssh"
-SSH_USERS_STATE_DIR="${SSH_QUOTA_DIR}"
-SSHWS_DROPBEAR_SERVICE="sshws-dropbear"
-SSHWS_STUNNEL_SERVICE="sshws-stunnel"
-SSHWS_PROXY_SERVICE="sshws-proxy"
-SSHWS_QAC_ENFORCER_SERVICE="sshws-qac-enforcer"
-SSHWS_QAC_ENFORCER_TIMER="sshws-qac-enforcer.timer"
-SSHWS_DROPBEAR_PORT="${SSHWS_DROPBEAR_PORT:-22022}"
-SSHWS_STUNNEL_PORT="${SSHWS_STUNNEL_PORT:-22443}"
-SSHWS_PROXY_PORT="${SSHWS_PROXY_PORT:-10015}"
-OPENVPN_ROOT="${OPENVPN_ROOT:-/etc/autoscript/openvpn}"
-OPENVPN_CONFIG_ENV_FILE="${OPENVPN_CONFIG_ENV_FILE:-${OPENVPN_ROOT}/config.env}"
-OPENVPN_PROFILE_DIR="${OPENVPN_PROFILE_DIR:-/opt/account/openvpn}"
-OPENVPN_METADATA_DIR="${OPENVPN_METADATA_DIR:-/var/lib/openvpn-manage/users}"
-OPENVPN_MANAGE_BIN="${OPENVPN_MANAGE_BIN:-/usr/local/bin/openvpn-manage}"
-OPENVPN_TCP_SERVICE="${OPENVPN_TCP_SERVICE:-openvpn-server@autoscript-tcp}"
 ZIVPN_ROOT="${ZIVPN_ROOT:-/etc/zivpn}"
 ZIVPN_CONFIG_FILE="${ZIVPN_CONFIG_FILE:-${ZIVPN_ROOT}/config.json}"
 ZIVPN_CERT_FILE="${ZIVPN_CERT_FILE:-${ZIVPN_ROOT}/zivpn.crt}"
@@ -151,53 +134,17 @@ ZIVPN_SYNC_BIN="${ZIVPN_SYNC_BIN:-/usr/local/bin/zivpn-password-sync}"
 ZIVPN_SERVICE="${ZIVPN_SERVICE:-zivpn.service}"
 ZIVPN_LISTEN_PORT="${ZIVPN_LISTEN_PORT:-5667}"
 ZIVPN_OBFS="${ZIVPN_OBFS:-zivpn}"
-SSH_DNS_ADBLOCK_ROOT="${SSH_DNS_ADBLOCK_ROOT:-/etc/autoscript/ssh-adblock}"
-SSH_DNS_ADBLOCK_CONFIG_FILE="${SSH_DNS_ADBLOCK_ROOT}/config.env"
-SSH_DNS_ADBLOCK_BLOCKLIST_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocked.domains"
-SSH_DNS_ADBLOCK_URLS_FILE="${SSH_DNS_ADBLOCK_ROOT}/source.urls"
-SSH_DNS_ADBLOCK_RENDERED_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocklist.generated.conf"
-SSH_DNS_ADBLOCK_DNSMASQ_CONF="${SSH_DNS_ADBLOCK_ROOT}/dnsmasq.conf"
-SSH_DNS_ADBLOCK_SERVICE="${SSH_DNS_ADBLOCK_SERVICE:-ssh-adblock-dns.service}"
-SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-adblock-sync.service}"
-SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/adblock-sync}"
-SSH_NETWORK_ROOT="${SSH_NETWORK_ROOT:-/etc/autoscript/ssh-network}"
-SSH_NETWORK_CONFIG_FILE="${SSH_NETWORK_ROOT}/config.env"
-SSH_NETWORK_NFT_TABLE="${SSH_NETWORK_NFT_TABLE:-autoscript_ssh_network}"
-SSH_NETWORK_FWMARK="${SSH_NETWORK_FWMARK:-42042}"
-SSH_NETWORK_ROUTE_TABLE="${SSH_NETWORK_ROUTE_TABLE:-42042}"
-SSH_NETWORK_RULE_PREF="${SSH_NETWORK_RULE_PREF:-14200}"
-SSH_NETWORK_WARP_BACKEND="${SSH_NETWORK_WARP_BACKEND:-auto}"
-SSH_NETWORK_WARP_INTERFACE="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
-SSH_NETWORK_XRAY_REDIR_PORT="${SSH_NETWORK_XRAY_REDIR_PORT:-12345}"
-SSH_NETWORK_XRAY_REDIR_PORT_V6="${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}"
-SSH_NETWORK_LOCK_FILE="${SSH_NETWORK_LOCK_FILE:-/run/autoscript/locks/ssh-network.lock}"
 ADBLOCK_AUTO_UPDATE_SERVICE="${ADBLOCK_AUTO_UPDATE_SERVICE:-adblock-update.service}"
 ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
-  "${WIREGUARD_DIR}" "${SSH_WARP_SYNC_BIN}" \
   "${WARP_MODE_STATE_KEY}" "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
   "${WARP_ZEROTRUST_ROOT}" "${WARP_ZEROTRUST_CONFIG_FILE}" "${WARP_ZEROTRUST_MDM_FILE}" \
   "${WARP_ZEROTRUST_SERVICE}" "${WARP_ZEROTRUST_PROXY_PORT}" \
-  "${SSH_USERS_STATE_DIR}" "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" \
-  "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}" \
-  "${SSHWS_QAC_ENFORCER_SERVICE}" "${SSHWS_QAC_ENFORCER_TIMER}" \
-  "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}" \
-  "${OPENVPN_ROOT}" "${OPENVPN_CONFIG_ENV_FILE}" "${OPENVPN_PROFILE_DIR}" \
-  "${OPENVPN_METADATA_DIR}" "${OPENVPN_MANAGE_BIN}" "${OPENVPN_TCP_SERVICE}" \
   "${ZIVPN_ROOT}" "${ZIVPN_CONFIG_FILE}" "${ZIVPN_CERT_FILE}" "${ZIVPN_KEY_FILE}" \
   "${ZIVPN_PASSWORDS_DIR}" "${ZIVPN_SYNC_BIN}" "${ZIVPN_SERVICE}" \
   "${ZIVPN_LISTEN_PORT}" "${ZIVPN_OBFS}" \
-  "${SSH_DNS_ADBLOCK_ROOT}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" \
-  "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${SSH_DNS_ADBLOCK_URLS_FILE}" "${SSH_DNS_ADBLOCK_RENDERED_FILE}" \
-  "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" "${SSH_DNS_ADBLOCK_SERVICE}" \
-  "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}" \
-  "${SSH_NETWORK_ROOT}" "${SSH_NETWORK_CONFIG_FILE}" "${SSH_NETWORK_NFT_TABLE}" \
-  "${SSH_NETWORK_FWMARK}" "${SSH_NETWORK_ROUTE_TABLE}" "${SSH_NETWORK_RULE_PREF}" \
-  "${SSH_NETWORK_WARP_BACKEND}" "${SSH_NETWORK_WARP_INTERFACE}" \
-  "${SSH_NETWORK_XRAY_REDIR_PORT}" "${SSH_NETWORK_XRAY_REDIR_PORT_V6}" \
-  "${SSH_NETWORK_LOCK_FILE}" \
   "${ADBLOCK_AUTO_UPDATE_SERVICE}" "${ADBLOCK_AUTO_UPDATE_TIMER}"
 
 # Main Menu header cache (best-effort, supaya render menu tetap cepat)
@@ -244,12 +191,6 @@ MAIN_INFO_REMOTE_LOOKUPS="${MAIN_INFO_REMOTE_LOOKUPS:-1}"
 init_runtime_dirs() {
   mkdir -p "${WORK_DIR}"
   chmod 700 "${WORK_DIR}"
-  mkdir -p "${SSH_ACCOUNT_DIR}"
-  chmod 700 "${SSH_ACCOUNT_DIR}" || true
-  mkdir -p "${SSH_USERS_STATE_DIR}"
-  chmod 700 "${SSH_USERS_STATE_DIR}" || true
-  mkdir -p "${SSH_NETWORK_ROOT}" 2>/dev/null || true
-  chmod 700 "${SSH_NETWORK_ROOT}" 2>/dev/null || true
 
   local lock_dir
   for lock_dir in \
@@ -259,7 +200,6 @@ init_runtime_dirs() {
     "$(dirname "${ROUTING_LOCK_FILE}")" \
     "$(dirname "${DNS_LOCK_FILE}")" \
     "$(dirname "${WARP_LOCK_FILE}")" \
-    "$(dirname "${SSH_NETWORK_LOCK_FILE}")"; do
     mkdir -p "${lock_dir}" 2>/dev/null || true
     chmod 700 "${lock_dir}" 2>/dev/null || true
   done
@@ -285,8 +225,6 @@ ensure_account_quota_dirs() {
     chmod 700 "${QUOTA_ROOT}/${proto}" || true
   done
 
-  mkdir -p "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}"
-  chmod 700 "${SSH_ACCOUNT_DIR}" "${SSH_QUOTA_DIR}" || true
 }
 
 ensure_speed_policy_dirs() {
@@ -663,13 +601,9 @@ raise SystemExit(1)
 PY
 }
 
-ssh_dns_adblock_runtime_refresh_if_available() {
-  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || return 0
   if declare -F adblock_run_locked >/dev/null 2>&1 && [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_runtime_refresh_if_available
     return $?
   fi
-  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1 || return 1
 }
 
 speed_policy_resync_after_warp_change() {
@@ -1158,7 +1092,6 @@ account_info_probe_domain_from_any_account_file() {
       return 0
     fi
   done
-  dir="${SSH_ACCOUNT_DIR}"
   if [[ -d "${dir}" ]]; then
     f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
     if [[ -n "${f}" ]]; then
@@ -1173,21 +1106,14 @@ account_info_probe_domain_from_any_account_file() {
   echo ""
 }
 
-ssh_account_info_compat_needs_refresh() {
   local state_file username acc_file acc_compat
-  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
-    ssh_state_dirs_prepare >/dev/null 2>&1 || true
   fi
-  [[ -d "${SSH_USERS_STATE_DIR}" ]] || return 1
 
   while IFS= read -r -d '' state_file; do
     username="$(basename "${state_file}")"
-    username="${username%@ssh.json}"
     username="${username%.json}"
     [[ -n "${username}" ]] || continue
 
-    acc_file="${SSH_ACCOUNT_DIR}/${username}@ssh.txt"
-    acc_compat="${SSH_ACCOUNT_DIR}/${username}.txt"
     if [[ ! -f "${acc_file}" && -f "${acc_compat}" ]]; then
       acc_file="${acc_compat}"
     fi
@@ -1201,98 +1127,73 @@ ssh_account_info_compat_needs_refresh() {
     if ! grep -Eq '^Country[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSH WS Path[[:space:]]*:[[:space:]]*/[A-Fa-f0-9]{10}[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSH WS Path Alt[[:space:]]*:[[:space:]]*/<bebas>/[A-Fa-f0-9]{10}/<bebas>[[:space:]]*$' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSH Direct[[:space:]]+Port[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-    if ! grep -Eq '^SSH SSL/TLS[[:space:]]+Port[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
     if ! grep -Eq '^BadVPN UDPGW[[:space:]]*:' "${acc_file}" 2>/dev/null; then
       return 0
     fi
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 
   return 1
 }
 
-ssh_account_info_refresh_all_from_state() {
   local state_file username updated=0 failed=0
-  if ! declare -F ssh_account_info_refresh_from_state >/dev/null 2>&1; then
     printf '0|0\n'
     return 0
   fi
-  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
-    ssh_state_dirs_prepare >/dev/null 2>&1 || true
   fi
 
-  [[ -d "${SSH_USERS_STATE_DIR}" ]] || {
     printf '0|0\n'
     return 0
   }
 
   while IFS= read -r -d '' state_file; do
     username="$(basename "${state_file}")"
-    username="${username%@ssh.json}"
     username="${username%.json}"
     [[ -n "${username}" ]] || continue
 
-    if ssh_account_info_refresh_from_state "${username}"; then
       updated=$((updated + 1))
     else
       failed=$((failed + 1))
     fi
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 
   printf '%s|%s\n' "${updated}" "${failed}"
   (( failed == 0 ))
 }
 
-account_info_refresh_collect_ssh_users() {
   local -n _out_ref="$1"
   local username state_file
   local -A seen=()
   _out_ref=()
 
-  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
-    ssh_state_dirs_prepare >/dev/null 2>&1 || true
   fi
 
-  if declare -F ssh_collect_candidate_users >/dev/null 2>&1; then
     while IFS= read -r username; do
       [[ -n "${username}" ]] || continue
       [[ -n "${seen["${username}"]+x}" ]] && continue
       seen["${username}"]=1
       _out_ref+=("${username}")
-    done < <(ssh_collect_candidate_users false 2>/dev/null || true)
     return 0
   fi
 
   while IFS= read -r -d '' state_file; do
     username="$(basename "${state_file}")"
-    username="${username%@ssh.json}"
     username="${username%.json}"
     [[ -n "${username}" ]] || continue
     [[ -n "${seen["${username}"]+x}" ]] && continue
     seen["${username}"]=1
     _out_ref+=("${username}")
-  done < <(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
 }
 
 account_info_refresh_targets_summary() {
   local scope="${1:-all}"
   local sample_limit="${2:-5}"
   local i proto username
-  local xray_count=0 ssh_count=0
-  local -A seen_xray=() seen_ssh=()
-  local -a xray_preview_items=() ssh_preview_items=()
-  local -a ssh_users=()
-  local xray_preview="-" ssh_preview="-"
 
   [[ "${sample_limit}" =~ ^[0-9]+$ ]] || sample_limit=5
 
@@ -1317,17 +1218,9 @@ account_info_refresh_targets_summary() {
     fi
   fi
 
-  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
-    account_info_refresh_collect_ssh_users ssh_users
-    for username in "${ssh_users[@]}"; do
       [[ -n "${username}" ]] || continue
-      if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
         continue
       fi
-      seen_ssh["${username}"]=1
-      ssh_count=$((ssh_count + 1))
-      if (( sample_limit > 0 && ${#ssh_preview_items[@]} < sample_limit )); then
-        ssh_preview_items+=("${username}")
       fi
     done
   fi
@@ -1339,23 +1232,15 @@ account_info_refresh_targets_summary() {
       xray_preview="${xray_preview}, ..."
     fi
   fi
-  if (( ${#ssh_preview_items[@]} > 0 )); then
-    ssh_preview="$(printf '%s, ' "${ssh_preview_items[@]}")"
-    ssh_preview="${ssh_preview%, }"
-    if (( sample_limit > 0 && ssh_count > sample_limit )); then
-      ssh_preview="${ssh_preview}, ..."
     fi
   fi
 
-  printf '%s|%s|%s|%s|%s\n' "${xray_count}" "${ssh_count}" "$((xray_count + ssh_count))" "${xray_preview}" "${ssh_preview}"
 }
 
 account_info_refresh_targets_report_write() {
   local scope="${1:-all}"
   local outfile="${2:-}"
   local i proto username
-  local -A seen_xray=() seen_ssh=()
-  local -a ssh_users=()
 
   [[ -n "${outfile}" ]] || return 1
   ensure_account_quota_dirs
@@ -1387,21 +1272,12 @@ account_info_refresh_targets_report_write() {
       printf '\n'
     fi
 
-    if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
-      printf '[SSH]\n'
-      account_info_refresh_collect_ssh_users ssh_users
-      if (( ${#ssh_users[@]} == 0 )); then
         printf '(tidak ada target)\n'
       else
-        for username in "${ssh_users[@]}"; do
           [[ -n "${username}" ]] || continue
-          if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
             continue
           fi
-          seen_ssh["${username}"]=1
-          printf '%s\tssh\t%s\n' "${username}" "$(ssh_account_info_file "${username}")"
         done
-        if (( ${#seen_ssh[@]} == 0 )); then
           printf '(tidak ada target)\n'
         fi
       fi
@@ -1464,8 +1340,6 @@ account_info_refresh_dry_run_report_write() {
   local target_country="${6:-}"
   local i proto username status target_file
   local stage_dir="" candidate_file="" state_file="" hint=""
-  local -A seen_xray=() seen_ssh=()
-  local -a ssh_users=()
 
   [[ -n "${outfile}" ]] || return 1
   ensure_account_quota_dirs
@@ -1518,26 +1392,15 @@ account_info_refresh_dry_run_report_write() {
       printf '\n'
     fi
 
-    if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
-      printf '[SSH dry-run]\n'
-      account_info_refresh_collect_ssh_users ssh_users
-      if (( ${#ssh_users[@]} == 0 )); then
         printf '(tidak ada target)\n'
       else
-        for username in "${ssh_users[@]}"; do
           [[ -n "${username}" ]] || continue
-          if [[ -n "${seen_ssh["${username}"]+x}" ]]; then
             continue
           fi
-          seen_ssh["${username}"]=1
-          target_file="$(ssh_account_info_file "${username}")"
-          state_file="$(ssh_user_state_resolve_file "${username}")"
-          stage_dir="$(mktemp -d "${WORK_DIR}/.ssh-account-dryrun.${username}.XXXXXX" 2>/dev/null || true)"
           candidate_file=""
           hint=""
           if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
             candidate_file="${stage_dir}/candidate.txt"
-            if [[ -f "${state_file}" ]] && ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}" >/dev/null 2>&1; then
               :
             else
               candidate_file=""
@@ -1549,11 +1412,9 @@ account_info_refresh_dry_run_report_write() {
           status="$(account_info_refresh_dry_run_status_for_file "${target_file}" "${candidate_file}" "${hint}")"
           printf '%s\t%s\t%s\n' "${username}" "${status}" "${target_file}"
           if [[ -n "${candidate_file}" ]]; then
-            account_info_refresh_append_diff_to_report "${outfile}" "${target_file}" "${candidate_file}" "${username}@ssh" || true
           fi
           [[ -n "${stage_dir}" ]] && rm -rf "${stage_dir}" >/dev/null 2>&1 || true
         done
-        if (( ${#seen_ssh[@]} == 0 )); then
           printf '(tidak ada target)\n'
         fi
       fi
@@ -1580,7 +1441,6 @@ account_info_compat_needs_refresh() {
   ensure_account_quota_dirs
   account_collect_files
 
-  if ssh_account_info_compat_needs_refresh; then
     return 0
   fi
 
@@ -2196,8 +2056,6 @@ main_info_cache_refresh() {
 
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp license_status license_days
-  local vless_count vmess_count trojan_count ssh_count
-  local edge_icon nginx_icon xray_icon ssh_icon
   local info_label_width=20
 
   main_info_cache_refresh
@@ -2216,11 +2074,9 @@ main_menu_info_header_print() {
   vless_count="$(account_count_by_proto "vless")"
   vmess_count="$(account_count_by_proto "vmess")"
   trojan_count="$(account_count_by_proto "trojan")"
-  ssh_count="$(ssh_account_count)"
   edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
   nginx_icon="$(service_status_icon "nginx")"
   xray_icon="$(service_status_icon "xray")"
-  ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
 
   printf "%-*s : %s\n" "${info_label_width}" "System OS" "${os}"
   printf "%-*s : %s\n" "${info_label_width}" "RAM" "${ram}"
@@ -2239,14 +2095,12 @@ main_menu_info_header_print() {
     "VLESS ${vless_count}" \
     "VMESS ${vmess_count}" \
     "TROJAN ${trojan_count}" \
-    "SSH ${ssh_count}"
   echo
   main_menu_center_line "SERVICES"
   main_menu_center_segments \
     "Edge Mux ${edge_icon}" \
     "Nginx ${nginx_icon}" \
     "Xray ${xray_icon}" \
-    "SSH ${ssh_icon}"
   hr
 }
 
@@ -2926,16 +2780,11 @@ main_menu_edge_service_name() {
   esac
 }
 
-ssh_account_count() {
   local count="0"
-  if declare -F ssh_state_dirs_prepare >/dev/null 2>&1; then
-    ssh_state_dirs_prepare >/dev/null 2>&1 || true
   fi
-  [[ -d "${SSH_USERS_STATE_DIR}" ]] || {
     printf '0\n'
     return 0
   }
-  count="$(find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' ! -name '.*' 2>/dev/null | wc -l | tr -d '[:space:]')"
   [[ "${count}" =~ ^[0-9]+$ ]] || count="0"
   printf '%s\n' "${count}"
 }

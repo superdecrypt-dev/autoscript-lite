@@ -7,13 +7,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from .commands_loader import MenuSpec
 
 
-def qac_picker_title(menu_id: str, *, xray_qac_menu_id: str, ssh_qac_menu_id: str, openvpn_qac_menu_id: str) -> str:
     if menu_id == xray_qac_menu_id:
         return "Xray QAC"
-    if menu_id == ssh_qac_menu_id:
-        return "SSH QAC"
-    if menu_id == openvpn_qac_menu_id:
-        return "OpenVPN QAC"
     return "Quota & Access Control"
 
 
@@ -56,8 +51,6 @@ def qac_menu_text(
     total_pages: int,
     *,
     xray_qac_menu_id: str,
-    ssh_qac_menu_id: str,
-    openvpn_qac_menu_id: str,
 ) -> str:
     lines = [f"<b>{html.escape(menu.label)}</b>"]
     if menu.description:
@@ -65,7 +58,6 @@ def qac_menu_text(
 
     active_label = qac_selection_label(menu.id, selection, xray_qac_menu_id=xray_qac_menu_id)
     if summary:
-        if menu.id == ssh_qac_menu_id:
             lines.extend(
                 [
                     "",
@@ -75,7 +67,6 @@ def qac_menu_text(
                             [
                                 f"Username           : {str(summary.get('username') or active_label)}",
                                 f"Quota Limit        : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used (SSH)   : {str(summary.get('quota_used') or '-')}",
                                 f"Expired At         : {str(summary.get('expired_at') or '-')}",
                                 f"IP/Login Limit     : {str(summary.get('ip_limit') or '-')}",
                                 f"IP/Login Limit Max : {str(summary.get('ip_limit_max') or '-')}",
@@ -94,7 +85,6 @@ def qac_menu_text(
                     + "</pre>",
                 ]
             )
-        elif menu.id == openvpn_qac_menu_id:
             lines.extend(
                 [
                     "",
@@ -104,7 +94,6 @@ def qac_menu_text(
                             [
                                 f"Username               : {str(summary.get('username') or active_label)}",
                                 f"Quota Limit            : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used (OpenVPN)   : {str(summary.get('quota_used') or '-')}",
                                 f"Expired At             : {str(summary.get('expired_at') or '-')}",
                                 f"IP Limit               : {str(summary.get('ip_limit') or '-')}",
                                 f"IP Limit Max           : {str(summary.get('ip_limit_max') or '-')}",
@@ -241,12 +230,9 @@ def qac_pick_text(
     *,
     delete_pick_page_size: int,
     xray_qac_menu_id: str,
-    ssh_qac_menu_id: str,
-    openvpn_qac_menu_id: str,
 ) -> str:
     total_pages = ((len(users) - 1) // delete_pick_page_size) + 1 if users else 1
     return (
-        f"<b>{html.escape(qac_picker_title(menu_id, xray_qac_menu_id=xray_qac_menu_id, ssh_qac_menu_id=ssh_qac_menu_id, openvpn_qac_menu_id=openvpn_qac_menu_id))}</b>\n"
         "Pilih user dulu untuk membuka menu QAC.\n\n"
         f"Total user: <code>{len(users)}</code>\n"
         f"Halaman: <code>{page + 1}/{total_pages}</code>"

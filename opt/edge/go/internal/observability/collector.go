@@ -126,10 +126,6 @@ type StatusSnapshot struct {
 	PublicTLSListen           string                           `json:"public_tls_listen"`
 	MetricsListen             string                           `json:"metrics_listen"`
 	HTTPBackend               string                           `json:"http_backend"`
-	SSHBackend                string                           `json:"ssh_backend"`
-	SSHTLSBackend             string                           `json:"ssh_tls_backend"`
-	SSHWSBackend              string                           `json:"ssh_ws_backend"`
-	OpenVPNRawBackend         string                           `json:"openvpn_raw_backend"`
 	VLESSRawBackend           string                           `json:"vless_raw_backend"`
 	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
 	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
@@ -466,10 +462,6 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		PublicTLSListen:           listeners.TLSAddr,
 		MetricsListen:             listeners.MetricsAddr,
 		HTTPBackend:               cfg.HTTPBackendAddr(),
-		SSHBackend:                cfg.SSHBackendAddr(),
-		SSHTLSBackend:             cfg.SSHTLSBackendAddr(),
-		SSHWSBackend:              cfg.SSHWSBackendAddr(),
-		OpenVPNRawBackend:         cfg.OpenVPNRawBackendAddr(),
 		VLESSRawBackend:           cfg.VLESSRawBackendAddr(),
 		VLESSRawBackendSource:     cfg.VLESSRawSource,
 		TrojanRawBackend:          cfg.TrojanRawBackendAddr(),
@@ -570,12 +562,6 @@ func configuredSNIRouteTarget(cfg runtime.Config, alias string) (backend, addr, 
 	switch strings.TrimSpace(alias) {
 	case "http":
 		return "http", cfg.HTTPBackendAddr(), "http", true
-	case "ssh_direct":
-		return "ssh", cfg.SSHBackendAddr(), "ssh-direct", true
-	case "ssh_tls":
-		return "ssh-tls", cfg.SSHTLSBackendAddr(), "ssh-tls", true
-	case "ssh_ws":
-		return "ssh-ws", cfg.SSHWSBackendAddr(), "ssh-ws", true
 	case "vless_tcp":
 		return "vless", cfg.VLESSRawBackendAddr(), "vless", true
 	case "trojan_tcp":
@@ -694,8 +680,6 @@ func detectClassName(class detect.InitialClass) string {
 		return "http"
 	case detect.ClassTLSClientHello:
 		return "tls_client_hello"
-	case detect.ClassSSH:
-		return "ssh"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:

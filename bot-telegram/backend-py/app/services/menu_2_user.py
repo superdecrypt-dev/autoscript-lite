@@ -14,8 +14,6 @@ from ..utils.validators import (
 
 USER_PROTOCOLS = tuple(system.USER_PROTOCOLS)
 XRAY_ONLY_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
-SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
-PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL}
 
 
 def _fmt_number(value: float) -> str:
@@ -29,7 +27,6 @@ def _fmt_number(value: float) -> str:
 def _scope_title(scope: str, label: str) -> str:
     prefix = {
         "xray": "Xray Users",
-        "ssh": "SSH Users",
     }.get(scope, "User Management")
     return f"{prefix} - {label}" if label else prefix
 
@@ -37,8 +34,6 @@ def _scope_title(scope: str, label: str) -> str:
 def _scope_protocols(scope: str) -> tuple[str, ...]:
     if scope == "xray":
         return XRAY_ONLY_PROTOCOLS
-    if scope == "ssh":
-        return SSH_ONLY_PROTOCOLS
     return USER_PROTOCOLS
 
 
@@ -82,8 +77,6 @@ def _mark_account_info_render(data: dict[str, object] | None = None) -> dict[str
 
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
     protocols = _scope_protocols(scope)
-    if protocols == SSH_ONLY_PROTOCOLS:
-        return True, system.SSH_PROTOCOL
     return require_protocol(params, title, allowed=set(protocols))
 
 
@@ -148,7 +141,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             speed_up = float(su_or_err)
 
         password_value = ""
-        if proto == system.SSH_PROTOCOL:
             ok_pw, pw_or_err = require_param(params, "password", title)
             if not ok_pw:
                 return pw_or_err
@@ -193,12 +185,9 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         else:
             data["download_error"] = str(download_or_err)
 
-        if proto == system.SSH_PROTOCOL:
             account_path = _extract_add_user_path(msg_add, "Account")
             quota_path = _extract_add_user_path(msg_add, "Quota")
-            _title_info, account_text = system.op_account_info(system.SSH_PROTOCOL, str(user_or_err))
             lines = [
-                "Add SSH user sukses ✅",
                 "",
                 "Account file:",
                 f"  {account_path}",
@@ -208,13 +197,11 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             lines.extend(
                 [
                     "",
-                    "SSH ACCOUNT INFO:",
                 ]
             )
             if account_text:
                 lines.append(account_text)
             else:
-                lines.append(f"(SSH ACCOUNT INFO tidak ditemukan: {account_path})")
             return ok_response(title, "\n".join(lines), data=_allow_sensitive_output(_mark_account_info_render(data)))
 
         account_path = _extract_add_user_path(msg_add, "Account")
@@ -319,10 +306,8 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         if not ok_pw:
             return pw_or_err
         username = str(user_or_err)
-        ok_reset, _title_reset, msg_reset = system_mutations.op_ssh_reset_password(username, str(pw_or_err))
         if ok_reset:
             data: dict[str, object] = {}
-            ok_download, download_or_err = system_mutations.op_user_account_file_download(system.SSH_PROTOCOL, username)
             if ok_download and isinstance(download_or_err, dict):
                 data["download_file"] = download_or_err
             else:
@@ -330,9 +315,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             return ok_response(title, msg_reset, data=_allow_sensitive_output(data))
         return error_response("user_reset_password_failed", title, msg_reset)
 
-    if action in {"active_sshws_sessions", "sshws_status", "restart_sshws_stack"}:
-        title = _scope_title(scope, "SSHWS")
-        return error_response("action_moved", title, "Aksi SSHWS dipindahkan ke menu Maintenance.")
 
     if action == "account_info":
         title = _scope_title(scope, "Account Info")

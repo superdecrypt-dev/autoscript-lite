@@ -107,7 +107,6 @@ pick_port() {
 
   while (( tries < max_tries )); do
     p=$(( min_port + RANDOM % span ))
-    for reserved in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
       if [[ "${p}" == "${reserved}" ]]; then
         p=""
         break

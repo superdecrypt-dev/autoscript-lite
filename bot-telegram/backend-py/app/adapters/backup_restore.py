@@ -84,7 +84,6 @@ REQUIRED_RESTART_SERVICES = (
     "xray-quota",
     "xray-limit-ip",
 )
-OPTIONAL_RESTART_SERVICES = ("wireproxy", "sshws-stunnel", "edge-mux", "badvpn-udpgw")
 DOMAIN_BACKUP_REL_PATH = "etc/xray/domain"
 
 
