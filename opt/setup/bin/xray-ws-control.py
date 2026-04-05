@@ -28,8 +28,8 @@ try:
 except ImportError as exc:
     raise SystemExit(f"Gagal import setup utils: {exc}")
 
-SSHWS_DIAGNOSTIC_TOKEN = getattr(utils, "SSHWS_DIAGNOSTIC_TOKEN", "diagnostic-probe")
-SSHWS_DIAGNOSTIC_USER = "sshws-diagnostic"
+XRAY_WS_DIAGNOSTIC_TOKEN = getattr(utils, "XRAY_WS_DIAGNOSTIC_TOKEN", getattr(utils, "SSHWS_DIAGNOSTIC_TOKEN", "diagnostic-probe"))
+XRAY_WS_DIAGNOSTIC_USER = "xray-ws-diagnostic"
 norm_user = utils.norm_user
 normalize_ip = utils.normalize_ip
 is_loopback_ip = utils.is_loopback_ip
@@ -39,10 +39,13 @@ to_float = utils.to_float
 load_json_file = utils.load_json_file
 write_json_atomic = utils.write_json_atomic
 
-RUNTIME_SESSION_STALE_SEC = max(15, int(float(os.environ.get("SSHWS_RUNTIME_SESSION_STALE_SEC", "90") or 90)))
+RUNTIME_SESSION_STALE_SEC = max(
+    15,
+    int(float(os.environ.get("XRAY_WS_RUNTIME_SESSION_STALE_SEC", os.environ.get("SSHWS_RUNTIME_SESSION_STALE_SEC", "90")) or 90)),
+)
 
 def token_index_dir(state_root):
-    return Path(state_root) / ".sshws-token-index"
+    return Path(state_root) / ".xray-ws-token-index"
 
 def token_index_path(state_root, token):
     token_norm = utils.normalize_token(token)
@@ -124,7 +127,7 @@ def rebuild_token_index(state_root):
         return resolved
     for path in sorted(root.glob("*.json"), key=lambda p: p.name.lower()):
         payload = load_state(path)
-        token = utils.normalize_token(payload.get("sshws_token"))
+        token = utils.normalize_token(payload.get("xray_ws_token") or payload.get("sshws_token"))
         if not token:
             continue
         user = norm_user(payload.get("username") or path.stem)
@@ -349,10 +352,10 @@ def load_state(path):
 
 def resolve_state_path(state_root, username):
     user = norm_user(username)
-    primary = Path(state_root) / f"{user}@ssh.json"
+    primary = Path(state_root) / f"{user}.json"
     if primary.is_file():
         return primary
-    legacy = Path(state_root) / f"{user}.json"
+    legacy = Path(state_root) / f"{user}@ssh.json"
     if legacy.is_file():
         return legacy
     return primary
@@ -369,7 +372,7 @@ def resolve_token(state_root, token):
         if user:
             state_path = resolve_state_path(state_root, user)
             state_payload = load_state(state_path)
-            if utils.normalize_token(state_payload.get("sshws_token")) == token_norm:
+            if utils.normalize_token(state_payload.get("xray_ws_token") or state_payload.get("sshws_token")) == token_norm:
                 return user
     resolved = rebuild_token_index(state_root)
     return norm_user(resolved.get(token_norm))
@@ -408,15 +411,15 @@ def cmd_admission(args):
     token = extract_token_from_path(args.path, args.expected_prefix)
     if not token:
         return {"allowed": False, "reason": "Unauthorized", "username": "", "policy": None}
-    if token == SSHWS_DIAGNOSTIC_TOKEN:
+    if token == XRAY_WS_DIAGNOSTIC_TOKEN:
         if not is_loopback_ip(args.client_ip):
             return {"allowed": False, "reason": "Unauthorized", "username": "", "policy": None}
         return {
             "allowed": True,
             "reason": "",
-            "username": SSHWS_DIAGNOSTIC_USER,
+            "username": XRAY_WS_DIAGNOSTIC_USER,
             "policy": {
-                "username": SSHWS_DIAGNOSTIC_USER,
+                "username": XRAY_WS_DIAGNOSTIC_USER,
                 "blocked": False,
                 "speed_enabled": False,
                 "speed_down_bps": 0,
@@ -478,10 +481,10 @@ def cmd_session_write(args):
         return {"ok": False}
     payload = {
         "backend_local_port": to_int(args.backend_local_port, 0),
-        "backend": args.backend or "dropbear",
+        "backend": args.backend or "xray-ws",
         "backend_target": args.backend_target or "",
-        "transport": args.transport or "ssh-ws",
-        "source": args.source or "sshws-proxy",
+        "transport": args.transport or "xray-ws",
+        "source": args.source or "xray-ws-proxy",
         "proxy_pid": to_int(args.proxy_pid or os.getpid(), os.getpid()),
         "created_at": to_int(args.created_at or int(time.time()), int(time.time())),
         "updated_at": int(time.time()),
@@ -617,9 +620,9 @@ def main():
     p.add_argument("--backend-target", default="")
     p.add_argument("--username", default="")
     p.add_argument("--client-ip", default="")
-    p.add_argument("--backend", default="dropbear")
-    p.add_argument("--transport", default="ssh-ws")
-    p.add_argument("--source", default="sshws-proxy")
+    p.add_argument("--backend", default="xray-ws")
+    p.add_argument("--transport", default="xray-ws")
+    p.add_argument("--source", default="xray-ws-proxy")
     p.add_argument("--proxy-pid", default="")
     p.add_argument("--created-at", default="")
 

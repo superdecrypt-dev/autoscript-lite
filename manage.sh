@@ -140,7 +140,7 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
 # Nilai konstanta di atas dipakai lintas modul yang di-source dinamis dari /opt/manage.
 # No-op berikut menandai variabel sebagai "used" agar shellcheck tidak false-positive.
 : "${WIREPROXY_CONF}" "${WGCF_DIR}" "${CUSTOM_GEOSITE_DAT}" "${ADBLOCK_GEOSITE_ENTRY}" \
-  "${WIREGUARD_DIR}" "${SSH_WARP_SYNC_BIN}" \
+  "${WIREGUARD_DIR}" "${XRAY_WARP_SYNC_BIN}" "${SSH_WARP_SYNC_BIN}" \
   "${WARP_MODE_STATE_KEY}" "${WARP_TIER_STATE_KEY}" "${WARP_PLUS_LICENSE_STATE_KEY}" "${WARP_LOCK_FILE}" \
   "${WARP_ZEROTRUST_ROOT}" "${WARP_ZEROTRUST_CONFIG_FILE}" "${WARP_ZEROTRUST_MDM_FILE}" \
   "${WARP_ZEROTRUST_SERVICE}" "${WARP_ZEROTRUST_PROXY_PORT}" \

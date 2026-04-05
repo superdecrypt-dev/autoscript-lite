@@ -70,8 +70,8 @@ def render_wgquick(source_text):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Render SSH WARP wg-quick config from wireproxy config")
-    parser.add_argument("--interface", required=True, help="Target interface name, e.g. warp-ssh0")
+    parser = argparse.ArgumentParser(description="Render Xray WARP wg-quick config from wireproxy config")
+    parser.add_argument("--interface", required=True, help="Target interface name, e.g. warp-xray0")
     parser.add_argument("--source", default="/etc/wireproxy/config.conf", help="Source wireproxy config")
     parser.add_argument("--dest-dir", default="/etc/wireguard", help="Destination config directory")
     args = parser.parse_args()

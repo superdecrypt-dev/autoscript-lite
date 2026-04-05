@@ -5,8 +5,8 @@ Script executable yang sebelumnya dihasilkan dari heredoc di `setup.sh` dipindah
 Helper aktif utama:
 - `xray-domain-guard`
 - `xray-speed.py`
-- `ssh-warp-sync.py`
-- `sshws-control.py`
+- `xray-warp-sync.py`
+- `xray-ws-control.py`
 - `autoscript-license-check`
 - `backup-manage.py`
 

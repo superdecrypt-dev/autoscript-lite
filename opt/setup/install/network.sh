@@ -813,9 +813,12 @@ setup_ssh_warp_interface() {
   iface="$(ssh_warp_interface_name_default)"
   conf_path="$(ssh_warp_config_path "${iface}")" || die "Nama interface SSH WARP tidak valid."
 
-  install_setup_bin_or_die "ssh-warp-sync.py" "${SSH_WARP_SYNC_BIN}" 0755
+  install_setup_bin_or_die "xray-warp-sync.py" "${XRAY_WARP_SYNC_BIN}" 0755
+  if [[ "${SSH_WARP_SYNC_BIN}" != "${XRAY_WARP_SYNC_BIN}" ]]; then
+    ln -sfn "${XRAY_WARP_SYNC_BIN}" "${SSH_WARP_SYNC_BIN}" >/dev/null 2>&1 || true
+  fi
   install -d -m 700 "${WIREGUARD_DIR:-/etc/wireguard}"
-  "${SSH_WARP_SYNC_BIN}" --interface "${iface}" --source "${WIREPROXY_CONF}" --dest-dir "${WIREGUARD_DIR:-/etc/wireguard}" \
+  "${XRAY_WARP_SYNC_BIN}" --interface "${iface}" --source "${WIREPROXY_CONF}" --dest-dir "${WIREGUARD_DIR:-/etc/wireguard}" \
     || die "Gagal menyiapkan config SSH WARP untuk ${iface}."
 
   unit="wg-quick@${iface}"

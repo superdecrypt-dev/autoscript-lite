@@ -866,7 +866,7 @@ func parseArgs() *config {
 	flag.StringVar(&cfg.xrayLockFile, "xray-lock-file", "/run/autoscript/locks/xray-ws-qac.lock", "Xray quota lock file")
 	flag.StringVar(&cfg.xrayEnforcerBin, "xray-enforcer-bin", "/usr/local/bin/true", "Xray quota enforcer binary")
 	flag.StringVar(&cfg.xraySessionRoot, "xray-session-root", "/run/autoscript/xray-ws-sessions", "Runtime session root")
-	flag.StringVar(&cfg.controlBin, "control-bin", "/usr/local/bin/sshws-control", "Python control plane helper")
+	flag.StringVar(&cfg.controlBin, "control-bin", "/usr/local/bin/xray-ws-control", "Python control plane helper")
 	var flushInt float64
 	flag.Float64Var(&flushInt, "quota-flush-interval", 1.0, "Quota flush interval in seconds")
 	flag.Parse()
@@ -877,6 +877,13 @@ func parseArgs() *config {
 	cfg.quotaFlushInterval = time.Duration(flushInt * float64(time.Second))
 	if cfg.quotaFlushInterval < time.Second {
 		cfg.quotaFlushInterval = time.Second
+	}
+	if cfg.controlBin == "/usr/local/bin/xray-ws-control" {
+		if _, err := os.Stat(cfg.controlBin); err != nil {
+			if _, legacyErr := os.Stat("/usr/local/bin/sshws-control"); legacyErr == nil {
+				cfg.controlBin = "/usr/local/bin/sshws-control"
+			}
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.mode)) {
 	case "ssh":

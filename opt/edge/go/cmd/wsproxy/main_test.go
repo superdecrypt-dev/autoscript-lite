@@ -119,7 +119,7 @@ func TestPythonSessionWriteUsesProvidedProxyPID(t *testing.T) {
 		t.Fatal("runtime.Caller failed")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", ".."))
-	helperPath := filepath.Join(repoRoot, "opt", "setup", "bin", "sshws-control.py")
+	helperPath := filepath.Join(repoRoot, "opt", "setup", "bin", "xray-ws-control.py")
 	sessionRoot := t.TempDir()
 
 	client := &controlClient{
