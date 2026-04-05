@@ -20,17 +20,22 @@ bash manage.sh
 
 Verifikasi minimum:
 - menu utama tampil tanpa warning fatal
-- bisa masuk dan kembali dari menu `1` sampai `13`
+- bisa masuk dan kembali dari menu `1` sampai `9`
 - input tidak valid ditolak aman lalu kembali ke menu
 - action sensitif tetap meminta konfirmasi bila flow-nya memang destruktif
 
 Flow yang wajib dicoba bila area terkait berubah:
 - `1) Xray Users`: create, detail, extend expiry, delete
-- `2) SSH Users`: create, reset password, delete
-- `4) SSH & OpenVPN QAC`: quota/speed/sync metadata
-- `8) Domain Control`: set domain, renew/check cert, refresh `ACCOUNT INFO`
-- `11) Maintenance`: status, restart service, lihat log
-- `13) Tools`: Telegram Bot, WARP Tier, Backup/Restore
+- `2) Xray QAC`: quota/speed/sync metadata
+- `3) Xray Network`: WARP, DNS, routing, dan apply runtime
+- `4) Domain Control`: set domain, renew/check cert, refresh `ACCOUNT INFO`
+- `7) Maintenance`: status, restart service, lihat log
+- `9) Tools`: Telegram Bot, WARP Tier, Backup/Restore
+
+Jika area `Tools` berubah, cek juga submenu:
+- `1) Telegram Bot`
+- `2) WARP Tier`
+- `3) Backup/Restore`
 
 ## 2. Installer Bot Telegram
 
