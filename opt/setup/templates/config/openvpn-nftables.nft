@@ -1,6 +1,0 @@
-table ip autoscript_openvpn {
-  chain postrouting {
-    type nat hook postrouting priority srcnat; policy accept;
-    ip saddr __OPENVPN_SUBNET_TCP__/24 masquerade
-  }
-}

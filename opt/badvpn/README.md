@@ -1,31 +1,8 @@
 # BadVPN UDPGW
 
-Direktori ini disediakan untuk asset prebuilt `badvpn-udpgw`.
+Direktori ini sekarang hanya menyimpan asset legacy yang belum dipakai oleh surface aktif `autoscript-lite`.
 
-Status saat ini:
-- desain: siap
-- scaffold: siap
-- binary prebuilt: sudah ada di repo
-- runtime live: sudah didukung via `setup.sh` dan tervalidasi di rilis baseline
-
-Target struktur:
-
-```text
-opt/badvpn/
-  README.md
-  dist/
-    README.md
-    badvpn-udpgw-linux-amd64
-    badvpn-udpgw-linux-arm64
-```
-
-Distribusi yang dipilih:
-- **binary prebuilt**
-- bukan build source di VPS saat setup normal
-
-Integrasi installer:
-- [badvpn.sh](/root/project/autoscript/opt/setup/install/badvpn.sh)
-
-Template runtime:
-- [badvpn-runtime.env](/root/project/autoscript/opt/setup/templates/config/badvpn-runtime.env)
-- [badvpn-udpgw.service](/root/project/autoscript/opt/setup/templates/systemd/badvpn-udpgw.service)
+Catatan:
+- runtime `BadVPN` sudah tidak lagi wired ke installer `lite`
+- template systemd/config legacy terkait `BadVPN` sudah dibersihkan dari `opt/setup/templates`
+- bila asset ini tidak lagi diperlukan untuk migrasi atau referensi, direktori ini bisa dihapus pada cleanup berikutnya

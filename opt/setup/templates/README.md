@@ -1,33 +1,31 @@
 # opt/setup/templates
 
-Template besar dari `setup.sh` sebaiknya dipindah ke sini secara bertahap.
+Folder ini berisi template config/runtime yang masih dipakai surface aktif `autoscript-lite`.
 
-Yang sudah dipindah pada tahap awal:
+Template aktif utama:
 - `nginx/xray.conf`
-- `systemd/sshws-dropbear.service`
-- `systemd/sshws-stunnel.service`
-- `systemd/sshws-proxy.service`
-- `systemd/sshws-qac-enforcer.service`
-- `systemd/sshws-qac-enforcer.timer`
-- `systemd/xray-confdir.conf`
-- `systemd/xray-speed.service`
+- `nginx/nginx.conf`
+- `nginx/stream-edge.conf`
+- `config/adblock.env`
+- `config/adblock-dnsmasq.conf`
+- `config/edge-runtime.env`
+- `config/warp-zerotrust.env`
+- `config/xray-speed-config.json`
+- `systemd/account-portal.service`
+- `systemd/adblock-dns.service`
+- `systemd/adblock-sync.service`
+- `systemd/adblock-update.service`
+- `systemd/adblock-update.timer`
+- `systemd/autoscript-license-enforcer.service`
+- `systemd/autoscript-license-enforcer.timer`
+- `systemd/edge-mux.service`
 - `systemd/wireproxy.service`
+- `systemd/xray-confdir.conf`
+- `systemd/xray-domain-guard.service`
+- `systemd/xray-domain-guard.timer`
 - `systemd/xray-expired.service`
 - `systemd/xray-limit-ip.service`
 - `systemd/xray-quota.service`
-- `systemd/xray-domain-guard.service`
-- `systemd/xray-domain-guard.timer`
-- `config/sshws-stunnel.conf`
-- `config/warp-zerotrust.env`
-- `config/xray-speed-config.json`
-- `nginx/nginx.conf`
+- `systemd/xray-speed.service`
 
-Target berikutnya yang masih layak dipindah:
-- `systemd/xray.service.d/10-confdir.conf`
-- script `xray-domain-guard`
-- config `xray-domain-guard/config.env`
-
-Tujuan:
-- mengurangi ukuran `setup.sh`
-- mempermudah diff dan audit template
-- memisahkan logic install dari payload file konfigurasi
+Template legacy SSH/OpenVPN/BadVPN yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.
