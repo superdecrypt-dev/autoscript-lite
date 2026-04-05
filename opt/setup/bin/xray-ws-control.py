@@ -479,7 +479,7 @@ def cmd_session_write(args):
         "backend": args.backend or "xray-ws",
         "backend_target": args.backend_target or "",
         "transport": args.transport or "xray-ws",
-        "source": args.source or "xray-ws-proxy",
+        "source": args.source or "xray-ws-runtime",
         "proxy_pid": to_int(args.proxy_pid or os.getpid(), os.getpid()),
         "created_at": to_int(args.created_at or int(time.time()), int(time.time())),
         "updated_at": int(time.time()),
@@ -593,7 +593,7 @@ def cmd_session_list(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SSH WS control plane helper")
+    parser = argparse.ArgumentParser(description="Xray WS control plane helper")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("admission")
@@ -617,7 +617,7 @@ def main():
     p.add_argument("--client-ip", default="")
     p.add_argument("--backend", default="xray-ws")
     p.add_argument("--transport", default="xray-ws")
-    p.add_argument("--source", default="xray-ws-proxy")
+    p.add_argument("--source", default="xray-ws-runtime")
     p.add_argument("--proxy-pid", default="")
     p.add_argument("--created-at", default="")
 
