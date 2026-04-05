@@ -73,7 +73,6 @@ func (t *XrayRuntimeSessionTracker) Stop() {
 		close(t.done)
 		if t.activeFile != "" {
 			_ = os.Remove(t.activeFile)
-			triggerSessionSync(t.logger, t.cfg.ManagePath)
 		}
 	})
 }

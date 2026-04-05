@@ -30,7 +30,7 @@ sudo /opt/bot-telegram/scripts/smoke-test.sh
 
 Ikuti idiom Bash, Python, dan Go sesuai area masing-masing. File shell memakai `set -euo pipefail`, indentasi 2 spasi, nama fungsi `snake_case` huruf kecil, dan anotasi `shellcheck` jika memang dibutuhkan. Jaga file aggregator tingkat atas tetap tipis; tambahkan logic baru ke child module yang relevan, bukan menumpuk lagi di `manage.sh` atau `setup.sh`.
 
-Python mengikuti penamaan standar PEP 8. Paket Go tetap kecil dan fokus di bawah `internal/` atau `cmd/`. Utamakan edit ASCII kecuali file target memang sudah memakai karakter non-ASCII. Untuk surface aktif `lite`, pakai namespace `Xray` atau `fallback` pada label route/observability baru; jangan menambah lagi label produk lama `ssh/openvpn` kecuali memang sedang menjaga kompatibilitas baca state lama secara internal.
+Python mengikuti penamaan standar PEP 8. Paket Go tetap kecil dan fokus di bawah `internal/` atau `cmd/`. Utamakan edit ASCII kecuali file target memang sudah memakai karakter non-ASCII. Untuk surface aktif `lite`, pakai namespace `Xray`, `WARP`, atau `fallback` pada label route/observability baru; jangan menambah lagi label produk/protokol lama yang sudah dihapus dari varian ini.
 
 ## Panduan Testing
 

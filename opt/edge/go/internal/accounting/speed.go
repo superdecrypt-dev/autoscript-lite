@@ -146,7 +146,6 @@ func (c *XraySpeedController) run() {
 			if attempts < defaultResolveAttempts {
 				if resolved, err := ResolveXrayUsernameByLocalPort(c.cfg.DropbearUnit, c.localPort); err == nil && resolved != "" {
 					c.user.Store(resolved)
-					triggerSessionSync(c.logger, c.cfg.ManagePath)
 					username = resolved
 				} else if err != nil && c.logger != nil {
 					c.logger.Printf("edge-mux speed resolve failed port=%d: %v", c.localPort, err)

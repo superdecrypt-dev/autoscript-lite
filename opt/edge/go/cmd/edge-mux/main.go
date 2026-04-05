@@ -1518,7 +1518,6 @@ func xrayQuotaConfig(cfg runtime.Config) accounting.XrayQuotaConfig {
 		StateRoot:        cfg.XrayQuotaRoot,
 		DropbearUnit:     cfg.XrayRuntimeUnit,
 		EnforcerPath:     cfg.XrayQACEnforcer,
-		ManagePath:       cfg.XrayManageBin,
 		SessionRoot:      cfg.XraySessionRoot,
 		SessionHeartbeat: cfg.XraySessionHeartbeat,
 	}

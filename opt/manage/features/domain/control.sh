@@ -1077,10 +1077,6 @@ domain_control_set_domain_now() {
   pause
 }
 
-domain_control_openvpn_sync_after_domain_change() {
-  return 0
-}
-
 domain_control_set_domain_after_prompt() {
   local cert_backup_dir
   local nginx_conf_backup

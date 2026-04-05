@@ -1096,10 +1096,10 @@ warp_runtime_snapshot_restore() {
   return 0
 }
 
-warp_runtime_refresh_ssh_network_after_profile_change() {
-  declare -F ssh_network_runtime_refresh_if_available >/dev/null 2>&1 || return 0
-  if ! ssh_network_runtime_refresh_if_available; then
-    warn "Runtime SSH Network gagal disegarkan sesudah profile WARP berubah."
+warp_runtime_refresh_followup_after_profile_change() {
+  declare -F xray_warp_runtime_refresh_if_available >/dev/null 2>&1 || return 0
+  if ! xray_warp_runtime_refresh_if_available; then
+    warn "Runtime follow-up WARP gagal disegarkan sesudah profile berubah."
     return 1
   fi
   return 0
@@ -1110,7 +1110,7 @@ warp_runtime_snapshot_restore_or_fail() {
   local snap_dir="$1"
   local primary_message="$2"
   if warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 \
-    && warp_runtime_refresh_ssh_network_after_profile_change >/dev/null 2>&1; then
+    && warp_runtime_refresh_followup_after_profile_change >/dev/null 2>&1; then
     warn "${primary_message}"
   else
     warn "${primary_message}"
@@ -3357,7 +3357,7 @@ warp_tier_switch_free() {
     if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "free" "warp_tier_last_verified" "free" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
+    if ! warp_runtime_refresh_followup_after_profile_change; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah switch WARP free."
     fi
     log "WARP tier target di-set: free"
@@ -3480,7 +3480,7 @@ warp_tier_switch_plus() {
       "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')"; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP plus."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
+    if ! warp_runtime_refresh_followup_after_profile_change; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah switch WARP plus."
     fi
     log "WARP tier target di-set: plus"
@@ -3600,7 +3600,7 @@ warp_tier_reconnect_regenerate() {
     if ! network_state_set_many "${WARP_MODE_STATE_KEY}" "consumer" "${WARP_TIER_STATE_KEY}" "${target}" "warp_tier_last_verified" "${target}" "warp_tier_last_verified_at" "$(date '+%Y-%m-%d %H:%M:%S')" >/dev/null 2>&1; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
-    if ! warp_runtime_refresh_ssh_network_after_profile_change; then
+    if ! warp_runtime_refresh_followup_after_profile_change; then
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah reconnect/regenerate WARP."
     fi
     warp_txn_success="true"

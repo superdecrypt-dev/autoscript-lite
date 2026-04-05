@@ -20,7 +20,6 @@ type XrayQuotaConfig struct {
 	StateRoot        string
 	DropbearUnit     string
 	EnforcerPath     string
-	ManagePath       string
 	SessionRoot      string
 	SessionHeartbeat time.Duration
 }
@@ -287,18 +286,5 @@ func triggerEnforcer(logger *log.Logger, enforcerPath, username string) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	if err := cmd.Run(); err != nil {
 		logger.Printf("edge-mux quota enforcer failed: %v", err)
-	}
-}
-
-func triggerSessionSync(logger *log.Logger, managePath string) {
-	path := strings.TrimSpace(managePath)
-	if path == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "__sync-ssh-network-session-targets")
-	if err := cmd.Run(); err != nil {
-		logger.Printf("edge-mux ssh session sync failed: %v", err)
 	}
 }

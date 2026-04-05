@@ -42,7 +42,6 @@ Menu bot Telegram sekarang mengikuti urutan `CLI Menu` di `manage.sh` untuk top-
 - `3) Xray QAC`
 - `4) SSH QAC`
 - `5) Xray Network`
-- `6) SSH Network`
 - `7) Adblocker`
 - `8) Domain Control`
 - `9) Speedtest`
@@ -53,8 +52,6 @@ Menu bot Telegram sekarang mengikuti urutan `CLI Menu` di `manage.sh` untuk top-
 
 Catatan parity:
 - `13) Tools` sengaja tidak dibawa ke bot Telegram; untuk bot, slot itu dipakai `WARP Tier`.
-- Domain `SSH Network` sudah muncul sebagai menu tersendiri agar susunan bot konsisten dengan CLI.
-- `SSH Network` sekarang disederhanakan menjadi `DNS for SSH`, `WARP SSH Global`, dan `WARP SSH Per-User`.
 - `WARP Tier` sekarang dibagi jadi root `Show Overall Status`, submenu `Free/Plus`, dan submenu `Zero Trust`.
 
 Catatan perilaku:

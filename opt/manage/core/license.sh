@@ -54,18 +54,6 @@ manage_license_guard_enabled() {
   [[ -e "${env_file}" || -x "${license_bin}" || -e "/etc/systemd/system/${license_service}" || -e "/etc/systemd/system/${license_timer}" ]]
 }
 
-manage_license_stage_for_args() {
-  local action="${1:-}"
-  case "${action}" in
-    __apply-ssh-network|__sync-ssh-network-session-targets)
-      printf '%s\n' "runtime"
-      ;;
-    *)
-      printf '%s\n' "manage"
-      ;;
-  esac
-}
-
 manage_license_guard_preflight() {
   local action="${1:-}"
   local stage license_bin api_url config_file default_api_url license_output
