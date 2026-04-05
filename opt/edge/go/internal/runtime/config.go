@@ -19,10 +19,10 @@ const (
 	defaultPublicTLSPorts      = "443,2053,2083,2087,2096,8443"
 	defaultMetricsListenAddr   = "127.0.0.1:9910"
 	defaultHTTPBackend         = "127.0.0.1:18080"
-	defaultSSHBackend          = "127.0.0.1:22022"
-	defaultSSHTLSBackend       = "127.0.0.1:22443"
-	defaultSSHWSBackend        = "127.0.0.1:10015"
-	defaultOpenVPNRawBackend   = "127.0.0.1:1194"
+	defaultSSHBackend          = "127.0.0.1:18080"
+	defaultSSHTLSBackend       = "127.0.0.1:18443"
+	defaultSSHWSBackend        = "127.0.0.1:18080"
+	defaultOpenVPNRawBackend   = "127.0.0.1:18443"
 	defaultVLESSRawBackend     = "127.0.0.1:28080"
 	defaultTrojanRawBackend    = "127.0.0.1:28081"
 	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
@@ -31,11 +31,11 @@ const (
 	defaultMetricsEnabled      = true
 	defaultTLSOn80             = true
 	defaultTLSHandshakeTimeout = 5 * time.Second
-	defaultSSHQuotaRoot        = "/opt/quota/ssh"
-	defaultSSHDropbearUnit     = "sshws-dropbear"
-	defaultSSHQACEnforcer      = "/usr/local/bin/sshws-qac-enforcer"
+	defaultSSHQuotaRoot        = "/opt/quota/xray"
+	defaultSSHDropbearUnit     = "xray"
+	defaultSSHQACEnforcer      = "/usr/local/bin/true"
 	defaultSSHManageBin        = "/usr/local/bin/manage"
-	defaultSSHSessionRoot      = "/run/autoscript/sshws-sessions"
+	defaultSSHSessionRoot      = "/run/autoscript/xray-edge-sessions"
 	defaultSSHSessionHeartbeat = 15 * time.Second
 	defaultMaxConnections      = 4096
 	defaultMaxConnectionsPerIP = 128
@@ -116,7 +116,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	sessionHeartbeat, err := envDurationSec(source, "EDGE_SSH_SESSION_HEARTBEAT_SEC", defaultSSHSessionHeartbeat)
+	sessionHeartbeat, err := envDurationSecAliases(source, defaultSSHSessionHeartbeat, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", "EDGE_SSH_SESSION_HEARTBEAT_SEC")
 	if err != nil {
 		return Config{}, err
 	}
@@ -196,10 +196,10 @@ func LoadConfig() (Config, error) {
 		MetricsEnabled:      metricsEnabled,
 		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
 		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
-		SSHBackend:          normalizeAddr(envString(source, "EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
-		SSHTLSBackend:       normalizeAddr(envString(source, "EDGE_SSH_TLS_BACKEND", defaultSSHTLSBackend), "127.0.0.1"),
-		SSHWSBackend:        normalizeAddr(envString(source, "EDGE_SSH_WS_BACKEND", defaultSSHWSBackend), "127.0.0.1"),
-		OpenVPNRawBackend:   normalizeAddr(envString(source, "EDGE_OPENVPN_TCP_BACKEND", defaultOpenVPNRawBackend), "127.0.0.1"),
+		SSHBackend:          normalizeAddr(envStringAliases(source, defaultSSHBackend, "EDGE_XRAY_DIRECT_BACKEND", "EDGE_SSH_CLASSIC_BACKEND"), "127.0.0.1"),
+		SSHTLSBackend:       normalizeAddr(envStringAliases(source, defaultSSHTLSBackend, "EDGE_XRAY_TLS_BACKEND", "EDGE_SSH_TLS_BACKEND"), "127.0.0.1"),
+		SSHWSBackend:        normalizeAddr(envStringAliases(source, defaultSSHWSBackend, "EDGE_XRAY_WS_BACKEND", "EDGE_SSH_WS_BACKEND"), "127.0.0.1"),
+		OpenVPNRawBackend:   normalizeAddr(envStringAliases(source, defaultOpenVPNRawBackend, "EDGE_XRAY_FALLBACK_BACKEND", "EDGE_OPENVPN_TCP_BACKEND"), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
@@ -210,11 +210,11 @@ func LoadConfig() (Config, error) {
 		DetectTimeout:       timeout,
 		ClassicTLSOn80:      classicTLSOn80,
 		TLSHandshakeTimeout: handshakeTimeout,
-		SSHQuotaRoot:        envString(source, "EDGE_SSH_QUOTA_ROOT", defaultSSHQuotaRoot),
-		SSHDropbearUnit:     envString(source, "EDGE_SSH_DROPBEAR_UNIT", defaultSSHDropbearUnit),
-		SSHQACEnforcer:      envString(source, "EDGE_SSH_QAC_ENFORCER", defaultSSHQACEnforcer),
-		SSHManageBin:        envString(source, "EDGE_SSH_MANAGE_BIN", defaultSSHManageBin),
-		SSHSessionRoot:      envString(source, "EDGE_SSH_SESSION_ROOT", defaultSSHSessionRoot),
+		SSHQuotaRoot:        envStringAliases(source, defaultSSHQuotaRoot, "EDGE_XRAY_QUOTA_ROOT", "EDGE_SSH_QUOTA_ROOT"),
+		SSHDropbearUnit:     envStringAliases(source, defaultSSHDropbearUnit, "EDGE_XRAY_RUNTIME_UNIT", "EDGE_SSH_DROPBEAR_UNIT"),
+		SSHQACEnforcer:      envStringAliases(source, defaultSSHQACEnforcer, "EDGE_XRAY_QAC_ENFORCER", "EDGE_SSH_QAC_ENFORCER"),
+		SSHManageBin:        envStringAliases(source, defaultSSHManageBin, "EDGE_XRAY_MANAGE_BIN", "EDGE_SSH_MANAGE_BIN"),
+		SSHSessionRoot:      envStringAliases(source, defaultSSHSessionRoot, "EDGE_XRAY_SESSION_ROOT", "EDGE_SSH_SESSION_ROOT"),
 		SSHSessionHeartbeat: sessionHeartbeat,
 		MaxConnections:      maxConnections,
 		MaxConnectionsPerIP: maxConnectionsPerIP,
@@ -537,6 +537,15 @@ func envString(source envSource, key, fallback string) string {
 	return v
 }
 
+func envStringAliases(source envSource, fallback string, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(source[key]); v != "" {
+			return v
+		}
+	}
+	return fallback
+}
+
 func envCSV(source envSource, key, fallback string) []string {
 	raw := strings.TrimSpace(source[key])
 	if raw == "" {
@@ -652,6 +661,21 @@ func envDurationSec(source envSource, key string, fallback time.Duration) (time.
 		return 0, fmt.Errorf("invalid integer seconds for %s", key)
 	}
 	return time.Duration(n) * time.Second, nil
+}
+
+func envDurationSecAliases(source envSource, fallback time.Duration, keys ...string) (time.Duration, error) {
+	for _, key := range keys {
+		v := strings.TrimSpace(source[key])
+		if v == "" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid integer seconds for %s", key)
+		}
+		return time.Duration(n) * time.Second, nil
+	}
+	return fallback, nil
 }
 
 func envNonNegativeInt(source envSource, key string, fallback int) (int, error) {
