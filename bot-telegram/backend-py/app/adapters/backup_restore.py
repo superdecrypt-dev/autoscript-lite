@@ -34,7 +34,6 @@ BACKUP_SAFETY_DIR = BACKUP_ROOT_DIR / "safety"
 UPLOAD_DIR_PRIMARY = BOT_STATE_DIR / "tmp" / "uploads"
 UPLOAD_DIR_ALT = BOT_HOME / "runtime" / "tmp" / "uploads"
 EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
-BADVPN_RUNTIME_ENV_FILE = Path("/etc/default/badvpn-udpgw")
 
 BACKUP_SOURCE_PATHS = (
     Path("/usr/local/etc/xray/conf.d"),
@@ -46,7 +45,6 @@ BACKUP_SOURCE_PATHS = (
     Path("/var/lib/xray-speed/state.json"),
     Path("/var/lib/xray-manage/network_state.json"),
     EDGE_RUNTIME_ENV_FILE,
-    BADVPN_RUNTIME_ENV_FILE,
     Path("/etc/wireproxy/config.conf"),
     Path("/etc/xray/domain"),
     Path("/opt/cert/fullchain.pem"),
@@ -65,7 +63,6 @@ RESTORE_ALLOWED_FILES = (
     Path("/var/lib/xray-speed/state.json"),
     Path("/var/lib/xray-manage/network_state.json"),
     EDGE_RUNTIME_ENV_FILE,
-    BADVPN_RUNTIME_ENV_FILE,
     Path("/etc/wireproxy/config.conf"),
     Path("/etc/xray/domain"),
     Path("/opt/cert/fullchain.pem"),
@@ -84,7 +81,7 @@ REQUIRED_RESTART_SERVICES = (
     "xray-quota",
     "xray-limit-ip",
 )
-OPTIONAL_RESTART_SERVICES = ("wireproxy", "sshws-stunnel", "edge-mux", "badvpn-udpgw")
+OPTIONAL_RESTART_SERVICES = ("wireproxy", "edge-mux")
 DOMAIN_BACKUP_REL_PATH = "etc/xray/domain"
 
 

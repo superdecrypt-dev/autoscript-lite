@@ -52,8 +52,8 @@ READONLY_GEOSITE_DOMAINS = (
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
 SSH_PROTOCOL = "ssh"
 OPENVPN_POLICY_PROTOCOL = "openvpn"
-USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
-QAC_PROTOCOLS = USER_PROTOCOLS + (OPENVPN_POLICY_PROTOCOL,)
+USER_PROTOCOLS = XRAY_PROTOCOLS
+QAC_PROTOCOLS = XRAY_PROTOCOLS
 PROTOCOLS = XRAY_PROTOCOLS
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -63,18 +63,11 @@ ALLOWED_SERVICES = (
     "xray",
     "nginx",
     "edge-mux",
-    "badvpn-udpgw",
     "wireproxy",
     "xray-expired",
     "xray-quota",
     "xray-limit-ip",
     "xray-speed",
-    "sshws-dropbear",
-    "sshws-stunnel",
-    "sshws-proxy",
-    "sshws-qac-enforcer.timer",
-    "openvpn-server@autoscript-tcp",
-    "ovpn-ws-proxy",
 )
 
 

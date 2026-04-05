@@ -23,10 +23,7 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "31:restart_all": 120.0,
     "31:restart_wireproxy": 90.0,
     "31:restart_edge_gateway": 90.0,
-    "31:restart_badvpn": 90.0,
-    "31:restart_openvpn": 120.0,
     "31:restart_xray_daemons": 120.0,
-    "31:restart_sshws_stack": 120.0,
     "32:create_backup": 240.0,
     "32:restore_latest": 420.0,
     "32:restore_latest_domain_only": 240.0,
@@ -40,13 +37,6 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "52:r2_restore_select": 420.0,
     "53:r2_delete_backup": 90.0,
     "33:warp_restart": 120.0,
-    "37:dns_for_ssh_apply": 180.0,
-    "40:warp_ssh_global_enable": 180.0,
-    "40:warp_ssh_global_disable": 180.0,
-    "41:routing_ssh_apply": 180.0,
-    "35:adblock_enable": 420.0,
-    "35:adblock_disable": 120.0,
-    "35:adblock_update": 420.0,
     "42:warp_tier_switch_free": 420.0,
     "42:warp_tier_switch_plus": 420.0,
     "42:warp_tier_reconnect": 420.0,
@@ -60,17 +50,9 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "22:add_user": 90.0,
     "22:delete_user": 90.0,
     "22:reset_credential": 90.0,
-    "23:add_user": 90.0,
-    "23:delete_user": 90.0,
-    "23:reset_password": 90.0,
     "24:reset_quota_used": 90.0,
-    "25:reset_quota_used": 90.0,
-    "44:reset_quota_used": 90.0,
 
     # Transitional menu IDs from older bot layouts.
-    "5:adblock_enable": 420.0,
-    "5:adblock_disable": 120.0,
-    "5:adblock_update": 420.0,
     "6:set_domain": 120.0,
     "6:setup_domain_custom": 420.0,
     "6:setup_domain_cloudflare": 420.0,
@@ -81,9 +63,7 @@ ACTION_TIMEOUTS_SECONDS: dict[str, float] = {
     "8:reload_nginx": 60.0,
     "8:renew_cert": 420.0,
     "9:restart_edge_gateway": 90.0,
-    "9:restart_badvpn": 90.0,
     "11:restart_edge_gateway": 90.0,
-    "11:restart_badvpn": 90.0,
     "12:create_backup": 240.0,
     "12:restore_latest": 420.0,
     "12:restore_from_upload": 420.0,
@@ -299,56 +279,6 @@ class BackendClient:
         if not isinstance(raw_entries, list):
             return []
 
-        out: list[BackendDomainOption] = []
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                continue
-            entry = str(item.get("entry") or "").strip()
-            if not entry:
-                continue
-            out.append(BackendDomainOption(entry=entry))
-        return out
-
-    async def list_adblock_manual_options(self) -> list[BackendDomainOption]:
-        try:
-            async with self._new_client(timeout=15.0) as client:
-                response = await client.get("/api/network/adblock/manual-options")
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text.strip()
-            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
-        except Exception as exc:
-            raise BackendError(_sanitize_text(str(exc))) from exc
-
-        raw_entries = data.get("entries") if isinstance(data, dict) else None
-        if not isinstance(raw_entries, list):
-            return []
-        out: list[BackendDomainOption] = []
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                continue
-            entry = str(item.get("entry") or "").strip()
-            if not entry:
-                continue
-            out.append(BackendDomainOption(entry=entry))
-        return out
-
-    async def list_adblock_url_options(self) -> list[BackendDomainOption]:
-        try:
-            async with self._new_client(timeout=15.0) as client:
-                response = await client.get("/api/network/adblock/url-options")
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text.strip()
-            raise BackendError(f"HTTP {exc.response.status_code}: {_sanitize_text(body[:400])}") from exc
-        except Exception as exc:
-            raise BackendError(_sanitize_text(str(exc))) from exc
-
-        raw_entries = data.get("entries") if isinstance(data, dict) else None
-        if not isinstance(raw_entries, list):
-            return []
         out: list[BackendDomainOption] = []
         for item in raw_entries:
             if not isinstance(item, dict):

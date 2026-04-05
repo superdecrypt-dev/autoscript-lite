@@ -128,22 +128,6 @@ def get_network_domain_options(mode: str | None = None) -> dict:
     }
 
 
-@router.get("/api/network/adblock/manual-options", dependencies=[Depends(verify_shared_secret)])
-def get_network_adblock_manual_options() -> dict:
-    entries = system.list_adblock_manual_domains()
-    return {
-        "entries": [{"entry": item} for item in entries],
-    }
-
-
-@router.get("/api/network/adblock/url-options", dependencies=[Depends(verify_shared_secret)])
-def get_network_adblock_url_options() -> dict:
-    entries = system.list_adblock_url_sources()
-    return {
-        "entries": [{"entry": item} for item in entries],
-    }
-
-
 @router.get("/api/domain/root-options", dependencies=[Depends(verify_shared_secret)])
 def get_domain_root_options() -> dict:
     roots = system_mutations.list_provided_root_domains()

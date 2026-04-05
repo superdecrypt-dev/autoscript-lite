@@ -1353,22 +1353,6 @@ async def _resolve_form_choice_options(runtime: Runtime, pending: dict, field_id
         entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
         return [(ent, ent) for ent in entries]
 
-    if field_id == "domain" and action_id == "delete_adblock_domain":
-        try:
-            options = await runtime.backend.list_adblock_manual_options()
-        except BackendError:
-            return []
-        entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
-        return [(ent, ent) for ent in entries]
-
-    if field_id == "url" and action_id == "delete_adblock_url_source":
-        try:
-            options = await runtime.backend.list_adblock_url_options()
-        except BackendError:
-            return []
-        entries = list(dict.fromkeys([o.entry for o in options if o.entry]))
-        return [(ent, ent) for ent in entries]
-
     return []
 
 
