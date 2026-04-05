@@ -188,3 +188,4 @@ Path internal itu hanya dipakai untuk wiring `nginx -> Xray` di host.
 - Nama file backup manual memakai format:
   - `backup-YYYY-MM-DD-HH:MM.tar.gz`
 - `safety backup` internal tetap dibuat otomatis sebelum restore penuh dan disimpan terpisah.
+- Panduan setup provider cloud ada di [`docs/BACKUP_RESTORE_CLOUD.md`](/root/project/autoscript-lite/docs/BACKUP_RESTORE_CLOUD.md).

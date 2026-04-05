@@ -22,6 +22,8 @@ Binary `edge-mux` akan:
 
 - `cmd/edge-mux/`
   - entrypoint binary
+- `cmd/wsproxy/`
+  - helper WebSocket runtime untuk jalur session/control yang masih dipakai host
 - `internal/detect/`
   - deteksi awal traffic
 - `internal/proxy/`
@@ -40,7 +42,7 @@ Binary `edge-mux` akan:
 - TLS termination di `:443`
 - klasifikasi awal:
   - HTTP/WebSocket -> backend HTTP internal
-  - non-HTTP / timeout singkat -> backend SSH klasik
+  - non-HTTP / timeout singkat -> backend fallback yang dikonfigurasi
 - route decision berbasis `Host/path/ALPN/SNI`
 - override route berbasis `SNI` exact-match lewat `EDGE_SNI_ROUTES`
 - passthrough TLS exact-match berbasis `SNI` lewat `EDGE_SNI_PASSTHROUGH`
@@ -48,7 +50,7 @@ Binary `edge-mux` akan:
 - hot reload `cert/config` via `SIGHUP`
 - route map `EDGE_SNI_ROUTES` dan `EDGE_SNI_PASSTHROUGH` ikut hot reload tanpa restart penuh
 - hardening anti-abuse dasar
-- parity session SSH untuk jalur direct/TLS
+- parity session runtime untuk jalur direct/TLS yang masih dipakai edge
 
 ## Endpoint Lokal
 
@@ -84,7 +86,7 @@ Default listen:
 
 Script build lokal:
 
-- [build-edge-mux.sh](/root/project/autoscript/opt/edge/scripts/build-edge-mux.sh)
+- [build-edge-mux.sh](/root/project/autoscript-lite/opt/edge/scripts/build-edge-mux.sh)
 
 Output default:
 

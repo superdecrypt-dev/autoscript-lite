@@ -14,6 +14,7 @@ Bot Telegram ini adalah pelengkap CLI `manage.sh`, berjalan standalone di `/opt/
 - `shared/commands.json`: definisi menu/action.
 - `systemd/`: template unit backend/gateway/monitor.
 - `scripts/`: gate/smoke/monitor helper.
+- Baseline arsitektur yang dikunci untuk varian ini ada di [`ARCHITECTURE_LOCK.md`](/root/project/autoscript-lite/bot-telegram/ARCHITECTURE_LOCK.md).
 
 ## Env penting
 Dikelola di `/etc/bot-telegram/bot.env`:
