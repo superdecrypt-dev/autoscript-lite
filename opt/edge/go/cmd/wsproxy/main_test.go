@@ -183,7 +183,7 @@ func writeMaskedClientFrame(t *testing.T, conn net.Conn, opcode byte, payload []
 	}
 }
 
-func TestSniffInitialClientRouteUsesOpenVPNControlPacketForOpenVPN(t *testing.T) {
+func TestSniffInitialClientRouteUsesFallbackRouteForOpenVPNControlPacket(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -200,20 +200,20 @@ func TestSniffInitialClientRouteUsesOpenVPNControlPacketForOpenVPN(t *testing.T)
 
 	reader := bufio.NewReader(server)
 	writer := wsproxy.NewWSWriter(server)
-	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
+	frame, useFallback, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("sniffInitialClientRoute error: %v", err)
 	}
 	if frame == nil {
 		t.Fatal("expected first frame, got nil")
 	}
-	if !useOVPN {
-		t.Fatal("expected OpenVPN route for OpenVPN control payload")
+	if !useFallback {
+		t.Fatal("expected fallback route for OpenVPN control payload")
 	}
 	<-done
 }
 
-func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForOpenVPN(t *testing.T) {
+func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForFallback(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -227,34 +227,34 @@ func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForOpenVPN(t *testing.
 
 	reader := bufio.NewReader(server)
 	writer := wsproxy.NewWSWriter(server)
-	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
+	frame, useFallback, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("sniffInitialClientRoute error: %v", err)
 	}
 	if frame == nil {
 		t.Fatal("expected first frame, got nil")
 	}
-	if !useOVPN {
-		t.Fatal("expected OpenVPN route for TLS-like payload")
+	if !useFallback {
+		t.Fatal("expected fallback route for TLS-like payload")
 	}
 	<-done
 }
 
-func TestSniffInitialClientRouteTimeoutFallsBackToSSH(t *testing.T) {
+func TestSniffInitialClientRouteTimeoutFallsBackToPrimaryBackend(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
 
 	reader := bufio.NewReader(server)
 	writer := wsproxy.NewWSWriter(server)
-	frame, useOVPN, err := sniffInitialClientRoute(server, reader, writer, 50*time.Millisecond)
+	frame, useFallback, err := sniffInitialClientRoute(server, reader, writer, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("sniffInitialClientRoute timeout error: %v", err)
 	}
 	if frame != nil {
 		t.Fatalf("expected nil frame on timeout, got %#v", frame)
 	}
-	if useOVPN {
-		t.Fatal("expected SSH fallback on timeout")
+	if useFallback {
+		t.Fatal("expected primary backend on timeout")
 	}
 }

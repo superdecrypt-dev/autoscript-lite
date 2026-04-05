@@ -33,27 +33,27 @@ const (
 	policyTimeout      = 2 * time.Second
 	sessionOpTimeout   = 2 * time.Second
 	diagnosticProbeTok = "diagnostic-probe"
-	diagnosticProbeUsr = "sshws-diagnostic"
+	diagnosticProbeUsr = "xray-ws-diagnostic"
 	quotaFlushSignal   = syscall.SIGUSR1
 )
 
 type config struct {
-	mode               string
-	listenHost         string
-	listenPort         int
-	backendHost        string
-	backendPort        int
-	ovpnBackendHost    string
-	ovpnBackendPort    int
-	ovpnProbeTimeout   time.Duration
-	path               string
-	handshakeTimeout   time.Duration
-	qacStateRoot       string
-	qacLockFile        string
-	qacEnforcerBin     string
-	qacSessionRoot     string
-	controlBin         string
-	quotaFlushInterval time.Duration
+	mode                 string
+	listenHost           string
+	listenPort           int
+	backendHost          string
+	backendPort          int
+	fallbackBackendHost  string
+	fallbackBackendPort  int
+	fallbackProbeTimeout time.Duration
+	path                 string
+	handshakeTimeout     time.Duration
+	xrayStateRoot        string
+	xrayLockFile         string
+	xrayEnforcerBin      string
+	xraySessionRoot      string
+	controlBin           string
+	quotaFlushInterval   time.Duration
 }
 
 type policy struct {
@@ -319,15 +319,15 @@ func newQuotaRecorder(stateRoot, lockFile, enforcerBin string) *quotaRecorder {
 func (q *quotaRecorder) statePath(username string) string {
 	user := wsproxy.NormUser(username)
 	if user == "" {
-		return filepath.Join(q.stateRoot, "@ssh.json")
+		return filepath.Join(q.stateRoot, "@xray.json")
 	}
-	primary := filepath.Join(q.stateRoot, user+"@ssh.json")
+	primary := filepath.Join(q.stateRoot, user+".json")
 	if wsproxy.FileExists(primary) {
 		return primary
 	}
-	legacy := filepath.Join(q.stateRoot, user+".json")
-	if wsproxy.FileExists(legacy) {
-		return legacy
+	legacyTagged := filepath.Join(q.stateRoot, user+"@ssh.json")
+	if wsproxy.FileExists(legacyTagged) {
+		return legacyTagged
 	}
 	return primary
 }
@@ -539,16 +539,16 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 	}
 
 	clientIP := wsproxy.ExtractClientIP(headers, conn)
-	probeOnly := cfg.mode == "ssh" && isLoopbackIP(clientIP) && isDiagnosticProbePath(pathOnly, cfg.path)
-	sharedOVPN := cfg.mode == "ssh" && cfg.ovpnBackendPort > 0
+	probeOnly := cfg.mode == "xray" && isLoopbackIP(clientIP) && isDiagnosticProbePath(pathOnly, cfg.path)
+	sharedFallback := cfg.mode == "xray" && cfg.fallbackBackendPort > 0
 
 	var username string
 	var res *reservation
 	var resp *admissionResponse
-	if cfg.mode == "ssh" && !probeOnly {
+	if cfg.mode == "xray" && !probeOnly {
 		admission, reservation, err := registry.reserveAdmission(clientIP, ctl, pathOnly, cfg.path)
 		if err != nil {
-			log.Printf("sshws admission helper failed for %q from %q: %v", pathOnly, clientIP, err)
+			log.Printf("xray-ws admission helper failed for %q from %q: %v", pathOnly, clientIP, err)
 			wsproxy.SendHTTPError(conn, 503, controlErrorReason)
 			return
 		}
@@ -582,15 +582,15 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 	backendHost := cfg.backendHost
 	backendPort := cfg.backendPort
 	var firstClientFrame *wsproxy.WSFrame
-	sshRuntime := cfg.mode == "ssh" && !probeOnly
-	if sharedOVPN {
+	xrayRuntime := cfg.mode == "xray" && !probeOnly
+	if sharedFallback {
 		if err := wsproxy.SendHandshakeOK(conn, accept); err != nil {
 			if res != nil {
 				registry.finalize(res)
 			}
 			return
 		}
-		frame, useOVPN, err := sniffInitialClientRoute(conn, wsr, wsw, cfg.ovpnProbeTimeout)
+		frame, useFallback, err := sniffInitialClientRoute(conn, wsr, wsw, cfg.fallbackProbeTimeout)
 		if err != nil {
 			if res != nil {
 				registry.finalize(res)
@@ -599,10 +599,10 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 			return
 		}
 		firstClientFrame = frame
-		if useOVPN {
-			backendHost = cfg.ovpnBackendHost
-			backendPort = cfg.ovpnBackendPort
-			sshRuntime = false
+		if useFallback {
+			backendHost = cfg.fallbackBackendHost
+			backendPort = cfg.fallbackBackendPort
+			xrayRuntime = false
 		}
 	}
 
@@ -617,7 +617,7 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 	defer backendConn.Close()
 
 	var ctx *connectionContext
-	if sshRuntime {
+	if xrayRuntime {
 		localPort := 0
 		if addr, ok := backendConn.LocalAddr().(*net.TCPAddr); ok {
 			localPort = addr.Port
@@ -626,7 +626,7 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 		ctx.setInitialPolicy(resp.Policy)
 		if err := ctx.writeRuntimeSession(); err != nil {
 			registry.finalize(res)
-			log.Printf("sshws session-write failed for user=%q port=%d: %v", username, localPort, err)
+			log.Printf("xray-ws session-write failed for user=%q port=%d: %v", username, localPort, err)
 			_ = wsw.WriteClose()
 			return
 		}
@@ -635,23 +635,23 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 			if ctx != nil {
 				_ = recorder.flushOnce()
 				if err := ctx.clearRuntimeSession(); err != nil {
-					log.Printf("sshws session-clear failed for user=%q port=%d: %v", username, localPort, err)
+					log.Printf("xray-ws session-clear failed for user=%q port=%d: %v", username, localPort, err)
 				}
-				triggerEnforcerAsync(cfg.qacEnforcerBin, username)
+				triggerEnforcerAsync(cfg.xrayEnforcerBin, username)
 			}
 		}()
 	} else if res != nil {
 		registry.finalize(res)
 	}
 
-	if !sharedOVPN {
+	if !sharedFallback {
 		if err := wsproxy.SendHandshakeOK(conn, accept); err != nil {
 			return
 		}
 	}
 
-	if cfg.mode == "ssh" && username != "" && sshRuntime {
-		triggerEnforcerAsync(cfg.qacEnforcerBin, username)
+	if cfg.mode == "xray" && username != "" && xrayRuntime {
+		triggerEnforcerAsync(cfg.xrayEnforcerBin, username)
 	}
 
 	done := make(chan struct{}, 2)
@@ -665,7 +665,7 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 				select {
 				case <-ticker.C:
 					if err := ctx.touchRuntimeSession(true); err != nil {
-						log.Printf("sshws session-touch failed for user=%q port=%d: %v", username, ctx.backendLocalPort, err)
+						log.Printf("xray-ws session-touch failed for user=%q port=%d: %v", username, ctx.backendLocalPort, err)
 						_ = backendConn.SetDeadline(time.Now())
 						_ = conn.SetDeadline(time.Now())
 						return
@@ -797,7 +797,7 @@ func quotaFlushSignalLoop(ctx context.Context, recorder *quotaRecorder, logger *
 			return
 		case <-sigCh:
 			if err := recorder.flushOnce(); err != nil && logger != nil {
-				logger.Printf("sshws quota flush via signal failed: %v", err)
+				logger.Printf("xray-ws quota flush via signal failed: %v", err)
 			}
 		}
 	}
@@ -816,9 +816,9 @@ func run(cfg *config) error {
 
 	registry := newConnectionRegistry()
 	limiter := wsproxy.NewRateLimiter()
-	control := &controlClient{bin: cfg.controlBin, stateRoot: cfg.qacStateRoot, sessionRoot: cfg.qacSessionRoot}
-	recorder := newQuotaRecorder(cfg.qacStateRoot, cfg.qacLockFile, cfg.qacEnforcerBin)
-	if cfg.mode == "ssh" {
+	control := &controlClient{bin: cfg.controlBin, stateRoot: cfg.xrayStateRoot, sessionRoot: cfg.xraySessionRoot}
+	recorder := newQuotaRecorder(cfg.xrayStateRoot, cfg.xrayLockFile, cfg.xrayEnforcerBin)
+	if cfg.mode == "xray" {
 		go quotaFlushLoop(ctx, recorder, cfg.quotaFlushInterval)
 		go quotaFlushSignalLoop(ctx, recorder, log.Default())
 	}
@@ -850,23 +850,23 @@ func run(cfg *config) error {
 
 func parseArgs() *config {
 	cfg := &config{}
-	flag.StringVar(&cfg.mode, "mode", "ssh", "Proxy mode: ssh or tcp")
+	flag.StringVar(&cfg.mode, "mode", "xray", "Proxy mode: xray or tcp")
 	flag.StringVar(&cfg.listenHost, "listen-host", "127.0.0.1", "Listen host")
 	flag.IntVar(&cfg.listenPort, "listen-port", 10015, "Listen port")
 	flag.StringVar(&cfg.backendHost, "backend-host", "127.0.0.1", "Backend host")
-	flag.IntVar(&cfg.backendPort, "backend-port", 22022, "Backend port")
-	flag.StringVar(&cfg.ovpnBackendHost, "ovpn-backend-host", "127.0.0.1", "OpenVPN backend host")
-	flag.IntVar(&cfg.ovpnBackendPort, "ovpn-backend-port", 0, "Optional OpenVPN backend port for shared WS path")
+	flag.IntVar(&cfg.backendPort, "backend-port", 18080, "Backend port")
+	flag.StringVar(&cfg.fallbackBackendHost, "fallback-backend-host", "127.0.0.1", "Fallback backend host")
+	flag.IntVar(&cfg.fallbackBackendPort, "fallback-backend-port", 0, "Optional fallback backend port for shared WS path")
 	flag.StringVar(&cfg.path, "path", "/", "Expected public path prefix")
 	var hsTimeout float64
 	flag.Float64Var(&hsTimeout, "handshake-timeout", handshakeTimeoutDefault.Seconds(), "Handshake timeout in seconds")
-	var ovpnProbeMS int
-	flag.IntVar(&ovpnProbeMS, "ovpn-probe-timeout-ms", 250, "Timeout in milliseconds to wait for initial OpenVPN payload after WS upgrade")
-	flag.StringVar(&cfg.qacStateRoot, "qac-state-root", "/opt/quota/ssh", "SSH QAC state root")
-	flag.StringVar(&cfg.qacLockFile, "qac-lock-file", "/run/autoscript/locks/sshws-qac.lock", "SSH QAC lock file")
-	flag.StringVar(&cfg.qacEnforcerBin, "qac-enforcer-bin", "/usr/local/bin/sshws-qac-enforcer", "SSH QAC enforcer binary")
-	flag.StringVar(&cfg.qacSessionRoot, "qac-session-root", "/run/autoscript/sshws-sessions", "Runtime session root")
-	flag.StringVar(&cfg.controlBin, "control-bin", "/usr/local/bin/sshws-control", "Python SSHWS control plane helper")
+	var fallbackProbeMS int
+	flag.IntVar(&fallbackProbeMS, "fallback-probe-timeout-ms", 250, "Timeout in milliseconds to wait for initial fallback payload after WS upgrade")
+	flag.StringVar(&cfg.xrayStateRoot, "xray-state-root", "/opt/quota/xray", "Xray quota state root")
+	flag.StringVar(&cfg.xrayLockFile, "xray-lock-file", "/run/autoscript/locks/xray-ws-qac.lock", "Xray quota lock file")
+	flag.StringVar(&cfg.xrayEnforcerBin, "xray-enforcer-bin", "/usr/local/bin/true", "Xray quota enforcer binary")
+	flag.StringVar(&cfg.xraySessionRoot, "xray-session-root", "/run/autoscript/xray-ws-sessions", "Runtime session root")
+	flag.StringVar(&cfg.controlBin, "control-bin", "/usr/local/bin/sshws-control", "Python control plane helper")
 	var flushInt float64
 	flag.Float64Var(&flushInt, "quota-flush-interval", 1.0, "Quota flush interval in seconds")
 	flag.Parse()
@@ -878,13 +878,18 @@ func parseArgs() *config {
 	if cfg.quotaFlushInterval < time.Second {
 		cfg.quotaFlushInterval = time.Second
 	}
-	if cfg.mode != "ssh" {
+	switch strings.ToLower(strings.TrimSpace(cfg.mode)) {
+	case "ssh":
+		cfg.mode = "xray"
+	case "xray":
+		cfg.mode = "xray"
+	default:
 		cfg.mode = "tcp"
 	}
-	if ovpnProbeMS < 0 {
-		ovpnProbeMS = 0
+	if fallbackProbeMS < 0 {
+		fallbackProbeMS = 0
 	}
-	cfg.ovpnProbeTimeout = time.Duration(ovpnProbeMS) * time.Millisecond
+	cfg.fallbackProbeTimeout = time.Duration(fallbackProbeMS) * time.Millisecond
 	return cfg
 }
 
@@ -913,8 +918,8 @@ func sniffInitialClientRoute(conn net.Conn, reader *bufio.Reader, writer *wsprox
 		case wsproxy.OpClose:
 			return frame, false, context.Canceled
 		case wsproxy.OpBinary, wsproxy.OpText, wsproxy.OpContinuation:
-			useOVPN := detect.IsOpenVPNClientHello(frame.Payload) || detect.IsTLSClientHello(frame.Payload)
-			return frame, useOVPN, nil
+			useFallback := detect.IsOpenVPNClientHello(frame.Payload) || detect.IsTLSClientHello(frame.Payload)
+			return frame, useFallback, nil
 		default:
 			continue
 		}
@@ -968,7 +973,7 @@ func triggerEnforcer(bin, user string) error {
 func triggerEnforcerAsync(bin, user string) {
 	go func() {
 		if err := triggerEnforcer(bin, user); err != nil {
-			log.Printf("sshws trigger-enforcer failed for user=%q: %v", wsproxy.NormUser(user), err)
+			log.Printf("xray-ws trigger-enforcer failed for user=%q: %v", wsproxy.NormUser(user), err)
 		}
 	}()
 }
