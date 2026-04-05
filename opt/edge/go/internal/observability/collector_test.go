@@ -147,7 +147,7 @@ func TestSnapshotIncludesConfiguredRouteTable(t *testing.T) {
 		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"alpha.example.com": "vless_tcp",
-			"beta.example.com":  "ssh_ws",
+			"beta.example.com":  "xray_ws",
 		},
 		SNIPassthrough: map[string]string{
 			"gamma.example.com": "127.0.0.1:18443",
@@ -164,8 +164,8 @@ func TestSnapshotIncludesConfiguredRouteTable(t *testing.T) {
 	if snapshot.ConfiguredRoutes[0].Backend != "vless" || snapshot.ConfiguredRoutes[0].BackendAddr != "127.0.0.1:33175" {
 		t.Fatalf("ConfiguredRoutes[0] = %#v, want vless -> 127.0.0.1:33175", snapshot.ConfiguredRoutes[0])
 	}
-	if snapshot.ConfiguredRoutes[1].Host != "beta.example.com" || snapshot.ConfiguredRoutes[1].RouteAlias != "ssh_ws" {
-		t.Fatalf("ConfiguredRoutes[1] = %#v, want beta.example.com ssh_ws", snapshot.ConfiguredRoutes[1])
+	if snapshot.ConfiguredRoutes[1].Host != "beta.example.com" || snapshot.ConfiguredRoutes[1].RouteAlias != "xray_ws" {
+		t.Fatalf("ConfiguredRoutes[1] = %#v, want beta.example.com xray_ws", snapshot.ConfiguredRoutes[1])
 	}
 	if snapshot.ConfiguredRoutes[2].Host != "gamma.example.com" || snapshot.ConfiguredRoutes[2].Mode != "passthrough" {
 		t.Fatalf("ConfiguredRoutes[2] = %#v, want gamma.example.com passthrough", snapshot.ConfiguredRoutes[2])

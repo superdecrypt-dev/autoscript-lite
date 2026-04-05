@@ -66,7 +66,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_direct_backend=%s ssh_tls_backend=%s ssh_ws_backend=%s openvpn_raw_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s xray_tls_backend=%s xray_ws_backend=%s xray_fallback_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		formatListenAddrs(cfg.HTTPListenAddrs()),
 		formatListenAddrs(cfg.TLSListenAddrs()),
@@ -716,7 +716,7 @@ func handleReloads(
 		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
-			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s ssh_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
 			formatListenAddrs(newCfg.HTTPListenAddrs()),
 			formatListenAddrs(newCfg.TLSListenAddrs()),
 			newCfg.MetricsAddr(),
@@ -995,52 +995,52 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		handleTLSPayloadConn(logger, cfg, collector, health, tlsConn, "http-inner")
 		return
 	case detect.ClassSSH:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:ssh-direct", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:xray-direct", false)
 		return
 	case detect.ClassOpenVPNRaw:
 		target := cfg.XrayFallbackBackendAddr()
 		if strings.TrimSpace(target) == "" {
 			target = cfg.XrayDirectBackendAddr()
 		}
-		event := routeDecisionEvent(cfg, health, class, target, "openvpn-tcp", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, target, "fallback-tcp", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "http-port:openvpn-tcp", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "http-port:fallback-tcp", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "http-port:ssh-direct-timeout", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "http-port:xray-direct-timeout", false)
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-unknown", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:ssh-direct-unknown", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:xray-direct-unknown", false)
 	}
 }
 
@@ -1109,48 +1109,48 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassSSH:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:ssh-direct", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:xray-direct", false)
 		return
 	case detect.ClassOpenVPNRaw:
 		target := cfg.XrayFallbackBackendAddr()
 		if strings.TrimSpace(target) == "" {
 			target = cfg.XrayDirectBackendAddr()
 		}
-		event := routeDecisionEvent(cfg, health, class, target, "openvpn-tcp", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, target, "fallback-tcp", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "tls-port:openvpn-tcp", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "tls-port:fallback-tcp", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct-timeout", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "tls-port:ssh-direct-timeout", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "tls-port:xray-direct-timeout", false)
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "ssh-direct-unknown", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-unknown", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "tls-port"
 		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
 			return
 		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:ssh-direct-unknown", false)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:xray-direct-unknown", false)
 		return
 	}
 }
@@ -1230,22 +1230,22 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.reason = "Request Timeout"
 	case detect.ClassTimeout:
 		decision.target = cfg.XrayDirectBackendAddr()
-		decision.route = "ssh-timeout"
-		decision.contextLabel = fmt.Sprintf("%s:ssh-timeout", surface)
+		decision.route = "xray-direct-timeout"
+		decision.contextLabel = fmt.Sprintf("%s:xray-direct-timeout", surface)
 	case detect.ClassSSH:
 		decision.target = cfg.XrayDirectBackendAddr()
-		decision.route = "ssh"
-		decision.contextLabel = fmt.Sprintf("%s:ssh", surface)
+		decision.route = "xray-direct"
+		decision.contextLabel = fmt.Sprintf("%s:xray-direct", surface)
 	case detect.ClassOpenVPNRaw:
 		decision.target = cfg.XrayFallbackBackendAddr()
 		if strings.TrimSpace(decision.target) == "" {
 			decision.target = cfg.XrayDirectBackendAddr()
-			decision.route = "ssh"
-			decision.contextLabel = fmt.Sprintf("%s:ssh-fallback", surface)
+			decision.route = "xray-direct"
+			decision.contextLabel = fmt.Sprintf("%s:xray-direct-fallback", surface)
 			break
 		}
-		decision.route = "openvpn-tcp"
-		decision.contextLabel = fmt.Sprintf("%s:openvpn-tcp", surface)
+		decision.route = "fallback-tcp"
+		decision.contextLabel = fmt.Sprintf("%s:fallback-tcp", surface)
 	case detect.ClassVLESSRaw:
 		decision.target = cfg.VLESSRawBackendAddr()
 		decision.route = "vless-tcp"
@@ -1278,11 +1278,11 @@ func resolveSNIRouteDecision(cfg runtime.Config, sni, surface string) (tlsRouteD
 	case "http":
 		decision.target = cfg.HTTPBackendAddr()
 		decision.sendHTTP502 = true
-	case "ssh_direct":
+	case "xray_direct":
 		decision.target = cfg.XrayDirectBackendAddr()
-	case "ssh_tls":
+	case "xray_tls":
 		decision.target = cfg.XrayTLSBackendAddr()
-	case "ssh_ws":
+	case "xray_ws":
 		decision.target = cfg.XrayWSBackendAddr()
 		decision.sendHTTP502 = true
 	case "vless_tcp":
@@ -1342,13 +1342,13 @@ func backendLabel(cfg runtime.Config, target string) string {
 	case cfg.HTTPBackendAddr():
 		return "http"
 	case cfg.XrayDirectBackendAddr():
-		return "ssh"
+		return "xray"
 	case cfg.XrayTLSBackendAddr():
-		return "ssh-tls"
+		return "xray-tls"
 	case cfg.XrayWSBackendAddr():
-		return "ssh-ws"
+		return "xray-ws"
 	case cfg.XrayFallbackBackendAddr():
-		return "openvpn"
+		return "fallback"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
 	case cfg.TrojanRawBackendAddr():
@@ -1392,9 +1392,9 @@ func routeDetectClassName(class detect.InitialClass) string {
 	case detect.ClassTLSClientHello:
 		return "tls_client_hello"
 	case detect.ClassSSH:
-		return "ssh"
+		return "xray_direct"
 	case detect.ClassOpenVPNRaw:
-		return "openvpn_raw"
+		return "fallback_raw"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:
@@ -1641,19 +1641,19 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 	}
 
 	addCheck("http", cfg.HTTPBackendAddr(), true)
-	addCheck("ssh-direct", cfg.XrayDirectBackendAddr(), true)
-	addCheck("ssh-tls", cfg.XrayTLSBackendAddr(), true)
-	addCheck("ssh-ws", cfg.XrayWSBackendAddr(), true)
-	addCheck("openvpn", cfg.XrayFallbackBackendAddr(), strings.TrimSpace(cfg.XrayFallbackBackendAddr()) != "")
+	addCheck("xray-direct", cfg.XrayDirectBackendAddr(), true)
+	addCheck("xray-tls", cfg.XrayTLSBackendAddr(), true)
+	addCheck("xray-ws", cfg.XrayWSBackendAddr(), true)
+	addCheck("fallback", cfg.XrayFallbackBackendAddr(), strings.TrimSpace(cfg.XrayFallbackBackendAddr()) != "")
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
 	for _, target := range uniquePassthroughTargets(cfg) {
 		addCheck(passthroughBackendHealthKey(target), target, true)
 	}
-	aggregateGroup("ssh", map[string]observability.BackendHealthSnapshot{
-		"direct": out["ssh-direct"],
-		"tls":    out["ssh-tls"],
-		"ws":     out["ssh-ws"],
+	aggregateGroup("xray", map[string]observability.BackendHealthSnapshot{
+		"direct": out["xray-direct"],
+		"tls":    out["xray-tls"],
+		"ws":     out["xray-ws"],
 	})
 	return out
 }

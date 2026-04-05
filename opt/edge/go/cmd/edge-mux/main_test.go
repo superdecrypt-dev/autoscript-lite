@@ -292,8 +292,8 @@ func TestDecideHTTPRouteKnownSSHWebSocketPathPassesThrough(t *testing.T) {
 
 	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
 
-	if decision.Route != "ssh-ws-like" {
-		t.Fatalf("route = %q, want ssh-ws-like", decision.Route)
+	if decision.Route != "xray-ws-like" {
+		t.Fatalf("route = %q, want xray-ws-like", decision.Route)
 	}
 	if decision.Status != 0 {
 		t.Fatalf("status = %d, want 0", decision.Status)
@@ -310,8 +310,8 @@ func TestDecideHTTPRouteDiagnosticProbeRequiresLoopback(t *testing.T) {
 	}
 
 	allowed := decideHTTPRoute(cfg, "tls-inner", initial, "", "", true)
-	if allowed.Route != "ssh-ws-like" || allowed.Status != 0 {
-		t.Fatalf("allowed diagnostic route = (%q,%d), want (ssh-ws-like,0)", allowed.Route, allowed.Status)
+	if allowed.Route != "xray-ws-like" || allowed.Status != 0 {
+		t.Fatalf("allowed diagnostic route = (%q,%d), want (xray-ws-like,0)", allowed.Route, allowed.Status)
 	}
 }
 
@@ -325,12 +325,12 @@ func TestRouteBlockedByHealthUsesSpecificBackendKey(t *testing.T) {
 	}
 	health := &backendHealthState{}
 	health.Set(map[string]observability.BackendHealthSnapshot{
-		"ssh": {
+		"xray": {
 			Address: "direct=127.0.0.1:22022, tls=127.0.0.1:22443, ws=127.0.0.1:10015",
 			Healthy: false,
 			Status:  "degraded",
 		},
-		"ssh-direct": {
+		"xray-direct": {
 			Address: "127.0.0.1:22022",
 			Healthy: true,
 			Status:  "up",
@@ -338,7 +338,7 @@ func TestRouteBlockedByHealthUsesSpecificBackendKey(t *testing.T) {
 	})
 
 	if _, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
-		t.Fatalf("routeBlockedByHealth() = true, want false for healthy ssh-direct backend")
+		t.Fatalf("routeBlockedByHealth() = true, want false for healthy xray-direct backend")
 	}
 }
 
@@ -442,7 +442,7 @@ func TestResolveSNIRouteDecisionUsesConfiguredBackend(t *testing.T) {
 		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"vmess.example.com": "vless_tcp",
-			"ws.example.com":    "ssh_ws",
+			"ws.example.com":    "xray_ws",
 		},
 	}
 
@@ -468,13 +468,13 @@ func TestResolveSNIRouteDecisionUsesConfiguredBackend(t *testing.T) {
 
 	wsDecision, ok := resolveSNIRouteDecision(cfg, "ws.example.com", "tls-inner")
 	if !ok {
-		t.Fatalf("resolveSNIRouteDecision() ok = false, want true for ssh_ws route")
+		t.Fatalf("resolveSNIRouteDecision() ok = false, want true for xray_ws route")
 	}
 	if wsDecision.target != cfg.XrayWSBackendAddr() {
 		t.Fatalf("wsDecision.target = %q, want %q", wsDecision.target, cfg.XrayWSBackendAddr())
 	}
-	if wsDecision.matchedRoute != "ssh_ws" {
-		t.Fatalf("wsDecision.matchedRoute = %q, want ssh_ws", wsDecision.matchedRoute)
+	if wsDecision.matchedRoute != "xray_ws" {
+		t.Fatalf("wsDecision.matchedRoute = %q, want xray_ws", wsDecision.matchedRoute)
 	}
 	if !wsDecision.sendHTTP502 {
 		t.Fatalf("wsDecision.sendHTTP502 = false, want true")
@@ -609,11 +609,11 @@ func TestDecideTLSPayloadRouteUsesOpenVPNBackendForOpenVPNClass(t *testing.T) {
 	if decision.target != cfg.XrayFallbackBackendAddr() {
 		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.XrayFallbackBackendAddr())
 	}
-	if decision.route != "openvpn-tcp" {
-		t.Fatalf("decision.route = %q, want openvpn-tcp", decision.route)
+	if decision.route != "fallback-tcp" {
+		t.Fatalf("decision.route = %q, want fallback-tcp", decision.route)
 	}
-	if got := backendLabel(cfg, cfg.XrayFallbackBackendAddr()); got != "openvpn" {
-		t.Fatalf("backendLabel(openvpn) = %q, want openvpn", got)
+	if got := backendLabel(cfg, cfg.XrayFallbackBackendAddr()); got != "fallback" {
+		t.Fatalf("backendLabel(fallback) = %q, want fallback", got)
 	}
 }
 

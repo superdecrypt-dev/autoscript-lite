@@ -12,9 +12,9 @@ const (
 	defaultRefreshInterval = 2 * time.Second
 	initialResolveWait     = 1500 * time.Millisecond
 	warmupFreeBytes        = 64 * 1024
-	// Allow enough time for dropbear auth logs to become visible so the first
-	// post-auth payload does not escape shaping almost entirely on short-lived
-	// ssh-direct sessions.
+	// Allow enough time for auth logs to become visible so the first post-auth
+	// payload does not escape shaping almost entirely on short-lived
+	// xray-direct sessions.
 	warmupMaxWait = 8 * time.Second
 )
 

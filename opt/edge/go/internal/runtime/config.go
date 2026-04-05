@@ -51,12 +51,12 @@ const (
 )
 
 var validSNIRouteAliases = map[string]struct{}{
-	"http":       {},
-	"ssh_direct": {},
-	"ssh_tls":    {},
-	"ssh_ws":     {},
-	"vless_tcp":  {},
-	"trojan_tcp": {},
+	"http":        {},
+	"xray_direct": {},
+	"xray_tls":    {},
+	"xray_ws":     {},
+	"vless_tcp":   {},
+	"trojan_tcp":  {},
 }
 
 type Config struct {

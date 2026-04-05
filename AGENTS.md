@@ -15,6 +15,7 @@ Gunakan source repo lokal saat menguji perubahan installer:
 
 ```bash
 RUN_USE_LOCAL_SOURCE=1 bash run.sh
+bash tools/test-noninteractive.sh
 bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
 python3 -m py_compile opt/setup/bin/*.py bot-telegram/backend-py/app/**/*.py bot-telegram/gateway-py/app/**/*.py
@@ -23,13 +24,13 @@ bash bot-telegram/scripts/gate-all.sh
 sudo /opt/bot-telegram/scripts/smoke-test.sh
 ```
 
-`gate-all.sh` memvalidasi kode Python bot. Test Go untuk varian `lite` berfokus di `opt/edge/go/**`.
+`tools/test-noninteractive.sh` adalah baseline utama yang harus tetap hijau. `gate-all.sh` memvalidasi kode Python bot. Test Go untuk varian `lite` berfokus di `opt/edge/go/**`.
 
 ## Gaya Kode dan Konvensi Penamaan
 
 Ikuti idiom Bash, Python, dan Go sesuai area masing-masing. File shell memakai `set -euo pipefail`, indentasi 2 spasi, nama fungsi `snake_case` huruf kecil, dan anotasi `shellcheck` jika memang dibutuhkan. Jaga file aggregator tingkat atas tetap tipis; tambahkan logic baru ke child module yang relevan, bukan menumpuk lagi di `manage.sh` atau `setup.sh`.
 
-Python mengikuti penamaan standar PEP 8. Paket Go tetap kecil dan fokus di bawah `internal/` atau `cmd/`. Utamakan edit ASCII kecuali file target memang sudah memakai karakter non-ASCII.
+Python mengikuti penamaan standar PEP 8. Paket Go tetap kecil dan fokus di bawah `internal/` atau `cmd/`. Utamakan edit ASCII kecuali file target memang sudah memakai karakter non-ASCII. Untuk surface aktif `lite`, pakai namespace `Xray` atau `fallback` pada label route/observability baru; jangan menambah lagi label produk lama `ssh/openvpn` kecuali memang sedang menjaga kompatibilitas baca state lama secara internal.
 
 ## Panduan Testing
 

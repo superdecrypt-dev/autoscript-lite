@@ -93,7 +93,7 @@ func RouteLabel(req HTTPRequest, alpn string) string {
 	}
 	if isWebSocketRequest(req) {
 		if looksLikeXrayWSPath(req.Path) {
-			return "ssh-ws-like"
+			return "xray-ws-like"
 		}
 		return "websocket-other"
 	}

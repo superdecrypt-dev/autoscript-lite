@@ -4,6 +4,8 @@
 
 `autoscript-lite` adalah varian yang hanya menyajikan layanan `Xray-core`. Repo ini tidak memuat surface installer, CLI, bot, atau dokumentasi operasional untuk `SSH WS`, `OpenVPN`, `BadVPN`, dan menu turunannya.
 
+Beberapa helper kompatibilitas internal masih tersisa untuk membaca state/runtime lama saat upgrade host lama ke snapshot terbaru. Itu bukan surface produk aktif dan tidak didokumentasikan sebagai fitur `lite`.
+
 ## Sebelum Install
 
 Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:

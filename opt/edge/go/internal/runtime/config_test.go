@@ -3,15 +3,15 @@ package runtime
 import "testing"
 
 func TestParseSNIRoutesNormalizesEntries(t *testing.T) {
-	routes, err := parseSNIRoutes("VMESS.EXAMPLE.COM.=vless-tcp, ssh.example.com=ssh_ws")
+	routes, err := parseSNIRoutes("VMESS.EXAMPLE.COM.=vless-tcp, ws.example.com=xray_ws")
 	if err != nil {
 		t.Fatalf("parseSNIRoutes error = %v", err)
 	}
 	if got := routes["vmess.example.com"]; got != "vless_tcp" {
 		t.Fatalf("vmess.example.com route = %q, want vless_tcp", got)
 	}
-	if got := routes["ssh.example.com"]; got != "ssh_ws" {
-		t.Fatalf("ssh.example.com route = %q, want ssh_ws", got)
+	if got := routes["ws.example.com"]; got != "xray_ws" {
+		t.Fatalf("ws.example.com route = %q, want xray_ws", got)
 	}
 }
 

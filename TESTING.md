@@ -53,7 +53,7 @@ Lalu verifikasi:
 - `bash install-telegram-bot.sh` atau `install-telegram-bot menu` tetap bisa dibuka.
 - Jika bot sudah terpasang di host, jalankan `sudo /opt/bot-telegram/scripts/smoke-test.sh`.
 
-Untuk uji manual/operator flow, gunakan checklist di [tools/test-interactive-checklist.md](/root/project/autoscript/tools/test-interactive-checklist.md).
+Untuk uji manual/operator flow, gunakan checklist di [tools/test-interactive-checklist.md](/root/project/autoscript-lite/tools/test-interactive-checklist.md).
 
 ## 3. Regression Test Per Domain
 
@@ -62,6 +62,7 @@ Setelah mengubah area tertentu, uji minimal flow berikut:
 - Xray users: create, extend expiry, reset credential, delete.
 - QAC: quota, speed, block/unblock, IP/login limit.
 - WARP dan Xray routing: mode global, per-user, apply runtime.
+- Edge gateway: route `Xray`, passthrough SNI, metrics/status, dan health snapshot.
 - Backup/Restore: create backup, list backup, restore, validasi rollback saat gagal.
 - Telegram bot: menu render, callback aman, ACL admin, upload restore bila diubah.
 
@@ -76,7 +77,7 @@ Target minimum:
 Checklist:
 - Install dari nol.
 - Reboot host.
-- Pastikan `xray`, `nginx`, `edge-mux`, dan service bot aktif sesuai fitur yang dipasang.
+- Pastikan `xray`, `nginx`, `edge-mux`, `adblock-dns`, dan service bot aktif sesuai fitur yang dipasang.
 - Uji koneksi nyata untuk `VLESS/VMess/Trojan`.
 - Jalankan installer lagi untuk cek idempotency.
 

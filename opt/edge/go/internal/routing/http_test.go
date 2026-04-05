@@ -9,8 +9,8 @@ func TestRouteLabelTreatsDiagnosticProbeAsSSHWS(t *testing.T) {
 		Upgrade:    "websocket",
 		Connection: "upgrade",
 	}
-	if got := RouteLabel(req, ""); got != "ssh-ws-like" {
-		t.Fatalf("RouteLabel() = %q, want ssh-ws-like", got)
+	if got := RouteLabel(req, ""); got != "xray-ws-like" {
+		t.Fatalf("RouteLabel() = %q, want xray-ws-like", got)
 	}
 }
 
@@ -23,8 +23,8 @@ func TestRouteLabelTreatsHexTokenWSPathAsSSHWSLike(t *testing.T) {
 			Upgrade:    "websocket",
 			Connection: "upgrade",
 		}
-		if got := RouteLabel(req, ""); got != "ssh-ws-like" {
-			t.Fatalf("RouteLabel(%q) = %q, want ssh-ws-like", path, got)
+		if got := RouteLabel(req, ""); got != "xray-ws-like" {
+			t.Fatalf("RouteLabel(%q) = %q, want xray-ws-like", path, got)
 		}
 	}
 }

@@ -126,10 +126,10 @@ type StatusSnapshot struct {
 	PublicTLSListen           string                           `json:"public_tls_listen"`
 	MetricsListen             string                           `json:"metrics_listen"`
 	HTTPBackend               string                           `json:"http_backend"`
-	XrayDirectBackend         string                           `json:"ssh_backend"`
-	XrayTLSBackend            string                           `json:"ssh_tls_backend"`
-	XrayWSBackend             string                           `json:"ssh_ws_backend"`
-	XrayFallbackBackend       string                           `json:"openvpn_raw_backend"`
+	XrayDirectBackend         string                           `json:"xray_direct_backend"`
+	XrayTLSBackend            string                           `json:"xray_tls_backend"`
+	XrayWSBackend             string                           `json:"xray_ws_backend"`
+	XrayFallbackBackend       string                           `json:"xray_fallback_backend"`
 	VLESSRawBackend           string                           `json:"vless_raw_backend"`
 	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
 	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
@@ -570,12 +570,12 @@ func configuredSNIRouteTarget(cfg runtime.Config, alias string) (backend, addr, 
 	switch strings.TrimSpace(alias) {
 	case "http":
 		return "http", cfg.HTTPBackendAddr(), "http", true
-	case "ssh_direct":
-		return "ssh", cfg.XrayDirectBackendAddr(), "ssh-direct", true
-	case "ssh_tls":
-		return "ssh-tls", cfg.XrayTLSBackendAddr(), "ssh-tls", true
-	case "ssh_ws":
-		return "ssh-ws", cfg.XrayWSBackendAddr(), "ssh-ws", true
+	case "xray_direct":
+		return "xray", cfg.XrayDirectBackendAddr(), "xray-direct", true
+	case "xray_tls":
+		return "xray-tls", cfg.XrayTLSBackendAddr(), "xray-tls", true
+	case "xray_ws":
+		return "xray-ws", cfg.XrayWSBackendAddr(), "xray-ws", true
 	case "vless_tcp":
 		return "vless", cfg.VLESSRawBackendAddr(), "vless", true
 	case "trojan_tcp":
@@ -695,11 +695,13 @@ func detectClassName(class detect.InitialClass) string {
 	case detect.ClassTLSClientHello:
 		return "tls_client_hello"
 	case detect.ClassSSH:
-		return "ssh"
+		return "xray_direct"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:
 		return "trojan_raw"
+	case detect.ClassOpenVPNRaw:
+		return "fallback_raw"
 	case detect.ClassTimeout:
 		return "timeout"
 	case detect.ClassPossibleHTTP:

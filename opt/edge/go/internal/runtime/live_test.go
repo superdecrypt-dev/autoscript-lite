@@ -58,7 +58,7 @@ func TestLiveReloadReturnsIndependentConfigs(t *testing.T) {
 	}
 
 	oldCfg.SNIRoutes["old.example.com"] = "http"
-	newCfg.SNIRoutes["new.example.com"] = "ssh_ws"
+	newCfg.SNIRoutes["new.example.com"] = "xray_ws"
 	newCfg.SNIPassthrough["vision.example.com"] = "127.0.0.1:9443"
 
 	current := live.Config()
