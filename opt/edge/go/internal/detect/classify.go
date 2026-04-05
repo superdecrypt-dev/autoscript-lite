@@ -164,6 +164,19 @@ func IsSSHBanner(b []byte) bool {
 	return bytes.HasPrefix(trimmed, []byte("SSH-"))
 }
 
+func IsPossibleSSHBannerPrefix(b []byte) bool {
+	trimmed := bytes.TrimLeft(b, "\r\n\t ")
+	if len(trimmed) == 0 {
+		return true
+	}
+	return len(trimmed) <= len("SSH-") && bytes.HasPrefix([]byte("SSH-"), trimmed)
+}
+
+func IsLikelySSHTimeoutPrefix(b []byte) bool {
+	trimmed := bytes.TrimLeft(b, "\r\n\t ")
+	return len(trimmed) >= 3 && IsPossibleSSHBannerPrefix(b)
+}
+
 func allBytesZero(b []byte) bool {
 	for _, v := range b {
 		if v != 0x00 {
@@ -504,6 +517,14 @@ func IsPossibleTrojanPrefix(b []byte) bool {
 	return b[pos] == '\r' && b[pos+1] == '\n'
 }
 
+func IsLikelyVLESSTimeoutPrefix(b []byte) bool {
+	return len(b) >= 18 && IsPossibleVLESSPrefix(b)
+}
+
+func IsLikelyTrojanTimeoutPrefix(b []byte) bool {
+	return len(b) >= 58 && IsPossibleTrojanPrefix(b)
+}
+
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
@@ -530,6 +551,8 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassTLSClientHello, nil
 			case IsSSHBanner(current):
 				return current, ClassSSH, nil
+			case IsPossibleSSHBannerPrefix(current):
+				continue
 			case IsVLESSRequest(current):
 				return current, ClassVLESSRaw, nil
 			case IsTrojanRequest(current):
@@ -553,10 +576,13 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				if IsPossibleHTTPPrefix(current) {
 					return current, ClassPossibleHTTP, nil
 				}
-				if IsPossibleVLESSPrefix(current) {
+				if IsLikelySSHTimeoutPrefix(current) {
+					return current, ClassSSH, nil
+				}
+				if IsLikelyVLESSTimeoutPrefix(current) {
 					return current, ClassVLESSRaw, nil
 				}
-				if IsPossibleTrojanPrefix(current) {
+				if IsLikelyTrojanTimeoutPrefix(current) {
 					return current, ClassTrojanRaw, nil
 				}
 				return current, ClassTimeout, nil
@@ -576,13 +602,15 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassTimeout, nil
 				case IsSSHBanner(current):
 					return current, ClassSSH, nil
+				case IsLikelySSHTimeoutPrefix(current):
+					return current, ClassSSH, nil
 				case IsVLESSRequest(current):
 					return current, ClassVLESSRaw, nil
 				case IsTrojanRequest(current):
 					return current, ClassTrojanRaw, nil
-				case IsPossibleVLESSPrefix(current):
+				case IsLikelyVLESSTimeoutPrefix(current):
 					return current, ClassVLESSRaw, nil
-				case IsPossibleTrojanPrefix(current):
+				case IsLikelyTrojanTimeoutPrefix(current):
 					return current, ClassTrojanRaw, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
@@ -604,13 +632,15 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassTimeout, nil
 	case IsSSHBanner(current):
 		return current, ClassSSH, nil
+	case IsLikelySSHTimeoutPrefix(current):
+		return current, ClassSSH, nil
 	case IsVLESSRequest(current):
 		return current, ClassVLESSRaw, nil
 	case IsTrojanRequest(current):
 		return current, ClassTrojanRaw, nil
-	case IsPossibleVLESSPrefix(current):
+	case IsLikelyVLESSTimeoutPrefix(current):
 		return current, ClassVLESSRaw, nil
-	case IsPossibleTrojanPrefix(current):
+	case IsLikelyTrojanTimeoutPrefix(current):
 		return current, ClassTrojanRaw, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
