@@ -228,10 +228,11 @@ func LoadConfig() (Config, error) {
 		SNIRoutes:            sniRoutes,
 		SNIPassthrough:       sniPassthrough,
 	}
-	if refreshed, _, err := RefreshDiscoveredRawBackends(cfg); err == nil {
-		cfg = refreshed
+	refreshed, _, err := RefreshDiscoveredRawBackends(cfg)
+	if err != nil {
+		return Config{}, fmt.Errorf("discover raw backends from %s: %w", cfg.XrayInboundsFile, err)
 	}
-	return cfg, nil
+	return refreshed, nil
 }
 
 func (c Config) Validate() error {

@@ -1,6 +1,11 @@
 package runtime
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseSNIRoutesNormalizesEntries(t *testing.T) {
 	routes, err := parseSNIRoutes("VMESS.EXAMPLE.COM.=vless-tcp, ws.example.com=xray_ws")
@@ -300,5 +305,26 @@ func TestEnvListenAddrsKeepsSinglePortUniqueWhenAlreadyInList(t *testing.T) {
 		if addrs[i] != addr {
 			t.Fatalf("addrs[%d] = %q, want %q", i, addrs[i], addr)
 		}
+	}
+}
+
+func TestLoadConfigReturnsDiscoveryErrorWhenXrayInboundsFileMissing(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "edge-runtime.env")
+	writeConfigTestFile(t, envFile, "EDGE_XRAY_INBOUNDS_FILE=/tmp/does-not-exist-raw-inbounds.json\n")
+	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("LoadConfig error = nil, want discovery error")
+	}
+	if !strings.Contains(err.Error(), "discover raw backends") {
+		t.Fatalf("LoadConfig error = %q, want discovery context", err)
+	}
+}
+
+func writeConfigTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
 }

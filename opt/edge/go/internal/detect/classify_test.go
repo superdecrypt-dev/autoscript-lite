@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -159,6 +160,105 @@ func TestReadInitialDoesNotClassifyTruncatedTLSRecordAsClientHelloOnEOF(t *testi
 		}
 		if got.class != ClassTimeout {
 			t.Fatalf("ReadInitial class = %v, want ClassTimeout for truncated TLS", got.class)
+		}
+		if string(got.data) != string(payload) {
+			t.Fatalf("ReadInitial payload mismatch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadInitial timed out")
+	}
+}
+
+func TestReadInitialWaitsForSplitVLESSRequest(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	type result struct {
+		data  []byte
+		class InitialClass
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		data, class, err := ReadInitial(serverConn, 2*time.Second, MaxPeekBytes)
+		resultCh <- result{data: data, class: class, err: err}
+	}()
+
+	payload := []byte{
+		0x00,
+		0x12, 0x34, 0x56, 0x78,
+		0x9a, 0xbc,
+		0x4d, 0xef,
+		0x8a, 0xbc,
+		0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
+		0x00,
+		0x01,
+		0x01, 0xbb,
+		0x02,
+		0x0b,
+		'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm',
+	}
+
+	if _, err := clientConn.Write(payload[:10]); err != nil {
+		t.Fatalf("clientConn.Write first chunk failed: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := clientConn.Write(payload[10:]); err != nil {
+		t.Fatalf("clientConn.Write second chunk failed: %v", err)
+	}
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("ReadInitial err = %v", got.err)
+		}
+		if got.class != ClassVLESSRaw {
+			t.Fatalf("ReadInitial class = %v, want ClassVLESSRaw", got.class)
+		}
+		if string(got.data) != string(payload) {
+			t.Fatalf("ReadInitial payload mismatch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadInitial timed out")
+	}
+}
+
+func TestReadInitialWaitsForSplitTrojanRequest(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	type result struct {
+		data  []byte
+		class InitialClass
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		data, class, err := ReadInitial(serverConn, 2*time.Second, MaxPeekBytes)
+		resultCh <- result{data: data, class: class, err: err}
+	}()
+
+	payload := append([]byte(strings.Repeat("a", 56)), '\r', '\n', 0x01, 0x03, 0x0b)
+	payload = append(payload, []byte("example.com")...)
+	payload = append(payload, 0x01, 0xbb, '\r', '\n')
+
+	if _, err := clientConn.Write(payload[:20]); err != nil {
+		t.Fatalf("clientConn.Write first chunk failed: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := clientConn.Write(payload[20:]); err != nil {
+		t.Fatalf("clientConn.Write second chunk failed: %v", err)
+	}
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("ReadInitial err = %v", got.err)
+		}
+		if got.class != ClassTrojanRaw {
+			t.Fatalf("ReadInitial class = %v, want ClassTrojanRaw", got.class)
 		}
 		if string(got.data) != string(payload) {
 			t.Fatalf("ReadInitial payload mismatch")

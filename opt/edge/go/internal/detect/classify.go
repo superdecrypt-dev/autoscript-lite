@@ -289,6 +289,72 @@ func IsVLESSRequest(b []byte) bool {
 	}
 }
 
+func IsPossibleVLESSPrefix(b []byte) bool {
+	if len(b) == 0 {
+		return true
+	}
+	if b[0] != 0x00 {
+		return false
+	}
+	if len(b) < 18 {
+		return true
+	}
+	uuid := b[1:17]
+	if !isRFC4122UUID(uuid) {
+		return false
+	}
+	addonsLen := int(b[17])
+	if addonsLen > 255 {
+		return false
+	}
+	pos := 18 + addonsLen
+	if len(b) <= pos {
+		return true
+	}
+	command := b[pos]
+	if command != 0x01 && command != 0x02 && command != 0x03 {
+		return false
+	}
+	pos++
+	if len(b) < pos+2+1 {
+		return true
+	}
+	port := int(b[pos])<<8 | int(b[pos+1])
+	if port <= 0 {
+		return false
+	}
+	pos += 2
+	addrType := b[pos]
+	pos++
+	switch addrType {
+	case 0x01:
+		if len(b) < pos+4 {
+			return true
+		}
+		return !allBytesZero(b[pos : pos+4])
+	case 0x02:
+		if len(b) < pos+1 {
+			return true
+		}
+		addrLen := int(b[pos])
+		pos++
+		if addrLen == 0 {
+			return false
+		}
+		if len(b) < pos+addrLen {
+			return true
+		}
+		return isValidDomainName(b[pos : pos+addrLen])
+	case 0x03:
+		if len(b) < pos+16 {
+			return true
+		}
+		return !allBytesZero(b[pos : pos+16])
+	default:
+		return false
+	}
+}
+
 func IsTrojanRequest(b []byte) bool {
 	if len(b) < 64 {
 		return false
@@ -351,6 +417,93 @@ func IsTrojanRequest(b []byte) bool {
 	return len(b) >= pos+2 && b[pos] == '\r' && b[pos+1] == '\n'
 }
 
+func IsPossibleTrojanPrefix(b []byte) bool {
+	if len(b) == 0 {
+		return true
+	}
+	hexLen := len(b)
+	if hexLen > 56 {
+		hexLen = 56
+	}
+	if !isASCIIHex(b[:hexLen]) {
+		return false
+	}
+	if len(b) < 56 {
+		return true
+	}
+	if b[56] != '\r' {
+		return false
+	}
+	if len(b) < 58 {
+		return true
+	}
+	if b[57] != '\n' {
+		return false
+	}
+	pos := 58
+	if len(b) <= pos {
+		return true
+	}
+	command := b[pos]
+	if command != 0x01 && command != 0x03 {
+		return false
+	}
+	pos++
+	if len(b) <= pos {
+		return true
+	}
+	addrType := b[pos]
+	pos++
+	switch addrType {
+	case 0x01:
+		if len(b) < pos+4+2+2 {
+			return true
+		}
+		if allBytesZero(b[pos : pos+4]) {
+			return false
+		}
+		pos += 4
+	case 0x03:
+		if len(b) < pos+1 {
+			return true
+		}
+		addrLen := int(b[pos])
+		pos++
+		if addrLen == 0 {
+			return false
+		}
+		if len(b) < pos+addrLen+2+2 {
+			return true
+		}
+		if !isValidDomainName(b[pos : pos+addrLen]) {
+			return false
+		}
+		pos += addrLen
+	case 0x04:
+		if len(b) < pos+16+2+2 {
+			return true
+		}
+		if allBytesZero(b[pos : pos+16]) {
+			return false
+		}
+		pos += 16
+	default:
+		return false
+	}
+	if len(b) < pos+2 {
+		return true
+	}
+	port := int(b[pos])<<8 | int(b[pos+1])
+	if port <= 0 {
+		return false
+	}
+	pos += 2
+	if len(b) < pos+2 {
+		return true
+	}
+	return b[pos] == '\r' && b[pos+1] == '\n'
+}
+
 func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, InitialClass, error) {
 	if maxBytes <= 0 {
 		maxBytes = MaxPeekBytes
@@ -381,6 +534,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassVLESSRaw, nil
 			case IsTrojanRequest(current):
 				return current, ClassTrojanRaw, nil
+			case IsPossibleVLESSPrefix(current):
+				continue
+			case IsPossibleTrojanPrefix(current):
+				continue
 			case IsPossibleHTTPPrefix(current):
 				continue
 			default:
@@ -417,6 +574,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassVLESSRaw, nil
 				case IsTrojanRequest(current):
 					return current, ClassTrojanRaw, nil
+				case IsPossibleVLESSPrefix(current):
+					return current, ClassTimeout, nil
+				case IsPossibleTrojanPrefix(current):
+					return current, ClassTimeout, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -441,6 +602,10 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassVLESSRaw, nil
 	case IsTrojanRequest(current):
 		return current, ClassTrojanRaw, nil
+	case IsPossibleVLESSPrefix(current):
+		return current, ClassTimeout, nil
+	case IsPossibleTrojanPrefix(current):
+		return current, ClassTimeout, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:
