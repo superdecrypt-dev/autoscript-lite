@@ -93,7 +93,7 @@ sshws_status_menu() {
   stunnel_port="$(sshws_detect_stunnel_port)"
   proxy_port="$(sshws_detect_proxy_port)"
   runtime_env="$(sshws_runtime_env_file)"
-  runtime_stale_sec="$(sshws_runtime_env_value "SSHWS_RUNTIME_SESSION_STALE_SEC" "90")"
+  runtime_stale_sec="$(sshws_runtime_env_value "XRAY_WS_RUNTIME_SESSION_STALE_SEC" "90")"
   runtime_handshake_timeout="$(sshws_runtime_env_value "SSHWS_HANDSHAKE_TIMEOUT_SEC" "10")"
   echo "Internal ports (detected):"
   echo "  - dropbear local : 127.0.0.1:${dropbear_port}"

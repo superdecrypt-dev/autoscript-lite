@@ -9,22 +9,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Common Regex
 SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
-SSHWS_TOKEN_RE = re.compile(r"^[a-f0-9]{10}$")
-SSHWS_DIAGNOSTIC_TOKEN = "diagnostic-probe"
+XRAY_WS_TOKEN_RE = re.compile(r"^[a-f0-9]{10}$")
+XRAY_WS_DIAGNOSTIC_TOKEN = "diagnostic-probe"
 
 def norm_user(v: Any) -> str:
     """Normalize username by removing protocol suffixes."""
     s = str(v or "").strip()
-    if s.endswith("@ssh"):
-        s = s[:-4]
     if "@" in s:
         s = s.split("@", 1)[0]
     return s
 
 def normalize_token(v: Any) -> str:
-    """Normalize and validate SSHWS token."""
+    """Normalize and validate Xray WS token."""
     s = str(v or "").strip().lower()
-    if s == SSHWS_DIAGNOSTIC_TOKEN or SSHWS_TOKEN_RE.fullmatch(s):
+    if s == XRAY_WS_DIAGNOSTIC_TOKEN or XRAY_WS_TOKEN_RE.fullmatch(s):
         return s
     return ""
 

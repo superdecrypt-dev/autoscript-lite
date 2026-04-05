@@ -322,13 +322,6 @@ func (q *quotaRecorder) statePath(username string) string {
 		return filepath.Join(q.stateRoot, "@xray.json")
 	}
 	primary := filepath.Join(q.stateRoot, user+".json")
-	if wsproxy.FileExists(primary) {
-		return primary
-	}
-	legacyTagged := filepath.Join(q.stateRoot, user+"@ssh.json")
-	if wsproxy.FileExists(legacyTagged) {
-		return legacyTagged
-	}
 	return primary
 }
 
@@ -877,13 +870,6 @@ func parseArgs() *config {
 	cfg.quotaFlushInterval = time.Duration(flushInt * float64(time.Second))
 	if cfg.quotaFlushInterval < time.Second {
 		cfg.quotaFlushInterval = time.Second
-	}
-	if cfg.controlBin == "/usr/local/bin/xray-ws-control" {
-		if _, err := os.Stat(cfg.controlBin); err != nil {
-			if _, legacyErr := os.Stat("/usr/local/bin/sshws-control"); legacyErr == nil {
-				cfg.controlBin = "/usr/local/bin/sshws-control"
-			}
-		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.mode)) {
 	case "ssh":

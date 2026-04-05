@@ -28,7 +28,7 @@ try:
 except ImportError as exc:
     raise SystemExit(f"Gagal import setup utils: {exc}")
 
-XRAY_WS_DIAGNOSTIC_TOKEN = getattr(utils, "XRAY_WS_DIAGNOSTIC_TOKEN", getattr(utils, "SSHWS_DIAGNOSTIC_TOKEN", "diagnostic-probe"))
+XRAY_WS_DIAGNOSTIC_TOKEN = getattr(utils, "XRAY_WS_DIAGNOSTIC_TOKEN", "diagnostic-probe")
 XRAY_WS_DIAGNOSTIC_USER = "xray-ws-diagnostic"
 norm_user = utils.norm_user
 normalize_ip = utils.normalize_ip
@@ -41,7 +41,7 @@ write_json_atomic = utils.write_json_atomic
 
 RUNTIME_SESSION_STALE_SEC = max(
     15,
-    int(float(os.environ.get("XRAY_WS_RUNTIME_SESSION_STALE_SEC", os.environ.get("SSHWS_RUNTIME_SESSION_STALE_SEC", "90")) or 90)),
+    int(float(os.environ.get("XRAY_WS_RUNTIME_SESSION_STALE_SEC", "90") or 90)),
 )
 
 def token_index_dir(state_root):
@@ -127,7 +127,7 @@ def rebuild_token_index(state_root):
         return resolved
     for path in sorted(root.glob("*.json"), key=lambda p: p.name.lower()):
         payload = load_state(path)
-        token = utils.normalize_token(payload.get("xray_ws_token") or payload.get("sshws_token"))
+        token = utils.normalize_token(payload.get("xray_ws_token"))
         if not token:
             continue
         user = norm_user(payload.get("username") or path.stem)
@@ -353,11 +353,6 @@ def load_state(path):
 def resolve_state_path(state_root, username):
     user = norm_user(username)
     primary = Path(state_root) / f"{user}.json"
-    if primary.is_file():
-        return primary
-    legacy = Path(state_root) / f"{user}@ssh.json"
-    if legacy.is_file():
-        return legacy
     return primary
 
 
@@ -372,7 +367,7 @@ def resolve_token(state_root, token):
         if user:
             state_path = resolve_state_path(state_root, user)
             state_payload = load_state(state_path)
-            if utils.normalize_token(state_payload.get("xray_ws_token") or state_payload.get("sshws_token")) == token_norm:
+            if utils.normalize_token(state_payload.get("xray_ws_token")) == token_norm:
                 return user
     resolved = rebuild_token_index(state_root)
     return norm_user(resolved.get(token_norm))

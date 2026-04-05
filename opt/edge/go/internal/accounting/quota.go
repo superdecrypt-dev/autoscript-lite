@@ -97,9 +97,6 @@ func scanAuthOutput(out []byte, portText string) string {
 
 func normalizeUser(v string) string {
 	s := strings.TrimSpace(v)
-	if strings.HasSuffix(s, "@ssh") {
-		s = strings.TrimSuffix(s, "@ssh")
-	}
 	if idx := strings.IndexByte(s, '@'); idx >= 0 {
 		s = s[:idx]
 	}
@@ -113,7 +110,6 @@ func candidateStateFiles(stateRoot, username string) []string {
 		return nil
 	}
 	return []string{
-		filepath.Join(root, user+"@ssh.json"),
 		filepath.Join(root, user+".json"),
 	}
 }

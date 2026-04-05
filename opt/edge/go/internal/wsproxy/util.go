@@ -31,9 +31,6 @@ func NormalizeToken(v string) string {
 
 func NormUser(v string) string {
 	s := strings.TrimSpace(v)
-	if strings.HasSuffix(s, "@ssh") {
-		s = strings.TrimSuffix(s, "@ssh")
-	}
 	if idx := strings.IndexByte(s, '@'); idx >= 0 {
 		s = s[:idx]
 	}
@@ -173,7 +170,7 @@ func PidAlive(pid int) bool {
 }
 
 func RuntimeSessionStale() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("SSHWS_RUNTIME_SESSION_STALE_SEC")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv("XRAY_WS_RUNTIME_SESSION_STALE_SEC")); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 15 {
 			return time.Duration(v) * time.Second
 		}
