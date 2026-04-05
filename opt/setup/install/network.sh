@@ -788,7 +788,7 @@ setup_warp_zero_trust_backend() {
   fi
 }
 
-ssh_warp_interface_name_default() {
+xray_warp_interface_name_default() {
   local iface="${XRAY_WARP_INTERFACE:-warp-xray0}"
   if [[ ! "${iface}" =~ ^[a-zA-Z0-9._-]{1,15}$ ]]; then
     iface="warp-xray0"
@@ -796,13 +796,13 @@ ssh_warp_interface_name_default() {
   printf '%s\n' "${iface}"
 }
 
-ssh_warp_config_path() {
+xray_warp_config_path() {
   local iface="${1:-}"
   [[ -n "${iface}" ]] || return 1
   printf '%s/%s.conf\n' "${WIREGUARD_DIR:-/etc/wireguard}" "${iface}"
 }
 
-setup_ssh_warp_interface() {
+setup_xray_warp_interface() {
   local iface="" conf_path="" unit=""
 
   ok "Siapkan Xray WARP interface..."
@@ -810,8 +810,8 @@ setup_ssh_warp_interface() {
   command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk Xray WARP."
   command -v wg-quick >/dev/null 2>&1 || die "wg-quick tidak ditemukan. Pastikan wireguard-tools terpasang."
 
-  iface="$(ssh_warp_interface_name_default)"
-  conf_path="$(ssh_warp_config_path "${iface}")" || die "Nama interface Xray WARP tidak valid."
+  iface="$(xray_warp_interface_name_default)"
+  conf_path="$(xray_warp_config_path "${iface}")" || die "Nama interface Xray WARP tidak valid."
 
   install_setup_bin_or_die "xray-warp-sync.py" "${XRAY_WARP_SYNC_BIN}" 0755
   install -d -m 700 "${WIREGUARD_DIR:-/etc/wireguard}"
