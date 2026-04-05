@@ -26,7 +26,6 @@ DEFAULTS = {
     "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC": "3600",
     "AUTOSCRIPT_LICENSE_RUNTIME_ENFORCE": "true",
     "AUTOSCRIPT_LICENSE_RUNTIME_INTERVAL_MIN": "15",
-    "OPENVPN_CONFIG_ENV_FILE": "/etc/autoscript/openvpn/config.env",
     "EDGE_RUNTIME_ENV_FILE": "/etc/default/edge-runtime",
 }
 
@@ -361,13 +360,6 @@ def edge_service_candidates(cfg):
     return candidates
 
 
-def openvpn_service_candidates(cfg):
-    ovpn_cfg = read_env_file(cfg["OPENVPN_CONFIG_ENV_FILE"])
-    tcp_svc = (os.environ.get("OPENVPN_TCP_SERVICE") or ovpn_cfg.get("OPENVPN_TCP_SERVICE") or "openvpn-server@autoscript-tcp").strip()
-    ws_svc = (os.environ.get("OPENVPN_WS_SERVICE") or ovpn_cfg.get("OPENVPN_WS_SERVICE") or "ovpn-ws-proxy").strip()
-    return [tcp_svc, ws_svc]
-
-
 def unique_units(units):
     resolved = []
     seen = set()
@@ -404,10 +396,9 @@ def service_start(unit):
 def all_public_services(cfg):
     units = []
     units.extend(edge_service_candidates(cfg))
-    units.extend(["xray", "sshws-dropbear", "sshws-stunnel", "sshws-proxy"])
-    units.extend(openvpn_service_candidates(cfg))
-    units.append("zivpn.service")
+    units.append("xray")
     units.extend([
+        "adblock-dns.service",
         "account-portal.service",
         "bot-telegram-monitor.timer",
         "bot-telegram-backend.service",
