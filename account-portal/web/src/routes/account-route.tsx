@@ -1,5 +1,5 @@
+import { lazy, Suspense, useEffect } from "react"
 import { AlertTriangle, RefreshCw } from "lucide-react"
-import { useEffect } from "react"
 import { useParams } from "react-router-dom"
 
 import { AccessCard } from "@/components/portal/access-card"
@@ -8,11 +8,16 @@ import { HeroCard } from "@/components/portal/hero-card"
 import { ImportLinksCard } from "@/components/portal/import-links-card"
 import { QuotaCard } from "@/components/portal/quota-card"
 import { SummaryCard } from "@/components/portal/summary-card"
-import { TrafficCard } from "@/components/portal/traffic-card"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { useAccountSummary, useAccountTraffic } from "@/hooks/use-portal-data"
+
+const TrafficCard = lazy(() =>
+  import("@/components/portal/traffic-card").then((module) => ({
+    default: module.TrafficCard,
+  })),
+)
 
 export function AccountRoute() {
   const { token } = useParams<{ token: string }>()
@@ -70,7 +75,18 @@ export function AccountRoute() {
       <HeroCard summary={summary.data} />
       <section className="grid min-w-0 grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-[minmax(0,1.52fr)_minmax(380px,0.92fr)] xl:items-start 2xl:grid-cols-[minmax(0,1.6fr)_minmax(410px,0.9fr)]">
         <div className="self-start md:col-span-2 xl:col-span-1">
-          <TrafficCard traffic={traffic.data} mobile={mobile} loading={traffic.loading} error={traffic.error} />
+          <Suspense
+            fallback={
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle>Traffic Realtime</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">Memuat chart traffic…</CardContent>
+              </Card>
+            }
+          >
+            <TrafficCard traffic={traffic.data} mobile={mobile} loading={traffic.loading} error={traffic.error} />
+          </Suspense>
         </div>
         <div className="grid self-start gap-6 md:col-span-2 xl:col-span-1">
           <SummaryCard summary={summary.data} />

@@ -10,6 +10,27 @@ const portalBase = process.env.PORTAL_WEB_ASSET_BASE || "/account-app/"
 export default defineConfig({
   base: portalBase,
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/recharts")) {
+            return "recharts"
+          }
+          if (id.includes("node_modules/react-router-dom") || id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
+            return "react-vendor"
+          }
+          if (id.includes("node_modules/@radix-ui/")) {
+            return "radix-ui"
+          }
+          if (id.includes("node_modules/lucide-react")) {
+            return "icons"
+          }
+          return undefined
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
