@@ -886,6 +886,7 @@ warp_global_mode_get() {
   xray_routing_default_rule_get "${src_file}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true
 }
 
+# shellcheck disable=SC2120
 warp_global_mode_pretty_get() {
   local mode
   mode="$(warp_global_mode_get "${1:-${XRAY_ROUTING_CONF}}")"

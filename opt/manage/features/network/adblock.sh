@@ -301,7 +301,7 @@ adblock_dns_resolver_config_get() {
 
 adblock_dns_resolver_runtime_conf_write() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked adblock_dns_resolver_runtime_conf_write "$@"
+    adblock_run_locked adblock_dns_resolver_runtime_conf_write
     return $?
   fi
   local cfg dns_port primary secondary tmp
@@ -583,7 +583,7 @@ adblock_status_get() {
 
 adblock_apply_now() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked adblock_apply_now "$@"
+    adblock_run_locked adblock_apply_now
     return $?
   fi
   [[ -x "${ADBLOCK_SYNC_BIN}" ]] || {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034
 set -euo pipefail
 
 # Harden PATH untuk mencegah PATH hijacking saat script dijalankan sebagai root.

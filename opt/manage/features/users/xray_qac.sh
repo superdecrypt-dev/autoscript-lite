@@ -909,7 +909,6 @@ PY
   fi
 
   chmod 600 "${qf}" 2>/dev/null || true
-  QUOTA_FIELDS_CACHE=()
   return 0
 }
 

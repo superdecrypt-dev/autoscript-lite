@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2005
 
 # - WARP global: direct / warp
 # - WARP: global / per-user / per-protocol (inbound)

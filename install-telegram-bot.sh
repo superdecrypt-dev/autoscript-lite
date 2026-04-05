@@ -748,8 +748,6 @@ configure_env_interactive() {
   current_default_chat_id="$(get_env_value TELEGRAM_DEFAULT_CHAT_ID "${BOT_ENV_FILE}")"
   current_admin_chat_ids="$(get_env_value TELEGRAM_ADMIN_CHAT_IDS "${BOT_ENV_FILE}")"
   current_admin_user_ids="$(get_env_value TELEGRAM_ADMIN_USER_IDS "${BOT_ENV_FILE}")"
-  current_allow_unrestricted="$(get_env_value TELEGRAM_ALLOW_UNRESTRICTED_ACCESS "${BOT_ENV_FILE}")"
-
   echo "Konfigurasi env: ${BOT_ENV_FILE}"
   echo "- TELEGRAM_BOT_TOKEN: $(mask_secret "${current_token}")"
   echo "- INTERNAL_SHARED_SECRET: $(mask_secret "${current_secret}")"

@@ -1,25 +1,23 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034
 
-# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan,ssh}/*.json
+# - Sumber data: metadata quota /opt/quota/{vless,vmess,trojan}/*.json
 # - Menggunakan quota_used sebagai dasar traffic usage.
 # -------------------------
 traffic_analytics_dataset_build_to_file() {
   # args: output_json_file
   local out_file="$1"
   need_python3
-  python3 - <<'PY' "${QUOTA_ROOT}" "${SSH_QUOTA_DIR}" "${out_file}" "${QUOTA_PROTO_DIRS[@]}"
+  python3 - <<'PY' "${QUOTA_ROOT}" "${out_file}" "${QUOTA_PROTO_DIRS[@]}"
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
 quota_root = sys.argv[1]
-ssh_quota_dir = sys.argv[2]
-out_file = sys.argv[3]
-protos = [p.strip() for p in sys.argv[4:] if p.strip()]
-if "ssh" not in protos:
-  protos.append("ssh")
+out_file = sys.argv[2]
+protos = [p.strip() for p in sys.argv[3:] if p.strip()]
 
 def to_int(v, default=0):
   try:
@@ -42,7 +40,7 @@ duplicate_groups_total = 0
 duplicate_files_total = 0
 
 for proto in protos:
-  pdir = ssh_quota_dir if proto == "ssh" else os.path.join(quota_root, proto)
+  pdir = os.path.join(quota_root, proto)
   if not os.path.isdir(pdir):
     continue
 
@@ -453,4 +451,3 @@ traffic_analytics_menu() {
     esac
   done
 }
-

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2005,SC2034
 
 network_diagnostics_menu() {
   while true; do
     title
-    echo "$(xray_network_menu_title "Diagnostics")"
+    xray_network_menu_title "Diagnostics"
     hr
     echo "  1) Show summary (routing)"
     echo "  2) Validate conf.d JSON (jq)"
@@ -89,4 +90,3 @@ network_menu() {
     esac
   done
 }
-

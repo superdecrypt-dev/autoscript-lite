@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034
 
 XRAY_EDGE_RUNTIME_ENV_FILE="${XRAY_EDGE_RUNTIME_ENV_FILE:-/etc/default/edge-runtime}"
 
@@ -227,9 +228,9 @@ xray_write_routing_locked() {
 
 xray_txn_changed_flag() {
   # args: output_blob -> prints 1 or 0
-  local out="${1:-}"
+  local out_blob="${1:-}"
   local changed
-  changed="$(printf '%s\n' "${out}" | awk -F'=' '/^changed=/{print $2; exit}')"
+  changed="$(printf '%s\n' "${out_blob}" | awk -F'=' '/^changed=/{print $2; exit}')"
   if [[ "${changed}" == "1" ]]; then
     echo "1"
   else
@@ -2875,7 +2876,7 @@ domain_control_refresh_account_info_batches_run() {
   fi
 
   summary="$(account_info_refresh_targets_summary "${scope}" 1)"
-  IFS='|' read -r xray_count ssh_count total_count xray_preview ssh_preview <<<"${summary}"
+  IFS='|' read -r _xray_count _ssh_count total_count _xray_preview _ssh_preview <<<"${summary}"
   [[ "${total_count}" =~ ^[0-9]+$ ]] || total_count=0
   if (( total_count == 0 )); then
     return 0
@@ -3479,7 +3480,7 @@ PY
 xray_add_txn_recover_dir() {
   local txn_dir="${1:-}"
   local proto="" username="" cred="" runtime_created="" live_account_file="" live_quota_file=""
-  local current_cred="" notes=""
+  local current_cred="" note_msg=""
   [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 0
 
   proto="$(mutation_txn_field_read "${txn_dir}" proto 2>/dev/null || true)"
@@ -3518,17 +3519,17 @@ xray_add_txn_recover_dir() {
     return 1
   fi
   if [[ -f "${txn_dir}/account.new.txt" && -n "${live_account_file}" ]]; then
-    account_info_restore_file_locked "${txn_dir}/account.new.txt" "${live_account_file}" >/dev/null 2>&1 || notes="commit account info gagal"
+    account_info_restore_file_locked "${txn_dir}/account.new.txt" "${live_account_file}" >/dev/null 2>&1 || note_msg="commit account info gagal"
   fi
-  if [[ -z "${notes}" && -f "${txn_dir}/quota.new.json" && -n "${live_quota_file}" ]]; then
-    quota_restore_file_locked "${txn_dir}/quota.new.json" "${live_quota_file}" >/dev/null 2>&1 || notes="commit quota gagal"
+  if [[ -z "${note_msg}" && -f "${txn_dir}/quota.new.json" && -n "${live_quota_file}" ]]; then
+    quota_restore_file_locked "${txn_dir}/quota.new.json" "${live_quota_file}" >/dev/null 2>&1 || note_msg="commit quota gagal"
   fi
-  if [[ -z "${notes}" ]]; then
+  if [[ -z "${note_msg}" ]]; then
     mutation_txn_dir_remove "${txn_dir}"
     log "Recovery transaksi add Xray selesai untuk ${username}@${proto}."
     return 0
   fi
-  warn "Recovery transaksi add Xray untuk ${username}@${proto} belum bersih: ${notes}"
+  warn "Recovery transaksi add Xray untuk ${username}@${proto} belum bersih: ${note_msg}"
   return 1
 }
 
@@ -3547,7 +3548,7 @@ xray_add_txn_recover_pending_all() {
 
 xray_delete_txn_recover_dir() {
   local txn_dir="${1:-}"
-  local proto username deleted_flag previous_cred current_cred notes=""
+  local proto username deleted_flag previous_cred current_cred note_msg=""
   [[ -n "${txn_dir}" && -d "${txn_dir}" ]] || return 0
 
   proto="$(mutation_txn_field_read "${txn_dir}" proto 2>/dev/null || true)"
@@ -3587,24 +3588,24 @@ xray_delete_txn_recover_dir() {
       warn "Recovery transaksi delete Xray untuk ${username}@${proto} ditahan: credential live sudah berubah sejak jurnal dibuat."
       return 1
     fi
-    xray_delete_client_try "${proto}" "${username}" || notes="hapus client runtime ulang gagal"
+    xray_delete_client_try "${proto}" "${username}" || note_msg="hapus client runtime ulang gagal"
   fi
-  if [[ -z "${notes}" ]] && ! delete_account_artifacts_checked "${proto}" "${username}"; then
-    notes="cleanup artefak lokal gagal"
+  if [[ -z "${note_msg}" ]] && ! delete_account_artifacts_checked "${proto}" "${username}"; then
+    note_msg="cleanup artefak lokal gagal"
   fi
-  if [[ -z "${notes}" ]] && ! speed_policy_sync_xray_try; then
-    notes="sinkronisasi speed policy gagal"
-  elif [[ -z "${notes}" ]] && ! speed_policy_apply_now >/dev/null 2>&1; then
-    notes="apply runtime speed policy gagal"
+  if [[ -z "${note_msg}" ]] && ! speed_policy_sync_xray_try; then
+    note_msg="sinkronisasi speed policy gagal"
+  elif [[ -z "${note_msg}" ]] && ! speed_policy_apply_now >/dev/null 2>&1; then
+    note_msg="apply runtime speed policy gagal"
   fi
 
-  if [[ -z "${notes}" ]]; then
+  if [[ -z "${note_msg}" ]]; then
     log "Recovery transaksi delete Xray selesai untuk ${username}@${proto}."
     mutation_txn_dir_remove "${txn_dir}"
     return 0
   fi
 
-  warn "Recovery transaksi delete Xray untuk ${username}@${proto} belum bersih: ${notes}"
+  warn "Recovery transaksi delete Xray untuk ${username}@${proto} belum bersih: ${note_msg}"
   return 1
 }
 
@@ -5213,9 +5214,3 @@ user_menu() {
 # - Sumber metadata: /opt/quota/(vless|vmess|trojan)/*.json
 # - Perubahan JSON menggunakan atomic write (tmp + replace) untuk menghindari file korup
 # -------------------------
-QUOTA_FILES=()
-QUOTA_FILE_PROTOS=()
-QUOTA_PAGE_SIZE=10
-QUOTA_PAGE=0
-QUOTA_QUERY=""
-QUOTA_VIEW_INDEXES=()

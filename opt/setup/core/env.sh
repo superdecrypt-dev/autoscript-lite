@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034
 # Shared env/constants for setup and manage runtime.
 
 if [[ -z "${SCRIPT_DIR:-}" ]]; then

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034
 
 domain_menu_v2() {
   ui_menu_screen_begin "8) Domain Control > Set Domain" "Konfigurasi Domain TLS"
@@ -1150,8 +1151,8 @@ domain_control_set_domain_after_prompt() {
     domain_control_txn_register_cf_snapshot "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${cf_dns_snapshot}"
     domain_control_txn_mark_cf_prepared
 
-    local cf_sync_ok="false" cf_sync_try=0
-    for cf_sync_try in 1 2 3; do
+    local cf_sync_ok="false"
+    for _ in 1 2 3; do
       if cf_prepare_subdomain_a_record "${CF_ZONE_ID}" "${DOMAIN}" "${VPS_IPV4}" "${CF_PROXIED:-false}"; then
         cf_sync_ok="true"
         break
@@ -1382,6 +1383,7 @@ domain_control_refresh_account_info_now() {
   return 1
 }
 
+# shellcheck disable=SC2120
 domain_control_sync_compat_domain_now() {
   local domain ask_rc=0 current_compat=""
   local snapshot_dir="" preview_report="" nginx_domain="" sync_state_domain=""

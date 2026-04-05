@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034
 
 # -------------------------
 # Speedtest
@@ -93,4 +94,3 @@ speedtest_menu() {
 }
 
 # -------------------------
-
