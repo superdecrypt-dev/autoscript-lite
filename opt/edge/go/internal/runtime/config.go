@@ -116,7 +116,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	sessionHeartbeat, err := envDurationSecAliases(source, defaultXraySessionHeartbeat, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", "EDGE_SSH_SESSION_HEARTBEAT_SEC")
+	sessionHeartbeat, err := envDurationSec(source, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", defaultXraySessionHeartbeat)
 	if err != nil {
 		return Config{}, err
 	}
@@ -196,10 +196,10 @@ func LoadConfig() (Config, error) {
 		MetricsEnabled:       metricsEnabled,
 		MetricsListenAddr:    normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
 		HTTPBackend:          normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
-		XrayDirectBackend:    normalizeAddr(envStringAliases(source, defaultXrayDirectBackend, "EDGE_XRAY_DIRECT_BACKEND", "EDGE_SSH_CLASSIC_BACKEND"), "127.0.0.1"),
-		XrayTLSBackend:       normalizeAddr(envStringAliases(source, defaultXrayTLSBackend, "EDGE_XRAY_TLS_BACKEND", "EDGE_SSH_TLS_BACKEND"), "127.0.0.1"),
-		XrayWSBackend:        normalizeAddr(envStringAliases(source, defaultXrayWSBackend, "EDGE_XRAY_WS_BACKEND", "EDGE_SSH_WS_BACKEND"), "127.0.0.1"),
-		XrayFallbackBackend:  normalizeAddr(envStringAliases(source, defaultXrayFallbackBackend, "EDGE_XRAY_FALLBACK_BACKEND", "EDGE_OPENVPN_TCP_BACKEND"), "127.0.0.1"),
+		XrayDirectBackend:    normalizeAddr(envString(source, "EDGE_XRAY_DIRECT_BACKEND", defaultXrayDirectBackend), "127.0.0.1"),
+		XrayTLSBackend:       normalizeAddr(envString(source, "EDGE_XRAY_TLS_BACKEND", defaultXrayTLSBackend), "127.0.0.1"),
+		XrayWSBackend:        normalizeAddr(envString(source, "EDGE_XRAY_WS_BACKEND", defaultXrayWSBackend), "127.0.0.1"),
+		XrayFallbackBackend:  normalizeAddr(envString(source, "EDGE_XRAY_FALLBACK_BACKEND", defaultXrayFallbackBackend), "127.0.0.1"),
 		VLESSRawBackend:      normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:     strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
@@ -210,11 +210,11 @@ func LoadConfig() (Config, error) {
 		DetectTimeout:        timeout,
 		ClassicTLSOn80:       classicTLSOn80,
 		TLSHandshakeTimeout:  handshakeTimeout,
-		XrayQuotaRoot:        envStringAliases(source, defaultXrayQuotaRoot, "EDGE_XRAY_QUOTA_ROOT", "EDGE_SSH_QUOTA_ROOT"),
-		XrayRuntimeUnit:      envStringAliases(source, defaultXrayRuntimeUnit, "EDGE_XRAY_RUNTIME_UNIT", "EDGE_SSH_DROPBEAR_UNIT"),
-		XrayQACEnforcer:      envStringAliases(source, defaultXrayQACEnforcer, "EDGE_XRAY_QAC_ENFORCER", "EDGE_SSH_QAC_ENFORCER"),
-		XrayManageBin:        envStringAliases(source, defaultXrayManageBin, "EDGE_XRAY_MANAGE_BIN", "EDGE_SSH_MANAGE_BIN"),
-		XraySessionRoot:      envStringAliases(source, defaultXraySessionRoot, "EDGE_XRAY_SESSION_ROOT", "EDGE_SSH_SESSION_ROOT"),
+		XrayQuotaRoot:        envString(source, "EDGE_XRAY_QUOTA_ROOT", defaultXrayQuotaRoot),
+		XrayRuntimeUnit:      envString(source, "EDGE_XRAY_RUNTIME_UNIT", defaultXrayRuntimeUnit),
+		XrayQACEnforcer:      envString(source, "EDGE_XRAY_QAC_ENFORCER", defaultXrayQACEnforcer),
+		XrayManageBin:        envString(source, "EDGE_XRAY_MANAGE_BIN", defaultXrayManageBin),
+		XraySessionRoot:      envString(source, "EDGE_XRAY_SESSION_ROOT", defaultXraySessionRoot),
 		XraySessionHeartbeat: sessionHeartbeat,
 		MaxConnections:       maxConnections,
 		MaxConnectionsPerIP:  maxConnectionsPerIP,
@@ -537,15 +537,6 @@ func envString(source envSource, key, fallback string) string {
 	return v
 }
 
-func envStringAliases(source envSource, fallback string, keys ...string) string {
-	for _, key := range keys {
-		if v := strings.TrimSpace(source[key]); v != "" {
-			return v
-		}
-	}
-	return fallback
-}
-
 func envCSV(source envSource, key, fallback string) []string {
 	raw := strings.TrimSpace(source[key])
 	if raw == "" {
@@ -661,21 +652,6 @@ func envDurationSec(source envSource, key string, fallback time.Duration) (time.
 		return 0, fmt.Errorf("invalid integer seconds for %s", key)
 	}
 	return time.Duration(n) * time.Second, nil
-}
-
-func envDurationSecAliases(source envSource, fallback time.Duration, keys ...string) (time.Duration, error) {
-	for _, key := range keys {
-		v := strings.TrimSpace(source[key])
-		if v == "" {
-			continue
-		}
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("invalid integer seconds for %s", key)
-		}
-		return time.Duration(n) * time.Second, nil
-	}
-	return fallback, nil
 }
 
 func envNonNegativeInt(source envSource, key string, fallback int) (int, error) {

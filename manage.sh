@@ -65,14 +65,6 @@ if [[ -z "${MANAGE_ENV_FILE}" ]]; then
 fi
 . "${MANAGE_ENV_FILE}"
 
-# Kompatibilitas bootstrap saat manage source repo lebih baru daripada runtime setup
-# yang terpasang di host. Ini mencegah unbound variable saat env installed masih
-# memakai namespace lama, sambil tetap memprioritaskan nama canonical baru.
-XRAY_WARP_SYNC_BIN="${XRAY_WARP_SYNC_BIN:-${SSH_WARP_SYNC_BIN:-/usr/local/bin/xray-warp-sync}}"
-XRAY_WARP_INTERFACE="${XRAY_WARP_INTERFACE:-${SSH_NETWORK_WARP_INTERFACE:-warp-xray0}}"
-XRAY_WARP_REDIR_PORT="${XRAY_WARP_REDIR_PORT:-${SSH_NETWORK_XRAY_REDIR_PORT:-12345}}"
-XRAY_WARP_REDIR_PORT_V6="${XRAY_WARP_REDIR_PORT_V6:-${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}}"
-
 # Entry-point specific constants (Keep as requested)
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
 PROVIDED_ROOT_DOMAINS=(

@@ -2672,13 +2672,13 @@ warp_zero_trust_cli_registration_line_get() {
   printf '%s\n' "${line}"
 }
 
-warp_zero_trust_ssh_guard_state_get() {
+warp_zero_trust_runtime_guard_state_get() {
   printf 'ok (lite runtime)\n'
 }
 
-warp_zero_trust_require_ssh_compatible() {
+warp_zero_trust_require_runtime_ready() {
   local guard=""
-  guard="$(warp_zero_trust_ssh_guard_state_get)"
+  guard="$(warp_zero_trust_runtime_guard_state_get)"
   case "${guard}" in
     ok*) return 0 ;;
   esac
@@ -2882,7 +2882,7 @@ warp_tier_free_plus_show_status() {
 warp_tier_zero_trust_show_status() {
   local cfg team client_id client_secret proxy_port config_state="" active_mode="" active_mode_display=""
   local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
-  local cli_status="unknown" reg_status="unknown" ssh_guard="unknown"
+  local cli_status="unknown" reg_status="unknown" runtime_guard="unknown"
   cfg="$(warp_zero_trust_config_get)"
   active_mode="$(warp_mode_state_get)"
   active_mode_display="$(warp_mode_display_get 2>/dev/null || true)"
@@ -2901,7 +2901,7 @@ warp_tier_zero_trust_show_status() {
     cli_status="$(warp_zero_trust_cli_status_line_get)"
     reg_status="$(warp_zero_trust_cli_registration_line_get)"
   fi
-  ssh_guard="$(warp_zero_trust_ssh_guard_state_get)"
+  runtime_guard="$(warp_zero_trust_runtime_guard_state_get)"
 
   printf "Mode          : %s\n" "${active_mode_display:-Zero Trust}"
   printf "Backend       : cloudflare-warp (Zero Trust proxy)\n"
@@ -2915,7 +2915,7 @@ warp_tier_zero_trust_show_status() {
   printf "Proxy State   : %s\n" "${proxy_state}"
   printf "CLI Status    : %s\n" "${cli_status}"
   printf "Registration  : %s\n" "${reg_status}"
-  printf "Routing Guard : %s\n" "${ssh_guard}"
+  printf "Routing Guard : %s\n" "${runtime_guard}"
 }
 
 warp_tier_zero_trust_show_requirements() {
@@ -3117,7 +3117,7 @@ warp_zero_trust_apply_connect() {
       pause
       exit 1
     fi
-    if ! warp_zero_trust_require_ssh_compatible; then
+    if ! warp_zero_trust_require_runtime_ready; then
       hr
       pause
       exit 1
