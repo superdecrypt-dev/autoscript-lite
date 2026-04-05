@@ -303,7 +303,7 @@ type quotaRecorder struct {
 	pendingMu sync.Mutex
 }
 
-type sshState struct {
+type quotaState struct {
 	QuotaUsed int64 `json:"quota_used"`
 }
 

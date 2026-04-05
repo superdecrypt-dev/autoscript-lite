@@ -92,7 +92,7 @@ func RouteLabel(req HTTPRequest, alpn string) string {
 		return name
 	}
 	if isWebSocketRequest(req) {
-		if looksLikeSSHWSPath(req.Path) {
+		if looksLikeXrayWSPath(req.Path) {
 			return "ssh-ws-like"
 		}
 		return "websocket-other"
@@ -168,7 +168,7 @@ func isWebSocketRequest(req HTTPRequest) bool {
 	return strings.Contains(req.Connection, "upgrade") && strings.Contains(req.Upgrade, "websocket")
 }
 
-func looksLikeSSHWSPath(path string) bool {
+func looksLikeXrayWSPath(path string) bool {
 	segments := pathSegments(path)
 	if len(segments) == 0 || len(segments) > 2 {
 		return false

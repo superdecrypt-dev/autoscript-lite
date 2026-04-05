@@ -12,42 +12,42 @@ import (
 )
 
 const (
-	defaultProvider            = "go"
-	defaultPublicHTTPAddr      = "0.0.0.0:80"
-	defaultPublicTLSAddr       = "0.0.0.0:443"
-	defaultPublicHTTPPorts     = "80,8080,8880,2052,2082,2086,2095"
-	defaultPublicTLSPorts      = "443,2053,2083,2087,2096,8443"
-	defaultMetricsListenAddr   = "127.0.0.1:9910"
-	defaultHTTPBackend         = "127.0.0.1:18080"
-	defaultSSHBackend          = "127.0.0.1:18080"
-	defaultSSHTLSBackend       = "127.0.0.1:18443"
-	defaultSSHWSBackend        = "127.0.0.1:18080"
-	defaultOpenVPNRawBackend   = "127.0.0.1:18443"
-	defaultVLESSRawBackend     = "127.0.0.1:28080"
-	defaultTrojanRawBackend    = "127.0.0.1:28081"
-	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
-	defaultTLSKeyFile          = "/opt/cert/privkey.pem"
-	defaultDetectTimeout       = 1500 * time.Millisecond
-	defaultMetricsEnabled      = true
-	defaultTLSOn80             = true
-	defaultTLSHandshakeTimeout = 5 * time.Second
-	defaultSSHQuotaRoot        = "/opt/quota/xray"
-	defaultSSHDropbearUnit     = "xray"
-	defaultSSHQACEnforcer      = "/usr/local/bin/true"
-	defaultSSHManageBin        = "/usr/local/bin/manage"
-	defaultSSHSessionRoot      = "/run/autoscript/xray-edge-sessions"
-	defaultSSHSessionHeartbeat = 15 * time.Second
-	defaultMaxConnections      = 4096
-	defaultMaxConnectionsPerIP = 128
-	defaultAcceptRatePerIP     = 60
-	defaultAcceptRateWindow    = 10 * time.Second
-	defaultCooldownRejects     = 8
-	defaultCooldownWindow      = 30 * time.Second
-	defaultCooldownDuration    = 120 * time.Second
-	defaultRuntimeEnvFile      = "/etc/default/edge-runtime"
-	defaultXrayInboundsFile    = "/usr/local/etc/xray/conf.d/10-inbounds.json"
-	defaultAcceptProxyProtocol = false
-	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
+	defaultProvider             = "go"
+	defaultPublicHTTPAddr       = "0.0.0.0:80"
+	defaultPublicTLSAddr        = "0.0.0.0:443"
+	defaultPublicHTTPPorts      = "80,8080,8880,2052,2082,2086,2095"
+	defaultPublicTLSPorts       = "443,2053,2083,2087,2096,8443"
+	defaultMetricsListenAddr    = "127.0.0.1:9910"
+	defaultHTTPBackend          = "127.0.0.1:18080"
+	defaultXrayDirectBackend    = "127.0.0.1:18080"
+	defaultXrayTLSBackend       = "127.0.0.1:18443"
+	defaultXrayWSBackend        = "127.0.0.1:18080"
+	defaultXrayFallbackBackend  = "127.0.0.1:18443"
+	defaultVLESSRawBackend      = "127.0.0.1:28080"
+	defaultTrojanRawBackend     = "127.0.0.1:28081"
+	defaultTLSCertFile          = "/opt/cert/fullchain.pem"
+	defaultTLSKeyFile           = "/opt/cert/privkey.pem"
+	defaultDetectTimeout        = 1500 * time.Millisecond
+	defaultMetricsEnabled       = true
+	defaultTLSOn80              = true
+	defaultTLSHandshakeTimeout  = 5 * time.Second
+	defaultXrayQuotaRoot        = "/opt/quota/xray"
+	defaultXrayRuntimeUnit      = "xray"
+	defaultXrayQACEnforcer      = "/usr/local/bin/true"
+	defaultXrayManageBin        = "/usr/local/bin/manage"
+	defaultXraySessionRoot      = "/run/autoscript/xray-edge-sessions"
+	defaultXraySessionHeartbeat = 15 * time.Second
+	defaultMaxConnections       = 4096
+	defaultMaxConnectionsPerIP  = 128
+	defaultAcceptRatePerIP      = 60
+	defaultAcceptRateWindow     = 10 * time.Second
+	defaultCooldownRejects      = 8
+	defaultCooldownWindow       = 30 * time.Second
+	defaultCooldownDuration     = 120 * time.Second
+	defaultRuntimeEnvFile       = "/etc/default/edge-runtime"
+	defaultXrayInboundsFile     = "/usr/local/etc/xray/conf.d/10-inbounds.json"
+	defaultAcceptProxyProtocol  = false
+	defaultTrustedProxyCIDRs    = "127.0.0.1/32,::1/128"
 )
 
 var validSNIRouteAliases = map[string]struct{}{
@@ -60,45 +60,45 @@ var validSNIRouteAliases = map[string]struct{}{
 }
 
 type Config struct {
-	Provider            string
-	PublicHTTPAddr      string
-	PublicTLSAddr       string
-	PublicHTTPAddrs     []string
-	PublicTLSAddrs      []string
-	MetricsEnabled      bool
-	MetricsListenAddr   string
-	HTTPBackend         string
-	SSHBackend          string
-	SSHTLSBackend       string
-	SSHWSBackend        string
-	OpenVPNRawBackend   string
-	VLESSRawBackend     string
-	TrojanRawBackend    string
-	XrayInboundsFile    string
-	VLESSRawSource      string
-	TrojanRawSource     string
-	TLSCertFile         string
-	TLSKeyFile          string
-	DetectTimeout       time.Duration
-	ClassicTLSOn80      bool
-	TLSHandshakeTimeout time.Duration
-	SSHQuotaRoot        string
-	SSHDropbearUnit     string
-	SSHQACEnforcer      string
-	SSHManageBin        string
-	SSHSessionRoot      string
-	SSHSessionHeartbeat time.Duration
-	MaxConnections      int
-	MaxConnectionsPerIP int
-	AcceptRatePerIP     int
-	AcceptRateWindow    time.Duration
-	CooldownRejects     int
-	CooldownWindow      time.Duration
-	CooldownDuration    time.Duration
-	AcceptProxyProtocol bool
-	TrustedProxyCIDRs   []string
-	SNIRoutes           map[string]string
-	SNIPassthrough      map[string]string
+	Provider             string
+	PublicHTTPAddr       string
+	PublicTLSAddr        string
+	PublicHTTPAddrs      []string
+	PublicTLSAddrs       []string
+	MetricsEnabled       bool
+	MetricsListenAddr    string
+	HTTPBackend          string
+	XrayDirectBackend    string
+	XrayTLSBackend       string
+	XrayWSBackend        string
+	XrayFallbackBackend  string
+	VLESSRawBackend      string
+	TrojanRawBackend     string
+	XrayInboundsFile     string
+	VLESSRawSource       string
+	TrojanRawSource      string
+	TLSCertFile          string
+	TLSKeyFile           string
+	DetectTimeout        time.Duration
+	ClassicTLSOn80       bool
+	TLSHandshakeTimeout  time.Duration
+	XrayQuotaRoot        string
+	XrayRuntimeUnit      string
+	XrayQACEnforcer      string
+	XrayManageBin        string
+	XraySessionRoot      string
+	XraySessionHeartbeat time.Duration
+	MaxConnections       int
+	MaxConnectionsPerIP  int
+	AcceptRatePerIP      int
+	AcceptRateWindow     time.Duration
+	CooldownRejects      int
+	CooldownWindow       time.Duration
+	CooldownDuration     time.Duration
+	AcceptProxyProtocol  bool
+	TrustedProxyCIDRs    []string
+	SNIRoutes            map[string]string
+	SNIPassthrough       map[string]string
 }
 
 func LoadConfig() (Config, error) {
@@ -116,7 +116,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	sessionHeartbeat, err := envDurationSecAliases(source, defaultSSHSessionHeartbeat, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", "EDGE_SSH_SESSION_HEARTBEAT_SEC")
+	sessionHeartbeat, err := envDurationSecAliases(source, defaultXraySessionHeartbeat, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", "EDGE_SSH_SESSION_HEARTBEAT_SEC")
 	if err != nil {
 		return Config{}, err
 	}
@@ -188,45 +188,45 @@ func LoadConfig() (Config, error) {
 	}
 
 	cfg := Config{
-		Provider:            envString(source, "EDGE_PROVIDER", defaultProvider),
-		PublicHTTPAddr:      publicHTTPAddr,
-		PublicTLSAddr:       publicTLSAddr,
-		PublicHTTPAddrs:     publicHTTPAddrs,
-		PublicTLSAddrs:      publicTLSAddrs,
-		MetricsEnabled:      metricsEnabled,
-		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
-		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
-		SSHBackend:          normalizeAddr(envStringAliases(source, defaultSSHBackend, "EDGE_XRAY_DIRECT_BACKEND", "EDGE_SSH_CLASSIC_BACKEND"), "127.0.0.1"),
-		SSHTLSBackend:       normalizeAddr(envStringAliases(source, defaultSSHTLSBackend, "EDGE_XRAY_TLS_BACKEND", "EDGE_SSH_TLS_BACKEND"), "127.0.0.1"),
-		SSHWSBackend:        normalizeAddr(envStringAliases(source, defaultSSHWSBackend, "EDGE_XRAY_WS_BACKEND", "EDGE_SSH_WS_BACKEND"), "127.0.0.1"),
-		OpenVPNRawBackend:   normalizeAddr(envStringAliases(source, defaultOpenVPNRawBackend, "EDGE_XRAY_FALLBACK_BACKEND", "EDGE_OPENVPN_TCP_BACKEND"), "127.0.0.1"),
-		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
-		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
-		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
-		VLESSRawSource:      "env:EDGE_XRAY_VLESS_RAW_BACKEND",
-		TrojanRawSource:     "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
-		TLSCertFile:         envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
-		TLSKeyFile:          envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
-		DetectTimeout:       timeout,
-		ClassicTLSOn80:      classicTLSOn80,
-		TLSHandshakeTimeout: handshakeTimeout,
-		SSHQuotaRoot:        envStringAliases(source, defaultSSHQuotaRoot, "EDGE_XRAY_QUOTA_ROOT", "EDGE_SSH_QUOTA_ROOT"),
-		SSHDropbearUnit:     envStringAliases(source, defaultSSHDropbearUnit, "EDGE_XRAY_RUNTIME_UNIT", "EDGE_SSH_DROPBEAR_UNIT"),
-		SSHQACEnforcer:      envStringAliases(source, defaultSSHQACEnforcer, "EDGE_XRAY_QAC_ENFORCER", "EDGE_SSH_QAC_ENFORCER"),
-		SSHManageBin:        envStringAliases(source, defaultSSHManageBin, "EDGE_XRAY_MANAGE_BIN", "EDGE_SSH_MANAGE_BIN"),
-		SSHSessionRoot:      envStringAliases(source, defaultSSHSessionRoot, "EDGE_XRAY_SESSION_ROOT", "EDGE_SSH_SESSION_ROOT"),
-		SSHSessionHeartbeat: sessionHeartbeat,
-		MaxConnections:      maxConnections,
-		MaxConnectionsPerIP: maxConnectionsPerIP,
-		AcceptRatePerIP:     acceptRatePerIP,
-		AcceptRateWindow:    acceptRateWindow,
-		CooldownRejects:     cooldownRejects,
-		CooldownWindow:      cooldownWindow,
-		CooldownDuration:    cooldownDuration,
-		AcceptProxyProtocol: acceptProxyProtocol,
-		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
-		SNIRoutes:           sniRoutes,
-		SNIPassthrough:      sniPassthrough,
+		Provider:             envString(source, "EDGE_PROVIDER", defaultProvider),
+		PublicHTTPAddr:       publicHTTPAddr,
+		PublicTLSAddr:        publicTLSAddr,
+		PublicHTTPAddrs:      publicHTTPAddrs,
+		PublicTLSAddrs:       publicTLSAddrs,
+		MetricsEnabled:       metricsEnabled,
+		MetricsListenAddr:    normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
+		HTTPBackend:          normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
+		XrayDirectBackend:    normalizeAddr(envStringAliases(source, defaultXrayDirectBackend, "EDGE_XRAY_DIRECT_BACKEND", "EDGE_SSH_CLASSIC_BACKEND"), "127.0.0.1"),
+		XrayTLSBackend:       normalizeAddr(envStringAliases(source, defaultXrayTLSBackend, "EDGE_XRAY_TLS_BACKEND", "EDGE_SSH_TLS_BACKEND"), "127.0.0.1"),
+		XrayWSBackend:        normalizeAddr(envStringAliases(source, defaultXrayWSBackend, "EDGE_XRAY_WS_BACKEND", "EDGE_SSH_WS_BACKEND"), "127.0.0.1"),
+		XrayFallbackBackend:  normalizeAddr(envStringAliases(source, defaultXrayFallbackBackend, "EDGE_XRAY_FALLBACK_BACKEND", "EDGE_OPENVPN_TCP_BACKEND"), "127.0.0.1"),
+		VLESSRawBackend:      normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
+		TrojanRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
+		XrayInboundsFile:     strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
+		VLESSRawSource:       "env:EDGE_XRAY_VLESS_RAW_BACKEND",
+		TrojanRawSource:      "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
+		TLSCertFile:          envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
+		TLSKeyFile:           envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
+		DetectTimeout:        timeout,
+		ClassicTLSOn80:       classicTLSOn80,
+		TLSHandshakeTimeout:  handshakeTimeout,
+		XrayQuotaRoot:        envStringAliases(source, defaultXrayQuotaRoot, "EDGE_XRAY_QUOTA_ROOT", "EDGE_SSH_QUOTA_ROOT"),
+		XrayRuntimeUnit:      envStringAliases(source, defaultXrayRuntimeUnit, "EDGE_XRAY_RUNTIME_UNIT", "EDGE_SSH_DROPBEAR_UNIT"),
+		XrayQACEnforcer:      envStringAliases(source, defaultXrayQACEnforcer, "EDGE_XRAY_QAC_ENFORCER", "EDGE_SSH_QAC_ENFORCER"),
+		XrayManageBin:        envStringAliases(source, defaultXrayManageBin, "EDGE_XRAY_MANAGE_BIN", "EDGE_SSH_MANAGE_BIN"),
+		XraySessionRoot:      envStringAliases(source, defaultXraySessionRoot, "EDGE_XRAY_SESSION_ROOT", "EDGE_SSH_SESSION_ROOT"),
+		XraySessionHeartbeat: sessionHeartbeat,
+		MaxConnections:       maxConnections,
+		MaxConnectionsPerIP:  maxConnectionsPerIP,
+		AcceptRatePerIP:      acceptRatePerIP,
+		AcceptRateWindow:     acceptRateWindow,
+		CooldownRejects:      cooldownRejects,
+		CooldownWindow:       cooldownWindow,
+		CooldownDuration:     cooldownDuration,
+		AcceptProxyProtocol:  acceptProxyProtocol,
+		TrustedProxyCIDRs:    envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
+		SNIRoutes:            sniRoutes,
+		SNIPassthrough:       sniPassthrough,
 	}
 	if refreshed, _, err := RefreshDiscoveredRawBackends(cfg); err == nil {
 		cfg = refreshed
@@ -257,7 +257,7 @@ func (c Config) Validate() error {
 			return errors.New("EDGE_METRICS_LISTEN must stay local-only (loopback)")
 		}
 	}
-	if c.HTTPBackend == "" || c.SSHBackend == "" || c.SSHTLSBackend == "" || c.SSHWSBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
+	if c.HTTPBackend == "" || c.XrayDirectBackend == "" || c.XrayTLSBackend == "" || c.XrayWSBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
 		return errors.New("backend addresses must not be empty")
 	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
@@ -269,7 +269,7 @@ func (c Config) Validate() error {
 	if c.TLSHandshakeTimeout <= 0 {
 		return errors.New("TLS handshake timeout must be > 0")
 	}
-	if c.SSHSessionHeartbeat <= 0 {
+	if c.XraySessionHeartbeat <= 0 {
 		return errors.New("SSH session heartbeat must be > 0")
 	}
 	if c.AcceptRateWindow <= 0 {
@@ -364,14 +364,14 @@ func (c Config) TLSListenAddrs() []string {
 	return []string{c.PublicTLSAddr}
 }
 
-func (c Config) MetricsAddr() string           { return c.MetricsListenAddr }
-func (c Config) HTTPBackendAddr() string       { return c.HTTPBackend }
-func (c Config) SSHBackendAddr() string        { return c.SSHBackend }
-func (c Config) SSHTLSBackendAddr() string     { return c.SSHTLSBackend }
-func (c Config) SSHWSBackendAddr() string      { return c.SSHWSBackend }
-func (c Config) OpenVPNRawBackendAddr() string { return c.OpenVPNRawBackend }
-func (c Config) VLESSRawBackendAddr() string   { return c.VLESSRawBackend }
-func (c Config) TrojanRawBackendAddr() string  { return c.TrojanRawBackend }
+func (c Config) MetricsAddr() string             { return c.MetricsListenAddr }
+func (c Config) HTTPBackendAddr() string         { return c.HTTPBackend }
+func (c Config) XrayDirectBackendAddr() string   { return c.XrayDirectBackend }
+func (c Config) XrayTLSBackendAddr() string      { return c.XrayTLSBackend }
+func (c Config) XrayWSBackendAddr() string       { return c.XrayWSBackend }
+func (c Config) XrayFallbackBackendAddr() string { return c.XrayFallbackBackend }
+func (c Config) VLESSRawBackendAddr() string     { return c.VLESSRawBackend }
+func (c Config) TrojanRawBackendAddr() string    { return c.TrojanRawBackend }
 
 func (c Config) Clone() Config {
 	clone := c

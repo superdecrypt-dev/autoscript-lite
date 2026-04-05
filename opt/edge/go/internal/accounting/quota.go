@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-type SSHQuotaConfig struct {
+type XrayQuotaConfig struct {
 	StateRoot        string
 	DropbearUnit     string
 	EnforcerPath     string
@@ -27,14 +27,14 @@ type SSHQuotaConfig struct {
 
 var authLineRe = regexp.MustCompile(`(?:Password )?auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)
 
-func RecordSSHQuota(logger *log.Logger, cfg SSHQuotaConfig, username string, localPort int, totalBytes uint64) {
+func RecordXrayQuota(logger *log.Logger, cfg XrayQuotaConfig, username string, localPort int, totalBytes uint64) {
 	if totalBytes == 0 {
 		return
 	}
 	resolved := normalizeUser(username)
 	if resolved == "" && localPort > 0 {
 		var err error
-		resolved, err = ResolveSSHUsernameByLocalPort(cfg.DropbearUnit, localPort)
+		resolved, err = ResolveXrayUsernameByLocalPort(cfg.DropbearUnit, localPort)
 		if err != nil {
 			logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
 			return
@@ -52,11 +52,11 @@ func RecordSSHQuota(logger *log.Logger, cfg SSHQuotaConfig, username string, loc
 	triggerEnforcer(logger, cfg.EnforcerPath, resolved)
 }
 
-func RecordSSHQuotaByLocalPort(logger *log.Logger, cfg SSHQuotaConfig, localPort int, totalBytes uint64) {
-	RecordSSHQuota(logger, cfg, "", localPort, totalBytes)
+func RecordXrayQuotaByLocalPort(logger *log.Logger, cfg XrayQuotaConfig, localPort int, totalBytes uint64) {
+	RecordXrayQuota(logger, cfg, "", localPort, totalBytes)
 }
 
-func ResolveSSHUsernameByLocalPort(unit string, localPort int) (string, error) {
+func ResolveXrayUsernameByLocalPort(unit string, localPort int) (string, error) {
 	portText := strconv.Itoa(localPort)
 	if username := scanAuthOutput(runCmd("journalctl", "-u", unit, "--no-pager", "-n", "2000"), portText); username != "" {
 		return username, nil
@@ -118,7 +118,7 @@ func candidateStateFiles(stateRoot, username string) []string {
 	}
 }
 
-func loadSSHState(stateRoot, username string) (string, map[string]any, error) {
+func loadXrayState(stateRoot, username string) (string, map[string]any, error) {
 	var target string
 	for _, path := range candidateStateFiles(stateRoot, username) {
 		if st, err := os.Stat(path); err == nil && !st.IsDir() {
@@ -140,18 +140,18 @@ func loadSSHState(stateRoot, username string) (string, map[string]any, error) {
 	return target, payload, nil
 }
 
-func LoadSSHSpeedPolicy(stateRoot, username string) (SSHSpeedPolicy, error) {
-	_, payload, err := loadSSHState(stateRoot, username)
+func LoadXraySpeedPolicy(stateRoot, username string) (XraySpeedPolicy, error) {
+	_, payload, err := loadXrayState(stateRoot, username)
 	if err != nil {
-		return SSHSpeedPolicy{}, err
+		return XraySpeedPolicy{}, err
 	}
 	status, _ := payload["status"].(map[string]any)
 	if !toBool(status["speed_limit_enabled"]) {
-		return SSHSpeedPolicy{}, nil
+		return XraySpeedPolicy{}, nil
 	}
 	down := mbitToBytesPerSecond(toFloat(status["speed_down_mbit"]))
 	up := mbitToBytesPerSecond(toFloat(status["speed_up_mbit"]))
-	return SSHSpeedPolicy{
+	return XraySpeedPolicy{
 		Enabled:         down > 0 || up > 0,
 		DownloadBytesPS: down,
 		UploadBytesPS:   up,
@@ -162,7 +162,7 @@ func addQuotaUsed(stateRoot, username string, totalBytes uint64) error {
 	if totalBytes == 0 {
 		return nil
 	}
-	target, payload, err := loadSSHState(stateRoot, username)
+	target, payload, err := loadXrayState(stateRoot, username)
 	if err != nil {
 		return err
 	}

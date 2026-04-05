@@ -317,11 +317,11 @@ func TestDecideHTTPRouteDiagnosticProbeRequiresLoopback(t *testing.T) {
 
 func TestRouteBlockedByHealthUsesSpecificBackendKey(t *testing.T) {
 	cfg := runtime.Config{
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 	}
 	health := &backendHealthState{}
 	health.Set(map[string]observability.BackendHealthSnapshot{
@@ -337,18 +337,18 @@ func TestRouteBlockedByHealthUsesSpecificBackendKey(t *testing.T) {
 		},
 	})
 
-	if _, blocked := routeBlockedByHealth(health, cfg, cfg.SSHBackendAddr()); blocked {
+	if _, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
 		t.Fatalf("routeBlockedByHealth() = true, want false for healthy ssh-direct backend")
 	}
 }
 
 func TestRouteDecisionEventUsesSpecificBackendStatus(t *testing.T) {
 	cfg := runtime.Config{
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 	}
 	health := &backendHealthState{}
 	health.Set(map[string]observability.BackendHealthSnapshot{
@@ -370,12 +370,12 @@ func TestRouteDecisionEventUsesSpecificBackendStatus(t *testing.T) {
 
 func TestDecideTLSPayloadRouteUsesSNIOverride(t *testing.T) {
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"vmess.example.com": "vless_tcp",
 		},
@@ -409,10 +409,10 @@ func TestDecideTLSPayloadRouteUsesSNIOverride(t *testing.T) {
 
 func TestDecideTLSPayloadRouteFallsBackWhenSNIMissing(t *testing.T) {
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 	}
 	initial := []byte("GET / HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
@@ -434,12 +434,12 @@ func TestDecideTLSPayloadRouteFallsBackWhenSNIMissing(t *testing.T) {
 
 func TestResolveSNIRouteDecisionUsesConfiguredBackend(t *testing.T) {
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"vmess.example.com": "vless_tcp",
 			"ws.example.com":    "ssh_ws",
@@ -470,8 +470,8 @@ func TestResolveSNIRouteDecisionUsesConfiguredBackend(t *testing.T) {
 	if !ok {
 		t.Fatalf("resolveSNIRouteDecision() ok = false, want true for ssh_ws route")
 	}
-	if wsDecision.target != cfg.SSHWSBackendAddr() {
-		t.Fatalf("wsDecision.target = %q, want %q", wsDecision.target, cfg.SSHWSBackendAddr())
+	if wsDecision.target != cfg.XrayWSBackendAddr() {
+		t.Fatalf("wsDecision.target = %q, want %q", wsDecision.target, cfg.XrayWSBackendAddr())
 	}
 	if wsDecision.matchedRoute != "ssh_ws" {
 		t.Fatalf("wsDecision.matchedRoute = %q, want ssh_ws", wsDecision.matchedRoute)
@@ -541,12 +541,12 @@ func TestUniquePassthroughTargetsDeduplicatesAndSorts(t *testing.T) {
 
 func TestBackendHealthSnapshotIncludesPassthroughTargets(t *testing.T) {
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIPassthrough: map[string]string{
 			"vision.example.com": "127.0.0.1:18443",
 		},
@@ -564,10 +564,10 @@ func TestBackendHealthSnapshotIncludesPassthroughTargets(t *testing.T) {
 
 func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"forced.example.com": "trojan_tcp",
 		},
@@ -601,18 +601,18 @@ func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 
 func TestDecideTLSPayloadRouteUsesOpenVPNBackendForOpenVPNClass(t *testing.T) {
 	cfg := runtime.Config{
-		SSHBackend:        "127.0.0.1:22022",
-		OpenVPNRawBackend: "127.0.0.1:1194",
+		XrayDirectBackend:   "127.0.0.1:22022",
+		XrayFallbackBackend: "127.0.0.1:1194",
 	}
 
 	decision := decideTLSPayloadRoute(cfg, "tls-port", nil, detect.ClassOpenVPNRaw, "", "", false)
-	if decision.target != cfg.OpenVPNRawBackendAddr() {
-		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.OpenVPNRawBackendAddr())
+	if decision.target != cfg.XrayFallbackBackendAddr() {
+		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.XrayFallbackBackendAddr())
 	}
 	if decision.route != "openvpn-tcp" {
 		t.Fatalf("decision.route = %q, want openvpn-tcp", decision.route)
 	}
-	if got := backendLabel(cfg, cfg.OpenVPNRawBackendAddr()); got != "openvpn" {
+	if got := backendLabel(cfg, cfg.XrayFallbackBackendAddr()); got != "openvpn" {
 		t.Fatalf("backendLabel(openvpn) = %q, want openvpn", got)
 	}
 }

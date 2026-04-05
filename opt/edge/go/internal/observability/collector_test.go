@@ -139,12 +139,12 @@ func TestObservePassthroughMetricsAggregatesSurfaceStats(t *testing.T) {
 func TestSnapshotIncludesConfiguredRouteTable(t *testing.T) {
 	collector := NewCollector(time.Unix(1700000000, 0))
 	cfg := runtime.Config{
-		HTTPBackend:      "127.0.0.1:18080",
-		SSHBackend:       "127.0.0.1:22022",
-		SSHTLSBackend:    "127.0.0.1:22443",
-		SSHWSBackend:     "127.0.0.1:10015",
-		VLESSRawBackend:  "127.0.0.1:33175",
-		TrojanRawBackend: "127.0.0.1:48778",
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		XrayTLSBackend:    "127.0.0.1:22443",
+		XrayWSBackend:     "127.0.0.1:10015",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"alpha.example.com": "vless_tcp",
 			"beta.example.com":  "ssh_ws",

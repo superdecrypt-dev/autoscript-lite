@@ -18,15 +18,15 @@ const (
 	warmupMaxWait = 8 * time.Second
 )
 
-type SSHSpeedPolicy struct {
+type XraySpeedPolicy struct {
 	Enabled         bool
 	DownloadBytesPS uint64
 	UploadBytesPS   uint64
 }
 
-type SSHSpeedController struct {
+type XraySpeedController struct {
 	logger    *log.Logger
-	cfg       SSHQuotaConfig
+	cfg       XrayQuotaConfig
 	localPort int
 	done      chan struct{}
 	started   atomic.Bool
@@ -37,8 +37,8 @@ type SSHSpeedController struct {
 	startedAt atomic.Int64
 }
 
-func NewSSHSpeedController(logger *log.Logger, cfg SSHQuotaConfig, localPort int) *SSHSpeedController {
-	return &SSHSpeedController{
+func NewXraySpeedController(logger *log.Logger, cfg XrayQuotaConfig, localPort int) *XraySpeedController {
+	return &XraySpeedController{
 		logger:    logger,
 		cfg:       cfg,
 		localPort: localPort,
@@ -46,7 +46,7 @@ func NewSSHSpeedController(logger *log.Logger, cfg SSHQuotaConfig, localPort int
 	}
 }
 
-func (c *SSHSpeedController) Start() {
+func (c *XraySpeedController) Start() {
 	if c == nil {
 		return
 	}
@@ -57,7 +57,7 @@ func (c *SSHSpeedController) Start() {
 	go c.run()
 }
 
-func (c *SSHSpeedController) Stop() {
+func (c *XraySpeedController) Stop() {
 	if c == nil {
 		return
 	}
@@ -66,15 +66,15 @@ func (c *SSHSpeedController) Stop() {
 	}
 }
 
-func (c *SSHSpeedController) DownloadLimiter() *speedRate {
+func (c *XraySpeedController) DownloadLimiter() *speedRate {
 	return &speedRate{value: &c.downBPS, controller: c}
 }
 
-func (c *SSHSpeedController) UploadLimiter() *speedRate {
+func (c *XraySpeedController) UploadLimiter() *speedRate {
 	return &speedRate{value: &c.upBPS, controller: c}
 }
 
-func (c *SSHSpeedController) Username() string {
+func (c *XraySpeedController) Username() string {
 	if c == nil {
 		return ""
 	}
@@ -84,7 +84,7 @@ func (c *SSHSpeedController) Username() string {
 	return ""
 }
 
-func (c *SSHSpeedController) WaitForReady(transferred uint64) {
+func (c *XraySpeedController) WaitForReady(transferred uint64) {
 	if c == nil || c.ready.Load() {
 		return
 	}
@@ -107,7 +107,7 @@ func (c *SSHSpeedController) WaitForReady(transferred uint64) {
 	}
 }
 
-func (c *SSHSpeedController) WaitForInitialPolicy(timeout time.Duration) {
+func (c *XraySpeedController) WaitForInitialPolicy(timeout time.Duration) {
 	if c == nil || c.ready.Load() {
 		return
 	}
@@ -130,7 +130,7 @@ func (c *SSHSpeedController) WaitForInitialPolicy(timeout time.Duration) {
 	}
 }
 
-func (c *SSHSpeedController) run() {
+func (c *XraySpeedController) run() {
 	ticker := time.NewTicker(defaultRefreshInterval)
 	defer ticker.Stop()
 	attempts := 0
@@ -144,7 +144,7 @@ func (c *SSHSpeedController) run() {
 		username := c.Username()
 		if username == "" {
 			if attempts < defaultResolveAttempts {
-				if resolved, err := ResolveSSHUsernameByLocalPort(c.cfg.DropbearUnit, c.localPort); err == nil && resolved != "" {
+				if resolved, err := ResolveXrayUsernameByLocalPort(c.cfg.DropbearUnit, c.localPort); err == nil && resolved != "" {
 					c.user.Store(resolved)
 					triggerSessionSync(c.logger, c.cfg.ManagePath)
 					username = resolved
@@ -171,7 +171,7 @@ func (c *SSHSpeedController) run() {
 			}
 		}
 
-		policy, err := LoadSSHSpeedPolicy(c.cfg.StateRoot, username)
+		policy, err := LoadXraySpeedPolicy(c.cfg.StateRoot, username)
 		if err != nil {
 			if c.logger != nil {
 				c.logger.Printf("edge-mux speed policy load failed user=%s: %v", username, err)
@@ -196,7 +196,7 @@ func (c *SSHSpeedController) run() {
 
 type speedRate struct {
 	value      *atomic.Uint64
-	controller *SSHSpeedController
+	controller *XraySpeedController
 }
 
 func (r *speedRate) RateBytesPerSecond() uint64 {

@@ -20,9 +20,9 @@ const (
 
 type UsernameResolver func() string
 
-type SSHRuntimeSessionTracker struct {
+type XrayRuntimeSessionTracker struct {
 	logger     *log.Logger
-	cfg        SSHQuotaConfig
+	cfg        XrayQuotaConfig
 	localPort  int
 	clientIP   string
 	transport  string
@@ -37,11 +37,11 @@ type SSHRuntimeSessionTracker struct {
 	activeFile string
 }
 
-func NewSSHRuntimeSessionTracker(logger *log.Logger, cfg SSHQuotaConfig, localPort int, clientIP, transport string, resolver UsernameResolver) *SSHRuntimeSessionTracker {
+func NewXrayRuntimeSessionTracker(logger *log.Logger, cfg XrayQuotaConfig, localPort int, clientIP, transport string, resolver UsernameResolver) *XrayRuntimeSessionTracker {
 	if cfg.SessionRoot == "" || cfg.SessionHeartbeat <= 0 {
 		return nil
 	}
-	return &SSHRuntimeSessionTracker{
+	return &XrayRuntimeSessionTracker{
 		logger:    logger,
 		cfg:       cfg,
 		localPort: localPort,
@@ -56,7 +56,7 @@ func NewSSHRuntimeSessionTracker(logger *log.Logger, cfg SSHQuotaConfig, localPo
 	}
 }
 
-func (t *SSHRuntimeSessionTracker) Start() {
+func (t *XrayRuntimeSessionTracker) Start() {
 	if t == nil {
 		return
 	}
@@ -65,7 +65,7 @@ func (t *SSHRuntimeSessionTracker) Start() {
 	})
 }
 
-func (t *SSHRuntimeSessionTracker) Stop() {
+func (t *XrayRuntimeSessionTracker) Stop() {
 	if t == nil {
 		return
 	}
@@ -78,7 +78,7 @@ func (t *SSHRuntimeSessionTracker) Stop() {
 	})
 }
 
-func (t *SSHRuntimeSessionTracker) run() {
+func (t *XrayRuntimeSessionTracker) run() {
 	started := time.Now()
 
 	for {
@@ -95,7 +95,7 @@ func (t *SSHRuntimeSessionTracker) run() {
 	}
 }
 
-func (t *SSHRuntimeSessionTracker) update() bool {
+func (t *XrayRuntimeSessionTracker) update() bool {
 	username := t.resolveUsername()
 	if err := os.MkdirAll(t.cfg.SessionRoot, 0o750); err != nil {
 		if t.logger != nil {
@@ -130,7 +130,7 @@ func (t *SSHRuntimeSessionTracker) update() bool {
 	return username != ""
 }
 
-func (t *SSHRuntimeSessionTracker) resolveUsername() string {
+func (t *XrayRuntimeSessionTracker) resolveUsername() string {
 	if t == nil {
 		return ""
 	}
@@ -140,7 +140,7 @@ func (t *SSHRuntimeSessionTracker) resolveUsername() string {
 		}
 	}
 	if t.localPort > 0 {
-		user, err := ResolveSSHUsernameByLocalPort(t.cfg.DropbearUnit, t.localPort)
+		user, err := ResolveXrayUsernameByLocalPort(t.cfg.DropbearUnit, t.localPort)
 		if err == nil {
 			return normalizeUser(user)
 		}
