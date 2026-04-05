@@ -49,24 +49,6 @@ network_diagnostics_menu() {
         hr
         systemctl status nginx --no-pager || true
         hr
-        if svc_exists "${SSHWS_DROPBEAR_SERVICE}"; then
-          systemctl status "${SSHWS_DROPBEAR_SERVICE}" --no-pager || true
-        else
-          warn "${SSHWS_DROPBEAR_SERVICE} tidak terdeteksi"
-        fi
-        hr
-        if svc_exists "${SSHWS_STUNNEL_SERVICE}"; then
-          systemctl status "${SSHWS_STUNNEL_SERVICE}" --no-pager || true
-        else
-          warn "${SSHWS_STUNNEL_SERVICE} tidak terdeteksi"
-        fi
-        hr
-        if svc_exists "${SSHWS_PROXY_SERVICE}"; then
-          systemctl status "${SSHWS_PROXY_SERVICE}" --no-pager || true
-        else
-          warn "${SSHWS_PROXY_SERVICE} tidak terdeteksi"
-        fi
-        hr
         if svc_exists wireproxy; then
           systemctl status wireproxy --no-pager || true
         else
@@ -107,5 +89,4 @@ network_menu() {
     esac
   done
 }
-
 

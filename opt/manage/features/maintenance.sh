@@ -4,10 +4,8 @@
 for _rel in \
   "features/maintenance/logs.sh" \
   "features/maintenance/services.sh" \
-  "features/maintenance/diagnostics.sh" \
   "features/maintenance/security.sh" \
-  "features/maintenance/tools.sh" \
-  "features/maintenance/runtime_services.sh"; do
+  "features/maintenance/tools.sh"; do
   manage_source_relative "${_rel}"
 done
 unset _rel

@@ -223,10 +223,6 @@ restore_service_list_excluding_nginx() {
 
 restart_active_tls_consumers() {
   local edge_svc=""
-  if svc_exists sshws-stunnel && systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1; then
-    systemctl restart sshws-stunnel >/dev/null 2>&1 || return 1
-    systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1 || return 1
-  fi
   edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
   if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && svc_exists "${edge_svc}" && systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1; then
     if systemctl reload "${edge_svc}" >/dev/null 2>&1; then

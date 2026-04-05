@@ -2703,8 +2703,8 @@ warp_zero_trust_require_ssh_compatible() {
   case "${guard}" in
     ok*|unknown) return 0 ;;
   esac
-  warn "Zero Trust untuk SSH hanya didukung bila runtime SSH Network sudah applied sehat di backend Local Proxy."
-  warn "Set SSH Network ke backend Local Proxy lalu apply, atau kosongkan effective WARP users dulu."
+  warn "Zero Trust membutuhkan runtime routing tambahan yang sudah applied sehat di backend Local Proxy."
+  warn "Set backend routing tambahan ke Local Proxy lalu apply, atau kosongkan effective WARP users dulu."
   warn "Status guard: ${guard}"
   return 1
 }
@@ -2937,7 +2937,7 @@ warp_tier_zero_trust_show_status() {
   printf "Proxy State   : %s\n" "${proxy_state}"
   printf "CLI Status    : %s\n" "${cli_status}"
   printf "Registration  : %s\n" "${reg_status}"
-  printf "SSH Guard     : %s\n" "${ssh_guard}"
+  printf "Routing Guard : %s\n" "${ssh_guard}"
 }
 
 warp_tier_zero_trust_show_requirements() {
@@ -2946,15 +2946,15 @@ warp_tier_zero_trust_show_requirements() {
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
   printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
-  printf "Requirement   : bila ada effective WARP users di SSH Network, runtime SSH wajib applied sehat di backend Local Proxy sebelum Zero Trust diaktifkan\n"
+  printf "Requirement   : bila ada effective WARP users di routing tambahan, runtime local proxy wajib applied sehat sebelum Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
-  printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan SSH Network via Local Proxy\n"
-  printf "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai local proxy bersama port lokal WARP\n"
-  printf "Rollout Note  : Dedicated interface SSH tetap dipertahankan sebagai fallback Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
+  printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan routing tambahan via Local Proxy\n"
+  printf "Rollout Note  : Routing tambahan kompatibel bila backend WARP memakai local proxy bersama port lokal WARP\n"
+  printf "Rollout Note  : Backend dedicated lama dipertahankan sebagai fallback Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_free_plus_backend_prepare_activate_unlocked() {
@@ -3357,7 +3357,7 @@ warp_tier_switch_free() {
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP free."
     fi
     if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah switch WARP free."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah switch WARP free."
     fi
     log "WARP tier target di-set: free"
     warp_txn_success="true"
@@ -3480,7 +3480,7 @@ warp_tier_switch_plus() {
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP plus."
     fi
     if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah switch WARP plus."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah switch WARP plus."
     fi
     log "WARP tier target di-set: plus"
     warp_txn_success="true"
@@ -3600,7 +3600,7 @@ warp_tier_reconnect_regenerate() {
       warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Gagal menyimpan target tier WARP setelah reconnect."
     fi
     if ! warp_runtime_refresh_ssh_network_after_profile_change; then
-      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime SSH Network gagal disegarkan sesudah reconnect/regenerate WARP."
+      warp_runtime_snapshot_restore_or_fail "${snap_dir}" "Runtime routing tambahan gagal disegarkan sesudah reconnect/regenerate WARP."
     fi
     warp_txn_success="true"
     trap - EXIT

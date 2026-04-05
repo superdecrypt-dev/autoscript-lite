@@ -117,71 +117,6 @@ edge_runtime_env_file() {
   printf '%s\n' "/etc/default/edge-runtime"
 }
 
-badvpn_runtime_env_file() {
-  printf '%s\n' "/etc/default/badvpn-udpgw"
-}
-
-badvpn_runtime_ports() {
-  local ports_raw
-  ports_raw="$(badvpn_runtime_get_env BADVPN_UDPGW_PORTS 2>/dev/null || echo "7300 7400 7500 7600 7700 7800 7900")"
-  ports_raw="${ports_raw//,/ }"
-  ports_raw="${ports_raw%\"}"
-  ports_raw="${ports_raw#\"}"
-  ports_raw="${ports_raw%\'}"
-  ports_raw="${ports_raw#\'}"
-  awk '
-    {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^[0-9]+$/ && !seen[$i]++) {
-          ports[++count] = $i + 0
-        }
-      }
-    }
-    END {
-      if (count > 0) {
-        for (i = 1; i <= count; i++) {
-          for (j = i + 1; j <= count; j++) {
-            if (ports[j] < ports[i]) {
-              tmp = ports[i]
-              ports[i] = ports[j]
-              ports[j] = tmp
-            }
-          }
-        }
-        for (i = 1; i <= count; i++) {
-          out = out (out ? " " : "") ports[i]
-        }
-        print out
-      }
-    }
-  ' <<< "${ports_raw}"
-}
-
-badvpn_public_port_label() {
-  local ports
-  ports="$(badvpn_runtime_ports)"
-  if svc_exists badvpn-udpgw || [[ -r "$(badvpn_runtime_env_file)" ]]; then
-    printf '%s\n' "${ports}" | sed 's/ /, /g'
-  else
-    printf '%s\n' "-"
-  fi
-}
-
-badvpn_runtime_get_env() {
-  local key="$1"
-  local env_file
-  env_file="$(badvpn_runtime_env_file)"
-  [[ -r "${env_file}" ]] || return 1
-  awk -F= -v key="${key}" '
-    $1 == key {
-      sub(/^[[:space:]]+/, "", $2)
-      sub(/[[:space:]]+$/, "", $2)
-      print $2
-      exit
-    }
-  ' "${env_file}"
-}
-
 edge_runtime_get_env() {
   local key="$1"
   local env_file
@@ -460,7 +395,7 @@ edge_runtime_status_menu() {
   echo "11) Maintenance > Edge Gateway Status"
   hr
 
-  local svc env_file provider active http_ports tls_ports http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 tls_backend_required
+  local svc env_file provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 tls_backend_required
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -469,8 +404,6 @@ edge_runtime_status_menu() {
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
-  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
-  ssh_tls_backend="$(edge_runtime_get_env EDGE_SSH_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:22443")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   if edge_runtime_tls_backend_required "${provider}" "${active}"; then
@@ -490,8 +423,6 @@ edge_runtime_status_menu() {
   else
     echo "HTTPS b/e   : ${http_tls_backend} (unused)"
   fi
-  echo "SSH backend : ${ssh_backend}"
-  echo "SSH TLS b/e : ${ssh_tls_backend}"
   echo "Detect (ms) : ${detect_timeout}"
   echo "TLS on 80   : ${tls80}"
   hr
@@ -530,9 +461,8 @@ edge_runtime_status_menu() {
       warn "Public TLS  $(edge_runtime_ports_label "${tls_ports}") : missing ${missing_tls[*]} ❌"
     fi
 
-    local backend_http_port backend_http_tls_port backend_ssh_port
+    local backend_http_port backend_http_tls_port
     backend_http_port="${http_backend##*:}"
-    backend_ssh_port="${ssh_backend##*:}"
     if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_http_port}([[:space:]]|$)"; then
       log "Backend HTTP ${http_backend} : LISTENING ✅"
     else
@@ -547,11 +477,6 @@ edge_runtime_status_menu() {
       fi
     else
       log "Backend HTTPS ${http_tls_backend} : unused for provider ${provider} ✅"
-    fi
-    if ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${backend_ssh_port}([[:space:]]|$)"; then
-      log "Backend SSH  ${ssh_backend} : LISTENING ✅"
-    else
-      warn "Backend SSH  ${ssh_backend} : NOT listening ❌"
     fi
   else
     warn "ss tidak tersedia, skip cek listener edge"
@@ -571,8 +496,8 @@ edge_runtime_socket_listening() {
 }
 
 edge_runtime_post_restart_health_check() {
-  local svc provider active http_ports tls_ports http_backend http_tls_backend ssh_backend tls_backend_required
-  local backend_http_port backend_http_tls_port backend_ssh_port
+  local svc provider active http_ports tls_ports http_backend http_tls_backend tls_backend_required
+  local backend_http_port backend_http_tls_port
   svc="$(edge_runtime_service_name)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
@@ -580,7 +505,6 @@ edge_runtime_post_restart_health_check() {
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
-  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
   if edge_runtime_tls_backend_required "${provider}" "${active}"; then
     tls_backend_required="true"
   else
@@ -594,7 +518,6 @@ edge_runtime_post_restart_health_check() {
 
   backend_http_port="${http_backend##*:}"
   backend_http_tls_port="${http_tls_backend##*:}"
-  backend_ssh_port="${ssh_backend##*:}"
 
   local port
   for port in ${http_ports}; do
@@ -615,10 +538,6 @@ edge_runtime_post_restart_health_check() {
   fi
   if [[ "${tls_backend_required}" == "true" ]] && ! edge_runtime_socket_listening "${backend_http_tls_port}"; then
     warn "Backend HTTPS ${http_tls_backend} belum listening setelah restart edge."
-    return 1
-  fi
-  if ! edge_runtime_socket_listening "${backend_ssh_port}"; then
-    warn "Backend SSH ${ssh_backend} belum listening setelah restart edge."
     return 1
   fi
   return 0
@@ -667,15 +586,13 @@ edge_runtime_info_menu() {
   echo "11) Maintenance > Edge Gateway Info"
   hr
 
-  local provider active http_ports tls_ports http_backend http_tls_backend ssh_backend ssh_tls_backend detect_timeout tls80 cert_file key_file
+  local provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 cert_file key_file
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
   http_ports="$(edge_runtime_public_http_ports)"
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
-  ssh_backend="$(edge_runtime_get_env EDGE_SSH_CLASSIC_BACKEND 2>/dev/null || echo "127.0.0.1:22022")"
-  ssh_tls_backend="$(edge_runtime_get_env EDGE_SSH_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:22443")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   cert_file="$(edge_runtime_get_env EDGE_TLS_CERT_FILE 2>/dev/null || echo "/opt/cert/fullchain.pem")"
@@ -686,8 +603,6 @@ edge_runtime_info_menu() {
   echo "Public TLS      : $(edge_runtime_ports_label "${tls_ports}")"
   echo "HTTP Backend    : ${http_backend}"
   echo "HTTPS Backend   : ${http_tls_backend}"
-  echo "SSH Backend     : ${ssh_backend}"
-  echo "SSH TLS Backend : ${ssh_tls_backend}"
   echo "Detect Timeout  : ${detect_timeout} ms"
   echo "Classic TLS :80 : ${tls80}"
   echo "TLS Cert        : ${cert_file}"
@@ -695,165 +610,11 @@ edge_runtime_info_menu() {
   hr
   echo "Mode ringkas:"
   echo "  - HTTP / WebSocket -> backend HTTP (${http_backend})"
-  if [[ "${provider}" == "nginx-stream" ]]; then
-    echo "  - TLS + ALPN http/1.1,h2 -> backend HTTPS (${http_tls_backend})"
-    echo "  - TLS tanpa ALPN HTTP -> backend SSH TLS (${ssh_tls_backend})"
-  else
-    echo "  - non-HTTP setelah TLS -> backend SSH klasik (${ssh_backend})"
-  fi
+  echo "  - TLS ingress -> backend HTTPS (${http_tls_backend})"
   echo "  - edge gateway aktif pada seluruh port Cloudflare HTTP/HTTPS yang didukung"
   hr
   pause
 }
-
-badvpn_status_menu() {
-  title
-  echo "11) Maintenance > BadVPN UDPGW Status"
-  hr
-
-  local env_file ports_raw ports_label max_clients max_conn sndbuf svc
-  svc="badvpn-udpgw.service"
-  env_file="$(badvpn_runtime_env_file)"
-  ports_raw="$(badvpn_runtime_ports)"
-  ports_label="$(printf '%s\n' "${ports_raw}" | sed 's/ /, /g')"
-  max_clients="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CLIENTS 2>/dev/null || echo "512")"
-  max_conn="$(badvpn_runtime_get_env BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT 2>/dev/null || echo "8")"
-  sndbuf="$(badvpn_runtime_get_env BADVPN_UDPGW_BUFFER_SIZE 2>/dev/null || echo "1048576")"
-
-  echo "Runtime env : ${env_file}"
-  echo "Listen port : 127.0.0.1:${ports_label}"
-  echo "Max clients : ${max_clients}"
-  echo "Max conn    : ${max_conn}"
-  echo "Sock sndbuf : ${sndbuf}"
-  hr
-
-  if svc_exists "${svc}"; then
-    svc_status_line "${svc}"
-  else
-    warn "${svc} tidak terpasang"
-  fi
-
-  hr
-  if have_cmd ss; then
-    local badvpn_missing="" port
-    for port in ${ports_raw}; do
-      if ! ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
-        badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
-      fi
-    done
-    if [[ -z "${badvpn_missing}" ]]; then
-      log "UDPGW 127.0.0.1:${ports_label} : LISTENING ✅"
-    else
-      warn "UDPGW 127.0.0.1:${ports_label} : MISSING ${badvpn_missing} ❌"
-    fi
-  else
-    warn "ss tidak tersedia, skip cek port TCP UDPGW"
-  fi
-
-  hr
-  pause
-}
-
-badvpn_post_restart_health_check() {
-  local svc ports_raw port
-  svc="badvpn-udpgw.service"
-  if ! svc_restart_checked "${svc}" 60; then
-    warn "Restart ${svc} gagal."
-    return 1
-  fi
-  if ! have_cmd ss; then
-    return 0
-  fi
-  ports_raw="$(badvpn_runtime_ports)"
-  for port in ${ports_raw}; do
-    if ! ss -lntH 2>/dev/null | grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"; then
-      warn "Port UDPGW 127.0.0.1:${port} belum listening setelah restart."
-      return 1
-    fi
-  done
-  return 0
-}
-
-badvpn_restart_menu() {
-  title
-  echo "11) Maintenance > Restart BadVPN UDPGW"
-  hr
-
-  local confirm_rc=0
-  confirm_yn_or_back "Restart BadVPN UDPGW sekarang?"
-  confirm_rc=$?
-  if (( confirm_rc != 0 )); then
-    if (( confirm_rc == 2 )); then
-      warn "Restart BadVPN UDPGW dibatalkan (kembali)."
-    else
-      warn "Restart BadVPN UDPGW dibatalkan."
-    fi
-    hr
-    pause
-    return 0
-  fi
-
-  local restart_failed="false"
-  local svc
-  svc="badvpn-udpgw.service"
-  if ! svc_exists "${svc}"; then
-    warn "${svc} tidak ditemukan."
-    hr
-    pause
-    return 0
-  fi
-
-  if ! badvpn_post_restart_health_check; then
-    warn "Restart ${svc} gagal."
-    restart_failed="true"
-  fi
-  hr
-  pause
-  [[ "${restart_failed}" != "true" ]]
-}
-
-sshws_detect_dropbear_port() {
-  local fallback="${SSHWS_DROPBEAR_PORT:-22022}"
-  local unit_file="/etc/systemd/system/${SSHWS_DROPBEAR_SERVICE}.service"
-  local value=""
-  if [[ -r "${unit_file}" ]]; then
-    value="$(grep -Eo -- '-p[[:space:]]+127\\.0\\.0\\.1:[0-9]+' "${unit_file}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+$' | head -n1 || true)"
-  fi
-  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
-    echo "${value}"
-  else
-    echo "${fallback}"
-  fi
-}
-
-sshws_detect_stunnel_port() {
-  local fallback="${SSHWS_STUNNEL_PORT:-22443}"
-  local conf_file="/etc/stunnel/sshws.conf"
-  local value=""
-  if [[ -r "${conf_file}" ]]; then
-    value="$(sed -nE 's/^[[:space:]]*accept[[:space:]]*=[[:space:]]*127\\.0\\.0\\.1:([0-9]+).*$/\1/p' "${conf_file}" | head -n1)"
-  fi
-  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
-    echo "${value}"
-  else
-    echo "${fallback}"
-  fi
-}
-
-sshws_detect_proxy_port() {
-  local fallback="${SSHWS_PROXY_PORT:-10015}"
-  local unit_file="/etc/systemd/system/${SSHWS_PROXY_SERVICE}.service"
-  local value=""
-  if [[ -r "${unit_file}" ]]; then
-    value="$(grep -Eo -- '--listen-port[[:space:]]+[0-9]+' "${unit_file}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+' | head -n1 || true)"
-  fi
-  if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
-    echo "${value}"
-  else
-    echo "${fallback}"
-  fi
-}
-
 
 daemon_restart_confirm_one() {
   local svc="${1:-}"
@@ -947,14 +708,8 @@ daemon_status_menu() {
   echo "11) Maintenance > Xray Daemons"
   hr
 
-  local sshws_dropbear_svc="${SSHWS_DROPBEAR_SERVICE:-sshws-dropbear}"
-  local sshws_stunnel_svc="${SSHWS_STUNNEL_SERVICE:-sshws-stunnel}"
-  local sshws_proxy_svc="${SSHWS_PROXY_SERVICE:-sshws-proxy}"
-  local sshws_qac_timer="${SSHWS_QAC_ENFORCER_TIMER:-sshws-qac-enforcer.timer}"
-
   local daemons=(
     "xray" "nginx" "xray-expired" "xray-quota" "xray-limit-ip" "xray-speed" "wireproxy"
-    "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}" "${sshws_qac_timer}"
   )
   local d
   for d in "${daemons[@]}"; do
@@ -978,13 +733,6 @@ daemon_status_menu() {
   echo "  7) xray-quota Logs"
   echo "  8) xray-limit-ip Logs"
   echo "  9) xray-speed Logs"
-  echo " 10) Restart ${sshws_dropbear_svc} only"
-  echo " 11) Restart ${sshws_stunnel_svc}"
-  echo " 12) Restart ${sshws_proxy_svc}"
-  echo " 13) Restart All SSH WS"
-  echo " 14) ${sshws_dropbear_svc} Logs"
-  echo " 15) ${sshws_stunnel_svc} Logs"
-  echo " 16) ${sshws_proxy_svc} Logs"
   echo "  0) Back"
   hr
   if ! read -r -p "Pilih: " c; then
@@ -1029,42 +777,6 @@ daemon_status_menu() {
     7) daemon_log_tail_show xray-quota 20 ;;
     8) daemon_log_tail_show xray-limit-ip 20 ;;
     9) daemon_log_tail_show xray-speed 20 ;;
-    10)
-      if confirm_menu_apply_now "Restart ${sshws_dropbear_svc} saja sekarang?"; then
-        if ! sshws_restart_after_dropbear "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
-          warn "Restart SSH WS gagal."
-        fi
-      fi
-      pause
-      ;;
-    11)
-      if confirm_menu_apply_now "Restart ${sshws_stunnel_svc} sekarang?"; then
-        if ! sshws_restart_services_checked "${sshws_stunnel_svc}"; then
-          warn "Restart ${sshws_stunnel_svc} gagal."
-        fi
-      fi
-      pause
-      ;;
-    12)
-      if confirm_menu_apply_now "Restart ${sshws_proxy_svc} sekarang?"; then
-        if ! sshws_restart_services_checked "${sshws_proxy_svc}"; then
-          warn "Restart ${sshws_proxy_svc} gagal."
-        fi
-      fi
-      pause
-      ;;
-    13)
-      if confirm_menu_apply_now "Restart semua service SSH WS sekarang?"; then
-        if ! sshws_restart_services_checked "${sshws_dropbear_svc}" "${sshws_stunnel_svc}" "${sshws_proxy_svc}"; then
-          pause
-          return 1
-        fi
-      fi
-      pause
-      ;;
-    14) daemon_log_tail_show "${sshws_dropbear_svc}" 20 ;;
-    15) daemon_log_tail_show "${sshws_stunnel_svc}" 20 ;;
-    16) daemon_log_tail_show "${sshws_proxy_svc}" 20 ;;
     0|kembali|k|back|b) return 0 ;;
     *) warn "Pilihan tidak valid" ; sleep 1 ;;
   esac

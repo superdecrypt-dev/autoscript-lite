@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,18 +20,18 @@ import (
 )
 
 const (
-	defaultEnvFile         = "/etc/autoscript/ssh-adblock/config.env"
-	defaultStateRoot       = "/opt/quota/ssh"
-	defaultBlocklistFile   = "/etc/autoscript/ssh-adblock/blocked.domains"
-	defaultURLsFile        = "/etc/autoscript/ssh-adblock/source.urls"
-	defaultMergedFile      = "/etc/autoscript/ssh-adblock/merged.domains"
-	defaultRenderedFile    = "/etc/autoscript/ssh-adblock/blocklist.generated.conf"
+	defaultEnvFile         = "/etc/autoscript/adblock/config.env"
+	defaultRuntimeUser     = "xray"
+	defaultBlocklistFile   = "/etc/autoscript/adblock/blocked.domains"
+	defaultURLsFile        = "/etc/autoscript/adblock/source.urls"
+	defaultMergedFile      = "/etc/autoscript/adblock/merged.domains"
+	defaultRenderedFile    = "/etc/autoscript/adblock/blocklist.generated.conf"
 	defaultCustomDat       = "/usr/local/share/xray/custom.dat"
 	defaultXrayRoutingFile = "/usr/local/etc/xray/conf.d/30-routing.json"
 	defaultXrayAdblockRule = "ext:custom.dat:adblock"
-	defaultNFTTable        = "autoscript_ssh_adblock"
+	defaultNFTTable        = "autoscript_adblock"
 	defaultDNSPort         = 5353
-	defaultDNSService      = "ssh-adblock-dns.service"
+	defaultDNSService      = "adblock-dns.service"
 	defaultSyncService     = "adblock-sync.service"
 	defaultXrayService     = "xray"
 	defaultHTTPTimeout     = 45 * time.Second
@@ -50,8 +49,6 @@ const (
 	keyAutoUpdateDays    = "AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS"
 )
 
-var sshUserRe = regexp.MustCompile(`^([a-z_][a-z0-9_-]{0,31})@ssh\.json$`)
-
 type options struct {
 	apply               bool
 	update              bool
@@ -66,7 +63,7 @@ type config struct {
 	Enabled           bool
 	Dirty             bool
 	LastUpdate        string
-	StateRoot         string
+	RuntimeUser       string
 	BlocklistFile     string
 	URLsFile          string
 	MergedFile        string
@@ -133,7 +130,7 @@ func parseOptions() options {
 	flag.BoolVar(&opts.reloadXray, "reload-xray", false, "Reload xray service when custom.dat changes")
 	flag.BoolVar(&opts.reloadXrayIfEnabled, "reload-xray-if-enabled", false, "Reload xray only when the Xray adblock rule is currently enabled")
 	flag.BoolVar(&opts.status, "status", false, "Print runtime status")
-	flag.BoolVar(&opts.showUsers, "show-users", false, "Print bound SSH users")
+	flag.BoolVar(&opts.showUsers, "show-users", false, "Print bound managed users")
 	flag.StringVar(&opts.envFile, "env-file", defaultEnvFile, "Path to adblock env file")
 	flag.Parse()
 	return opts
@@ -142,19 +139,19 @@ func parseOptions() options {
 func loadConfig(envFile string) config {
 	env := parseEnvFile(envFile)
 	cfg := config{
-		Enabled:           toBool(env["SSH_DNS_ADBLOCK_ENABLED"]),
+		Enabled:           toBool(env["AUTOSCRIPT_ADBLOCK_ENABLED"]),
 		Dirty:             toBool(env[keyDirty]),
 		LastUpdate:        strings.TrimSpace(env[keyLastUpdate]),
-		StateRoot:         orDefault(env["SSH_DNS_ADBLOCK_STATE_ROOT"], defaultStateRoot),
-		BlocklistFile:     orDefault(env["SSH_DNS_ADBLOCK_BLOCKLIST_FILE"], defaultBlocklistFile),
-		URLsFile:          orDefault(env["SSH_DNS_ADBLOCK_URLS_FILE"], defaultURLsFile),
+		RuntimeUser:       orDefault(env["AUTOSCRIPT_ADBLOCK_RUNTIME_USER"], defaultRuntimeUser),
+		BlocklistFile:     orDefault(env["AUTOSCRIPT_ADBLOCK_BLOCKLIST_FILE"], defaultBlocklistFile),
+		URLsFile:          orDefault(env["AUTOSCRIPT_ADBLOCK_URLS_FILE"], defaultURLsFile),
 		MergedFile:        orDefault(env[keyMergedFile], defaultMergedFile),
-		RenderedFile:      orDefault(env["SSH_DNS_ADBLOCK_RENDERED_FILE"], defaultRenderedFile),
+		RenderedFile:      orDefault(env["AUTOSCRIPT_ADBLOCK_RENDERED_FILE"], defaultRenderedFile),
 		CustomDat:         orDefault(env[keyCustomDat], defaultCustomDat),
-		NFTTable:          orDefault(env["SSH_DNS_ADBLOCK_NFT_TABLE"], defaultNFTTable),
-		DNSPort:           max(1, toInt(env["SSH_DNS_ADBLOCK_PORT"], defaultDNSPort)),
-		DNSService:        orDefault(env["SSH_DNS_ADBLOCK_SERVICE"], defaultDNSService),
-		SyncService:       orDefault(env["SSH_DNS_ADBLOCK_SYNC_SERVICE"], defaultSyncService),
+		NFTTable:          orDefault(env["AUTOSCRIPT_ADBLOCK_NFT_TABLE"], defaultNFTTable),
+		DNSPort:           max(1, toInt(env["AUTOSCRIPT_ADBLOCK_PORT"], defaultDNSPort)),
+		DNSService:        orDefault(env["AUTOSCRIPT_ADBLOCK_SERVICE"], defaultDNSService),
+		SyncService:       orDefault(env["AUTOSCRIPT_ADBLOCK_SYNC_SERVICE"], defaultSyncService),
 		XrayService:       orDefault(env[keyXrayService], defaultXrayService),
 		AutoUpdateEnabled: toBool(env[keyAutoUpdateEnabled]),
 		AutoUpdateService: orDefault(env[keyAutoUpdateService], "adblock-update.service"),
@@ -263,23 +260,15 @@ func tableExists(tableName string) bool {
 	return cmd.Run() == nil
 }
 
-func listManagedUsers(stateRoot string) []managedUser {
+func listManagedUsers(runtimeUsers string) []managedUser {
 	passwd := loadPasswdUIDs()
-	rootEntries, err := os.ReadDir(stateRoot)
-	if err != nil {
-		return nil
-	}
 	var users []managedUser
 	seenUIDs := make(map[int]struct{})
-	for _, entry := range rootEntries {
-		if entry.IsDir() {
+	for _, token := range strings.Split(runtimeUsers, ",") {
+		username := strings.TrimSpace(token)
+		if username == "" {
 			continue
 		}
-		match := sshUserRe.FindStringSubmatch(entry.Name())
-		if match == nil {
-			continue
-		}
-		username := match[1]
 		uid, ok := passwd[username]
 		if !ok || uid <= 0 {
 			continue
@@ -289,6 +278,9 @@ func listManagedUsers(stateRoot string) []managedUser {
 		}
 		seenUIDs[uid] = struct{}{}
 		users = append(users, managedUser{Username: username, UID: uid})
+	}
+	if len(users) == 0 {
+		return nil
 	}
 	sort.Slice(users, func(i, j int) bool {
 		return users[i].Username < users[j].Username
@@ -867,7 +859,7 @@ func applyRuntime(cfg config, refreshSources, reloadXray bool) ([]managedUser, [
 		return nil, nil, err
 	}
 
-	users := listManagedUsers(cfg.StateRoot)
+	users := listManagedUsers(cfg.RuntimeUser)
 	if !cfg.Enabled || len(users) == 0 {
 		flushTable(cfg.NFTTable)
 	} else if err := applyTable(cfg.NFTTable, cfg.DNSPort, users); err != nil {
@@ -891,7 +883,7 @@ func applyRuntime(cfg config, refreshSources, reloadXray bool) ([]managedUser, [
 }
 
 func printStatus(cfg config) {
-	users := listManagedUsers(cfg.StateRoot)
+	users := listManagedUsers(cfg.RuntimeUser)
 	manualDomains := readBlocklist(cfg.BlocklistFile)
 	mergedDomains := readMergedDomains(cfg.MergedFile)
 	if len(mergedDomains) == 0 {
@@ -943,7 +935,7 @@ func printStatus(cfg config) {
 }
 
 func printUsers(cfg config) {
-	for _, user := range listManagedUsers(cfg.StateRoot) {
+	for _, user := range listManagedUsers(cfg.RuntimeUser) {
 		fmt.Printf("%s|%d\n", user.Username, user.UID)
 	}
 }

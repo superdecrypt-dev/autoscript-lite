@@ -253,13 +253,13 @@ PY
   return 0
 }
 
-ssh_dns_adblock_config_get() {
+adblock_config_get() {
   need_python3
-  [[ -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" ]] || {
+  [[ -f "${ADBLOCK_CONFIG_FILE}" ]] || {
     printf 'enabled=0\ndns_port=-\nupstream_primary=1.1.1.1\nupstream_secondary=8.8.8.8\nauto_update_enabled=0\n'
     return 0
   }
-  python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" 2>/dev/null || true
+  python3 - <<'PY' "${ADBLOCK_CONFIG_FILE}" 2>/dev/null || true
 import pathlib
 import sys
 
@@ -276,22 +276,22 @@ for line in text.splitlines():
   k, v = line.split("=", 1)
   data[k.strip()] = v.strip()
 
-print(f"enabled={data.get('SSH_DNS_ADBLOCK_ENABLED', '0')}")
-print(f"dns_port={data.get('SSH_DNS_ADBLOCK_PORT', '-')}")
-print(f"upstream_primary={data.get('SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY', '1.1.1.1')}")
-print(f"upstream_secondary={data.get('SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY', '8.8.8.8')}")
+print(f"enabled={data.get('AUTOSCRIPT_ADBLOCK_ENABLED', '0')}")
+print(f"dns_port={data.get('AUTOSCRIPT_ADBLOCK_PORT') or data.get('AUTOSCRIPT_ADBLOCK_PORT', '-')}")
+print(f"upstream_primary={data.get('AUTOSCRIPT_ADBLOCK_UPSTREAM_PRIMARY') or data.get('AUTOSCRIPT_ADBLOCK_UPSTREAM_PRIMARY', '1.1.1.1')}")
+print(f"upstream_secondary={data.get('AUTOSCRIPT_ADBLOCK_UPSTREAM_SECONDARY') or data.get('AUTOSCRIPT_ADBLOCK_UPSTREAM_SECONDARY', '8.8.8.8')}")
 print(f"auto_update_enabled={data.get('AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_ENABLED', '0')}")
 print(f"auto_update_days={data.get('AUTOSCRIPT_ADBLOCK_AUTO_UPDATE_DAYS', '1')}")
 PY
 }
 
-ssh_dns_resolver_config_get() {
+adblock_dns_resolver_config_get() {
   local cfg dns_port primary secondary
-  cfg="$(ssh_dns_adblock_config_get)"
+  cfg="$(adblock_config_get)"
   dns_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
   primary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_primary=/{print $2; exit}')"
   secondary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_secondary=/{print $2; exit}')"
-  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="${SSH_DNS_ADBLOCK_PORT:-5353}"
+  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="5353"
   [[ -n "${primary}" ]] || primary="1.1.1.1"
   [[ -n "${secondary}" ]] || secondary="8.8.8.8"
   printf 'dns_port=%s\n' "${dns_port}"
@@ -299,25 +299,25 @@ ssh_dns_resolver_config_get() {
   printf 'upstream_secondary=%s\n' "${secondary}"
 }
 
-ssh_dns_resolver_runtime_conf_write() {
+adblock_dns_resolver_runtime_conf_write() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_resolver_runtime_conf_write "$@"
+    adblock_run_locked adblock_dns_resolver_runtime_conf_write "$@"
     return $?
   fi
   local cfg dns_port primary secondary tmp
-  cfg="$(ssh_dns_resolver_config_get)"
+  cfg="$(adblock_dns_resolver_config_get)"
   dns_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
   primary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_primary=/{print $2; exit}')"
   secondary="$(printf '%s\n' "${cfg}" | awk -F'=' '/^upstream_secondary=/{print $2; exit}')"
-  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="${SSH_DNS_ADBLOCK_PORT:-5353}"
+  [[ "${dns_port}" =~ ^[0-9]+$ ]] || dns_port="5353"
   primary="$(dns_server_literal_normalize "${primary}")" || primary="1.1.1.1"
   secondary="$(dns_server_literal_normalize "${secondary}")" || secondary="8.8.8.8"
 
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}")" 2>/dev/null || true
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-dnsmasq.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-dnsmasq.$$"
+  mkdir -p "$(dirname "${ADBLOCK_DNSMASQ_CONF}")" 2>/dev/null || true
+  tmp="$(mktemp "${WORK_DIR}/.adblock-dnsmasq.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-dnsmasq.$$"
   cat > "${tmp}" <<EOF
-# SSH Adblock resolver
+# DNS Adblock resolver
 port=${dns_port}
 listen-address=127.0.0.1
 bind-interfaces
@@ -328,66 +328,66 @@ bogus-priv
 cache-size=1000
 server=${primary}
 server=${secondary}
-conf-file=${SSH_DNS_ADBLOCK_RENDERED_FILE}
+conf-file=${ADBLOCK_RENDERED_FILE}
 EOF
-  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" || {
+  mv -f "${tmp}" "${ADBLOCK_DNSMASQ_CONF}" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     return 1
   }
-  chmod 644 "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" >/dev/null 2>&1 || true
+  chmod 644 "${ADBLOCK_DNSMASQ_CONF}" >/dev/null 2>&1 || true
   return 0
 }
 
-ssh_dns_resolver_apply_now() {
+adblock_dns_resolver_apply_now() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_resolver_apply_now "$@"
+    adblock_run_locked adblock_dns_resolver_apply_now "$@"
     return $?
   fi
-  ssh_dns_resolver_runtime_conf_write || return 1
-  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    svc_restart_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
-      warn "Restart ${SSH_DNS_ADBLOCK_SERVICE} gagal."
+  adblock_dns_resolver_runtime_conf_write || return 1
+  if systemctl is-active --quiet "${ADBLOCK_DNS_SERVICE}"; then
+    svc_restart_checked "${ADBLOCK_DNS_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Restart ${ADBLOCK_DNS_SERVICE} gagal."
       return 1
     }
   else
-    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
-      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+    svc_start_checked "${ADBLOCK_DNS_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${ADBLOCK_DNS_SERVICE} gagal diaktifkan."
       return 1
     }
   fi
-  ssh_dns_adblock_apply_now
+  adblock_apply_now
 }
 
-ssh_dns_resolver_set_upstreams() {
+adblock_dns_resolver_set_upstreams() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_resolver_set_upstreams "$@"
+    adblock_run_locked adblock_dns_resolver_set_upstreams "$@"
     return $?
   fi
   local primary="${1:-}"
   local secondary="${2:-}"
   primary="$(dns_server_literal_normalize "${primary}")" || return 1
   secondary="$(dns_server_literal_normalize "${secondary}")" || return 1
-  ssh_dns_adblock_config_mutate_with_runtime \
-    ssh_dns_resolver_apply_now \
+  adblock_config_mutate_with_runtime \
+    adblock_dns_resolver_apply_now \
     adblock_config_set_values \
-    "Perubahan upstream DNS SSH" \
-    SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY "${primary}" \
-    SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY "${secondary}"
+    "Perubahan upstream DNS Adblock" \
+    AUTOSCRIPT_ADBLOCK_UPSTREAM_PRIMARY "${primary}" \
+    AUTOSCRIPT_ADBLOCK_UPSTREAM_SECONDARY "${secondary}"
 }
 
-ssh_dns_adblock_config_set_enabled() {
+adblock_config_set_enabled() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_config_set_enabled "$@"
+    adblock_run_locked adblock_config_set_enabled "$@"
     return $?
   fi
   local value="${1:-0}"
   need_python3
   [[ "${value}" == "0" || "${value}" == "1" ]] || return 1
   local tmp
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_CONFIG_FILE}")" 2>/dev/null || true
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-config.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-config.$$"
-  python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" "${tmp}" "${value}"
+  mkdir -p "$(dirname "${ADBLOCK_CONFIG_FILE}")" 2>/dev/null || true
+  tmp="$(mktemp "${WORK_DIR}/.adblock-config.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-config.$$"
+  python3 - <<'PY' "${ADBLOCK_CONFIG_FILE}" "${tmp}" "${value}"
 import pathlib
 import sys
 
@@ -403,22 +403,23 @@ if src.exists():
     lines = []
 out = []
 for line in lines:
-  if line.strip().startswith("SSH_DNS_ADBLOCK_ENABLED="):
-    out.append(f"SSH_DNS_ADBLOCK_ENABLED={value}")
+  stripped = line.strip()
+  if stripped.startswith("AUTOSCRIPT_ADBLOCK_ENABLED="):
+    out.append(f"AUTOSCRIPT_ADBLOCK_ENABLED={value}")
     found = True
   else:
     out.append(line)
 if not found:
-  out.append(f"SSH_DNS_ADBLOCK_ENABLED={value}")
+  out.append(f"AUTOSCRIPT_ADBLOCK_ENABLED={value}")
 dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
 PY
   local rc=$?
   if (( rc == 0 )); then
-    mv -f "${tmp}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" || {
+    mv -f "${tmp}" "${ADBLOCK_CONFIG_FILE}" || {
       rm -f "${tmp}" >/dev/null 2>&1 || true
       return 1
     }
-    chmod 644 "${SSH_DNS_ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || true
+    chmod 644 "${ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || true
   else
     rm -f "${tmp}" >/dev/null 2>&1 || true
   fi
@@ -436,12 +437,12 @@ adblock_config_set_values() {
   fi
 
   local tmp
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_CONFIG_FILE}")" 2>/dev/null || true
-  touch "${SSH_DNS_ADBLOCK_CONFIG_FILE}"
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-config.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-config.$$"
+  mkdir -p "$(dirname "${ADBLOCK_CONFIG_FILE}")" 2>/dev/null || true
+  touch "${ADBLOCK_CONFIG_FILE}"
+  tmp="$(mktemp "${WORK_DIR}/.adblock-config.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-config.$$"
 
-  python3 - <<'PY' "${SSH_DNS_ADBLOCK_CONFIG_FILE}" "${tmp}" "$@"
+  python3 - <<'PY' "${ADBLOCK_CONFIG_FILE}" "${tmp}" "$@"
 import pathlib
 import sys
 
@@ -486,22 +487,22 @@ dst.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
 PY
   local rc=$?
   if (( rc == 0 )); then
-    mv -f "${tmp}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" || {
+    mv -f "${tmp}" "${ADBLOCK_CONFIG_FILE}" || {
       rm -f "${tmp}" >/dev/null 2>&1 || true
       return 1
     }
-    chmod 644 "${SSH_DNS_ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || true
+    chmod 644 "${ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || true
   else
     rm -f "${tmp}" >/dev/null 2>&1 || true
   fi
   return "${rc}"
 }
 
-ssh_dns_adblock_status_get() {
+adblock_status_get() {
   local raw_status=""
-  if [[ ! -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]]; then
+  if [[ ! -x "${ADBLOCK_SYNC_BIN}" ]]; then
     local cfg auto_update_enabled auto_update_days
-    cfg="$(ssh_dns_adblock_config_get)"
+    cfg="$(adblock_config_get)"
     auto_update_enabled="$(printf '%s\n' "${cfg}" | awk -F'=' '/^auto_update_enabled=/{print $2; exit}')"
     auto_update_days="$(printf '%s\n' "${cfg}" | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
     [[ -n "${auto_update_days}" ]] || auto_update_days="1"
@@ -527,7 +528,7 @@ ssh_dns_adblock_status_get() {
     printf 'last_update=-\n'
     return 0
   fi
-  raw_status="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --status 2>/dev/null || true)"
+  raw_status="$("${ADBLOCK_SYNC_BIN}" --status 2>/dev/null || true)"
   if [[ -z "${raw_status}" ]]; then
     return 0
   fi
@@ -553,11 +554,11 @@ ssh_dns_adblock_status_get() {
 
   if [[ -z "${dns_state}" ]] && adblock_status_token_is_service_state "${dns_service}"; then
     dns_state="${dns_service}"
-    dns_service="${SSH_DNS_ADBLOCK_SERVICE}"
+    dns_service="${ADBLOCK_DNS_SERVICE}"
   fi
   if [[ -z "${sync_state}" ]] && adblock_status_token_is_service_state "${sync_service}"; then
     sync_state="${sync_service}"
-    sync_service="${SSH_DNS_ADBLOCK_SYNC_SERVICE}"
+    sync_service="${ADBLOCK_SYNC_SERVICE}"
   fi
   if [[ -z "${auto_state}" ]] && adblock_status_token_is_service_state "${auto_service}"; then
     auto_state="${auto_service}"
@@ -580,30 +581,30 @@ ssh_dns_adblock_status_get() {
   printf 'auto_update_service_state=%s\n' "${auto_state:-missing}"
 }
 
-ssh_dns_adblock_apply_now() {
+adblock_apply_now() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_apply_now "$@"
+    adblock_run_locked adblock_apply_now "$@"
     return $?
   fi
-  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || {
+  [[ -x "${ADBLOCK_SYNC_BIN}" ]] || {
     warn "adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
     return 1
   }
-  if ! systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
-      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+  if ! systemctl is-active --quiet "${ADBLOCK_DNS_SERVICE}"; then
+    svc_start_checked "${ADBLOCK_DNS_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${ADBLOCK_DNS_SERVICE} gagal diaktifkan."
       return 1
     }
   fi
-  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1
+  "${ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1
 }
 
-ssh_dns_adblock_config_mutate_with_runtime() {
+adblock_config_mutate_with_runtime() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_config_mutate_with_runtime "$@"
+    adblock_run_locked adblock_config_mutate_with_runtime "$@"
     return $?
   fi
-  local apply_fn="${1:-}" mutate_fn="${2:-}" context="${3:-Perubahan DNS Adblock SSH}"
+  local apply_fn="${1:-}" mutate_fn="${2:-}" context="${3:-Perubahan DNS Adblock}"
   local backup="" had_existing="0"
   local -a rollback_notes=()
   shift 3 || true
@@ -611,13 +612,13 @@ ssh_dns_adblock_config_mutate_with_runtime() {
   declare -F "${apply_fn}" >/dev/null 2>&1 || return 1
   declare -F "${mutate_fn}" >/dev/null 2>&1 || return 1
 
-  if [[ -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" ]]; then
+  if [[ -f "${ADBLOCK_CONFIG_FILE}" ]]; then
     had_existing="1"
-    backup="$(mktemp "${WORK_DIR}/.ssh-adblock-config.rollback.XXXXXX" 2>/dev/null || true)"
-    [[ -n "${backup}" ]] || backup="${WORK_DIR}/.ssh-adblock-config.rollback.$$"
-    if ! cp -a "${SSH_DNS_ADBLOCK_CONFIG_FILE}" "${backup}" 2>/dev/null; then
+    backup="$(mktemp "${WORK_DIR}/.adblock-config.rollback.XXXXXX" 2>/dev/null || true)"
+    [[ -n "${backup}" ]] || backup="${WORK_DIR}/.adblock-config.rollback.$$"
+    if ! cp -a "${ADBLOCK_CONFIG_FILE}" "${backup}" 2>/dev/null; then
       rm -f "${backup}" >/dev/null 2>&1 || true
-      warn "Gagal membuat backup config SSH DNS Adblock sebelum apply."
+      warn "Gagal membuat backup config DNS Adblock sebelum apply."
       return 1
     fi
   fi
@@ -633,11 +634,11 @@ ssh_dns_adblock_config_mutate_with_runtime() {
   fi
 
   if [[ "${had_existing}" == "1" ]]; then
-    if ! cp -a "${backup}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" 2>/dev/null; then
+    if ! cp -a "${backup}" "${ADBLOCK_CONFIG_FILE}" 2>/dev/null; then
       rollback_notes+=("restore config gagal")
     fi
   else
-    rm -f "${SSH_DNS_ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || rollback_notes+=("hapus config baru gagal")
+    rm -f "${ADBLOCK_CONFIG_FILE}" >/dev/null 2>&1 || rollback_notes+=("hapus config baru gagal")
   fi
 
   if ! "${apply_fn}" >/dev/null 2>&1; then
@@ -653,17 +654,17 @@ ssh_dns_adblock_config_mutate_with_runtime() {
   return 1
 }
 
-ssh_dns_adblock_set_enabled_now() {
+adblock_set_enabled_now() {
   if [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_set_enabled_now "$@"
+    adblock_run_locked adblock_set_enabled_now "$@"
     return $?
   fi
   local value="${1:-0}"
   [[ "${value}" == "0" || "${value}" == "1" ]] || return 1
-  ssh_dns_adblock_config_mutate_with_runtime \
-    ssh_dns_adblock_apply_now \
-    ssh_dns_adblock_config_set_enabled \
-    "Perubahan status DNS Adblock SSH" \
+  adblock_config_mutate_with_runtime \
+    adblock_apply_now \
+    adblock_config_set_enabled \
+    "Perubahan status DNS Adblock" \
     "${value}"
 }
 
@@ -672,7 +673,7 @@ adblock_update_now() {
     adblock_run_locked adblock_update_now "$@"
     return $?
   fi
-  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || {
+  [[ -x "${ADBLOCK_SYNC_BIN}" ]] || {
     warn "adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
     return 1
   }
@@ -681,13 +682,13 @@ adblock_update_now() {
   if [[ "${mode}" == "reload-xray" ]]; then
     args+=(--reload-xray)
   fi
-  if ! systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    svc_start_checked "${SSH_DNS_ADBLOCK_SERVICE}" 20 >/dev/null 2>&1 || {
-      warn "Service ${SSH_DNS_ADBLOCK_SERVICE} gagal diaktifkan."
+  if ! systemctl is-active --quiet "${ADBLOCK_DNS_SERVICE}"; then
+    svc_start_checked "${ADBLOCK_DNS_SERVICE}" 20 >/dev/null 2>&1 || {
+      warn "Service ${ADBLOCK_DNS_SERVICE} gagal diaktifkan."
       return 1
     }
   fi
-  "${SSH_DNS_ADBLOCK_SYNC_BIN}" "${args[@]}" >/dev/null 2>&1
+  "${ADBLOCK_SYNC_BIN}" "${args[@]}" >/dev/null 2>&1
 }
 
 adblock_mark_dirty() {
@@ -696,7 +697,7 @@ adblock_mark_dirty() {
 
 adblock_dirty_flag_get() {
   local status dirty
-  status="$(ssh_dns_adblock_status_get)"
+  status="$(adblock_status_get)"
   dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
   case "${dirty}" in
     1|true|TRUE|yes|on) printf '1\n' ;;
@@ -954,7 +955,7 @@ adblock_auto_update_set_days() {
     return 1
   }
 
-  previous_days="$(ssh_dns_adblock_config_get | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
+  previous_days="$(adblock_config_get | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
   [[ "${previous_days}" =~ ^[1-9][0-9]*$ ]] || previous_days="1"
   if systemctl is-enabled --quiet "${ADBLOCK_AUTO_UPDATE_TIMER}" 2>/dev/null; then
     timer_was_enabled="1"
@@ -1058,8 +1059,8 @@ adblock_auto_update_days_menu() {
 
 adblock_manual_domains_list() {
   need_python3
-  [[ -f "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" ]] || return 0
-  python3 - <<'PY' "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" 2>/dev/null || true
+  [[ -f "${ADBLOCK_BLOCKLIST_FILE}" ]] || return 0
+  python3 - <<'PY' "${ADBLOCK_BLOCKLIST_FILE}" 2>/dev/null || true
 import pathlib
 import sys
 
@@ -1104,8 +1105,8 @@ adblock_manual_domain_add_commit() {
   local normalized="${1:-}"
   local snap_dir tmp
   [[ -n "${normalized}" ]] || return 1
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
-  touch "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"
+  mkdir -p "$(dirname "${ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
+  touch "${ADBLOCK_BLOCKLIST_FILE}"
   if adblock_manual_domains_list | grep -Fxq "${normalized}"; then
     warn "Domain sudah ada."
     return 1
@@ -1113,15 +1114,15 @@ adblock_manual_domain_add_commit() {
   snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-domain-add.XXXXXX" 2>/dev/null || true)"
   [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-domain-add.$$"
   mkdir -p "${snap_dir}" 2>/dev/null || true
-  snapshot_file_capture "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
+  snapshot_file_capture "${ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
     warn "Gagal membuat snapshot blocklist sebelum update."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   }
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-blocklist.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-blocklist.$$"
-  if [[ -f "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" ]]; then
-    cat "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" > "${tmp}" || {
+  tmp="$(mktemp "${WORK_DIR}/.adblock-blocklist.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-blocklist.$$"
+  if [[ -f "${ADBLOCK_BLOCKLIST_FILE}" ]]; then
+    cat "${ADBLOCK_BLOCKLIST_FILE}" > "${tmp}" || {
       rm -f "${tmp}" >/dev/null 2>&1 || true
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       warn "Gagal menyalin blocklist lama."
@@ -1136,19 +1137,19 @@ adblock_manual_domain_add_commit() {
     warn "Gagal menulis blocklist baru."
     return 1
   }
-  if ! mv -f "${tmp}" "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}"; then
+  if ! mv -f "${tmp}" "${ADBLOCK_BLOCKLIST_FILE}"; then
     rm -f "${tmp}" >/dev/null 2>&1 || true
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     warn "Gagal mengganti blocklist live."
     return 1
   fi
-  chmod 644 "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
+  chmod 644 "${ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
   if adblock_mark_dirty; then
     log "Domain Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 0
   fi
-  if snapshot_file_restore "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
+  if snapshot_file_restore "${ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
     warn "Domain ditambahkan, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
   else
     warn "Domain ditambahkan, status dirty gagal ditandai, dan rollback snapshot blocklist juga gagal."
@@ -1188,7 +1189,7 @@ adblock_manual_domain_add_menu() {
       pause
       continue
     fi
-    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil ditambahkan." adblock_manual_domain_add_commit "${normalized}"; then
+    if adblock_run_locked adblock_source_change_commit_and_sync "${ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil ditambahkan." adblock_manual_domain_add_commit "${normalized}"; then
       pause
       return 0
     fi
@@ -1213,8 +1214,8 @@ adblock_manual_domain_delete_commit() {
     warn "Domain tidak ditemukan."
     return 1
   fi
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-domains.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-domains.$$"
+  tmp="$(mktemp "${WORK_DIR}/.adblock-domains.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-domains.$$"
   : > "${tmp}"
   for i in "${!domains[@]}"; do
     if [[ "${domains[$i]}" == "${normalized}" ]]; then
@@ -1222,29 +1223,29 @@ adblock_manual_domain_delete_commit() {
     fi
     printf '%s\n' "${domains[$i]}" >> "${tmp}"
   done
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
+  mkdir -p "$(dirname "${ADBLOCK_BLOCKLIST_FILE}")" 2>/dev/null || true
   snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-domain-del.XXXXXX" 2>/dev/null || true)"
   [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-domain-del.$$"
   mkdir -p "${snap_dir}" 2>/dev/null || true
-  snapshot_file_capture "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
+  snapshot_file_capture "${ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     warn "Gagal membuat snapshot blocklist sebelum delete."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   }
-  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" || {
+  mv -f "${tmp}" "${ADBLOCK_BLOCKLIST_FILE}" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     warn "Gagal menulis blocklist baru."
     return 1
   }
-  chmod 644 "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
+  chmod 644 "${ADBLOCK_BLOCKLIST_FILE}" >/dev/null 2>&1 || true
   if adblock_mark_dirty; then
     log "Domain Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 0
   fi
-  if snapshot_file_restore "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
+  if snapshot_file_restore "${ADBLOCK_BLOCKLIST_FILE}" "${snap_dir}" "blocklist" >/dev/null 2>&1; then
     warn "Domain dihapus, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
   else
     warn "Domain dihapus, status dirty gagal ditandai, dan rollback snapshot blocklist juga gagal."
@@ -1305,7 +1306,7 @@ adblock_manual_domain_delete_menu() {
       pause
       continue
     fi
-    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil dihapus." adblock_manual_domain_delete_commit "${selected_domain}"; then
+    if adblock_run_locked adblock_source_change_commit_and_sync "${ADBLOCK_BLOCKLIST_FILE}" "blocklist" "Domain manual Adblock berhasil dihapus." adblock_manual_domain_delete_commit "${selected_domain}"; then
       pause
       return 0
     fi
@@ -1315,8 +1316,8 @@ adblock_manual_domain_delete_menu() {
 }
 
 adblock_restore_runtime_state_checked() {
-  # args: want_xray_enabled(0/1) want_ssh_enabled(0/1)
-  local want_xray="${1:-0}" want_ssh="${2:-0}"
+  # args: want_xray_enabled(0/1) want_dns_enabled(0/1)
+  local want_xray="${1:-0}" want_dns="${2:-0}"
   local target_mode="off"
   local notes=()
   [[ "${want_xray}" == "1" ]] && target_mode="blocked"
@@ -1325,10 +1326,10 @@ adblock_restore_runtime_state_checked() {
     notes+=("rollback Xray gagal")
   fi
 
-  if ! ssh_dns_adblock_config_set_enabled "${want_ssh}" >/dev/null 2>&1; then
-    notes+=("rollback config SSH gagal")
-  elif ! ssh_dns_adblock_apply_now >/dev/null 2>&1; then
-    notes+=("rollback apply SSH gagal")
+  if ! adblock_config_set_enabled "${want_dns}" >/dev/null 2>&1; then
+    notes+=("rollback config DNS gagal")
+  elif ! adblock_apply_now >/dev/null 2>&1; then
+    notes+=("rollback apply DNS gagal")
   fi
 
   if ((${#notes[@]} > 0)); then
@@ -1362,9 +1363,9 @@ adblock_prompt_update_after_source_change() {
 adblock_action_preview_print() {
   local action="${1:-update}"
   local status dirty manual_domains merged_domains source_urls rendered_status custom_dat
-  local xray_enabled ssh_enabled xray_outbound update_mode="none"
+  local xray_enabled dns_enabled xray_outbound update_mode="none"
 
-  status="$(ssh_dns_adblock_status_get)"
+  status="$(adblock_status_get)"
   dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
   manual_domains="$(printf '%s\n' "${status}" | awk -F'=' '/^manual_domains=/{print $2; exit}')"
   merged_domains="$(printf '%s\n' "${status}" | awk -F'=' '/^merged_domains=/{print $2; exit}')"
@@ -1373,7 +1374,7 @@ adblock_action_preview_print() {
   custom_dat="$(printf '%s\n' "${status}" | awk -F'=' '/^custom_dat=/{print $2; exit}')"
   xray_enabled="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
   xray_outbound="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^outbound=/{print $2; exit}')"
-  ssh_enabled="$(printf '%s\n' "${status}" | awk -F'=' '/^enabled=/{print $2; exit}')"
+  dns_enabled="$(printf '%s\n' "${status}" | awk -F'=' '/^enabled=/{print $2; exit}')"
   [[ -n "${manual_domains}" ]] || manual_domains="0"
   [[ -n "${merged_domains}" ]] || merged_domains="0"
   [[ -n "${source_urls}" ]] || source_urls="0"
@@ -1381,7 +1382,7 @@ adblock_action_preview_print() {
   [[ -n "${rendered_status}" ]] || rendered_status="-"
   [[ -n "${custom_dat}" ]] || custom_dat="-"
   [[ -n "${xray_enabled}" ]] || xray_enabled="0"
-  [[ -n "${ssh_enabled}" ]] || ssh_enabled="0"
+  [[ -n "${dns_enabled}" ]] || dns_enabled="0"
 
   if [[ "${xray_enabled}" == "1" ]]; then
     update_mode="reload-xray"
@@ -1395,14 +1396,14 @@ adblock_action_preview_print() {
   echo "custom.dat   : ${custom_dat}"
   echo "Rendered DNS : ${rendered_status}"
   echo "Xray rule    : $([[ "${xray_enabled}" == "1" ]] && echo "ON" || echo "OFF") (${xray_outbound:--})"
-  echo "SSH rule     : $([[ "${ssh_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+  echo "DNS rule     : $([[ "${dns_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
   case "${action}" in
     enable)
-      echo "Efek         : build/update artifact bila perlu, aktifkan routing Xray, apply DNS Adblock SSH."
+      echo "Efek         : build/update artifact bila perlu, aktifkan routing Xray, apply DNS Adblock."
       echo "Mode update  : ${update_mode}"
       ;;
     disable)
-      echo "Efek         : nonaktifkan routing Xray dan DNS Adblock SSH sekarang."
+      echo "Efek         : nonaktifkan routing Xray dan DNS Adblock sekarang."
       ;;
     update)
       echo "Efek         : rebuild artifact shared source dan apply ke runtime yang relevan."
@@ -1417,7 +1418,7 @@ adblock_enable_all() {
     return $?
   fi
   local status dirty rendered_status xray_was_enabled update_mode rollback_msg=""
-  status="$(ssh_dns_adblock_status_get)"
+  status="$(adblock_status_get)"
   dirty="$(printf '%s\n' "${status}" | awk -F'=' '/^dirty=/{print $2; exit}')"
   rendered_status="$(printf '%s\n' "${status}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
   xray_was_enabled="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
@@ -1443,23 +1444,23 @@ adblock_enable_all() {
     return 1
   fi
 
-  if ! ssh_dns_adblock_config_set_enabled 1; then
+  if ! adblock_config_set_enabled 1; then
     if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
       die "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
-    warn "Gagal mengaktifkan DNS Adblock SSH."
+    warn "Gagal mengaktifkan DNS Adblock."
     return 1
   fi
 
-  if ! ssh_dns_adblock_apply_now; then
+  if ! adblock_apply_now; then
     if ! rollback_msg="$(adblock_restore_runtime_state_checked "${xray_was_enabled}" "0")"; then
       die "Rollback enable Adblock gagal: ${rollback_msg}"
     fi
-    warn "DNS Adblock SSH gagal diterapkan."
+    warn "DNS Adblock gagal diterapkan."
     return 1
   fi
 
-  log "Adblock diaktifkan (shared source -> Xray + SSH)."
+  log "Adblock diaktifkan (shared source -> Xray + DNS)."
   return 0
 }
 
@@ -1469,10 +1470,10 @@ adblock_disable_all() {
     return $?
   fi
   local xray_status="ON"
-  local ssh_status="ON"
-  local previous_xray previous_ssh rollback_msg=""
+  local dns_status="ON"
+  local previous_xray previous_dns rollback_msg=""
   previous_xray="$(xray_routing_adblock_rule_get 2>/dev/null | awk -F'=' '/^enabled=/{print $2; exit}')"
-  previous_ssh="$(ssh_dns_adblock_status_get | awk -F'=' '/^enabled=/{print $2; exit}')"
+  previous_dns="$(adblock_status_get | awk -F'=' '/^enabled=/{print $2; exit}')"
 
   if xray_routing_adblock_rule_set off; then
     xray_status="OFF"
@@ -1480,40 +1481,40 @@ adblock_disable_all() {
     warn "Xray Adblock gagal dinonaktifkan."
   fi
 
-  if ! ssh_dns_adblock_config_set_enabled 0; then
-    warn "Gagal menonaktifkan DNS Adblock SSH."
-  elif ssh_dns_adblock_apply_now; then
-    ssh_status="OFF"
+  if ! adblock_config_set_enabled 0; then
+    warn "Gagal menonaktifkan DNS Adblock."
+  elif adblock_apply_now; then
+    dns_status="OFF"
   else
-    warn "DNS Adblock SSH gagal disinkronkan saat disable."
+    warn "DNS Adblock gagal disinkronkan saat disable."
   fi
 
-  if [[ "${xray_status}" == "OFF" && "${ssh_status}" == "OFF" ]]; then
-    log "Adblock dinonaktifkan (Xray + SSH)."
+  if [[ "${xray_status}" == "OFF" && "${dns_status}" == "OFF" ]]; then
+    log "Adblock dinonaktifkan (Xray + DNS)."
     return 0
   fi
 
-  if ! rollback_msg="$(adblock_restore_runtime_state_checked "${previous_xray}" "${previous_ssh}")"; then
+  if ! rollback_msg="$(adblock_restore_runtime_state_checked "${previous_xray}" "${previous_dns}")"; then
     die "Rollback disable Adblock gagal: ${rollback_msg}"
   fi
-  warn "Adblock nonaktif sebagian. Xray=${xray_status}, SSH=${ssh_status}."
+  warn "Adblock nonaktif sebagian. Xray=${xray_status}, DNS=${dns_status}."
   return 1
 }
 
-ssh_dns_adblock_show_bound_users() {
+adblock_show_bound_users() {
   title
   echo "$(adblock_menu_title "Bound Users")"
   hr
-  if [[ ! -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]]; then
+  if [[ ! -x "${ADBLOCK_SYNC_BIN}" ]]; then
     warn "adblock-sync tidak ditemukan. Jalankan setup.sh ulang."
     hr
     pause
     return 0
   fi
   local rows
-  rows="$("${SSH_DNS_ADBLOCK_SYNC_BIN}" --show-users 2>/dev/null || true)"
+  rows="$("${ADBLOCK_SYNC_BIN}" --show-users 2>/dev/null || true)"
   if [[ -z "${rows//[[:space:]]/}" ]]; then
-    echo "Belum ada user SSH terkelola yang terikat ke SSH Adblock."
+    echo "Belum ada user yang terikat ke DNS Adblock."
     hr
     pause
     return 0
@@ -1581,10 +1582,10 @@ xray_adblock_menu() {
   done
 }
 
-ssh_dns_adblock_menu() {
+adblock_dns_menu() {
   while true; do
     local st enabled dns_port dns_service dns_state sync_service sync_state nft_table users_count entries source_urls
-    st="$(ssh_dns_adblock_status_get)"
+    st="$(adblock_status_get)"
     enabled="$(printf '%s\n' "${st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
     dns_port="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
     dns_service="$(printf '%s\n' "${st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
@@ -1611,7 +1612,7 @@ ssh_dns_adblock_menu() {
     fi
 
     title
-    echo "$(adblock_menu_title "SSH Adblock")"
+    echo "$(adblock_menu_title "DNS Adblock")"
     hr
     printf "Rule Status   : %s\n" "$([[ "${enabled}" == "1" ]] && echo "ON" || echo "OFF")"
     printf "DNS Service   : %s\n" "${dns_service:--}"
@@ -1635,37 +1636,37 @@ ssh_dns_adblock_menu() {
     read -r -p "Pilih: " c
     case "${c}" in
       1)
-        if ssh_dns_adblock_set_enabled_now 1; then
-          log "SSH Adblock diaktifkan."
+        if adblock_set_enabled_now 1; then
+          log "DNS Adblock diaktifkan."
         else
-          warn "SSH Adblock gagal diaktifkan."
+          warn "DNS Adblock gagal diaktifkan."
         fi
         pause
         ;;
       2)
-        if ssh_dns_adblock_set_enabled_now 0; then
-          log "SSH Adblock dinonaktifkan."
+        if adblock_set_enabled_now 0; then
+          log "DNS Adblock dinonaktifkan."
         else
-          warn "SSH Adblock gagal dinonaktifkan."
+          warn "DNS Adblock gagal dinonaktifkan."
         fi
         pause
         ;;
       3)
-        ssh_dns_adblock_url_add_menu
+        adblock_url_add_menu
         ;;
       4)
-        ssh_dns_adblock_url_delete_menu
+        adblock_url_delete_menu
         ;;
       5)
-        if ssh_dns_adblock_apply_now; then
-          log "SSH Adblock URL sources diperbarui."
+        if adblock_apply_now; then
+          log "DNS Adblock URL sources diperbarui."
         else
-          warn "SSH Adblock URL sources gagal diperbarui."
+          warn "DNS Adblock URL sources gagal diperbarui."
         fi
         pause
         ;;
       6)
-        ssh_dns_adblock_show_bound_users
+        adblock_show_bound_users
         ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
@@ -1673,40 +1674,40 @@ ssh_dns_adblock_menu() {
   done
 }
 
-ssh_dns_adblock_urls_list() {
-  [[ -f "${SSH_DNS_ADBLOCK_URLS_FILE}" ]] || return 0
-  grep -E '^[[:space:]]*https?://' "${SSH_DNS_ADBLOCK_URLS_FILE}" 2>/dev/null | sed 's/^[[:space:]]*//'
+adblock_urls_list() {
+  [[ -f "${ADBLOCK_URLS_FILE}" ]] || return 0
+  grep -E '^[[:space:]]*https?://' "${ADBLOCK_URLS_FILE}" 2>/dev/null | sed 's/^[[:space:]]*//'
 }
 
-ssh_dns_adblock_url_normalize() {
+adblock_url_normalize() {
   local url="${1:-}"
   url="$(printf '%s' "${url}" | tr -d '[:space:]')"
   [[ "${url}" =~ ^https?://.+$ ]] || return 1
   printf '%s\n' "${url}"
 }
 
-ssh_dns_adblock_url_add_commit() {
+adblock_url_add_commit() {
   local normalized="${1:-}"
   local snap_dir tmp
   [[ -n "${normalized}" ]] || return 1
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
-  touch "${SSH_DNS_ADBLOCK_URLS_FILE}"
-  if ssh_dns_adblock_urls_list | grep -Fxq "${normalized}"; then
+  mkdir -p "$(dirname "${ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+  touch "${ADBLOCK_URLS_FILE}"
+  if adblock_urls_list | grep -Fxq "${normalized}"; then
     warn "URL sudah ada."
     return 1
   fi
   snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-url-add.XXXXXX" 2>/dev/null || true)"
   [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-url-add.$$"
   mkdir -p "${snap_dir}" 2>/dev/null || true
-  snapshot_file_capture "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
+  snapshot_file_capture "${ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
     warn "Gagal membuat snapshot URL source sebelum update."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   }
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-urls.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-urls.$$"
-  if [[ -f "${SSH_DNS_ADBLOCK_URLS_FILE}" ]]; then
-    cat "${SSH_DNS_ADBLOCK_URLS_FILE}" > "${tmp}" || {
+  tmp="$(mktemp "${WORK_DIR}/.adblock-urls.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-urls.$$"
+  if [[ -f "${ADBLOCK_URLS_FILE}" ]]; then
+    cat "${ADBLOCK_URLS_FILE}" > "${tmp}" || {
       rm -f "${tmp}" >/dev/null 2>&1 || true
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       warn "Gagal menyalin file URL source lama."
@@ -1721,19 +1722,19 @@ ssh_dns_adblock_url_add_commit() {
     warn "Gagal menulis file URL source baru."
     return 1
   }
-  if ! mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}"; then
+  if ! mv -f "${tmp}" "${ADBLOCK_URLS_FILE}"; then
     rm -f "${tmp}" >/dev/null 2>&1 || true
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     warn "Gagal mengganti file URL source live."
     return 1
   fi
-  chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
+  chmod 644 "${ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
   if adblock_mark_dirty; then
     log "URL source Adblock ditambahkan. Jalankan Update Adblock untuk build artifact baru."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 0
   fi
-  if snapshot_file_restore "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
+  if snapshot_file_restore "${ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
     warn "URL ditambahkan, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
   else
     warn "URL ditambahkan, status dirty gagal ditandai, dan rollback snapshot URL juga gagal."
@@ -1742,7 +1743,7 @@ ssh_dns_adblock_url_add_commit() {
   return 1
 }
 
-ssh_dns_adblock_url_add_menu() {
+adblock_url_add_menu() {
   local input normalized confirm_rc=0
   while true; do
     title
@@ -1757,7 +1758,7 @@ ssh_dns_adblock_url_add_menu() {
     if is_back_choice "${input}"; then
       return 0
     fi
-    normalized="$(ssh_dns_adblock_url_normalize "${input}")" || {
+    normalized="$(adblock_url_normalize "${input}")" || {
       warn "URL tidak valid."
       pause
       continue
@@ -1773,7 +1774,7 @@ ssh_dns_adblock_url_add_menu() {
       pause
       continue
     fi
-    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil ditambahkan." ssh_dns_adblock_url_add_commit "${normalized}"; then
+    if adblock_run_locked adblock_source_change_commit_and_sync "${ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil ditambahkan." adblock_url_add_commit "${normalized}"; then
       pause
       return 0
     fi
@@ -1782,7 +1783,7 @@ ssh_dns_adblock_url_add_menu() {
   done
 }
 
-ssh_dns_adblock_url_delete_commit() {
+adblock_url_delete_commit() {
   local normalized="${1:-}"
   local -a urls=()
   local line tmp i snap_dir found="0"
@@ -1793,13 +1794,13 @@ ssh_dns_adblock_url_delete_commit() {
     if [[ "${line}" == "${normalized}" ]]; then
       found="1"
     fi
-  done < <(ssh_dns_adblock_urls_list)
+  done < <(adblock_urls_list)
   if [[ "${found}" != "1" ]]; then
     warn "URL tidak ditemukan."
     return 1
   fi
-  tmp="$(mktemp "${WORK_DIR}/.ssh-adblock-urls.XXXXXX" 2>/dev/null || true)"
-  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.ssh-adblock-urls.$$"
+  tmp="$(mktemp "${WORK_DIR}/.adblock-urls.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${tmp}" ]] || tmp="${WORK_DIR}/.adblock-urls.$$"
   : > "${tmp}"
   for i in "${!urls[@]}"; do
     if [[ "${urls[$i]}" == "${normalized}" ]]; then
@@ -1807,29 +1808,29 @@ ssh_dns_adblock_url_delete_commit() {
     fi
     printf '%s\n' "${urls[$i]}" >> "${tmp}"
   done
-  mkdir -p "$(dirname "${SSH_DNS_ADBLOCK_URLS_FILE}")" 2>/dev/null || true
+  mkdir -p "$(dirname "${ADBLOCK_URLS_FILE}")" 2>/dev/null || true
   snap_dir="$(mktemp -d "${WORK_DIR}/.adblock-url-del.XXXXXX" 2>/dev/null || true)"
   [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.adblock-url-del.$$"
   mkdir -p "${snap_dir}" 2>/dev/null || true
-  snapshot_file_capture "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
+  snapshot_file_capture "${ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     warn "Gagal membuat snapshot URL source sebelum delete."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 1
   }
-  mv -f "${tmp}" "${SSH_DNS_ADBLOCK_URLS_FILE}" || {
+  mv -f "${tmp}" "${ADBLOCK_URLS_FILE}" || {
     rm -f "${tmp}" >/dev/null 2>&1 || true
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     warn "Gagal menulis URL source baru."
     return 1
   }
-  chmod 644 "${SSH_DNS_ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
+  chmod 644 "${ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
   if adblock_mark_dirty; then
     log "URL source Adblock dihapus. Jalankan Update Adblock untuk build artifact baru."
     rm -rf "${snap_dir}" >/dev/null 2>&1 || true
     return 0
   fi
-  if snapshot_file_restore "${SSH_DNS_ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
+  if snapshot_file_restore "${ADBLOCK_URLS_FILE}" "${snap_dir}" "urls" >/dev/null 2>&1; then
     warn "URL dihapus, tetapi status dirty gagal ditandai. Perubahan dibatalkan."
   else
     warn "URL dihapus, status dirty gagal ditandai, dan rollback snapshot URL juga gagal."
@@ -1838,7 +1839,7 @@ ssh_dns_adblock_url_delete_commit() {
   return 1
 }
 
-ssh_dns_adblock_url_delete_menu() {
+adblock_url_delete_menu() {
   local -a urls=()
   local line choice idx i selected_url confirm_rc=0
   while true; do
@@ -1849,7 +1850,7 @@ ssh_dns_adblock_url_delete_menu() {
     while IFS= read -r line; do
       [[ -n "${line}" ]] || continue
       urls+=("${line}")
-    done < <(ssh_dns_adblock_urls_list)
+    done < <(adblock_urls_list)
     if ((${#urls[@]} == 0)); then
       echo "Belum ada URL source Adblock."
       hr
@@ -1892,7 +1893,7 @@ ssh_dns_adblock_url_delete_menu() {
       pause
       continue
     fi
-    if adblock_run_locked adblock_source_change_commit_and_sync "${SSH_DNS_ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil dihapus." ssh_dns_adblock_url_delete_commit "${selected_url}"; then
+    if adblock_run_locked adblock_source_change_commit_and_sync "${ADBLOCK_URLS_FILE}" "urls" "URL source Adblock berhasil dihapus." adblock_url_delete_commit "${selected_url}"; then
       pause
       return 0
     fi
@@ -1905,7 +1906,7 @@ adblock_menu() {
   need_python3
   while true; do
     local xray_st xray_enabled xray_outbound xray_duplicates
-    local ssh_st ssh_enabled dns_port dns_service dns_state sync_service sync_state nft_table users_count entries source_urls
+    local adblock_st dns_enabled dns_port dns_service dns_state sync_service sync_state nft_table users_count entries source_urls
     local dirty manual_domains merged_domains rendered_status xray_asset last_update overall_status
     local auto_update_enabled auto_update_timer auto_update_schedule auto_update_days auto_update_service auto_update_service_state
     xray_st="$(xray_routing_adblock_rule_get 2>/dev/null || true)"
@@ -1913,29 +1914,29 @@ adblock_menu() {
     xray_outbound="$(printf '%s\n' "${xray_st}" | awk -F'=' '/^outbound=/{sub(/^outbound=/,""); print; exit}')"
     xray_duplicates="$(printf '%s\n' "${xray_st}" | awk -F'=' '/^duplicates=/{print $2; exit}')"
 
-    ssh_st="$(ssh_dns_adblock_status_get)"
-    ssh_enabled="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
-    dns_port="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
-    dns_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
-    dns_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
-    sync_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
-    sync_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
-    nft_table="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
-    users_count="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
-    entries="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
-    source_urls="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
-    dirty="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^dirty=/{print $2; exit}')"
-    manual_domains="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^manual_domains=/{print $2; exit}')"
-    merged_domains="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^merged_domains=/{print $2; exit}')"
-    rendered_status="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
-    xray_asset="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^custom_dat=/{print $2; exit}')"
-    auto_update_enabled="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_enabled=/{print $2; exit}')"
-    auto_update_service="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_service=/{print $2; exit}')"
-    auto_update_service_state="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_service_state=/{print $2; exit}')"
-    auto_update_timer="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_timer=/{print $2; exit}')"
-    auto_update_days="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
-    auto_update_schedule="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^auto_update_schedule=/{print $2; exit}')"
-    last_update="$(printf '%s\n' "${ssh_st}" | awk -F'=' '/^last_update=/{sub(/^last_update=/,""); print; exit}')"
+    adblock_st="$(adblock_status_get)"
+    dns_enabled="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^enabled=/{print $2; exit}')"
+    dns_port="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^dns_port=/{print $2; exit}')"
+    dns_service="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^dns_service=/{print $2; exit}')"
+    dns_state="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^dns_service_state=/{print $2; exit}')"
+    sync_service="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^sync_service=/{print $2; exit}')"
+    sync_state="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^sync_service_state=/{print $2; exit}')"
+    nft_table="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^nft_table=/{print $2; exit}')"
+    users_count="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^users_count=/{print $2; exit}')"
+    entries="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^blocklist_entries=/{print $2; exit}')"
+    source_urls="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^source_urls=/{print $2; exit}')"
+    dirty="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^dirty=/{print $2; exit}')"
+    manual_domains="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^manual_domains=/{print $2; exit}')"
+    merged_domains="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^merged_domains=/{print $2; exit}')"
+    rendered_status="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^rendered_file=/{print $2; exit}')"
+    xray_asset="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^custom_dat=/{print $2; exit}')"
+    auto_update_enabled="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_enabled=/{print $2; exit}')"
+    auto_update_service="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_service=/{print $2; exit}')"
+    auto_update_service_state="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_service_state=/{print $2; exit}')"
+    auto_update_timer="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_timer=/{print $2; exit}')"
+    auto_update_days="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_days=/{print $2; exit}')"
+    auto_update_schedule="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^auto_update_schedule=/{print $2; exit}')"
+    last_update="$(printf '%s\n' "${adblock_st}" | awk -F'=' '/^last_update=/{sub(/^last_update=/,""); print; exit}')"
     if [[ -z "${dns_state}" ]]; then
       if [[ -n "${dns_service}" && "${dns_service}" != "missing" ]] && svc_exists "${dns_service}"; then
         dns_state="$(svc_state "${dns_service}")"
@@ -1958,9 +1959,9 @@ adblock_menu() {
       fi
     fi
 
-    if [[ "${xray_enabled}" == "1" && "${ssh_enabled}" == "1" ]]; then
+    if [[ "${xray_enabled}" == "1" && "${dns_enabled}" == "1" ]]; then
       overall_status="ON"
-    elif [[ "${xray_enabled}" == "1" || "${ssh_enabled}" == "1" ]]; then
+    elif [[ "${xray_enabled}" == "1" || "${dns_enabled}" == "1" ]]; then
       overall_status="PARTIAL"
     else
       overall_status="OFF"
@@ -1969,7 +1970,7 @@ adblock_menu() {
     title
     echo "$(adblock_menu_title)"
     hr
-    echo "Satu source: manual domains + URL sources. Output runtime: Xray custom.dat + SSH dnsmasq."
+    echo "Satu source: manual domains + URL sources. Output runtime: Xray custom.dat + DNS dnsmasq."
     hr
     printf "Status       : %s\n" "${overall_status}"
     printf "Dirty        : %s\n" "$([[ "${dirty}" == "1" ]] && echo "YES" || echo "NO")"
@@ -1992,7 +1993,7 @@ adblock_menu() {
       printf "Duplicates   : %s (akan dibersihkan saat update)\n" "${xray_duplicates}"
     fi
     hr
-    printf "SSH Rule     : %s\n" "$([[ "${ssh_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
+    printf "DNS Rule     : %s\n" "$([[ "${dns_enabled}" == "1" ]] && echo "ON" || echo "OFF")"
     printf "DNS Service  : %s\n" "${dns_service:--}"
     printf "DNS State    : %s\n" "${dns_state:--}"
     printf "Sync Service : %s\n" "${sync_service:--}"
@@ -2044,8 +2045,8 @@ adblock_menu() {
         ;;
       3) menu_run_isolated_report "Add Adblock Domain" adblock_manual_domain_add_menu ;;
       4) menu_run_isolated_report "Delete Adblock Domain" adblock_manual_domain_delete_menu ;;
-      5) menu_run_isolated_report "Add Adblock Source URL" ssh_dns_adblock_url_add_menu ;;
-      6) menu_run_isolated_report "Delete Adblock Source URL" ssh_dns_adblock_url_delete_menu ;;
+      5) menu_run_isolated_report "Add Adblock Source URL" adblock_url_add_menu ;;
+      6) menu_run_isolated_report "Delete Adblock Source URL" adblock_url_delete_menu ;;
       7)
         hr
         adblock_action_preview_print update
@@ -2067,7 +2068,7 @@ adblock_menu() {
         fi
         pause
         ;;
-      8) ssh_dns_adblock_show_bound_users ;;
+      8) adblock_show_bound_users ;;
       9)
         if [[ "${auto_update_enabled}" == "1" ]]; then
           if confirm_yn_or_back "Disable Auto Update Adblock sekarang?"; then

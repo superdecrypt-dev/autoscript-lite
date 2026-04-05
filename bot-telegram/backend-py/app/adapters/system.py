@@ -14,22 +14,16 @@ from typing import Any, List, Tuple
 
 ACCOUNT_ROOT = Path("/opt/account")
 QUOTA_ROOT = Path("/opt/quota")
-SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
-SSHWS_CONTROL_BIN = Path("/usr/local/bin/sshws-control")
 XRAY_CONFDIR = Path("/usr/local/etc/xray/conf.d")
 NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 CERT_FULLCHAIN = Path("/opt/cert/fullchain.pem")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
-ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
+ADBLOCK_ENV_FILE = Path("/etc/autoscript/adblock/config.env")
 ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
-ADBLOCK_DEFAULT_BLOCKLIST = Path("/etc/autoscript/ssh-adblock/blocked.domains")
-ADBLOCK_DEFAULT_URLS = Path("/etc/autoscript/ssh-adblock/source.urls")
-SSH_NETWORK_ENV_FILE = Path("/etc/autoscript/ssh-network/config.env")
+ADBLOCK_DEFAULT_BLOCKLIST = Path("/etc/autoscript/adblock/blocked.domains")
+ADBLOCK_DEFAULT_URLS = Path("/etc/autoscript/adblock/source.urls")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 EDGE_RUNTIME_ENV_FILE = Path("/etc/default/edge-runtime")
-BADVPN_RUNTIME_ENV_FILE = Path("/etc/default/badvpn-udpgw")
-SSHWS_RUNTIME_ENV_FILE = Path("/etc/default/sshws-runtime")
-OPENVPN_CONFIG_ENV_FILE = Path("/etc/autoscript/openvpn/config.env")
 XRAY_DOMAIN_GUARD_BIN = Path("/usr/local/bin/xray-domain-guard")
 XRAY_DOMAIN_GUARD_CONFIG_FILE = Path("/etc/xray-domain-guard/config.env")
 XRAY_DOMAIN_GUARD_LOG_FILE = Path("/var/log/xray-domain-guard/domain-guard.log")
@@ -50,14 +44,11 @@ READONLY_GEOSITE_DOMAINS = (
     "geosite:reddit",
 )
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
-SSH_PROTOCOL = "ssh"
-OPENVPN_POLICY_PROTOCOL = "openvpn"
 USER_PROTOCOLS = XRAY_PROTOCOLS
 QAC_PROTOCOLS = XRAY_PROTOCOLS
 PROTOCOLS = XRAY_PROTOCOLS
 QUOTA_UNIT_DECIMAL = {"decimal", "gb", "1000", "gigabyte"}
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 EXIT_CODE_RE = re.compile(r"^\[exit (\d+)\]$")
 ALLOWED_SERVICES = (
     "xray",
@@ -81,11 +72,6 @@ def _local_now() -> datetime:
 
 ALLOWED_RESTART_SERVICES = set(ALLOWED_SERVICES) | {"fail2ban"}
 XRAY_DAEMONS = ("xray-expired", "xray-quota", "xray-limit-ip", "xray-speed")
-SSHWS_SERVICES = ("sshws-dropbear", "sshws-stunnel", "sshws-proxy")
-OPENVPN_SERVICES = ("openvpn-server@autoscript-tcp", "ovpn-ws-proxy")
-SSHWS_DROPBEAR_UNIT = Path("/etc/systemd/system/sshws-dropbear.service")
-SSHWS_STUNNEL_CONF = Path("/etc/stunnel/sshws.conf")
-SSHWS_PROXY_UNIT = Path("/etc/systemd/system/sshws-proxy.service")
 MESSAGE_SOFT_LIMIT = 3500
 MAIN_MENU_HEADER_CACHE_TTL_SECONDS = 180
 _MAIN_MENU_HEADER_CACHE_TEXT = ""
@@ -447,35 +433,6 @@ def _unit_status_line(name: str, *, unit_type: str = "service") -> str:
     return f"- {unit}: {active} / {enabled}"
 
 
-def _detect_port_from_file(path: Path, pattern: str, fallback: int) -> int:
-    if path.exists():
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            text = ""
-        match = re.search(pattern, text, re.MULTILINE)
-        if match:
-            try:
-                value = int(match.group(1))
-            except Exception:
-                value = 0
-            if 1 <= value <= 65535:
-                return value
-    return fallback
-
-
-def _sshws_dropbear_port() -> int:
-    return _detect_port_from_file(SSHWS_DROPBEAR_UNIT, r"-p\s+127\.0\.0\.1:(\d+)", 22022)
-
-
-def _sshws_stunnel_port() -> int:
-    return _detect_port_from_file(SSHWS_STUNNEL_CONF, r"^\s*accept\s*=\s*127\.0\.0\.1:(\d+)", 22443)
-
-
-def _sshws_proxy_port() -> int:
-    return _detect_port_from_file(SSHWS_PROXY_UNIT, r"--listen-port\s+(\d+)", 10015)
-
-
 def _listener_present(port: int, *, host: str = "") -> bool:
     if not shutil.which("ss"):
         return False
@@ -549,189 +506,11 @@ def _edge_runtime_provider_name(default: str = "go") -> str:
     return provider or default
 
 
-def _badvpn_runtime_env_value(key: str, default: str = "") -> str:
-    return _read_env_map(BADVPN_RUNTIME_ENV_FILE).get(key, default)
-
-
-def _openvpn_env_value(key: str, default: str = "") -> str:
-    return _read_env_map(OPENVPN_CONFIG_ENV_FILE).get(key, default)
-
-
-def _openvpn_ws_proxy_port() -> int:
-    return _to_int(_openvpn_env_value("OPENVPN_WS_PROXY_PORT", "10016"), 10016)
-
-
-def _openvpn_ws_public_path() -> str:
-    path = str(_openvpn_env_value("OPENVPN_WS_PUBLIC_PATH", "") or "").strip()
-    if not path:
-        return "-"
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return path
-
-
-def _openvpn_ws_alt_path() -> str:
-    path = _openvpn_ws_public_path()
-    if path == "-":
-        return "-"
-    return f"/<bebas>/{path.lstrip('/')}/<bebas>"
-
-
-def _openvpn_public_tcp_ports_label() -> str:
-    ports = _edge_runtime_ports(
-        "EDGE_PUBLIC_TLS_PORTS",
-        "EDGE_PUBLIC_TLS_PORT",
-        "443,2053,2083,2087,2096,8443",
-        "443",
-    ) + _edge_runtime_ports(
-        "EDGE_PUBLIC_HTTP_PORTS",
-        "EDGE_PUBLIC_HTTP_PORT",
-        "80,8080,8880,2052,2082,2086,2095",
-        "80",
-    )
-    merged: list[int] = []
-    seen: set[int] = set()
-    for port in ports:
-        if port in seen:
-            continue
-        seen.add(port)
-        merged.append(port)
-    if not merged:
-        tcp_port = _openvpn_env_value("OPENVPN_PUBLIC_PORT_TCP", _openvpn_env_value("OPENVPN_PORT_TCP", "1194")) or "1194"
-        return str(tcp_port)
-    return _edge_runtime_ports_label(merged)
-
-
-def _sshws_runtime_env_value(key: str, default: str = "") -> str:
-    return _read_env_map(SSHWS_RUNTIME_ENV_FILE).get(key, default)
-
-
 def _edge_runtime_service_name() -> str:
     provider = _edge_runtime_provider_name("go")
     if provider == "nginx-stream":
         return "nginx"
     return "edge-mux"
-
-
-def _badvpn_runtime_ports() -> list[int]:
-    raw = _badvpn_runtime_env_value("BADVPN_UDPGW_PORTS", "7300 7400 7500 7600 7700 7800 7900")
-    values: list[int] = []
-    seen: set[int] = set()
-    for token in re.split(r"[\s,]+", raw.strip()):
-        if not token:
-            continue
-        try:
-            port = int(token)
-        except Exception:
-            continue
-        if not (1 <= port <= 65535) or port in seen:
-            continue
-        seen.add(port)
-        values.append(port)
-    return values
-
-
-def _badvpn_runtime_ports_label() -> str:
-    ports = _badvpn_runtime_ports()
-    if not ports:
-        return "-"
-    return ", ".join(str(port) for port in ports)
-
-
-def _probe_tcp_endpoint(host: str, port: int, *, tls_mode: bool = False) -> str:
-    raw_sock = None
-    sock = None
-    try:
-        raw_sock = socket.create_connection((host, int(port)), timeout=2.5)
-        raw_sock.settimeout(2.5)
-        if tls_mode:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock = ctx.wrap_socket(raw_sock, server_hostname=host or "localhost")
-        else:
-            sock = raw_sock
-        return "CONNECTED"
-    except Exception as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
-        return f"FAIL ({detail})"
-    finally:
-        try:
-            if sock is not None:
-                sock.close()
-        except Exception:
-            pass
-        try:
-            if raw_sock is not None and raw_sock is not sock:
-                raw_sock.close()
-        except Exception:
-            pass
-
-
-def _probe_ws_endpoint(
-    host: str,
-    port: int,
-    *,
-    path: str = "/",
-    host_header: str = "",
-    tls_mode: bool = False,
-    sni: str = "",
-) -> str:
-    raw_sock = None
-    sock = None
-    try:
-        raw_sock = socket.create_connection((host, int(port)), timeout=3.0)
-        raw_sock.settimeout(3.0)
-        if tls_mode:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock = ctx.wrap_socket(raw_sock, server_hostname=sni or host or "localhost")
-        else:
-            sock = raw_sock
-
-        request = (
-            f"GET {path or '/'} HTTP/1.1\r\n"
-            f"Host: {host_header or host}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            f"Sec-WebSocket-Key: {base64.b64encode(str(time.time_ns()).encode('ascii', 'ignore')).decode('ascii', 'ignore')}\r\n"
-            "User-Agent: bot-telegram/sshws-diagnostics\r\n"
-            "\r\n"
-        ).encode("ascii", "ignore")
-        sock.sendall(request)
-
-        buf = b""
-        while b"\r\n\r\n" not in buf and len(buf) < 16384:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-        if not buf:
-            return "FAIL (empty-response)"
-
-        line = buf.split(b"\r\n", 1)[0].decode("latin1", "replace").strip()
-        parts = line.split(None, 2)
-        if len(parts) >= 2 and parts[1].isdigit():
-            code = parts[1]
-            reason = parts[2] if len(parts) >= 3 else ""
-            return f"HTTP {code}" + (f" {reason}" if reason else "")
-        return f"FAIL ({line or 'bad-response'})"
-    except Exception as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
-        return f"FAIL ({detail})"
-    finally:
-        try:
-            if sock is not None:
-                sock.close()
-        except Exception:
-            pass
-        try:
-            if raw_sock is not None and raw_sock is not sock:
-                raw_sock.close()
-        except Exception:
-            pass
 
 
 def _service_group_restart(services: tuple[str, ...] | list[str], title: str) -> tuple[bool, str, str]:
@@ -753,40 +532,6 @@ def _service_group_restart(services: tuple[str, ...] | list[str], title: str) ->
     if attempted == 0:
         return False, title, "Tidak ada unit yang ditemukan."
     return (not had_failure), title, "\n".join(lines)
-
-
-def _sshws_post_restart_health_check() -> tuple[bool, list[str]]:
-    failed: list[str] = []
-    dropbear_port = _sshws_dropbear_port()
-    stunnel_port = _sshws_stunnel_port()
-    proxy_port = _sshws_proxy_port()
-    domain = detect_domain()
-    probe_path = "/diagnostic-probe"
-
-    if (service_exists("sshws-proxy") or service_exists("sshws-stunnel")) and not _listener_present(80):
-        failed.append("port-80")
-    if (service_exists("sshws-proxy") or service_exists("sshws-stunnel")) and not _listener_present(443):
-        failed.append("port-443")
-    if service_exists("sshws-dropbear") and not _probe_tcp_endpoint("127.0.0.1", dropbear_port).startswith("CONNECTED"):
-        failed.append("dropbear")
-    if service_exists("sshws-proxy") and not _probe_ws_endpoint(
-        "127.0.0.1",
-        proxy_port,
-        path=probe_path,
-        host_header=f"127.0.0.1:{proxy_port}",
-    ).startswith("HTTP 101"):
-        failed.append("ws-proxy")
-    if service_exists("sshws-stunnel") and not _probe_tcp_endpoint("127.0.0.1", stunnel_port, tls_mode=True).startswith("CONNECTED"):
-        failed.append("stunnel")
-    if _listener_present(80):
-        probe80 = _probe_ws_endpoint("127.0.0.1", 80, path=probe_path, host_header=domain or "127.0.0.1")
-        if not probe80.startswith("HTTP 101"):
-            failed.append("nginx-80")
-    if domain and domain != "-" and _listener_present(443):
-        probe443 = _probe_ws_endpoint("127.0.0.1", 443, path=probe_path, host_header=domain, tls_mode=True, sni=domain)
-        if not probe443.startswith("HTTP 101"):
-            failed.append("nginx-443")
-    return (len(failed) == 0), failed
 
 
 def _restart_service_checked(service: str, timeout: int = 25) -> tuple[bool, str, str]:
@@ -1183,15 +928,7 @@ def _is_valid_username(username: str) -> bool:
     return bool(USERNAME_RE.match(username))
 
 
-def _is_valid_ssh_username(username: str) -> bool:
-    return bool(SSH_USERNAME_RE.match(username))
-
-
 def _account_info_label(proto: str) -> str:
-    if proto == SSH_PROTOCOL:
-        return "SSH ACCOUNT INFO"
-    if proto == OPENVPN_POLICY_PROTOCOL:
-        return "OPENVPN ACCOUNT INFO"
     return "XRAY ACCOUNT INFO"
 
 
@@ -1455,10 +1192,7 @@ def op_quota_summary(
 def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
     if proto not in QAC_PROTOCOLS:
         return "Quota & Access Control - Detail", f"Proto tidak valid: {proto}"
-    if proto == SSH_PROTOCOL:
-        if not _is_valid_ssh_username(username):
-            return "Quota & Access Control - Detail", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
-    elif not _is_valid_username(username):
+    if not _is_valid_username(username):
         return "Quota & Access Control - Detail", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
     for candidate in _quota_candidates(proto, username):
         if not candidate.exists():
@@ -1484,10 +1218,7 @@ def op_quota_detail(proto: str, username: str) -> tuple[str, str]:
                 ]
             )
         else:
-            if proto == OPENVPN_POLICY_PROTOCOL:
-                parts.extend(["", "OPENVPN ACCOUNT INFO: memakai linked profile .ovpn, tidak ada file txt terpisah di /opt/account"])
-            else:
-                parts.extend(["", f"{account_label}: file tidak ditemukan di /opt/account"])
+            parts.extend(["", f"{account_label}: file tidak ditemukan di /opt/account"])
 
         return "Quota & Access Control - Detail", "\n".join(parts)
     return "Quota & Access Control - Detail", f"File quota tidak ditemukan untuk {username} [{proto}]"
@@ -1498,10 +1229,7 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
     user_n = username.strip()
     if proto_n not in USER_PROTOCOLS:
         return "User Management - Account Info", f"Proto tidak valid: {proto}"
-    if proto_n == SSH_PROTOCOL:
-        if not _is_valid_ssh_username(user_n):
-            return "User Management - Account Info", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
-    elif not _is_valid_username(user_n):
+    if not _is_valid_username(user_n):
         return "User Management - Account Info", "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _account_candidates(proto_n, user_n):
@@ -1513,14 +1241,6 @@ def op_account_info(proto: str, username: str) -> tuple[str, str]:
             return "User Management - Account Info", f"Gagal membaca file {candidate}: {exc}"
         if not content:
             content = "(kosong)"
-        if proto_n == SSH_PROTOCOL:
-            lines = [
-                f"Username : {user_n}",
-                f"File     : {candidate}",
-                "",
-                content,
-            ]
-            return "User Management - Account Info", "\n".join(lines)
         lines = [
             f"Username : {user_n}",
             f"Protocol : {proto_n}",
@@ -1537,10 +1257,7 @@ def op_account_info_summary(proto: str, username: str) -> tuple[bool, dict[str, 
     user_n = username.strip()
     if proto_n not in QAC_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
-    if proto_n == SSH_PROTOCOL:
-        if not _is_valid_ssh_username(user_n):
-            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
-    elif not _is_valid_username(user_n):
+    if not _is_valid_username(user_n):
         return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _quota_candidates(proto_n, user_n):
@@ -1585,10 +1302,7 @@ def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str]
     user_n = username.strip()
     if proto_n not in QAC_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
-    if proto_n == SSH_PROTOCOL:
-        if not _is_valid_ssh_username(user_n):
-            return False, "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
-    elif not _is_valid_username(user_n):
+    if not _is_valid_username(user_n):
         return False, "Username tidak valid. Gunakan huruf/angka/._- tanpa spasi."
 
     for candidate in _quota_candidates(proto_n, user_n):
@@ -1606,7 +1320,7 @@ def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str]
         speed_limit_enabled = bool(status.get("speed_limit_enabled"))
         speed_down = _fmt_number(_to_float(status.get("speed_down_mbit"), 0.0))
         speed_up = _fmt_number(_to_float(status.get("speed_up_mbit"), 0.0))
-        username_display = f"{user_n}@{proto_n}" if proto_n not in {SSH_PROTOCOL, OPENVPN_POLICY_PROTOCOL} else user_n
+        username_display = f"{user_n}@{proto_n}"
         summary = {
             "username": username_display,
             "quota_limit": _fmt_quota_limit_gb(payload),
@@ -1619,30 +1333,17 @@ def op_qac_user_summary(proto: str, username: str) -> tuple[bool, dict[str, str]
             "speed_upload": f"{speed_up} Mbps",
             "speed_limit": "ON" if speed_limit_enabled else "OFF",
         }
-        if proto_n == SSH_PROTOCOL:
-            distinct_ips_raw = status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else []
-            distinct_ips = [str(item).strip() for item in distinct_ips_raw if str(item).strip()]
-            summary.update(
-                {
-                    "distinct_ip_count": str(max(0, _to_int(status.get("distinct_ip_count"), 0))),
-                    "distinct_ips": ", ".join(distinct_ips) if distinct_ips else "-",
-                    "ip_limit_metric": str(max(0, _to_int(status.get("ip_limit_metric"), 0))),
-                    "account_locked": "ON" if bool(status.get("account_locked")) else "OFF",
-                    "active_sessions_total": str(max(0, _to_int(status.get("active_sessions_total"), 0))),
-                }
-            )
-        elif proto_n == OPENVPN_POLICY_PROTOCOL:
-            distinct_ips_raw = status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else []
-            distinct_ips = [str(item).strip() for item in distinct_ips_raw if str(item).strip()]
-            summary.update(
-                {
-                    "distinct_ip_count": str(max(0, _to_int(status.get("distinct_ip_count"), 0))),
-                    "distinct_ips": ", ".join(distinct_ips) if distinct_ips else "-",
-                    "ip_limit_metric": str(max(0, _to_int(status.get("ip_limit_metric"), 0))),
-                    "account_locked": "ON" if bool(status.get("account_locked")) else "OFF",
-                    "active_sessions_total": str(max(0, _to_int(status.get("active_sessions_total"), 0))),
-                }
-            )
+        distinct_ips_raw = status.get("distinct_ips") if isinstance(status.get("distinct_ips"), list) else []
+        distinct_ips = [str(item).strip() for item in distinct_ips_raw if str(item).strip()]
+        summary.update(
+            {
+                "distinct_ip_count": str(max(0, _to_int(status.get("distinct_ip_count"), 0))),
+                "distinct_ips": ", ".join(distinct_ips) if distinct_ips else "-",
+                "ip_limit_metric": str(max(0, _to_int(status.get("ip_limit_metric"), 0))),
+                "account_locked": "ON" if bool(status.get("account_locked")) else "OFF",
+                "active_sessions_total": str(max(0, _to_int(status.get("active_sessions_total"), 0))),
+            }
+        )
 
         return True, summary
 
@@ -1708,25 +1409,27 @@ def _adblock_env_value(key: str, default: str = "") -> str:
     try:
         if not ADBLOCK_ENV_FILE.exists():
             return default
+        data: dict[str, str] = {}
         for raw in ADBLOCK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             env_key, env_value = line.split("=", 1)
-            if env_key.strip() == key:
-                value = env_value.strip()
-                return value if value else default
+            data[env_key.strip()] = env_value.strip()
     except Exception:
         return default
+    value = data.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
     return default
 
 
 def _adblock_blocklist_file() -> Path:
-    return Path(_adblock_env_value("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", str(ADBLOCK_DEFAULT_BLOCKLIST)))
+    return Path(_adblock_env_value("AUTOSCRIPT_ADBLOCK_BLOCKLIST_FILE", str(ADBLOCK_DEFAULT_BLOCKLIST)))
 
 
 def _adblock_urls_file() -> Path:
-    return Path(_adblock_env_value("SSH_DNS_ADBLOCK_URLS_FILE", str(ADBLOCK_DEFAULT_URLS)))
+    return Path(_adblock_env_value("AUTOSCRIPT_ADBLOCK_URLS_FILE", str(ADBLOCK_DEFAULT_URLS)))
 
 
 def list_adblock_manual_domains() -> list[str]:
@@ -1851,7 +1554,7 @@ def _adblock_status_map() -> dict[str, str]:
 
     if _looks_like_service_state(status.get("dns_service", "")) and not status.get("dns_service_state"):
         status["dns_service_state"] = status["dns_service"]
-        status["dns_service"] = "ssh-adblock-dns.service"
+        status["dns_service"] = _adblock_env_value("AUTOSCRIPT_ADBLOCK_SERVICE", "adblock-dns.service")
     if _looks_like_service_state(status.get("sync_service", "")) and not status.get("sync_service_state"):
         status["sync_service_state"] = status["sync_service"]
         status["sync_service"] = "adblock-sync.service"
@@ -1933,7 +1636,7 @@ def op_network_adblock_bound_users() -> tuple[str, str]:
         username, uid = line.split("|", 1)
         rows.append((username.strip(), uid.strip()))
     if not rows:
-        return title, "Belum ada user SSH terkelola yang terikat ke SSH Adblock."
+        return title, "Belum ada user yang terikat ke DNS Adblock."
     lines = ["Username             UID", "-------------------- --------"]
     for username, uid in rows:
         lines.append(f"{username:<20} {uid}")
@@ -2406,7 +2109,7 @@ def op_network_warp_tier_zero_trust_requirements() -> tuple[str, str]:
             "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host",
             "Requirement   : team name + service token client id/client secret harus terisi",
             f"Requirement   : backend ini memakai proxy lokal port {_warp_zero_trust_proxy_port_get()} untuk outbound Xray",
-            "Requirement   : SSH Network yang memakai WARP aktif harus kompatibel dengan backend Local Proxy",
+            "Requirement   : mode WARP aktif harus memakai backend yang kompatibel dengan proxy lokal",
         ]
     )
     return title, body
@@ -2419,260 +2122,11 @@ def op_network_warp_tier_zero_trust_rollout_notes() -> tuple[str, str]:
             "Rollout Note  : Zero Trust diperlakukan sebagai mode backend baru",
             "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy",
             "Rollout Note  : Zero Trust difokuskan ke jalur Xray via proxy lokal",
-            "Rollout Note  : SSH Network kompatibel bila backend WARP SSH memakai Local Proxy",
-            "Rollout Note  : Dedicated Interface SSH tetap fallback, tetapi tidak kompatibel dengan Zero Trust",
+            "Rollout Note  : Backend Local Proxy adalah jalur kompatibel untuk Zero Trust",
+            "Rollout Note  : Backend interface dedicated tidak dipakai pada rollout ini",
         ]
     )
     return title, body
-
-
-def _ssh_network_config_map() -> dict[str, str]:
-    data = _read_env_map(SSH_NETWORK_ENV_FILE)
-    global_mode = str(data.get("SSH_NETWORK_ROUTE_GLOBAL") or "direct").strip().lower()
-    if global_mode not in {"direct", "warp"}:
-        global_mode = "direct"
-
-    warp_backend = str(data.get("SSH_NETWORK_WARP_BACKEND") or "auto").strip().lower()
-    if warp_backend not in {"auto", "local-proxy", "interface"}:
-        warp_backend = "auto"
-
-    warp_interface = str(data.get("SSH_NETWORK_WARP_INTERFACE") or "warp-ssh0").strip()
-    if not warp_interface or not re.fullmatch(r"[A-Za-z0-9._-]{1,15}", warp_interface):
-        warp_interface = "warp-ssh0"
-
-    return {
-        "global_mode": global_mode,
-        "warp_backend": warp_backend,
-        "warp_interface": warp_interface,
-    }
-
-
-def _ssh_network_backend_effective(configured: str) -> str:
-    backend = str(configured or "auto").strip().lower()
-    if backend in {"local-proxy", "interface"}:
-        return backend
-    if shutil.which("xray") and shutil.which("iptables"):
-        return "local-proxy"
-    return "interface"
-
-
-def _ssh_network_backend_pretty(backend: str) -> str:
-    value = str(backend or "auto").strip().lower()
-    if value == "local-proxy":
-        return "Local Proxy"
-    if value == "interface":
-        return "Dedicated Interface"
-    if value == "idle":
-        return "Idle / Not Applied"
-    return "Auto"
-
-
-def _ssh_network_apply_path_pretty(backend: str) -> str:
-    value = str(backend or "auto").strip().lower()
-    if value == "interface":
-        return "wg-quick dedicated interface"
-    return "xray redirect + local WARP SOCKS"
-
-
-def _ssh_network_global_mode_pretty(mode: str) -> str:
-    value = str(mode or "direct").strip().lower()
-    if value == "warp":
-        return "WARP"
-    return "DIRECT"
-
-
-def _ssh_network_host_mode_display() -> str:
-    return _warp_mode_display_get()
-
-
-def _ssh_network_host_backend_display() -> str:
-    host_mode = _ssh_network_host_mode_display()
-    if host_mode == "Zero Trust":
-        return "cloudflare-warp"
-    return "wireproxy"
-
-
-def _ssh_network_host_service_name() -> str:
-    if _ssh_network_host_mode_display() == "Zero Trust":
-        return "warp-svc"
-    return "wireproxy"
-
-
-def _ssh_network_host_proxy_bind() -> str:
-    bind_addr = _wireproxy_socks_bind_address()
-    host, port = _normalize_bind_address(bind_addr)
-    if port is None:
-        return bind_addr
-    return host or bind_addr
-
-
-def _ssh_network_host_proxy_state() -> str:
-    bind_addr = _wireproxy_socks_bind_address()
-    _, port = _normalize_bind_address(bind_addr)
-    if port is None:
-        return "unknown"
-    if _listener_present(port):
-        return f"listening ({bind_addr})"
-    return f"not-listening ({bind_addr})"
-
-
-def _ssh_network_xray_redir_state(port: int) -> str:
-    if _listener_present(port):
-        return "active"
-    return "standby"
-
-
-def _ssh_network_effective_rows() -> list[dict[str, str]]:
-    cfg = _ssh_network_config_map()
-    global_mode = cfg.get("global_mode", "direct")
-    rows: list[dict[str, str]] = []
-    ssh_quota_dir = QUOTA_ROOT / SSH_PROTOCOL
-
-    if not ssh_quota_dir.exists():
-        return rows
-
-    for quota_path in sorted(ssh_quota_dir.glob("*.json")):
-        ok, payload = read_json(quota_path)
-        if not ok or not isinstance(payload, dict):
-            continue
-
-        username = str(payload.get("username") or quota_path.stem.split("@", 1)[0]).strip()
-        if not username:
-            continue
-
-        network = payload.get("network")
-        override = "inherit"
-        if isinstance(network, dict):
-          candidate = str(network.get("route_mode") or "").strip().lower()
-          if candidate in {"inherit", "direct", "warp"}:
-              override = candidate
-
-        effective = global_mode if override == "inherit" else override
-        rows.append(
-            {
-                "username": username,
-                "override": override,
-                "effective": effective,
-            }
-        )
-    return rows
-
-
-def op_ssh_network_overview() -> tuple[str, str]:
-    title = "SSH Network"
-    cfg = _ssh_network_config_map()
-    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
-    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
-    lines = [
-        f"Global Mode        : {_ssh_network_global_mode_pretty(cfg.get('global_mode', 'direct'))}",
-        f"Backend Config     : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
-        f"Backend Target     : {_ssh_network_backend_pretty(backend_effective)}",
-        f"Apply Path         : {_ssh_network_apply_path_pretty(backend_effective)}",
-        f"Host WARP Mode     : {_ssh_network_host_mode_display()}",
-        f"Host Backend       : {_ssh_network_host_backend_display()}",
-        f"Host Service       : {_ssh_network_host_service_name()} ({service_state(_ssh_network_host_service_name())})",
-        f"Host SOCKS         : {_ssh_network_host_proxy_state()}",
-        f"Xray Redir IPv4    : {_ssh_network_xray_redir_state(12345)}",
-        f"Xray Redir IPv6    : {_ssh_network_xray_redir_state(12346)}",
-        f"WARP Iface         : {cfg.get('warp_interface', 'warp-ssh0')}",
-        f"Effective Warp Users : {warp_users}",
-    ]
-    return title, "\n".join(lines)
-
-
-def op_ssh_network_dns_status() -> tuple[str, str]:
-    title = "SSH Network - DNS for SSH"
-    st = _adblock_status_map()
-    enabled = st.get("enabled", "0") == "1"
-    lines = [
-        f"DNS Steering   : {'ON' if enabled else 'OFF'}",
-        f"DNS Service    : {st.get('dns_service', '-')}",
-        f"DNS State      : {st.get('dns_service_state', '-')}",
-        f"Sync Service   : {st.get('sync_service', '-')}",
-        f"Sync State     : {st.get('sync_service_state', '-')}",
-        f"NFT Table      : {st.get('nft_table', '-')}",
-        f"Managed Users  : {st.get('users_count', '0')}",
-        f"DNS Port       : {st.get('dns_port', '-')}",
-        f"Blocklist      : {st.get('blocklist_entries', '0')} entries",
-        f"Last Update    : {st.get('last_update', '-')}",
-        "",
-        "Backend DNS for SSH memakai SSH Adblock runtime yang sama seperti menu Adblocker.",
-    ]
-    return title, "\n".join(lines)
-
-
-def op_ssh_network_routing_global_status() -> tuple[str, str]:
-    title = "SSH Network - Routing SSH Global"
-    cfg = _ssh_network_config_map()
-    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
-    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
-    lines = [
-        f"Global Routing  : {_ssh_network_global_mode_pretty(cfg.get('global_mode', 'direct'))}",
-        f"Backend Config  : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
-        f"Backend Target  : {_ssh_network_backend_pretty(backend_effective)}",
-        f"Apply Path      : {_ssh_network_apply_path_pretty(backend_effective)}",
-        f"Effective Warp Users : {warp_users}",
-    ]
-    return title, "\n".join(lines)
-
-
-def op_ssh_network_routing_user_status() -> tuple[str, str]:
-    title = "SSH Network - Routing SSH Per-User"
-    rows = _ssh_network_effective_rows()
-    if not rows:
-        return title, "Belum ada user SSH managed yang bisa dirender."
-
-    lines = [
-        "Username             Override   Effective",
-        "-------------------- ---------- ----------",
-    ]
-    for row in rows[:20]:
-        lines.append(
-            f"{row['username']:<20} {row['override']:<10} {row['effective']:<10}"
-        )
-    if len(rows) > 20:
-        lines.append(f"... {len(rows) - 20} baris lain tidak ditampilkan")
-    return title, "\n".join(lines)
-
-
-def op_ssh_network_warp_global_status() -> tuple[str, str]:
-    title = "SSH Network - WARP SSH Global"
-    cfg = _ssh_network_config_map()
-    backend_effective = _ssh_network_backend_effective(cfg.get("warp_backend", "auto"))
-    warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
-    lines = [
-        f"Global WARP      : {'ON' if cfg.get('global_mode', 'direct') == 'warp' else 'OFF'}",
-        f"Backend Config   : {_ssh_network_backend_pretty(cfg.get('warp_backend', 'auto'))}",
-        f"Backend Target   : {_ssh_network_backend_pretty(backend_effective)}",
-        f"Apply Path       : {_ssh_network_apply_path_pretty(backend_effective)}",
-        f"Host WARP Mode   : {_ssh_network_host_mode_display()}",
-        f"Host Backend     : {_ssh_network_host_backend_display()}",
-        f"Host Service     : {_ssh_network_host_service_name()} ({service_state(_ssh_network_host_service_name())})",
-        f"Host SOCKS       : {_ssh_network_host_proxy_state()}",
-        f"Effective Warp Users : {warp_users}",
-    ]
-    return title, "\n".join(lines)
-
-
-def op_ssh_network_warp_user_status() -> tuple[str, str]:
-    title = "SSH Network - WARP SSH Per-User"
-    rows = _ssh_network_effective_rows()
-    if not rows:
-        return title, "Belum ada user SSH managed yang bisa dirender."
-
-    lines = [
-        "State metadata SSH: network.route_mode.",
-        "",
-        "Username             Override   Effective",
-        "-------------------- ---------- ----------",
-    ]
-    for row in rows[:20]:
-        lines.append(
-            f"{row['username']:<20} {row['override']:<10} {row['effective']:<10}"
-        )
-    if len(rows) > 20:
-        lines.append(f"... {len(rows) - 20} baris lain tidak ditampilkan")
-    return title, "\n".join(lines)
 
 
 def op_domain_info() -> tuple[str, str]:
@@ -3249,7 +2703,6 @@ def op_security_overview() -> tuple[str, str]:
         f"TLS Expiry        : {tls_line}",
         f"Fail2ban          : {'Active' if service_state('fail2ban') == 'active' else 'Inactive'}",
         f"Banned IP         : {_fail2ban_total_banned() if _fail2ban_client_available() else 0}",
-        f"SSH Protection    : {'Active' if _fail2ban_jail_active('sshd') else 'Inactive'}",
         (
             "Nginx Protection  : Active"
             if _fail2ban_jail_active("nginx-bad-request-access") or _fail2ban_jail_active("nginx-bad-request-error")
@@ -3308,17 +2761,6 @@ def op_restart_edge_gateway() -> tuple[bool, str, str]:
     if ok:
         return True, "Maintenance - Restart Edge Gateway", f"Restart {service} berhasil.\nState: {state}"
     return False, "Maintenance - Restart Edge Gateway", f"Restart {service} gagal.\n{out}\nState: {state}"
-
-
-def op_restart_sshws_stack() -> tuple[bool, str, str]:
-    ok, title, message = _service_group_restart(SSHWS_SERVICES, "Maintenance - Restart SSHWS Stack")
-    if not ok:
-        return ok, title, message
-    healthy, failed = _sshws_post_restart_health_check()
-    if not healthy:
-        details = ", ".join(failed) if failed else "unknown"
-        return False, title, f"{message}\n\nPost-restart health check gagal: {details}"
-    return True, title, f"{message}\n\nPost-restart health check: OK"
 
 
 def op_restart_all_core() -> tuple[bool, str, str]:
@@ -3395,8 +2837,6 @@ def op_edge_gateway_status() -> tuple[str, str]:
     tls_ports = _edge_runtime_ports("EDGE_PUBLIC_TLS_PORTS", "EDGE_PUBLIC_TLS_PORT", "443,2053,2083,2087,2096,8443", "443")
     http_backend = _edge_runtime_env_value("EDGE_NGINX_HTTP_BACKEND", "127.0.0.1:18080") or "127.0.0.1:18080"
     tls_backend = _edge_runtime_env_value("EDGE_NGINX_TLS_BACKEND", "127.0.0.1:18443") or "127.0.0.1:18443"
-    ssh_backend = _edge_runtime_env_value("EDGE_SSH_CLASSIC_BACKEND", "127.0.0.1:22022") or "127.0.0.1:22022"
-    ssh_tls_backend = _edge_runtime_env_value("EDGE_SSH_TLS_BACKEND", "127.0.0.1:22443") or "127.0.0.1:22443"
     metrics_addr = _edge_runtime_env_value("EDGE_METRICS_LISTEN", "127.0.0.1:9910") or "127.0.0.1:9910"
     lines = [
         _unit_status_line(service),
@@ -3406,128 +2846,10 @@ def op_edge_gateway_status() -> tuple[str, str]:
         f"TLS Ports     : {_edge_runtime_ports_label(tls_ports)} ({'LISTENING' if tls_ports and all(_listener_present(port) for port in tls_ports) else 'unknown'})",
         f"HTTP Backend  : {http_backend}",
         f"TLS Backend   : {tls_backend}",
-        f"SSH Backend   : {ssh_backend}",
-        f"SSH TLS Back  : {ssh_tls_backend}",
         f"Metrics       : {metrics_addr}",
         f"Env File      : {EDGE_RUNTIME_ENV_FILE}",
     ]
     return title, "\n".join(lines)
-
-
-def op_badvpn_status() -> tuple[str, str]:
-    title = "Maintenance - BadVPN UDPGW Status"
-    ports = _badvpn_runtime_ports()
-    listener_summary = "-"
-    if ports:
-        # badvpn-udpgw accepts TCP client connections that encapsulate UDP payloads.
-        missing = [str(port) for port in ports if not _listener_present(port)]
-        listener_summary = "LISTENING" if not missing else f"MISSING {', '.join(missing)}"
-    lines = [
-        _unit_status_line("badvpn-udpgw"),
-        f"Ports         : {_badvpn_runtime_ports_label()}",
-        f"TCP Listen    : {listener_summary}",
-        f"Max Clients   : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CLIENTS', '512') or '512'}",
-        f"Max Conn/User : {_badvpn_runtime_env_value('BADVPN_UDPGW_MAX_CONNECTIONS_FOR_CLIENT', '8') or '8'}",
-        f"Buffer Size   : {_badvpn_runtime_env_value('BADVPN_UDPGW_BUFFER_SIZE', '1048576') or '1048576'}",
-        f"Env File      : {BADVPN_RUNTIME_ENV_FILE}",
-    ]
-    return title, "\n".join(lines)
-
-
-def op_openvpn_status() -> tuple[str, str]:
-    title = "Maintenance - OpenVPN Status"
-    tcp_port = _openvpn_env_value("OPENVPN_PORT_TCP", "1194") or "1194"
-    public_tcp_port = _openvpn_public_tcp_ports_label()
-    ws_proxy_port = _openvpn_ws_proxy_port()
-    ws_public_path = _openvpn_ws_public_path()
-    ws_alt_path = _openvpn_ws_alt_path()
-    lines = ["Services:"]
-    for service in OPENVPN_SERVICES:
-        state = service_state(service)
-        enabled = systemctl_enabled_state(service)
-        load = _systemctl_show_props(service, ["LoadState"]).get("LoadState") or "unknown"
-        if load == "not-found":
-            lines.append(f"- {service}.service: not installed")
-        else:
-            lines.append(f"- {service}.service: {state or '-'} / {enabled or '-'}")
-    lines.extend(
-        [
-            "",
-            "Ports:",
-            f"- backend tcp {tcp_port} : {'LISTENING' if _listener_present(int(tcp_port)) else 'NOT listening'}",
-            f"- public tcp {public_tcp_port} : {'ROUTED via edge-mux' if service_state(_edge_runtime_service_name() or 'edge-mux') == 'active' else 'edge gateway inactive'}",
-            f"- ws proxy {ws_proxy_port} : {'LISTENING' if _listener_present(ws_proxy_port, host='127.0.0.1') else 'NOT listening'}",
-            "",
-            "Runtime:",
-            f"- env file    : {OPENVPN_CONFIG_ENV_FILE}",
-            f"- profile dir : {_openvpn_env_value('OPENVPN_PROFILE_DIR', '/opt/account/openvpn')}",
-            f"- metadata dir: {_openvpn_env_value('OPENVPN_METADATA_DIR', '/var/lib/openvpn-manage/users')}",
-            f"- public host : {_openvpn_env_value('OPENVPN_PUBLIC_HOST', detect_domain() or '-')}",
-            f"- ws path     : {ws_public_path}",
-            f"- ws path alt : {ws_alt_path}",
-            f"- ws port     : {_ws_public_ports_label()}",
-        ]
-    )
-    return title, "\n".join(lines)
-
-
-def op_restart_openvpn() -> tuple[bool, str, str]:
-    title = "Maintenance - Restart OpenVPN"
-    lines: list[str] = []
-    had_failure = False
-    for service in OPENVPN_SERVICES:
-        load = _systemctl_show_props(service, ["LoadState"]).get("LoadState") or "unknown"
-        if load == "not-found":
-            lines.append(f"- {service}: skip (unit tidak ditemukan)")
-            had_failure = True
-            continue
-        ok, state, out = _restart_service_checked(service, timeout=25)
-        if ok:
-            lines.append(f"- {service}: restarted ({state})")
-        else:
-            had_failure = True
-            brief = out.splitlines()[-1].strip() if out else "unknown error"
-            lines.append(f"- {service}: gagal ({state}) - {brief}")
-    if not had_failure:
-        tcp_port = _openvpn_env_value("OPENVPN_PORT_TCP", "1194") or "1194"
-        ws_proxy_port = _openvpn_ws_proxy_port()
-        health_failures: list[str] = []
-        try:
-            tcp_port_int = int(tcp_port)
-        except Exception:
-            health_failures.append(f"backend tcp invalid ({tcp_port})")
-        else:
-            if not _listener_present(tcp_port_int):
-                health_failures.append(f"backend tcp {tcp_port_int} tidak listening")
-        if not _listener_present(ws_proxy_port, host="127.0.0.1"):
-            health_failures.append(f"ws proxy {ws_proxy_port} tidak listening")
-        if health_failures:
-            return False, title, "\n".join(lines + ["", "Health check gagal:", *[f"- {item}" for item in health_failures]])
-        lines.extend(
-            [
-                "",
-                "Health check: OK",
-                f"- backend tcp {tcp_port} listening",
-                f"- ws proxy {ws_proxy_port} listening",
-            ]
-        )
-    return (not had_failure), title, "\n".join(lines)
-
-
-def op_openvpn_logs() -> tuple[str, str]:
-    title = "Maintenance - OpenVPN Logs"
-    chunks: list[str] = []
-    for service in OPENVPN_SERVICES:
-        load = _systemctl_show_props(service, ["LoadState"]).get("LoadState") or "unknown"
-        if load == "not-found":
-            continue
-        unit = f"{service}.service"
-        chunks.append(f"[{unit}]")
-        chunks.append(_journal_tail(unit, lines=20))
-        chunks.append("")
-    if not chunks:
-        return title, "Tidak ada unit OpenVPN yang terpasang."
-    return title, _trim_message("\n".join(chunks).strip())
 
 
 def op_daemon_status() -> tuple[str, str]:
@@ -3538,10 +2860,6 @@ def op_daemon_status() -> tuple[str, str]:
     lines.extend(["", "Xray Daemons:"])
     for service in XRAY_DAEMONS:
         lines.append(_unit_status_line(service))
-    lines.extend(["", "SSHWS Runtime:"])
-    for service in SSHWS_SERVICES:
-        lines.append(_unit_status_line(service))
-    lines.append(_unit_status_line("sshws-qac-enforcer", unit_type="timer"))
     return title, "\n".join(lines)
 
 
@@ -3557,227 +2875,3 @@ def op_xray_daemon_logs() -> tuple[str, str]:
     if not chunks:
         return title, "Tidak ada daemon Xray yang terpasang."
     return title, _trim_message("\n".join(chunks).strip())
-
-
-def op_sshws_status() -> tuple[str, str]:
-    title = "SSH Management - SSH WS Service Status"
-    runtime_stale_sec = _sshws_runtime_env_value("SSHWS_RUNTIME_SESSION_STALE_SEC", "90") or "90"
-    runtime_handshake_sec = _sshws_runtime_env_value("SSHWS_HANDSHAKE_TIMEOUT_SEC", "10") or "10"
-    enforcer_state = _systemctl_show_props(
-        "sshws-qac-enforcer.service",
-        ["Result", "ExecMainStatus"],
-    )
-    enforcer_result = enforcer_state.get("Result") or "-"
-    enforcer_exit = enforcer_state.get("ExecMainStatus") or "-"
-    enforcer_last = _journal_last_line("sshws-qac-enforcer.service")
-    lines = ["Services:"]
-    for service in SSHWS_SERVICES:
-        if service == "sshws-stunnel" and not service_exists(service):
-            lines.append(f"- {service}.service: optional / not installed")
-        else:
-            lines.append(_unit_status_line(service))
-    lines.append(_unit_status_line("sshws-qac-enforcer", unit_type="timer"))
-
-    lines.extend(
-        [
-            "",
-            "Public Ports:",
-            f"- 80  : {'LISTENING' if _listener_present(80) else 'NOT listening'}",
-            f"- 443 : {'LISTENING' if _listener_present(443) else 'NOT listening'}",
-            "",
-            "Internal Ports:",
-            f"- dropbear : 127.0.0.1:{_sshws_dropbear_port()}",
-            f"- stunnel  : 127.0.0.1:{_sshws_stunnel_port()}",
-            f"- ws proxy : 127.0.0.1:{_sshws_proxy_port()}",
-            "",
-            "Runtime Env:",
-            f"- env file      : {SSHWS_RUNTIME_ENV_FILE}",
-            f"- stale sec     : {runtime_stale_sec}",
-            f"- handshake sec : {runtime_handshake_sec}",
-            "",
-            "Enforcer:",
-            f"- last result   : {enforcer_result}",
-            f"- last exit code: {enforcer_exit}",
-            f"- last journal  : {enforcer_last}",
-        ]
-    )
-    return title, "\n".join(lines)
-
-
-def op_sshws_diagnostics() -> tuple[str, str]:
-    title = "Maintenance - SSH WS Diagnostics"
-    domain = detect_domain()
-    dropbear_port = _sshws_dropbear_port()
-    stunnel_port = _sshws_stunnel_port()
-    proxy_port = _sshws_proxy_port()
-    probe_path = "/diagnostic-probe"
-
-    lines = ["Services:"]
-    for service in SSHWS_SERVICES:
-        if service == "sshws-stunnel" and not service_exists(service):
-            lines.append(f"- {service}.service: optional / not installed")
-        else:
-            lines.append(_unit_status_line(service))
-
-    lines.extend(
-        [
-            "",
-            "Internal Ports:",
-            f"- dropbear : 127.0.0.1:{dropbear_port}",
-            f"- stunnel  : 127.0.0.1:{stunnel_port}",
-            f"- ws proxy : 127.0.0.1:{proxy_port}",
-            f"- domain   : {domain}",
-            f"- path     : {probe_path}",
-            "",
-            "Local Probes:",
-            f"- dropbear tcp : {_probe_tcp_endpoint('127.0.0.1', dropbear_port)}",
-            f"- proxy ws     : {_probe_ws_endpoint('127.0.0.1', proxy_port, path=probe_path, host_header=f'127.0.0.1:{proxy_port}')}",
-        ]
-    )
-    if service_exists("sshws-stunnel"):
-        lines.append(f"- stunnel tls  : {_probe_tcp_endpoint('127.0.0.1', stunnel_port, tls_mode=True)}")
-    else:
-        lines.append("- stunnel tls  : SKIP (optional)")
-
-    lines.extend(["", "Public Path Probes:"])
-    if _listener_present(80):
-        lines.append(f"- nginx :80  : {_probe_ws_endpoint('127.0.0.1', 80, path=probe_path, host_header=domain or '127.0.0.1')}")
-    else:
-        lines.append("- nginx :80  : SKIP (not listening)")
-    if domain and domain != "-" and _listener_present(443):
-        lines.append(
-            f"- nginx :443 : {_probe_ws_endpoint('127.0.0.1', 443, path=probe_path, host_header=domain, tls_mode=True, sni=domain)}"
-        )
-    else:
-        lines.append("- nginx :443 : SKIP (domain/443 unavailable)")
-
-    lines.extend(
-        [
-            "",
-            "Notes:",
-            "- HTTP 101 menandakan chain SSHWS sehat.",
-            "- HTTP 502 biasanya berarti backend internal belum siap.",
-            "- HTTP 401/403 berarti probe path ditolak oleh guard/proxy.",
-        ]
-    )
-    return title, _trim_message("\n".join(lines))
-
-
-def op_sshws_combined_logs() -> tuple[str, str]:
-    title = "Maintenance - SSHWS Combined Logs"
-    chunks: list[str] = []
-    units = (
-        ("sshws-proxy", "service", 8),
-        ("sshws-qac-enforcer", "service", 8),
-        ("sshws-dropbear", "service", 6),
-        ("sshws-stunnel", "service", 6),
-    )
-    for service, unit_type, lines in units:
-        if not service_exists(service, unit_type=unit_type):
-            continue
-        unit = f"{service}.{unit_type}"
-        chunks.append(f"[{unit}]")
-        chunks.append(_journal_tail(unit, lines=lines))
-        chunks.append("")
-    if not chunks:
-        return title, "Tidak ada unit SSHWS yang terpasang."
-    return title, _trim_message("\n".join(chunks).strip())
-
-
-def op_sshws_active_sessions() -> tuple[str, str]:
-    title = "User Management - Active SSHWS Sessions"
-    if not SSHWS_RUNTIME_SESSION_DIR.exists():
-        return title, f"Runtime session dir tidak ditemukan: {SSHWS_RUNTIME_SESSION_DIR}"
-
-    if not SSHWS_CONTROL_BIN.exists():
-        return title, f"Helper SSHWS tidak ditemukan: {SSHWS_CONTROL_BIN}"
-
-    ok, out = run_cmd(
-        [
-            str(SSHWS_CONTROL_BIN),
-            "session-list",
-            "--session-root",
-            str(SSHWS_RUNTIME_SESSION_DIR),
-        ],
-        timeout=20,
-    )
-    if not ok:
-        return title, f"Gagal membaca sesi aktif SSHWS.\n\n{out}"
-    try:
-        payload = json.loads(out)
-    except Exception as exc:
-        return title, f"Gagal parse output helper SSHWS: {exc}"
-
-    raw_sessions = payload.get("sessions")
-    raw_counts = payload.get("counts")
-    if not isinstance(raw_sessions, list):
-        raw_sessions = []
-    if not isinstance(raw_counts, dict):
-        raw_counts = {}
-
-    sessions: list[dict[str, str]] = []
-    counts: Counter[str] = Counter()
-    for item in raw_sessions:
-        if not isinstance(item, dict):
-            continue
-        username = str(item.get("username") or "").strip()
-        if not username:
-            continue
-        backend_port = str(item.get("backend_port") or item.get("backend_local_port") or "-").strip() or "-"
-        backend_target = str(item.get("backend_target") or item.get("backend") or "-").strip() or "-"
-        client_ip = str(item.get("client_ip") or "-").strip() or "-"
-        proxy_pid = str(item.get("proxy_pid") or "-").strip() or "-"
-        created_raw = item.get("created_at")
-        created_text = "-"
-        try:
-            created_text = datetime.fromtimestamp(int(created_raw), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except Exception:
-            pass
-        updated_raw = item.get("updated_at")
-        updated_text = "-"
-        try:
-            updated_text = datetime.fromtimestamp(int(updated_raw), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except Exception:
-            pass
-        counts[username] += 1
-        sessions.append(
-            {
-                "username": username,
-                "backend_port": backend_port,
-                "backend_target": backend_target,
-                "client_ip": client_ip,
-                "proxy_pid": proxy_pid,
-                "created_at": created_text,
-                "updated_at": updated_text,
-                "session_file": str(item.get("session_file") or "-").strip() or "-",
-            }
-        )
-
-    if not counts and raw_counts:
-        for username, value in raw_counts.items():
-            try:
-                counts[str(username)] = int(value)
-            except Exception:
-                continue
-
-    if not sessions:
-        return title, "Belum ada sesi aktif SSHWS."
-
-    summary_lines = [f"- {user}: {counts[user]} sesi" for user in sorted(counts.keys())]
-    detail_lines = [
-        f"{idx+1:03d}. {item['username']} | ip={item['client_ip']} | port={item['backend_port']} | backend={item['backend_target']} | pid={item['proxy_pid']} | created={item['created_at']} | updated={item['updated_at']} | file={item['session_file']}"
-        for idx, item in enumerate(sessions[:200])
-    ]
-    msg = "\n".join(
-        [
-            f"Total sesi aktif : {len(sessions)}",
-            f"Total user aktif : {len(counts)}",
-            "",
-            "Ringkasan per user:",
-            *summary_lines,
-            "",
-            "Detail sesi (maks 200):",
-            *detail_lines,
-        ]
-    )
-    return title, msg

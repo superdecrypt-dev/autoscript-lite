@@ -151,15 +151,15 @@ ZIVPN_SYNC_BIN="${ZIVPN_SYNC_BIN:-/usr/local/bin/zivpn-password-sync}"
 ZIVPN_SERVICE="${ZIVPN_SERVICE:-zivpn.service}"
 ZIVPN_LISTEN_PORT="${ZIVPN_LISTEN_PORT:-5667}"
 ZIVPN_OBFS="${ZIVPN_OBFS:-zivpn}"
-SSH_DNS_ADBLOCK_ROOT="${SSH_DNS_ADBLOCK_ROOT:-/etc/autoscript/ssh-adblock}"
-SSH_DNS_ADBLOCK_CONFIG_FILE="${SSH_DNS_ADBLOCK_ROOT}/config.env"
-SSH_DNS_ADBLOCK_BLOCKLIST_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocked.domains"
-SSH_DNS_ADBLOCK_URLS_FILE="${SSH_DNS_ADBLOCK_ROOT}/source.urls"
-SSH_DNS_ADBLOCK_RENDERED_FILE="${SSH_DNS_ADBLOCK_ROOT}/blocklist.generated.conf"
-SSH_DNS_ADBLOCK_DNSMASQ_CONF="${SSH_DNS_ADBLOCK_ROOT}/dnsmasq.conf"
-SSH_DNS_ADBLOCK_SERVICE="${SSH_DNS_ADBLOCK_SERVICE:-ssh-adblock-dns.service}"
-SSH_DNS_ADBLOCK_SYNC_SERVICE="${SSH_DNS_ADBLOCK_SYNC_SERVICE:-adblock-sync.service}"
-SSH_DNS_ADBLOCK_SYNC_BIN="${SSH_DNS_ADBLOCK_SYNC_BIN:-/usr/local/bin/adblock-sync}"
+ADBLOCK_ROOT="${ADBLOCK_ROOT:-/etc/autoscript/adblock}"
+ADBLOCK_CONFIG_FILE="${ADBLOCK_CONFIG_FILE:-${ADBLOCK_ROOT}/config.env}"
+ADBLOCK_BLOCKLIST_FILE="${ADBLOCK_BLOCKLIST_FILE:-${ADBLOCK_ROOT}/blocked.domains}"
+ADBLOCK_URLS_FILE="${ADBLOCK_URLS_FILE:-${ADBLOCK_ROOT}/source.urls}"
+ADBLOCK_RENDERED_FILE="${ADBLOCK_RENDERED_FILE:-${ADBLOCK_ROOT}/blocklist.generated.conf}"
+ADBLOCK_DNSMASQ_CONF="${ADBLOCK_DNSMASQ_CONF:-${ADBLOCK_ROOT}/dnsmasq.conf}"
+ADBLOCK_DNS_SERVICE="${ADBLOCK_DNS_SERVICE:-adblock-dns.service}"
+ADBLOCK_SYNC_SERVICE="${ADBLOCK_SYNC_SERVICE:-adblock-sync.service}"
+ADBLOCK_SYNC_BIN="${ADBLOCK_SYNC_BIN:-/usr/local/bin/adblock-sync}"
 SSH_NETWORK_ROOT="${SSH_NETWORK_ROOT:-/etc/autoscript/ssh-network}"
 SSH_NETWORK_CONFIG_FILE="${SSH_NETWORK_ROOT}/config.env"
 SSH_NETWORK_NFT_TABLE="${SSH_NETWORK_NFT_TABLE:-autoscript_ssh_network}"
@@ -189,10 +189,9 @@ ADBLOCK_AUTO_UPDATE_TIMER="${ADBLOCK_AUTO_UPDATE_TIMER:-adblock-update.timer}"
   "${ZIVPN_ROOT}" "${ZIVPN_CONFIG_FILE}" "${ZIVPN_CERT_FILE}" "${ZIVPN_KEY_FILE}" \
   "${ZIVPN_PASSWORDS_DIR}" "${ZIVPN_SYNC_BIN}" "${ZIVPN_SERVICE}" \
   "${ZIVPN_LISTEN_PORT}" "${ZIVPN_OBFS}" \
-  "${SSH_DNS_ADBLOCK_ROOT}" "${SSH_DNS_ADBLOCK_CONFIG_FILE}" \
-  "${SSH_DNS_ADBLOCK_BLOCKLIST_FILE}" "${SSH_DNS_ADBLOCK_URLS_FILE}" "${SSH_DNS_ADBLOCK_RENDERED_FILE}" \
-  "${SSH_DNS_ADBLOCK_DNSMASQ_CONF}" "${SSH_DNS_ADBLOCK_SERVICE}" \
-  "${SSH_DNS_ADBLOCK_SYNC_SERVICE}" "${SSH_DNS_ADBLOCK_SYNC_BIN}" \
+  "${ADBLOCK_ROOT}" "${ADBLOCK_CONFIG_FILE}" "${ADBLOCK_BLOCKLIST_FILE}" \
+  "${ADBLOCK_URLS_FILE}" "${ADBLOCK_RENDERED_FILE}" "${ADBLOCK_DNSMASQ_CONF}" \
+  "${ADBLOCK_DNS_SERVICE}" "${ADBLOCK_SYNC_SERVICE}" "${ADBLOCK_SYNC_BIN}" \
   "${SSH_NETWORK_ROOT}" "${SSH_NETWORK_CONFIG_FILE}" "${SSH_NETWORK_NFT_TABLE}" \
   "${SSH_NETWORK_FWMARK}" "${SSH_NETWORK_ROUTE_TABLE}" "${SSH_NETWORK_RULE_PREF}" \
   "${SSH_NETWORK_WARP_BACKEND}" "${SSH_NETWORK_WARP_INTERFACE}" \
@@ -663,13 +662,13 @@ raise SystemExit(1)
 PY
 }
 
-ssh_dns_adblock_runtime_refresh_if_available() {
-  [[ -x "${SSH_DNS_ADBLOCK_SYNC_BIN}" ]] || return 0
+adblock_runtime_refresh_if_available() {
+  [[ -x "${ADBLOCK_SYNC_BIN}" ]] || return 0
   if declare -F adblock_run_locked >/dev/null 2>&1 && [[ "${ADBLOCK_LOCK_HELD:-0}" != "1" ]]; then
-    adblock_run_locked ssh_dns_adblock_runtime_refresh_if_available
+    adblock_run_locked adblock_runtime_refresh_if_available
     return $?
   fi
-  "${SSH_DNS_ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1 || return 1
+  "${ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1 || return 1
 }
 
 speed_policy_resync_after_warp_change() {
@@ -2196,8 +2195,8 @@ main_info_cache_refresh() {
 
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp license_status license_days
-  local vless_count vmess_count trojan_count ssh_count
-  local edge_icon nginx_icon xray_icon ssh_icon
+  local vless_count vmess_count trojan_count
+  local edge_icon nginx_icon xray_icon
   local info_label_width=20
 
   main_info_cache_refresh
@@ -2216,11 +2215,9 @@ main_menu_info_header_print() {
   vless_count="$(account_count_by_proto "vless")"
   vmess_count="$(account_count_by_proto "vmess")"
   trojan_count="$(account_count_by_proto "trojan")"
-  ssh_count="$(ssh_account_count)"
   edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
   nginx_icon="$(service_status_icon "nginx")"
   xray_icon="$(service_status_icon "xray")"
-  ssh_icon="$(service_group_status_icon "${SSHWS_DROPBEAR_SERVICE}" "${SSHWS_STUNNEL_SERVICE}" "${SSHWS_PROXY_SERVICE}")"
 
   printf "%-*s : %s\n" "${info_label_width}" "System OS" "${os}"
   printf "%-*s : %s\n" "${info_label_width}" "RAM" "${ram}"
@@ -2238,15 +2235,13 @@ main_menu_info_header_print() {
   main_menu_center_segments \
     "VLESS ${vless_count}" \
     "VMESS ${vmess_count}" \
-    "TROJAN ${trojan_count}" \
-    "SSH ${ssh_count}"
+    "TROJAN ${trojan_count}"
   echo
   main_menu_center_line "SERVICES"
   main_menu_center_segments \
     "Edge Mux ${edge_icon}" \
     "Nginx ${nginx_icon}" \
-    "Xray ${xray_icon}" \
-    "SSH ${ssh_icon}"
+    "Xray ${xray_icon}"
   hr
 }
 

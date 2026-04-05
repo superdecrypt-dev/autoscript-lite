@@ -14,12 +14,6 @@ sanity_check() {
     ss -lntp 2>/dev/null | grep -Eq "${pattern}"
   }
 
-  listener_present_badvpn() {
-    local port="$1"
-    local pattern="(^|[[:space:]])127\\.0\\.0\\.1:${port}([[:space:]]|$)"
-    ss -lntp 2>/dev/null | grep -Eq "${pattern}" || ss -lunp 2>/dev/null | grep -Eq "${pattern}"
-  }
-
   wait_for_listener() {
     local checker="$1"
     local target="$2"
@@ -91,56 +85,13 @@ sanity_check() {
     warn "check: Zero Trust backend belum terpasang (opsional)"
   fi
 
-  if systemctl is-active --quiet sshws-dropbear; then
-    ok "check: sshws-dropbear active"
+  local adblock_dns_service="${ADBLOCK_DNS_SERVICE:-adblock-dns.service}"
+  if systemctl is-active --quiet "${adblock_dns_service}"; then
+    ok "check: dns adblock active"
   else
-    warn "check: sshws-dropbear inactive"
-    systemctl status sshws-dropbear --no-pager >&2 || true
-    journalctl -u sshws-dropbear -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet sshws-stunnel; then
-    ok "check: sshws-stunnel active"
-  else
-    warn "check: sshws-stunnel inactive"
-    systemctl status sshws-stunnel --no-pager >&2 || true
-    journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
-    warn "check: sshws-stunnel opsional"
-  fi
-
-  if systemctl is-active --quiet sshws-proxy; then
-    ok "check: sshws-proxy active"
-  else
-    warn "check: sshws-proxy inactive"
-    systemctl status sshws-proxy --no-pager >&2 || true
-    journalctl -u sshws-proxy -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet sshws-qac-enforcer.timer; then
-    ok "check: ssh qac timer active"
-  else
-    warn "check: ssh qac timer inactive"
-    systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet zivpn.service; then
-    ok "check: zivpn active"
-  else
-    warn "check: zivpn inactive"
-    systemctl status zivpn.service --no-pager >&2 || true
-    journalctl -u zivpn.service -n 120 --no-pager >&2 || true
-    failed=1
-  fi
-
-  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
-    ok "check: ssh adblock active"
-  else
-    warn "check: ssh adblock inactive"
-    systemctl status "${SSH_DNS_ADBLOCK_SERVICE}" --no-pager >&2 || true
-    journalctl -u "${SSH_DNS_ADBLOCK_SERVICE}" -n 120 --no-pager >&2 || true
+    warn "check: dns adblock inactive"
+    systemctl status "${adblock_dns_service}" --no-pager >&2 || true
+    journalctl -u "${adblock_dns_service}" -n 120 --no-pager >&2 || true
     failed=1
   fi
 
@@ -160,19 +111,6 @@ sanity_check() {
     systemctl status "${ACCOUNT_PORTAL_SERVICE}.service" --no-pager >&2 || true
     journalctl -u "${ACCOUNT_PORTAL_SERVICE}.service" -n 120 --no-pager >&2 || true
     failed=1
-  fi
-
-  if badvpn_runtime_expected 2>/dev/null; then
-    if systemctl is-active --quiet badvpn-udpgw.service; then
-      ok "check: badvpn-udpgw active"
-    else
-      warn "check: badvpn-udpgw inactive"
-      systemctl status badvpn-udpgw.service --no-pager >&2 || true
-      journalctl -u badvpn-udpgw.service -n 120 --no-pager >&2 || true
-      failed=1
-    fi
-  else
-    warn "check: badvpn-udpgw optional (prebuilt tidak tersedia)"
   fi
 
   if [[ "${edge_provider}" != "none" ]]; then
@@ -235,34 +173,6 @@ sanity_check() {
     ok "check: port 443 listening"
   else
     warn "check: port 443 not listening"
-  fi
-
-  if badvpn_runtime_expected 2>/dev/null; then
-    local badvpn_ports badvpn_ports_label badvpn_missing="" port
-    badvpn_ports="$(awk -F= '
-      $1 == "BADVPN_UDPGW_PORTS" {
-        gsub(/"/, "", $2)
-        gsub(/,/, " ", $2)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-        print $2
-        exit
-      }
-    ' /etc/default/badvpn-udpgw 2>/dev/null)"
-    [[ -n "${badvpn_ports}" ]] || badvpn_ports="7300 7400 7500 7600 7700 7800 7900"
-    badvpn_ports_label="$(printf '%s\n' "${badvpn_ports}" | sed 's/ /, /g')"
-    for port in ${badvpn_ports}; do
-      if ! wait_for_listener listener_present_badvpn "${port}" 5 1; then
-        badvpn_missing="${badvpn_missing}${badvpn_missing:+, }${port}"
-      fi
-    done
-    if [[ -z "${badvpn_missing}" ]]; then
-      ok "check: badvpn ${badvpn_ports_label} listening"
-    else
-      warn "check: badvpn ${badvpn_ports_label} missing ${badvpn_missing}"
-      failed=1
-    fi
-  else
-    warn "check: badvpn 7300, 7400, 7500, 7600, 7700, 7800, 7900 optional (prebuilt tidak tersedia)"
   fi
 
   if [[ "$failed" -ne 0 ]]; then

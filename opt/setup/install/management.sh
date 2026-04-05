@@ -1,14 +1,131 @@
 #!/usr/bin/env bash
 # Management/bot sync module for setup runtime.
 
+adblock_dist_arch_suffix() {
+  local arch
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  case "${arch}" in
+    x86_64|amd64) printf '%s\n' "amd64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+adblock_dist_binary_path() {
+  local suffix
+  suffix="$(adblock_dist_arch_suffix)" || return 1
+  printf '%s\n' "opt/adblock/dist/adblock-sync-linux-${suffix}"
+}
+
+install_adblock_runtime() {
+  local dist_src="" dnsmasq_bin=""
+
+  ok "Siapkan runtime adblock..."
+
+  dist_src="$(adblock_dist_binary_path)" || die "Arsitektur host belum didukung untuk runtime adblock."
+  dnsmasq_bin="$(command -v dnsmasq 2>/dev/null || true)"
+
+  [[ -n "${dnsmasq_bin}" && -x "${dnsmasq_bin}" ]] || die "Binary dnsmasq tidak ditemukan."
+
+  install_repo_asset_or_die "${dist_src}" "${ADBLOCK_SYNC_BIN}" 0755
+
+  install -d -m 0755 "${ADBLOCK_ROOT}"
+  touch "${ADBLOCK_BLOCKLIST_FILE}" "${ADBLOCK_URLS_FILE}"
+  chmod 644 "${ADBLOCK_BLOCKLIST_FILE}" "${ADBLOCK_URLS_FILE}" >/dev/null 2>&1 || true
+  chown root:root "${ADBLOCK_BLOCKLIST_FILE}" "${ADBLOCK_URLS_FILE}" 2>/dev/null || true
+
+  render_setup_template_or_die \
+    "config/adblock.env" \
+    "${ADBLOCK_CONFIG_FILE}" \
+    0644 \
+    "ADBLOCK_PORT=${ADBLOCK_PORT}" \
+    "ADBLOCK_RUNTIME_USER=${ADBLOCK_RUNTIME_USER}" \
+    "ADBLOCK_BLOCKLIST_FILE=${ADBLOCK_BLOCKLIST_FILE}" \
+    "ADBLOCK_URLS_FILE=${ADBLOCK_URLS_FILE}" \
+    "ADBLOCK_MERGED_FILE=${ADBLOCK_MERGED_FILE}" \
+    "ADBLOCK_RENDERED_FILE=${ADBLOCK_RENDERED_FILE}" \
+    "ADBLOCK_NFT_TABLE=${ADBLOCK_NFT_TABLE}" \
+    "ADBLOCK_DNS_SERVICE=${ADBLOCK_DNS_SERVICE}" \
+    "ADBLOCK_SYNC_SERVICE=${ADBLOCK_SYNC_SERVICE}" \
+    "CUSTOM_GEOSITE_DEST=${CUSTOM_GEOSITE_DEST}" \
+    "ADBLOCK_AUTO_UPDATE_SERVICE=${ADBLOCK_AUTO_UPDATE_SERVICE}" \
+    "ADBLOCK_AUTO_UPDATE_TIMER=${ADBLOCK_AUTO_UPDATE_TIMER}" \
+    "ADBLOCK_AUTO_UPDATE_DAYS=${ADBLOCK_AUTO_UPDATE_DAYS}"
+
+  render_setup_template_or_die \
+    "config/adblock-dnsmasq.conf" \
+    "${ADBLOCK_DNSMASQ_CONF}" \
+    0644 \
+    "ADBLOCK_PORT=${ADBLOCK_PORT}" \
+    "ADBLOCK_UPSTREAM_PRIMARY=1.1.1.1" \
+    "ADBLOCK_UPSTREAM_SECONDARY=8.8.8.8" \
+    "ADBLOCK_RENDERED_FILE=${ADBLOCK_RENDERED_FILE}"
+
+  render_setup_template_or_die \
+    "systemd/adblock-dns.service" \
+    "/etc/systemd/system/${ADBLOCK_DNS_SERVICE}" \
+    0644 \
+    "ADBLOCK_DNSMASQ_CONF=${ADBLOCK_DNSMASQ_CONF}" \
+    "DNSMASQ_BIN=${dnsmasq_bin}"
+
+  render_setup_template_or_die \
+    "systemd/adblock-sync.service" \
+    "/etc/systemd/system/${ADBLOCK_SYNC_SERVICE}" \
+    0644 \
+    "ADBLOCK_DNS_SERVICE=${ADBLOCK_DNS_SERVICE}" \
+    "ADBLOCK_SYNC_BIN=${ADBLOCK_SYNC_BIN}"
+
+  render_setup_template_or_die \
+    "systemd/adblock-update.service" \
+    "/etc/systemd/system/${ADBLOCK_AUTO_UPDATE_SERVICE}" \
+    0644 \
+    "ADBLOCK_DNS_SERVICE=${ADBLOCK_DNS_SERVICE}" \
+    "XRAY_SERVICE=xray" \
+    "ADBLOCK_SYNC_BIN=${ADBLOCK_SYNC_BIN}"
+
+  render_setup_template_or_die \
+    "systemd/adblock-update.timer" \
+    "/etc/systemd/system/${ADBLOCK_AUTO_UPDATE_TIMER}" \
+    0644 \
+    "ADBLOCK_AUTO_UPDATE_SERVICE=${ADBLOCK_AUTO_UPDATE_SERVICE}" \
+    "ADBLOCK_AUTO_UPDATE_DAYS=${ADBLOCK_AUTO_UPDATE_DAYS}"
+
+  systemctl daemon-reload
+
+  systemctl enable "${ADBLOCK_DNS_SERVICE}" >/dev/null 2>&1 || die "Gagal mengaktifkan ${ADBLOCK_DNS_SERVICE}."
+  systemctl enable "${ADBLOCK_SYNC_SERVICE}" >/dev/null 2>&1 || die "Gagal mengaktifkan ${ADBLOCK_SYNC_SERVICE}."
+  systemctl disable --now "${ADBLOCK_AUTO_UPDATE_TIMER}" >/dev/null 2>&1 || true
+
+  if ! "${ADBLOCK_SYNC_BIN}" --apply >/dev/null 2>&1; then
+    systemctl status "${ADBLOCK_DNS_SERVICE}" --no-pager >&2 || true
+    journalctl -u "${ADBLOCK_DNS_SERVICE}" -n 120 --no-pager >&2 || true
+    die "Gagal menerapkan runtime adblock awal."
+  fi
+
+  if ! systemctl is-active --quiet "${ADBLOCK_DNS_SERVICE}"; then
+    systemctl status "${ADBLOCK_DNS_SERVICE}" --no-pager >&2 || true
+    journalctl -u "${ADBLOCK_DNS_SERVICE}" -n 120 --no-pager >&2 || true
+    die "Service ${ADBLOCK_DNS_SERVICE} tidak aktif setelah setup adblock."
+  fi
+
+  ok "Runtime adblock siap:"
+  ok "  - binary: ${ADBLOCK_SYNC_BIN}"
+  ok "  - config: ${ADBLOCK_CONFIG_FILE}"
+  ok "  - dnsmasq conf: ${ADBLOCK_DNSMASQ_CONF}"
+  ok "  - service: ${ADBLOCK_DNS_SERVICE}"
+  ok "  - sync service: ${ADBLOCK_SYNC_SERVICE}"
+}
+
 install_management_scripts() {
   ok "Siapkan tools runtime..."
 
-  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
-  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan
   chmod 700 /opt/account /opt/quota
-  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
-  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
+  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan
+  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan
+
+  install_adblock_runtime
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
@@ -1885,30 +2002,6 @@ sync_manage_modules_layout() {
     chown -R root:root "${dst_dir}" 2>/dev/null || true
   }
 
-  install_ssh_network_restore_service() {
-    render_setup_template_or_die \
-      "systemd/ssh-network-restore.service" \
-      "/etc/systemd/system/ssh-network-restore.service" \
-      0644
-    local restore_result=""
-    systemctl daemon-reload
-    if ! systemctl enable ssh-network-restore.service >/dev/null 2>&1; then
-      die "Gagal mengaktifkan ssh-network-restore.service."
-    fi
-    systemctl reset-failed ssh-network-restore.service >/dev/null 2>&1 || true
-    if ! systemctl restart ssh-network-restore.service >/dev/null 2>&1; then
-      systemctl status ssh-network-restore.service --no-pager >&2 || true
-      journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
-      die "ssh-network-restore.service gagal dijalankan saat setup."
-    fi
-    restore_result="$(systemctl show -p Result --value ssh-network-restore.service 2>/dev/null || true)"
-    if [[ "${restore_result}" != "success" ]] || ! systemctl is-active --quiet ssh-network-restore.service; then
-      systemctl status ssh-network-restore.service --no-pager >&2 || true
-      journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
-      die "ssh-network-restore.service tidak sehat setelah restart (Result=${restore_result:-unknown})."
-    fi
-  }
-
   sync_manage_from_local_source() {
     [[ -d "${MANAGE_MODULES_SRC_DIR}" ]] || return 1
     [[ -f "${SCRIPT_DIR}/manage.sh" ]] || {
@@ -1922,7 +2015,6 @@ sync_manage_modules_layout() {
     mkdir -p "$(dirname "${MANAGE_BIN}")"
     install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
     chown root:root "${MANAGE_BIN}" 2>/dev/null || true
-    install_ssh_network_restore_service
     ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
     ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
@@ -2062,7 +2154,6 @@ PY
       mkdir -p "$(dirname "${MANAGE_BIN}")"
       install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
-      install_ssh_network_restore_service
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
       ok "Fallback modular manage siap di: ${fallback_modules_dir}"
@@ -2089,11 +2180,9 @@ sync_setup_runtime_layout() {
   local account_portal_src="${ACCOUNT_PORTAL_SRC_DIR:-${SCRIPT_DIR}/account-portal}"
   local adblock_src="${SCRIPT_DIR}/opt/adblock"
   local edge_src="${SCRIPT_DIR}/opt/edge"
-  local badvpn_src="${SCRIPT_DIR}/opt/badvpn"
   local fallback_account_portal_root="${fallback_root}/account-portal"
   local fallback_adblock_root="${fallback_root}/opt/adblock"
   local fallback_edge_root="${fallback_root}/opt/edge"
-  local fallback_badvpn_root="${fallback_root}/opt/badvpn"
 
   [[ -d "${setup_src}" ]] || die "Source modular setup tidak ditemukan: ${setup_src}"
   [[ -f "${SCRIPT_DIR}/setup.sh" ]] || die "Source setup.sh tidak ditemukan: ${SCRIPT_DIR}/setup.sh"
@@ -2123,13 +2212,6 @@ sync_setup_runtime_layout() {
     find "${fallback_edge_root}" -type f -name '*.go' -exec chmod 644 {} + 2>/dev/null || true
     find "${fallback_edge_root}" -type f -name 'edge-mux-linux-*' -exec chmod 755 {} + 2>/dev/null || true
     chown -R root:root "${fallback_edge_root}" 2>/dev/null || true
-  fi
-  if [[ -d "${badvpn_src}" ]]; then
-    sync_tree_atomic "${badvpn_src}" "${fallback_badvpn_root}" "asset badvpn ${fallback_badvpn_root}"
-    find "${fallback_badvpn_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
-    find "${fallback_badvpn_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
-    find "${fallback_badvpn_root}" -type f -name 'badvpn-udpgw-linux-*' -exec chmod 755 {} + 2>/dev/null || true
-    chown -R root:root "${fallback_badvpn_root}" 2>/dev/null || true
   fi
   find "${fallback_modules_root}" -type d -exec chmod 755 {} + 2>/dev/null || true
   find "${fallback_modules_root}" -type f -name '*.sh' -exec chmod 644 {} + 2>/dev/null || true
