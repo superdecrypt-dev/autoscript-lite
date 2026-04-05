@@ -271,7 +271,7 @@ func (c Config) Validate() error {
 		return errors.New("TLS handshake timeout must be > 0")
 	}
 	if c.XraySessionHeartbeat <= 0 {
-		return errors.New("SSH session heartbeat must be > 0")
+		return errors.New("xray session heartbeat must be > 0")
 	}
 	if c.AcceptRateWindow <= 0 {
 		return errors.New("accept rate window must be > 0")

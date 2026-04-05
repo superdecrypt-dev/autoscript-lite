@@ -322,6 +322,27 @@ func TestLoadConfigReturnsDiscoveryErrorWhenXrayInboundsFileMissing(t *testing.T
 	}
 }
 
+func TestLoadConfigKeepsExplicitRawBackendsWithoutDiscoveryFile(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "edge-runtime.env")
+	writeConfigTestFile(t, envFile, strings.Join([]string{
+		"EDGE_XRAY_INBOUNDS_FILE=/tmp/does-not-exist-raw-inbounds.json",
+		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
+		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
+	}, "\n")+"\n")
+	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig error = %v", err)
+	}
+	if cfg.VLESSRawBackend != "10.10.10.5:443" {
+		t.Fatalf("VLESSRawBackend = %q, want 10.10.10.5:443", cfg.VLESSRawBackend)
+	}
+	if cfg.TrojanRawBackend != "10.10.10.6:443" {
+		t.Fatalf("TrojanRawBackend = %q, want 10.10.10.6:443", cfg.TrojanRawBackend)
+	}
+}
+
 func writeConfigTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

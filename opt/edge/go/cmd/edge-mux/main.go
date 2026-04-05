@@ -229,7 +229,7 @@ func parseFlagOverrides() flagOverrides {
 	flag.StringVar(&overrides.httpListen, "http-listen", "", "public HTTP listen address")
 	flag.StringVar(&overrides.tlsListen, "tls-listen", "", "public TLS listen address")
 	flag.StringVar(&overrides.httpBackend, "http-backend", "", "internal HTTP backend address")
-	flag.StringVar(&overrides.xrayDirectBackend, "ssh-backend", "", "internal Xray direct backend address")
+	flag.StringVar(&overrides.xrayDirectBackend, "xray-direct-backend", "", "internal Xray direct backend address")
 	flag.StringVar(&overrides.certFile, "cert-file", "", "TLS certificate file")
 	flag.StringVar(&overrides.keyFile, "key-file", "", "TLS key file")
 	flag.IntVar(&overrides.timeoutMs, "detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
@@ -1004,6 +1004,26 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:xray-direct", false)
 		return
+	case detect.ClassVLESSRaw:
+		event := routeDecisionEvent(cfg, health, class, cfg.VLESSRawBackendAddr(), "vless-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.VLESSRawBackendAddr()); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.VLESSRawBackendAddr(), initial, "http-port:vless-tcp", false)
+		return
+	case detect.ClassTrojanRaw:
+		event := routeDecisionEvent(cfg, health, class, cfg.TrojanRawBackendAddr(), "trojan-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "http-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.TrojanRawBackendAddr()); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.TrojanRawBackendAddr(), initial, "http-port:trojan-tcp", false)
+		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
@@ -1103,6 +1123,26 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:xray-direct", false)
+		return
+	case detect.ClassVLESSRaw:
+		event := routeDecisionEvent(cfg, health, class, cfg.VLESSRawBackendAddr(), "vless-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.VLESSRawBackendAddr()); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.VLESSRawBackendAddr(), initial, "tls-port:vless-tcp", false)
+		return
+	case detect.ClassTrojanRaw:
+		event := routeDecisionEvent(cfg, health, class, cfg.TrojanRawBackendAddr(), "trojan-tcp", "", "", "", "", "", 0, "detect", "")
+		event.Surface = "tls-port"
+		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.TrojanRawBackendAddr()); blocked {
+			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
+			return
+		}
+		emitRouteDecision(logger, collector, conn, event)
+		bridgeToBackend(logger, cfg, collector, health, conn, cfg.TrojanRawBackendAddr(), initial, "tls-port:trojan-tcp", false)
 		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")

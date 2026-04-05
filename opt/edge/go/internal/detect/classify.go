@@ -553,6 +553,12 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				if IsPossibleHTTPPrefix(current) {
 					return current, ClassPossibleHTTP, nil
 				}
+				if IsPossibleVLESSPrefix(current) {
+					return current, ClassVLESSRaw, nil
+				}
+				if IsPossibleTrojanPrefix(current) {
+					return current, ClassTrojanRaw, nil
+				}
 				return current, ClassTimeout, nil
 			}
 			if errors.Is(err, io.EOF) {
@@ -575,9 +581,9 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				case IsTrojanRequest(current):
 					return current, ClassTrojanRaw, nil
 				case IsPossibleVLESSPrefix(current):
-					return current, ClassTimeout, nil
+					return current, ClassVLESSRaw, nil
 				case IsPossibleTrojanPrefix(current):
-					return current, ClassTimeout, nil
+					return current, ClassTrojanRaw, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -603,9 +609,9 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 	case IsTrojanRequest(current):
 		return current, ClassTrojanRaw, nil
 	case IsPossibleVLESSPrefix(current):
-		return current, ClassTimeout, nil
+		return current, ClassVLESSRaw, nil
 	case IsPossibleTrojanPrefix(current):
-		return current, ClassTimeout, nil
+		return current, ClassTrojanRaw, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:

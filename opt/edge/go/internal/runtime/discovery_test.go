@@ -78,6 +78,30 @@ func TestRefreshDiscoveredRawBackendsPreservesExplicitNonLoopbackTargets(t *test
 	}
 }
 
+func TestRefreshDiscoveredRawBackendsSkipsFileWhenTargetsAreExplicit(t *testing.T) {
+	cfg := Config{
+		VLESSRawBackend:  "10.10.10.5:443",
+		TrojanRawBackend: "10.10.10.6:443",
+		VLESSRawSource:   "env:EDGE_XRAY_VLESS_RAW_BACKEND",
+		TrojanRawSource:  "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
+		XrayInboundsFile: filepath.Join(t.TempDir(), "missing-10-inbounds.json"),
+	}
+
+	refreshed, changed, err := RefreshDiscoveredRawBackends(cfg)
+	if err != nil {
+		t.Fatalf("RefreshDiscoveredRawBackends error = %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false")
+	}
+	if refreshed.VLESSRawBackend != cfg.VLESSRawBackend {
+		t.Fatalf("VLESSRawBackend = %q, want %q", refreshed.VLESSRawBackend, cfg.VLESSRawBackend)
+	}
+	if refreshed.TrojanRawBackend != cfg.TrojanRawBackend {
+		t.Fatalf("TrojanRawBackend = %q, want %q", refreshed.TrojanRawBackend, cfg.TrojanRawBackend)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

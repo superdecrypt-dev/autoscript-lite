@@ -24,6 +24,9 @@ func RefreshDiscoveredRawBackends(cfg Config) (Config, bool, error) {
 		file = defaultXrayInboundsFile
 	}
 	cfg.XrayInboundsFile = file
+	if !shouldOverrideDiscoveredBackend(cfg.VLESSRawBackend) && !shouldOverrideDiscoveredBackend(cfg.TrojanRawBackend) {
+		return cfg, false, nil
+	}
 
 	discovered, err := discoverRawBackendsFromXrayFile(file)
 	if err != nil {
