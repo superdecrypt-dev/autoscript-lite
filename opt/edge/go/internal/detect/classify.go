@@ -18,7 +18,6 @@ const (
 	ClassHTTP
 	ClassTLSClientHello
 	ClassSSH
-	ClassOpenVPNRaw
 	ClassVLESSRaw
 	ClassTrojanRaw
 	ClassTimeout
@@ -65,43 +64,6 @@ func IsTLSClientHello(b []byte) bool {
 		return false
 	}
 	return b[0] == 0x16 && b[1] == 0x03 && b[2] <= 0x04
-}
-
-func IsOpenVPNClientHello(b []byte) bool {
-	if len(b) < 3 {
-		return false
-	}
-	packetLen := int(b[0])<<8 | int(b[1])
-	if packetLen <= 0 {
-		return false
-	}
-	if len(b) < packetLen+2 {
-		return false
-	}
-	// OpenVPN TCP prepends a 2-byte packet length. The first control packet
-	// sent by the client is a P_CONTROL_HARD_RESET_CLIENT_* frame, which uses
-	// opcode 7 in the high 5 bits of the opcode/key byte.
-	return (b[2] >> 3) == 7
-}
-
-func IsPossibleOpenVPNPrefix(b []byte) bool {
-	if len(b) == 0 {
-		return true
-	}
-	if len(b) == 1 {
-		return b[0] == 0x00
-	}
-	packetLen := int(b[0])<<8 | int(b[1])
-	if packetLen <= 0 || packetLen > MaxPeekBytes-2 {
-		return false
-	}
-	if len(b) < 3 {
-		return true
-	}
-	if (b[2] >> 3) != 7 {
-		return false
-	}
-	return len(b) < packetLen+2
 }
 
 func tlsClientHelloRecordLength(b []byte) (int, bool) {
@@ -419,10 +381,6 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 				return current, ClassVLESSRaw, nil
 			case IsTrojanRequest(current):
 				return current, ClassTrojanRaw, nil
-			case IsOpenVPNClientHello(current):
-				return current, ClassOpenVPNRaw, nil
-			case IsPossibleOpenVPNPrefix(current):
-				continue
 			case IsPossibleHTTPPrefix(current):
 				continue
 			default:
@@ -459,10 +417,6 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 					return current, ClassVLESSRaw, nil
 				case IsTrojanRequest(current):
 					return current, ClassTrojanRaw, nil
-				case IsOpenVPNClientHello(current):
-					return current, ClassOpenVPNRaw, nil
-				case IsPossibleOpenVPNPrefix(current):
-					return current, ClassTimeout, nil
 				case IsPossibleHTTPPrefix(current):
 					return current, ClassPossibleHTTP, nil
 				default:
@@ -487,10 +441,6 @@ func ReadInitial(conn net.Conn, timeout time.Duration, maxBytes int) ([]byte, In
 		return current, ClassVLESSRaw, nil
 	case IsTrojanRequest(current):
 		return current, ClassTrojanRaw, nil
-	case IsOpenVPNClientHello(current):
-		return current, ClassOpenVPNRaw, nil
-	case IsPossibleOpenVPNPrefix(current):
-		return current, ClassTimeout, nil
 	case IsPossibleHTTPPrefix(current):
 		return current, ClassPossibleHTTP, nil
 	default:

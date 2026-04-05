@@ -599,24 +599,6 @@ func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 	}
 }
 
-func TestDecideTLSPayloadRouteUsesOpenVPNBackendForOpenVPNClass(t *testing.T) {
-	cfg := runtime.Config{
-		XrayDirectBackend:   "127.0.0.1:22022",
-		XrayFallbackBackend: "127.0.0.1:1194",
-	}
-
-	decision := decideTLSPayloadRoute(cfg, "tls-port", nil, detect.ClassOpenVPNRaw, "", "", false)
-	if decision.target != cfg.XrayFallbackBackendAddr() {
-		t.Fatalf("decision.target = %q, want %q", decision.target, cfg.XrayFallbackBackendAddr())
-	}
-	if decision.route != "fallback-tcp" {
-		t.Fatalf("decision.route = %q, want fallback-tcp", decision.route)
-	}
-	if got := backendLabel(cfg, cfg.XrayFallbackBackendAddr()); got != "fallback" {
-		t.Fatalf("backendLabel(fallback) = %q, want fallback", got)
-	}
-}
-
 func TestHealthBlockReasonUsesBackendStatus(t *testing.T) {
 	if got := healthBlockReason(observability.BackendHealthSnapshot{Healthy: false, Status: "down"}, true); got != "backend_down" {
 		t.Fatalf("healthBlockReason(down) = %q, want backend_down", got)

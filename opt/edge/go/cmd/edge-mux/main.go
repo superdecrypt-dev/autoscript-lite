@@ -1004,20 +1004,6 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:xray-direct", false)
 		return
-	case detect.ClassOpenVPNRaw:
-		target := cfg.XrayFallbackBackendAddr()
-		if strings.TrimSpace(target) == "" {
-			target = cfg.XrayDirectBackendAddr()
-		}
-		event := routeDecisionEvent(cfg, health, class, target, "fallback-tcp", "", "", "", "", "", 0, "detect", "")
-		event.Surface = "http-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
-		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "http-port:fallback-tcp", false)
-		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
 		event.Surface = "http-port"
@@ -1117,20 +1103,6 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		}
 		emitRouteDecision(logger, collector, conn, event)
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:xray-direct", false)
-		return
-	case detect.ClassOpenVPNRaw:
-		target := cfg.XrayFallbackBackendAddr()
-		if strings.TrimSpace(target) == "" {
-			target = cfg.XrayDirectBackendAddr()
-		}
-		event := routeDecisionEvent(cfg, health, class, target, "fallback-tcp", "", "", "", "", "", 0, "detect", "")
-		event.Surface = "tls-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, target); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
-		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, target, initial, "tls-port:fallback-tcp", false)
 		return
 	case detect.ClassTimeout:
 		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
@@ -1236,16 +1208,6 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.target = cfg.XrayDirectBackendAddr()
 		decision.route = "xray-direct"
 		decision.contextLabel = fmt.Sprintf("%s:xray-direct", surface)
-	case detect.ClassOpenVPNRaw:
-		decision.target = cfg.XrayFallbackBackendAddr()
-		if strings.TrimSpace(decision.target) == "" {
-			decision.target = cfg.XrayDirectBackendAddr()
-			decision.route = "xray-direct"
-			decision.contextLabel = fmt.Sprintf("%s:xray-direct-fallback", surface)
-			break
-		}
-		decision.route = "fallback-tcp"
-		decision.contextLabel = fmt.Sprintf("%s:fallback-tcp", surface)
 	case detect.ClassVLESSRaw:
 		decision.target = cfg.VLESSRawBackendAddr()
 		decision.route = "vless-tcp"
@@ -1393,8 +1355,6 @@ func routeDetectClassName(class detect.InitialClass) string {
 		return "tls_client_hello"
 	case detect.ClassSSH:
 		return "xray_direct"
-	case detect.ClassOpenVPNRaw:
-		return "fallback_raw"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:

@@ -911,7 +911,7 @@ func sniffInitialClientRoute(conn net.Conn, reader *bufio.Reader, writer *wsprox
 		case wsproxy.OpClose:
 			return frame, false, context.Canceled
 		case wsproxy.OpBinary, wsproxy.OpText, wsproxy.OpContinuation:
-			useFallback := detect.IsOpenVPNClientHello(frame.Payload) || detect.IsTLSClientHello(frame.Payload)
+			useFallback := detect.IsTLSClientHello(frame.Payload)
 			return frame, useFallback, nil
 		default:
 			continue

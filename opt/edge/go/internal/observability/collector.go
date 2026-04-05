@@ -700,8 +700,6 @@ func detectClassName(class detect.InitialClass) string {
 		return "vless_raw"
 	case detect.ClassTrojanRaw:
 		return "trojan_raw"
-	case detect.ClassOpenVPNRaw:
-		return "fallback_raw"
 	case detect.ClassTimeout:
 		return "timeout"
 	case detect.ClassPossibleHTTP:
