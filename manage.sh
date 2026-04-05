@@ -40,26 +40,38 @@ manage_bootstrap_path_trusted() {
 # -------------------------
 MANAGE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MANAGE_ENV_FILE=""
+MANAGE_ENV_UNTRUSTED_CANDIDATE=""
 # shellcheck source=opt/setup/core/env.sh
 for MANAGE_ENV_CANDIDATE in \
   "${MANAGE_SCRIPT_DIR}/opt/setup/core/env.sh" \
   "/opt/setup/core/env.sh" \
   "/usr/local/lib/autoscript-setup/opt/setup/core/env.sh"
 do
-  if [[ -f "${MANAGE_ENV_CANDIDATE}" ]]; then
+  if [[ -f "${MANAGE_ENV_CANDIDATE}" ]] && manage_bootstrap_path_trusted "${MANAGE_ENV_CANDIDATE}"; then
     MANAGE_ENV_FILE="${MANAGE_ENV_CANDIDATE}"
     break
   fi
+  if [[ -z "${MANAGE_ENV_UNTRUSTED_CANDIDATE}" && -f "${MANAGE_ENV_CANDIDATE}" ]]; then
+    MANAGE_ENV_UNTRUSTED_CANDIDATE="${MANAGE_ENV_CANDIDATE}"
+  fi
 done
 if [[ -z "${MANAGE_ENV_FILE}" ]]; then
-  echo "manage: env.sh tidak ditemukan; cari di source repo, /opt/setup, dan /usr/local/lib/autoscript-setup." >&2
-  exit 1
-fi
-if ! manage_bootstrap_path_trusted "${MANAGE_ENV_FILE}"; then
-  echo "manage: env.sh tidak trusted; pastikan owner root, bukan symlink, dan tidak writable oleh group/other: ${MANAGE_ENV_FILE}" >&2
+  if [[ -n "${MANAGE_ENV_UNTRUSTED_CANDIDATE}" ]]; then
+    echo "manage: env.sh ditemukan tetapi tidak trusted; cari di source repo, /opt/setup, dan /usr/local/lib/autoscript-setup: ${MANAGE_ENV_UNTRUSTED_CANDIDATE}" >&2
+  else
+    echo "manage: env.sh tidak ditemukan; cari di source repo, /opt/setup, dan /usr/local/lib/autoscript-setup." >&2
+  fi
   exit 1
 fi
 . "${MANAGE_ENV_FILE}"
+
+# Kompatibilitas bootstrap saat manage source repo lebih baru daripada runtime setup
+# yang terpasang di host. Ini mencegah unbound variable saat env installed masih
+# memakai namespace lama, sambil tetap memprioritaskan nama canonical baru.
+XRAY_WARP_SYNC_BIN="${XRAY_WARP_SYNC_BIN:-${SSH_WARP_SYNC_BIN:-/usr/local/bin/xray-warp-sync}}"
+XRAY_WARP_INTERFACE="${XRAY_WARP_INTERFACE:-${SSH_NETWORK_WARP_INTERFACE:-warp-xray0}}"
+XRAY_WARP_REDIR_PORT="${XRAY_WARP_REDIR_PORT:-${SSH_NETWORK_XRAY_REDIR_PORT:-12345}}"
+XRAY_WARP_REDIR_PORT_V6="${XRAY_WARP_REDIR_PORT_V6:-${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}}"
 
 # Entry-point specific constants (Keep as requested)
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-ZEbavEuJawHqX4-Jwj-L5Vj0nHOD-uPXtdxsMiAZ}"
