@@ -65,7 +65,9 @@ manage_license_guard_preflight() {
     return 0
   fi
 
-  stage="$(manage_license_stage_for_args "${action}")"
+  # Hidden runtime actions legacy sudah dipangkas dari varian lite.
+  # Entry preflight yang masih aktif cukup diperlakukan sebagai stage manage.
+  stage="manage"
   license_bin="$(manage_license_guard_bin_path)"
   api_url="$(manage_license_guard_api_url)"
   config_file="$(manage_license_guard_config_file)"

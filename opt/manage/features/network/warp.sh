@@ -1097,8 +1097,8 @@ warp_runtime_snapshot_restore() {
 }
 
 warp_runtime_refresh_followup_after_profile_change() {
-  declare -F xray_warp_runtime_refresh_if_available >/dev/null 2>&1 || return 0
-  if ! xray_warp_runtime_refresh_if_available; then
+  if declare -F speed_policy_resync_after_warp_change >/dev/null 2>&1 \
+    && ! speed_policy_resync_after_warp_change; then
     warn "Runtime follow-up WARP gagal disegarkan sesudah profile berubah."
     return 1
   fi
@@ -1126,7 +1126,7 @@ warp_runtime_snapshot_restore_on_abort() {
   local snap_dir="${1:-}"
   [[ -n "${snap_dir}" && -d "${snap_dir}" ]] || return 0
   if warp_runtime_snapshot_restore "${snap_dir}" >/dev/null 2>&1 \
-    && warp_runtime_refresh_ssh_network_after_profile_change >/dev/null 2>&1; then
+    && warp_runtime_refresh_followup_after_profile_change >/dev/null 2>&1; then
     warn "Transaksi WARP terputus sebelum selesai. Snapshot runtime dipulihkan."
   else
     warn "Transaksi WARP terputus sebelum selesai dan rollback snapshot gagal."
@@ -2673,39 +2673,16 @@ warp_zero_trust_cli_registration_line_get() {
 }
 
 warp_zero_trust_ssh_guard_state_get() {
-  local st="" effective="0" backend_applied="" backend_effective=""
-  if ! declare -F ssh_network_runtime_status_get >/dev/null 2>&1; then
-    printf 'unknown\n'
-    return 0
-  fi
-  st="$(ssh_network_runtime_status_get 2>/dev/null || true)"
-  effective="$(printf '%s\n' "${st}" | awk -F'=' '/^effective_warp_users=/{print $2; exit}')"
-  backend_applied="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_applied=/{print $2; exit}')"
-  backend_effective="$(printf '%s\n' "${st}" | awk -F'=' '/^warp_backend_effective=/{print $2; exit}')"
-  [[ -n "${backend_applied}" ]] || backend_applied="${backend_effective:-idle}"
-  if [[ "${effective}" =~ ^[0-9]+$ ]] && (( effective > 0 )); then
-    if [[ "${backend_applied}" == "local-proxy" ]]; then
-      printf 'ok (%s effective warp users via Local Proxy)\n' "${effective}"
-    else
-      printf 'blocked (%s effective warp users, backend applied=%s)\n' "${effective}" "${backend_applied}"
-    fi
-    return 0
-  fi
-  if [[ "${backend_applied}" == "local-proxy" ]]; then
-    printf 'ok (Local Proxy ready)\n'
-  else
-    printf 'ok\n'
-  fi
+  printf 'ok (lite runtime)\n'
 }
 
 warp_zero_trust_require_ssh_compatible() {
   local guard=""
   guard="$(warp_zero_trust_ssh_guard_state_get)"
   case "${guard}" in
-    ok*|unknown) return 0 ;;
+    ok*) return 0 ;;
   esac
-  warn "Zero Trust membutuhkan runtime routing tambahan yang sudah applied sehat di backend Local Proxy."
-  warn "Set backend routing tambahan ke Local Proxy lalu apply, atau kosongkan effective WARP users dulu."
+  warn "Zero Trust membutuhkan runtime WARP yang sehat sebelum diaktifkan."
   warn "Status guard: ${guard}"
   return 1
 }
