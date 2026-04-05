@@ -59,7 +59,6 @@ opt/manage/
 - `opt/manage/features/maintenance.sh`: aggregator live untuk helper `11) Maintenance`
 - `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, daemon status
 - `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
-- `opt/manage/features/maintenance/diagnostics.sh`: diagnostic menu tambahan maintenance
 - `opt/manage/menus/main_menu.sh`: router menu utama
 - `opt/manage/menus/maintenance_menu.sh`: router menu `11) Maintenance`
 - `manage.sh`: helper runtime inti lintas-domain, trusted loader, konstanta, dan bootstrap
@@ -88,7 +87,7 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `13) Tools`
   Telegram Bot, WARP Tier, dan Backup/Restore.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
-  `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; `SSH Network` kompatibel bila backend WARP SSH memakai `Local Proxy`.
+  `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; backend WARP lokal tetap kompatibel untuk redirect runtime Xray.
   Fondasi paket/runtime `cloudflare-warp` sekarang dipersiapkan dari `setup.sh`, tetapi mode ini tetap idle sampai diaktifkan operator.
   `manage` startup juga menjalankan guard lisensi IP memakai URL license bawaan; IP expired atau revoked dari portal Cloudflare akan ditolak sebelum panel dibuka.
 

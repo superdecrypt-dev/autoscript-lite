@@ -2,7 +2,7 @@ package routing
 
 import "testing"
 
-func TestRouteLabelTreatsDiagnosticProbeAsSSHWS(t *testing.T) {
+func TestRouteLabelTreatsDiagnosticProbeAsXrayWS(t *testing.T) {
 	req := HTTPRequest{
 		Method:     "GET",
 		Path:       "/diagnostic-probe",
@@ -14,7 +14,7 @@ func TestRouteLabelTreatsDiagnosticProbeAsSSHWS(t *testing.T) {
 	}
 }
 
-func TestRouteLabelTreatsHexTokenWSPathAsSSHWSLike(t *testing.T) {
+func TestRouteLabelTreatsHexTokenWSPathAsXrayWSLike(t *testing.T) {
 	tests := []string{"/a1b2c3d4e5", "/bebas/a1b2c3d4e5"}
 	for _, path := range tests {
 		req := HTTPRequest{

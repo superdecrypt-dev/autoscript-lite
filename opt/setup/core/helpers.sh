@@ -98,7 +98,6 @@ register_exit_cleanup cleanup_pick_port_registry
 
 pick_port() {
   local p tries=0
-  local reserved
   local max_tries=10000
   local min_port max_port span
 
@@ -107,12 +106,6 @@ pick_port() {
 
   while (( tries < max_tries )); do
     p=$(( min_port + RANDOM % span ))
-    for reserved in "${SSHWS_DROPBEAR_PORT}" "${SSHWS_STUNNEL_PORT}" "${SSHWS_PROXY_PORT}"; do
-      if [[ "${p}" == "${reserved}" ]]; then
-        p=""
-        break
-      fi
-    done
     [[ -n "${p}" ]] || { tries=$((tries + 1)); continue; }
     if is_port_free "${p}" && ! grep -qxF "${p}" "${_PICK_PORT_REGISTRY}" 2>/dev/null; then
       echo "${p}" >> "${_PICK_PORT_REGISTRY}"

@@ -789,9 +789,9 @@ setup_warp_zero_trust_backend() {
 }
 
 ssh_warp_interface_name_default() {
-  local iface="${SSH_NETWORK_WARP_INTERFACE:-warp-ssh0}"
+  local iface="${XRAY_WARP_INTERFACE:-warp-xray0}"
   if [[ ! "${iface}" =~ ^[a-zA-Z0-9._-]{1,15}$ ]]; then
-    iface="warp-ssh0"
+    iface="warp-xray0"
   fi
   printf '%s\n' "${iface}"
 }
@@ -805,29 +805,29 @@ ssh_warp_config_path() {
 setup_ssh_warp_interface() {
   local iface="" conf_path="" unit=""
 
-  ok "Siapkan SSH WARP interface..."
+  ok "Siapkan Xray WARP interface..."
   [[ -s "${WIREPROXY_CONF}" ]] || die "Source config WARP host tidak ditemukan: ${WIREPROXY_CONF}"
-  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk SSH WARP."
+  command -v python3 >/dev/null 2>&1 || die "python3 tidak ditemukan untuk Xray WARP."
   command -v wg-quick >/dev/null 2>&1 || die "wg-quick tidak ditemukan. Pastikan wireguard-tools terpasang."
 
   iface="$(ssh_warp_interface_name_default)"
-  conf_path="$(ssh_warp_config_path "${iface}")" || die "Nama interface SSH WARP tidak valid."
+  conf_path="$(ssh_warp_config_path "${iface}")" || die "Nama interface Xray WARP tidak valid."
 
   install_setup_bin_or_die "xray-warp-sync.py" "${XRAY_WARP_SYNC_BIN}" 0755
   install -d -m 700 "${WIREGUARD_DIR:-/etc/wireguard}"
   "${XRAY_WARP_SYNC_BIN}" --interface "${iface}" --source "${WIREPROXY_CONF}" --dest-dir "${WIREGUARD_DIR:-/etc/wireguard}" \
-    || die "Gagal menyiapkan config SSH WARP untuk ${iface}."
+    || die "Gagal menyiapkan config Xray WARP untuk ${iface}."
 
   unit="wg-quick@${iface}"
   if systemctl is-active --quiet "${unit}" >/dev/null 2>&1; then
     if service_enable_restart_checked "${unit}"; then
-      ok "SSH WARP interface aktif dan disegarkan: ${iface}"
+      ok "Xray WARP interface aktif dan disegarkan: ${iface}"
     else
-      warn "SSH WARP config diperbarui, tetapi restart ${unit} gagal."
+      warn "Xray WARP config diperbarui, tetapi restart ${unit} gagal."
     fi
   else
     systemctl disable --now "${unit}" >/dev/null 2>&1 || true
-    ok "SSH WARP config siap: ${conf_path}"
+    ok "Xray WARP config siap: ${conf_path}"
   fi
 }
 
