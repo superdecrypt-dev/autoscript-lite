@@ -260,8 +260,13 @@ domain_control_restart_active_tls_runtime_consumers() {
   fi
 
   local edge_svc
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || {
+      warn "Gagal restart sshws-stunnel setelah update cert."
       return 1
     }
+    svc_is_active sshws-stunnel || {
+      warn "sshws-stunnel tidak active setelah update cert."
       return 1
     }
   fi
@@ -292,8 +297,11 @@ domain_control_capture_runtime_snapshot() {
   if svc_exists nginx && svc_is_active nginx; then
     DOMAIN_CTRL_NGINX_WAS_ACTIVE="1"
   fi
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES+=("sshws-stunnel")
   fi
   edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" && "${edge_svc}" != "sshws-stunnel" ]] && svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
     DOMAIN_CTRL_TLS_RUNTIME_ACTIVE_SERVICES+=("${edge_svc}")
   fi
   DOMAIN_CTRL_RUNTIME_SNAPSHOT_VALID="1"
@@ -312,9 +320,11 @@ domain_control_restore_tls_runtime_consumers_from_snapshot() {
   local -a skipped_services=("$@")
   local edge_svc svc
   local rc=0
+  local -a targets=("sshws-stunnel")
   local skipped
 
   edge_svc="$(domain_control_edge_runtime_service_name 2>/dev/null || true)"
+  if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" && "${edge_svc}" != "sshws-stunnel" ]]; then
     targets+=("${edge_svc}")
   fi
 
@@ -1076,16 +1086,23 @@ domain_control_set_domain_now() {
   else
     warn "ACCOUNT INFO berhasil direfresh ke domain baru, tetapi state sinkronisasi domain gagal disimpan."
   fi
+  if domain_control_openvpn_sync_after_domain_change "${DOMAIN}"; then
+    log "Profile OpenVPN berhasil diselaraskan ke domain baru."
   else
+    warn "Sebagian profil OpenVPN gagal diselaraskan ke domain baru."
   fi
   pause
 }
 
+domain_control_openvpn_sync_after_domain_change() {
   local domain="${1:-}"
   [[ -n "${domain}" ]] || return 0
+  if ! declare -F openvpn_runtime_available >/dev/null 2>&1; then
     return 0
   fi
+  openvpn_runtime_available || return 0
 
+  local env_file="${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}"
   python3 - <<'PY' "${env_file}" "${domain}" || return 1
 from pathlib import Path
 import sys
@@ -1101,10 +1118,13 @@ for raw in lines:
         out.append(line)
         continue
     key, _ = line.split("=", 1)
+    if key.strip() == "OPENVPN_PUBLIC_HOST":
+        out.append(f"OPENVPN_PUBLIC_HOST={domain}")
         seen = True
     else:
         out.append(line)
 if not seen:
+    out.append(f"OPENVPN_PUBLIC_HOST={domain}")
 path.parent.mkdir(parents=True, exist_ok=True)
 tmp = path.with_name(f".{path.name}.tmp")
 tmp.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
@@ -1119,18 +1139,24 @@ PY
     usernames+=("${username}")
   done < <(
     {
+      find "${SSH_USERS_STATE_DIR}" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null \
+        | sed -E 's/@ssh\.json$//' | sed -E 's/\.json$//'
+      find "${SSH_ACCOUNT_DIR}" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null \
+        | sed -E 's/@ssh\.txt$//' | sed -E 's/\.txt$//'
     } | sort -u
   )
 
   local updated=0 failed=0
   for username in "${usernames[@]}"; do
     id "${username}" >/dev/null 2>&1 || continue
+    if openvpn_manage_json ensure-user --username "${username}" >/dev/null 2>&1; then
       updated=$((updated + 1))
     else
       failed=$((failed + 1))
     fi
   done
 
+  log "OpenVPN sync domain=${domain}: updated=${updated}, failed=${failed}"
   (( failed == 0 ))
 }
 
@@ -1234,7 +1260,9 @@ domain_control_set_domain_after_prompt() {
 }
 
 domain_control_refresh_account_info_now() {
+  local domain ip summary xray_count ssh_count total_count xray_preview ssh_preview preview_report="" dry_run_report=""
   local geo="" geo_ip="" target_isp="-" target_country="-"
+  local scope_choice="" scope="all" scope_label="Semua (Xray + SSH)"
   local spin_log=""
   local ask_rc=0
   local max_targets_per_run="10"
@@ -1259,7 +1287,9 @@ domain_control_refresh_account_info_now() {
     [[ -n "${target_country}" ]] || target_country="-"
   fi
   echo "Pilih scope refresh:"
+  echo "  1) Semua (Xray + SSH)"
   echo "  2) Xray only"
+  echo "  3) SSH only"
   echo "  0) Back"
   hr
   while true; do
@@ -1268,13 +1298,16 @@ domain_control_refresh_account_info_now() {
       return 0
     fi
     case "${scope_choice}" in
+      1) scope="all" ; scope_label="Semua (Xray + SSH)" ; break ;;
       2) scope="xray" ; scope_label="Xray only" ; break ;;
+      3) scope="ssh" ; scope_label="SSH only" ; break ;;
       0|kembali|k|back|b) return 0 ;;
       *) echo "Pilihan tidak valid." ;;
     esac
   done
 
   summary="$(account_info_refresh_targets_summary "${scope}" 5)"
+  IFS='|' read -r xray_count ssh_count total_count xray_preview ssh_preview <<<"${summary}"
 
   echo "Domain aktif : ${domain}"
   echo "IP aktif     : ${ip:-tidak terdeteksi}"
@@ -1286,6 +1319,9 @@ domain_control_refresh_account_info_now() {
     echo "Target Xray  : ${xray_count:-0}"
     echo "Preview Xray : ${xray_preview:--}"
   fi
+  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+    echo "Target SSH   : ${ssh_count:-0}"
+    echo "Preview SSH  : ${ssh_preview:--}"
   fi
   echo "Total target : ${total_count:-0}"
   echo "Default run  : 10 target pertama per eksekusi."
@@ -1867,6 +1903,7 @@ domain_control_guard_renew_if_needed() {
   echo "  - Cert files : ${CERT_FULLCHAIN}, ${CERT_PRIVKEY}"
   echo "  - Nginx conf : ${NGINX_CONF}"
   echo "  - Compat file: ${XRAY_DOMAIN_FILE}"
+  echo "  - Service    : nginx, xray, sshws-stunnel, edge runtime (jika aktif)"
   echo "Command    : ${XRAY_DOMAIN_GUARD_BIN} renew-if-needed"
   echo "Catatan    : renew-if-needed dijalankan oleh binary eksternal dan dapat memperbarui cert/domain artefak terkait."
   hr

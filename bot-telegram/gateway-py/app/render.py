@@ -148,6 +148,7 @@ def action_form_prompt(
 
 
 def confirm_text(menu: MenuSpec, action: ActionSpec, params: dict[str, str]) -> str:
+    allow_password = menu.label.strip().lower().startswith("ssh users")
     lines = [
         f"<b>Konfirmasi: {html.escape(menu.label)} · {html.escape(action.label)}</b>",
         "",

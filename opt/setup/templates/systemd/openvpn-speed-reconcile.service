@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenVPN speed immediate reconcile (oneshot)
+After=network-online.target __OPENVPN_TCP_SERVICE__.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openvpn-speed once --config __OPENVPN_SPEED_CONFIG_FILE__

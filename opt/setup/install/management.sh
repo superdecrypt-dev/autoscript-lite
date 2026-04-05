@@ -4,7 +4,11 @@
 install_management_scripts() {
   ok "Siapkan tools runtime..."
 
+  mkdir -p /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
+  mkdir -p /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
   chmod 700 /opt/account /opt/quota
+  chmod 700 /opt/account/vless /opt/account/vmess /opt/account/trojan /opt/account/ssh
+  chmod 700 /opt/quota/vless /opt/quota/vmess /opt/quota/trojan /opt/quota/ssh
 
   cat > /usr/local/bin/xray-expired <<'EOF'
 #!/usr/bin/env python3
@@ -1881,12 +1885,27 @@ sync_manage_modules_layout() {
     chown -R root:root "${dst_dir}" 2>/dev/null || true
   }
 
+  install_ssh_network_restore_service() {
     render_setup_template_or_die \
+      "systemd/ssh-network-restore.service" \
+      "/etc/systemd/system/ssh-network-restore.service" \
       0644
     local restore_result=""
     systemctl daemon-reload
+    if ! systemctl enable ssh-network-restore.service >/dev/null 2>&1; then
+      die "Gagal mengaktifkan ssh-network-restore.service."
     fi
+    systemctl reset-failed ssh-network-restore.service >/dev/null 2>&1 || true
+    if ! systemctl restart ssh-network-restore.service >/dev/null 2>&1; then
+      systemctl status ssh-network-restore.service --no-pager >&2 || true
+      journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
+      die "ssh-network-restore.service gagal dijalankan saat setup."
     fi
+    restore_result="$(systemctl show -p Result --value ssh-network-restore.service 2>/dev/null || true)"
+    if [[ "${restore_result}" != "success" ]] || ! systemctl is-active --quiet ssh-network-restore.service; then
+      systemctl status ssh-network-restore.service --no-pager >&2 || true
+      journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
+      die "ssh-network-restore.service tidak sehat setelah restart (Result=${restore_result:-unknown})."
     fi
   }
 
@@ -1903,6 +1922,7 @@ sync_manage_modules_layout() {
     mkdir -p "$(dirname "${MANAGE_BIN}")"
     install -m 0755 "${SCRIPT_DIR}/manage.sh" "${MANAGE_BIN}"
     chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+    install_ssh_network_restore_service
     ok "Binary manage disegarkan dari source lokal: ${MANAGE_BIN}"
     install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
     ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR} (source lokal)"
@@ -2042,6 +2062,7 @@ PY
       mkdir -p "$(dirname "${MANAGE_BIN}")"
       install -m 0755 "${extracted_manage_bin}" "${MANAGE_BIN}"
       chown root:root "${MANAGE_BIN}" 2>/dev/null || true
+      install_ssh_network_restore_service
       install_bot_installer_if_present "${SCRIPT_DIR}/install-telegram-bot.sh" "/usr/local/bin/install-telegram-bot" "Telegram"
       ok "Template modular manage siap di: ${MANAGE_MODULES_DST_DIR}"
       ok "Fallback modular manage siap di: ${fallback_modules_dir}"

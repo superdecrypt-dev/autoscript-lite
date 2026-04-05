@@ -56,6 +56,7 @@ manage_license_guard_enabled() {
 manage_license_stage_for_args() {
   local action="${1:-}"
   case "${action}" in
+    __apply-ssh-network|__sync-ssh-network-session-targets)
       printf '%s\n' "runtime"
       ;;
     *)

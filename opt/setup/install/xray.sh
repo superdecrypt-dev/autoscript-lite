@@ -31,6 +31,7 @@ write_xray_config() {
   local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
   local P_VLESS_XHTTP P_VMESS_XHTTP P_TROJAN_XHTTP
   local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
+  local P_API P_SSH_WARP_REDIR P_SSH_WARP_REDIR6
 
   P_VLESS_TCP="$(pick_port)"
   P_TROJAN_TCP="$(pick_port)"
@@ -47,6 +48,8 @@ write_xray_config() {
   P_VMESS_GRPC="$(pick_port)"
   P_TROJAN_GRPC="$(pick_port)"
   P_API="10080"
+  P_SSH_WARP_REDIR="${SSH_NETWORK_XRAY_REDIR_PORT:-12345}"
+  P_SSH_WARP_REDIR6="${SSH_NETWORK_XRAY_REDIR_PORT_V6:-12346}"
 
   if ! is_port_free "$P_API"; then
     warn "Port API Xray (${P_API}) sedang dipakai. Mencoba stop service xray sebelumnya..."
@@ -169,6 +172,8 @@ write_xray_config() {
       {
         "type": "field",
         "inboundTag": [
+          "ssh-network-warp-redir-v4",
+          "ssh-network-warp-redir-v6"
         ],
         "outboundTag": "warp"
       },
@@ -274,7 +279,9 @@ write_xray_config() {
     },
     {
       "listen": "127.0.0.1",
+      "port": ${P_SSH_WARP_REDIR},
       "protocol": "dokodemo-door",
+      "tag": "ssh-network-warp-redir-v4",
       "settings": {
         "network": "tcp",
         "followRedirect": true
@@ -287,7 +294,9 @@ write_xray_config() {
     },
     {
       "listen": "::1",
+      "port": ${P_SSH_WARP_REDIR6},
       "protocol": "dokodemo-door",
+      "tag": "ssh-network-warp-redir-v6",
       "settings": {
         "network": "tcp",
         "followRedirect": true

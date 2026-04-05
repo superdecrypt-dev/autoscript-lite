@@ -2648,6 +2648,7 @@ account_refresh_xray_batch_apply() {
   return 0
 }
 
+account_refresh_ssh_batch_apply() {
   # args: start_idx end_idx domain ip users_ref targets_ref updated_ref failed_ref skipped_ref
   local start_idx="${1:-0}"
   local end_idx="${2:-0}"
@@ -2660,6 +2661,8 @@ account_refresh_xray_batch_apply() {
   local -n _skipped_ref="${9}"
   local snap_dir="" manifest_file="" i username target_file state_file candidate_file=""
 
+  snap_dir="$(mktemp -d "${WORK_DIR}/.account-info-refresh-ssh.XXXXXX" 2>/dev/null || true)"
+  [[ -n "${snap_dir}" ]] || snap_dir="${WORK_DIR}/.account-info-refresh-ssh.$$"
   mkdir -p "${snap_dir}" 2>/dev/null || return 1
   manifest_file="${snap_dir}/manifest.tsv"
   : > "${manifest_file}" || {
@@ -2670,14 +2673,19 @@ account_refresh_xray_batch_apply() {
   for (( i=start_idx; i<end_idx; i++ )); do
     username="${_users_ref[$i]}"
     target_file="${_targets_ref[$i]}"
+    state_file="$(ssh_user_state_resolve_file "${username}")"
     if [[ -n "${target_file}" ]]; then
       if ! account_info_refresh_snapshot_file "${target_file}" "${snap_dir}" "${manifest_file}"; then
+        warn "Gagal membuat snapshot batch ACCOUNT INFO SSH: ${target_file}"
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
         rm -rf "${snap_dir}" >/dev/null 2>&1 || true
         return 1
       fi
     fi
     if [[ -n "${state_file}" ]]; then
       if ! account_info_refresh_snapshot_file "${state_file}" "${snap_dir}" "${manifest_file}"; then
+        warn "Gagal membuat snapshot state SSH sebelum refresh batch: ${state_file}"
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
         rm -rf "${snap_dir}" >/dev/null 2>&1 || true
         return 1
       fi
@@ -2686,17 +2694,26 @@ account_refresh_xray_batch_apply() {
 
   for (( i=start_idx; i<end_idx; i++ )); do
     username="${_users_ref[$i]}"
+    state_file="$(ssh_user_state_resolve_file "${username}")"
     target_file="${_targets_ref[$i]}"
+    [[ -n "${target_file}" ]] || target_file="$(ssh_account_info_file "${username}")"
     if ! account_info_target_write_preflight "${target_file}"; then
+      warn "Preflight target ACCOUNT INFO SSH gagal: ${target_file}"
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       return 1
     fi
     if [[ ! -f "${state_file}" ]]; then
+      warn "Refresh ACCOUNT INFO SSH skip '${username}': metadata state SSH tidak ditemukan."
       _skipped_ref=$((_skipped_ref + 1))
       continue
     fi
+    candidate_file="${snap_dir}/ssh.${i}.candidate.txt"
     rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+    if ! ssh_account_info_refresh_from_state "${username}" "" "${candidate_file}" "${domain}" "${ip}"; then
       _failed_ref=$((_failed_ref + 1))
+      warn "Refresh ACCOUNT INFO SSH gagal untuk ${username}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       return 1
     fi
@@ -2709,6 +2726,8 @@ account_refresh_xray_batch_apply() {
       _updated_ref=$((_updated_ref + 1))
     else
       _failed_ref=$((_failed_ref + 1))
+      warn "Commit ACCOUNT INFO SSH gagal untuk ${username}. Batch saat ini akan di-rollback."
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO SSH juga gagal."
       rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       return 1
@@ -2728,7 +2747,11 @@ account_refresh_all_info_files() {
   local max_targets="${4:-0}"
   local start_offset="${5:-0}"
   local i proto username
+  local updated=0 failed=0 ssh_updated=0 ssh_failed=0 xray_skipped=0 ssh_skipped=0
   local -a xray_refresh_protos=() xray_refresh_users=() xray_refresh_targets=()
+  local -a ssh_refresh_users=() ssh_refresh_targets=()
+  local -A seen_xray_users=() seen_ssh_users=()
+  local -a ssh_users=()
   local batch_size=10 batch_start=0 batch_end=0 total_batches=0 current_batch=0
   local total_selected=0 selected_offset=0
 
@@ -2744,6 +2767,7 @@ account_refresh_all_info_files() {
 
   ensure_account_quota_dirs
   case "${scope}" in
+    all|xray|ssh) ;;
     *) scope="all" ;;
   esac
   [[ "${max_targets}" =~ ^[0-9]+$ ]] || max_targets=0
@@ -2778,16 +2802,24 @@ account_refresh_all_info_files() {
       done
     fi
   fi
+  if [[ "${scope}" == "all" || "${scope}" == "ssh" ]]; then
+    account_info_refresh_collect_ssh_users ssh_users
+    for username in "${ssh_users[@]}"; do
       [[ -n "${username}" ]] || continue
+      if [[ -n "${seen_ssh_users["${username}"]+x}" ]]; then
         continue
       fi
       if (( start_offset > 0 && selected_offset < start_offset )); then
+        seen_ssh_users["${username}"]=1
         selected_offset=$((selected_offset + 1))
         continue
       fi
       if (( max_targets > 0 && total_selected >= max_targets )); then
         break
       fi
+      seen_ssh_users["${username}"]=1
+      ssh_refresh_users+=("${username}")
+      ssh_refresh_targets+=("$(ssh_account_info_file "${username}")")
       total_selected=$((total_selected + 1))
     done
   fi
@@ -2800,18 +2832,28 @@ account_refresh_all_info_files() {
       current_batch=$((batch_start / batch_size + 1))
       log "Refresh ACCOUNT INFO Xray batch ${current_batch}/${total_batches}."
       if ! account_refresh_xray_batch_apply "${domain}" "${ip}" "${batch_start}" "${batch_end}" xray_refresh_protos xray_refresh_users xray_refresh_targets updated failed xray_skipped; then
+        log "Refresh ACCOUNT INFO (scope=${scope}) berhenti pada batch Xray ${current_batch}/${total_batches}: xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
         return 1
       fi
     done
   fi
 
+  if (( ${#ssh_refresh_users[@]} > 0 )); then
+    total_batches=$(( (${#ssh_refresh_users[@]} + batch_size - 1) / batch_size ))
+    for (( batch_start=0; batch_start<${#ssh_refresh_users[@]}; batch_start+=batch_size )); do
       batch_end=$((batch_start + batch_size))
+      (( batch_end > ${#ssh_refresh_users[@]} )) && batch_end="${#ssh_refresh_users[@]}"
       current_batch=$((batch_start / batch_size + 1))
+      log "Refresh ACCOUNT INFO SSH batch ${current_batch}/${total_batches}."
+      if ! account_refresh_ssh_batch_apply "${batch_start}" "${batch_end}" "${domain}" "${ip}" ssh_refresh_users ssh_refresh_targets ssh_updated ssh_failed ssh_skipped; then
+        log "Refresh ACCOUNT INFO (scope=${scope}) berhenti pada batch SSH ${current_batch}/${total_batches}: xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
         return 1
       fi
     done
   fi
 
+  log "Refresh ACCOUNT INFO (scope=${scope}, batch_size=${batch_size}, max_targets=${max_targets}, start_offset=${start_offset}): xray_updated=${updated}, xray_skipped=${xray_skipped}, xray_failed=${failed}, ssh_updated=${ssh_updated}, ssh_skipped=${ssh_skipped}, ssh_failed=${ssh_failed}"
+  if (( failed > 0 || ssh_failed > 0 )); then
     return 1
   fi
   return 0
@@ -2823,6 +2865,8 @@ domain_control_refresh_account_info_batches_run() {
   local ip="${2:-}"
   local scope="${3:-all}"
   local batch_limit="${4:-10}"
+  local summary="" xray_count=0 ssh_count=0 total_count=0
+  local xray_preview="" ssh_preview=""
   local offset=0
 
   [[ "${batch_limit}" =~ ^[0-9]+$ ]] || batch_limit=10
@@ -2831,6 +2875,7 @@ domain_control_refresh_account_info_batches_run() {
   fi
 
   summary="$(account_info_refresh_targets_summary "${scope}" 1)"
+  IFS='|' read -r xray_count ssh_count total_count xray_preview ssh_preview <<<"${summary}"
   [[ "${total_count}" =~ ^[0-9]+$ ]] || total_count=0
   if (( total_count == 0 )); then
     return 0

@@ -140,10 +140,13 @@ source_setup_module "opt/setup/install/account_portal.sh"
 # shellcheck source=opt/setup/install/license.sh
 source_setup_module "opt/setup/install/license.sh"
 # shellcheck source=opt/setup/install/sshws.sh
+source_setup_module "opt/setup/install/sshws.sh"
 # shellcheck source=opt/setup/install/openvpn.sh
+source_setup_module "opt/setup/install/openvpn.sh"
 # shellcheck source=opt/setup/install/zivpn.sh
 source_setup_module "opt/setup/install/zivpn.sh"
 # shellcheck source=opt/setup/install/adblock.sh
+source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
 # shellcheck source=opt/setup/install/sanity.sh
@@ -203,6 +206,10 @@ setup_post_domain_main() {
   else
     warn "Gagal menulis compat domain file: ${XRAY_DOMAIN_FILE}"
   fi
+  setup_run_step "Install SSH WS" install_sshws_stack
+  setup_run_step "Install SSH QAC enforcer" install_sshws_qac_enforcer
+  setup_run_step "Install SSH expired cleaner" install_ssh_expired_cleaner
+  setup_run_step "Install OpenVPN" install_openvpn_stack
   setup_run_step "Install ZIVPN UDP" install_zivpn_stack
   setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
   setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack

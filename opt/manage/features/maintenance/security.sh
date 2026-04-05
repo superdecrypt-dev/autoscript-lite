@@ -98,6 +98,9 @@ cert_runtime_restart_active_tls_consumers() {
     return 0
   fi
   local edge_svc=""
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || return 1
+    svc_is_active sshws-stunnel || return 1
   fi
   if edge_runtime_enabled_for_public_ports; then
     edge_svc="$(edge_runtime_service_name 2>/dev/null || true)"
@@ -111,7 +114,15 @@ cert_runtime_restart_active_tls_consumers() {
 
 cert_runtime_tls_consumers_health_check() {
   local -a failed=()
+  local stunnel_port="" stunnel_probe="" edge_svc="" http_port="" tls_port=""
 
+  if svc_exists sshws-stunnel && svc_is_active sshws-stunnel; then
+    stunnel_port="$(sshws_detect_stunnel_port 2>/dev/null || true)"
+    if [[ "${stunnel_port}" =~ ^[0-9]+$ ]]; then
+      stunnel_probe="$(sshws_probe_tcp_endpoint "127.0.0.1" "${stunnel_port}" "tls")"
+      if ! sshws_probe_result_is_healthy "${stunnel_probe}"; then
+        warn "Probe TLS consumer sshws-stunnel gagal: $(sshws_probe_result_disp "${stunnel_probe}")"
+        failed+=("sshws-stunnel")
       fi
     fi
   fi
@@ -978,6 +989,7 @@ security_overview_menu() {
     fi
   fi
 
+  local f2b_line banned ssh_line nginx_line rec_line
   if svc_is_active fail2ban 2>/dev/null; then
     f2b_line="Active"
   else
@@ -987,7 +999,10 @@ security_overview_menu() {
   banned="$(fail2ban_total_banned_get)"
   [[ -n "${banned}" ]] || banned="0"
 
+  if fail2ban_jail_active_bool sshd; then
+    ssh_line="Active"
   else
+    ssh_line="Inactive"
   fi
 
   if fail2ban_jail_active_bool nginx-bad-request-access || fail2ban_jail_active_bool nginx-bad-request-error; then
@@ -1012,6 +1027,7 @@ security_overview_menu() {
   local swap_line
   swap_line="$(swap_status_pretty_get)"
 
+  local edge_svc edge_line xray_svc_line nginx_svc_line ssh_svc_line
   edge_svc="$(main_menu_edge_service_name)"
   if svc_exists "${edge_svc}" && svc_is_active "${edge_svc}"; then
     edge_line="Active"
@@ -1028,13 +1044,19 @@ security_overview_menu() {
   else
     nginx_svc_line="Inactive"
   fi
+  if svc_exists "${SSHWS_DROPBEAR_SERVICE}" && svc_is_active "${SSHWS_DROPBEAR_SERVICE}" \
+    && svc_exists "${SSHWS_STUNNEL_SERVICE}" && svc_is_active "${SSHWS_STUNNEL_SERVICE}" \
+    && svc_exists "${SSHWS_PROXY_SERVICE}" && svc_is_active "${SSHWS_PROXY_SERVICE}"; then
+    ssh_svc_line="Active"
   else
+    ssh_svc_line="Inactive"
   fi
 
   echo
   echo "TLS Expiry        : ${tls_line}"
   echo "Fail2ban          : ${f2b_line}"
   echo "Banned IP         : ${banned}"
+  echo "SSH Protection    : ${ssh_line}"
   echo "Nginx Protection  : ${nginx_line}"
   echo "Recidive          : ${rec_line}"
   echo "BBR               : ${bbr_line}"
@@ -1044,6 +1066,7 @@ security_overview_menu() {
   echo "Edge Mux          : ${edge_line}"
   echo "Nginx             : ${nginx_svc_line}"
   echo "Xray              : ${xray_svc_line}"
+  echo "SSH               : ${ssh_svc_line}"
   hr
   pause
 }

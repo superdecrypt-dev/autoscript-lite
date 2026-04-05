@@ -1,0 +1,12 @@
+[Unit]
+Description=SSH WS quota and access enforcer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/sshws-runtime
+ExecStart=/usr/local/bin/sshws-qac-enforcer --once
+User=root
+Group=root
+Nice=10

@@ -13,6 +13,7 @@ from ..services import MENU_HANDLERS
 from ..utils.response import error_response
 
 router = APIRouter(tags=["menus"])
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 DOWNLOAD_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{6,32}$")
 
 
@@ -74,9 +75,12 @@ def _visible_menu_count(payload: dict) -> int:
     return count
 
 
+@router.api_route("/ovpn/{token}", methods=["GET", "HEAD"], dependencies=[Depends(verify_shared_secret)])
+def download_openvpn_profile(token: str, request: Request) -> Response:
     token_n = str(token or "").strip()
     if not DOWNLOAD_TOKEN_RE.fullmatch(token_n):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link download tidak valid.")
+    token_path = system_mutations._openvpn_download_token_file(token_n)
     if not token_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link download tidak ditemukan.")
     try:
@@ -89,13 +93,17 @@ def _visible_menu_count(payload: dict) -> int:
     if exp < int(time.time()):
         token_path.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Link download sudah expired.")
+    if not SSH_USERNAME_RE.fullmatch(user_n):
         token_path.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile tidak ditemukan.")
+    ok_profile, payload_or_err = system_mutations._openvpn_manage_json("profile-download", "--username", user_n, timeout=300)
     if not ok_profile or not isinstance(payload_or_err, dict):
         token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile OpenVPN tidak tersedia.")
     profile_path = Path(str(payload_or_err.get("profile_path") or "").strip())
     if not profile_path.exists():
         token_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile OpenVPN tidak ditemukan.")
     if request.method.upper() == "HEAD":
         body = b""
         content_length = profile_path.stat().st_size
@@ -105,6 +113,7 @@ def _visible_menu_count(payload: dict) -> int:
     if request.method.upper() == "GET":
         token_path.unlink(missing_ok=True)
     headers = {
+        "Content-Disposition": f'attachment; filename="{user_n}@openvpn.ovpn"',
         "Content-Length": str(content_length),
         "Cache-Control": "private, no-store",
     }
@@ -136,9 +145,11 @@ def get_main_menu_overview() -> dict:
 @router.get("/api/users/options", dependencies=[Depends(verify_shared_secret)])
 def get_user_options(proto: str | None = None) -> dict:
     proto_norm = (proto or "").strip().lower()
+    allowed = set(system.USER_PROTOCOLS) | {getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn")}
     if proto_norm and proto_norm not in allowed:
         return {"users": []}
 
+    if proto_norm == getattr(system, "OPENVPN_POLICY_PROTOCOL", "openvpn"):
         users = [{"proto": proto_norm, "username": username} for username, _path in system._iter_proto_quota_files(proto_norm)]
         return {"users": users}
 

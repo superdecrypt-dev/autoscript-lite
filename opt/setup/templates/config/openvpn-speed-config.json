@@ -1,0 +1,9 @@
+{
+  "tun_iface": "__OPENVPN_TUN_IFACE__",
+  "ifb_iface": "__OPENVPN_SPEED_IFB_IFACE__",
+  "state_root": "/opt/quota/openvpn",
+  "status_file": "__OPENVPN_ROOT__/status-tcp.log",
+  "event_dir": "__OPENVPN_SPEED_EVENT_DIR__",
+  "state_file": "__OPENVPN_SPEED_STATE_FILE__",
+  "default_rate_mbit": __OPENVPN_SPEED_DEFAULT_RATE_MBIT__
+}

@@ -440,8 +440,15 @@ write_nginx_config() {
     nginx_mode_desc="public 80/443"
   fi
 
+  local openvpn_ws_public_path="${OPENVPN_WS_PUBLIC_PATH:-}"
+  if [[ -z "${openvpn_ws_public_path}" && -f "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" ]]; then
+    openvpn_ws_public_path="$(awk -F= '$1=="OPENVPN_WS_PUBLIC_PATH"{print substr($0, index($0, "=")+1); exit}' "${OPENVPN_CONFIG_ENV_FILE:-/etc/autoscript/openvpn/config.env}" 2>/dev/null | tr -d '\r' || true)"
   fi
+  openvpn_ws_public_path="$(printf '%s' "${openvpn_ws_public_path}" | xargs 2>/dev/null || true)"
+  # Prevent an empty OpenVPN WS path from degrading into a regex that matches
   # almost every one-segment public path and hijacks Xray routes.
+  if [[ -z "${openvpn_ws_public_path}" ]]; then
+    openvpn_ws_public_path="/__openvpn-ws-disabled__"
   fi
 
   local -a nginx_tpl_vars=(
@@ -471,6 +478,9 @@ write_nginx_config() {
     "I_TROJAN_GRPC=${I_TROJAN_GRPC}"
     "DOMAIN=${DOMAIN}"
     "CERT_DIR=${CERT_DIR}"
+    "SSHWS_PROXY_PORT=${SSHWS_PROXY_PORT}"
+    "OPENVPN_WS_PROXY_PORT=${OPENVPN_WS_PROXY_PORT:-10016}"
+    "OPENVPN_WS_PUBLIC_PATH=${openvpn_ws_public_path}"
     "ACCOUNT_PORTAL_PORT=${ACCOUNT_PORTAL_PORT:-7082}"
     "NGINX_LISTEN_BLOCK=${nginx_listen_block}"
     "NGINX_REALIP_BLOCK=${nginx_realip_block}"

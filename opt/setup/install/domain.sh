@@ -121,6 +121,9 @@ acme_stop_additional_conflicting_services() {
 
 acme_restart_active_tls_consumers() {
   local edge_svc
+  if systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1; then
+    systemctl restart sshws-stunnel >/dev/null 2>&1 || die "Gagal restart sshws-stunnel setelah update cert."
+    systemctl is-active --quiet sshws-stunnel >/dev/null 2>&1 || die "sshws-stunnel tidak active setelah update cert."
   fi
   edge_svc="$(acme_edge_runtime_service_name 2>/dev/null || true)"
   if [[ -n "${edge_svc}" && "${edge_svc}" != "nginx" ]] && systemctl is-active --quiet "${edge_svc}" >/dev/null 2>&1; then

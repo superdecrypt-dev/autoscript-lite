@@ -1,0 +1,17 @@
+[Unit]
+Description=Dropbear SSH local endpoint for SSH WebSocket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/dropbear
+ExecStart=/usr/sbin/dropbear -F -E -R -w -g -P /run/dropbear/sshws-dropbear.pid -p 127.0.0.1:__SSHWS_DROPBEAR_PORT__
+KillMode=process
+TimeoutStopSec=10
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

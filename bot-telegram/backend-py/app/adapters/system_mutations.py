@@ -31,7 +31,25 @@ from ..utils.locks import file_lock
 ACCOUNT_ROOT = Path("/opt/account")
 QUOTA_ROOT = Path("/opt/quota")
 SPEED_POLICY_ROOT = Path("/opt/speed")
+SSH_PROTOCOL = "ssh"
+OPENVPN_POLICY_PROTOCOL = "openvpn"
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
+USER_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL,)
+QAC_PROTOCOLS = XRAY_PROTOCOLS + (SSH_PROTOCOL, OPENVPN_POLICY_PROTOCOL)
+SSH_ACCOUNT_DIR = ACCOUNT_ROOT / SSH_PROTOCOL
+SSH_QUOTA_DIR = QUOTA_ROOT / SSH_PROTOCOL
+OPENVPN_QUOTA_DIR = QUOTA_ROOT / OPENVPN_POLICY_PROTOCOL
+SSHWS_PROXY_BIN = Path("/usr/local/bin/ws-proxy")
+SSHWS_QAC_ENFORCER_BIN = Path("/usr/local/bin/sshws-qac-enforcer")
+SSHWS_RUNTIME_SESSION_DIR = Path("/run/autoscript/sshws-sessions")
+SSHWS_LOCK_FILE = Path("/run/autoscript/locks/sshws-qac.lock")
+OPENVPN_CONFIG_ENV_FILE = Path("/etc/autoscript/openvpn/config.env")
+OPENVPN_MANAGE_BIN = Path("/usr/local/bin/openvpn-manage")
+OPENVPN_PROFILE_DIR = Path("/opt/account/openvpn")
+OPENVPN_METADATA_DIR = Path("/var/lib/openvpn-manage/users")
+OPENVPN_TCP_SERVICE = "openvpn-server@autoscript-tcp"
+OPENVPN_DOWNLOAD_TTL_SECONDS = 300
+OPENVPN_DOWNLOAD_TOKEN_DIR = Path("/run/autoscript/openvpn-download-tokens")
 ZIVPN_SERVICE = "zivpn"
 ZIVPN_CONFIG_FILE = Path("/etc/zivpn/config.json")
 ZIVPN_SYNC_BIN = Path("/usr/local/bin/zivpn-password-sync")
@@ -50,11 +68,20 @@ NGINX_CONF = Path("/etc/nginx/conf.d/xray.conf")
 WIREPROXY_CONF = Path("/etc/wireproxy/config.conf")
 WGCF_DIR = Path("/etc/wgcf")
 NETWORK_STATE_FILE = Path("/var/lib/xray-manage/network_state.json")
+SSH_NETWORK_ENV_FILE = Path("/etc/autoscript/ssh-network/config.env")
+SSH_NETWORK_LOCK_FILE = "/run/autoscript/locks/ssh-network.lock"
+ADBLOCK_ENV_FILE = Path("/etc/autoscript/ssh-adblock/config.env")
 ADBLOCK_SYNC_BIN = Path("/usr/local/bin/adblock-sync")
 ADBLOCK_TIMER_DIR = Path("/etc/systemd/system")
 ADBLOCK_LOCK_FILE = "/run/autoscript/locks/adblock.lock"
 ADBLOCK_XRAY_RULE = "ext:custom.dat:adblock"
+ADBLOCK_DEFAULT_BLOCKLIST = "/etc/autoscript/ssh-adblock/blocked.domains"
+ADBLOCK_DEFAULT_URLS = "/etc/autoscript/ssh-adblock/source.urls"
+ADBLOCK_DEFAULT_MERGED = "/etc/autoscript/ssh-adblock/merged.domains"
+ADBLOCK_DEFAULT_RENDERED = "/etc/autoscript/ssh-adblock/blocklist.generated.conf"
+ADBLOCK_DEFAULT_DNSMASQ_CONF = "/etc/autoscript/ssh-adblock/dnsmasq.conf"
 ADBLOCK_DEFAULT_CUSTOM_DAT = "/usr/local/share/xray/custom.dat"
+ADBLOCK_DEFAULT_DNS_SERVICE = "ssh-adblock-dns.service"
 ADBLOCK_DEFAULT_SYNC_SERVICE = "adblock-sync.service"
 ADBLOCK_DEFAULT_AUTO_UPDATE_SERVICE = "adblock-update.service"
 ADBLOCK_DEFAULT_AUTO_UPDATE_TIMER = "adblock-update.timer"
@@ -69,6 +96,7 @@ SPEED_POLICY_LOCK_FILE = "/var/lock/xray-speed-policy.lock"
 USER_DATA_MUTATION_LOCK_FILE = "/run/autoscript/locks/user-data-mutation.lock"
 PROTOCOLS = XRAY_PROTOCOLS
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 PORTAL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
 _GEO_LOOKUP_CACHE: dict[str, tuple[str, str]] = {}
 DOMAIN_RE = re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
@@ -265,6 +293,7 @@ def _zivpn_sync_runtime() -> tuple[bool, str]:
             "--obfs",
             settings["obfs"],
             "--account-dir",
+            str(SSH_ACCOUNT_DIR),
             "--service",
             ZIVPN_SERVICE,
             "--sync-service-state",
@@ -324,10 +353,15 @@ def _zivpn_password_read(username: str) -> str:
     return text or "-"
 
 
+def _openvpn_runtime_available() -> bool:
+    return OPENVPN_MANAGE_BIN.exists() and OPENVPN_CONFIG_ENV_FILE.exists()
 
 
+def _openvpn_env_value(key: str, default: str = "") -> str:
+    if not OPENVPN_CONFIG_ENV_FILE.exists():
         return default
     try:
+        for line in OPENVPN_CONFIG_ENV_FILE.read_text(encoding="utf-8").splitlines():
             text = line.strip()
             if not text or text.startswith("#") or "=" not in text:
                 continue
@@ -340,17 +374,23 @@ def _zivpn_password_read(username: str) -> str:
     return default
 
 
+def _openvpn_public_host() -> str:
     domain = _detect_domain()
     if domain:
         return domain
+    host = str(_openvpn_env_value("OPENVPN_PUBLIC_HOST", "") or "").strip()
     if host:
         return host
     return _detect_public_ipv4() or "-"
 
 
+def _openvpn_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
     lines: list[str] = []
+    if OPENVPN_CONFIG_ENV_FILE.exists():
         try:
+            lines = OPENVPN_CONFIG_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception as exc:
+            return False, f"Gagal membaca config env OpenVPN: {exc}"
 
     out: list[str] = []
     seen: set[str] = set()
@@ -374,11 +414,17 @@ def _zivpn_password_read(username: str) -> str:
         out.append(f"{key}={value}")
 
     try:
+        OPENVPN_CONFIG_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(OPENVPN_CONFIG_ENV_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(OPENVPN_CONFIG_ENV_FILE, 0o600)
     except Exception as exc:
+        return False, f"Gagal menulis config env OpenVPN: {exc}"
     return True, "ok"
 
 
+def _managed_ssh_usernames() -> list[str]:
     names: set[str] = set()
+    for directory, suffix in ((SSH_ACCOUNT_DIR, f"@{SSH_PROTOCOL}.txt"), (SSH_QUOTA_DIR, f"@{SSH_PROTOCOL}.json")):
         if not directory.exists():
             continue
         for path in sorted(directory.iterdir()):
@@ -397,20 +443,26 @@ def _zivpn_password_read(username: str) -> str:
     return sorted(names)
 
 
+def _openvpn_sync_public_host_and_profiles(domain: str | None = None) -> tuple[int, int, int, str]:
+    if not _openvpn_runtime_available():
+        return 0, 0, 0, "OpenVPN runtime tidak tersedia."
 
     domain_eff = str(domain or "").strip() or _detect_domain()
     if not domain_eff:
         return 0, 0, 0, "Domain aktif tidak ditemukan."
 
+    ok_env, env_msg = _openvpn_update_env_many({"OPENVPN_PUBLIC_HOST": domain_eff})
     if not ok_env:
         return 0, 0, 0, env_msg
 
     updated = 0
     failed = 0
     skipped = 0
+    for username in _managed_ssh_usernames():
         if not _linux_user_exists(username):
             skipped += 1
             continue
+        ok_profile, payload_or_err = _openvpn_manage_json("ensure-user", "--username", username, timeout=300)
         if ok_profile and isinstance(payload_or_err, dict) and bool(payload_or_err.get("ok", True)):
             updated += 1
         else:
@@ -418,9 +470,12 @@ def _zivpn_password_read(username: str) -> str:
     return updated, failed, skipped, "ok"
 
 
+def _openvpn_public_tcp_port() -> str:
+    value = str(_openvpn_env_value("OPENVPN_PUBLIC_PORT_TCP", _openvpn_env_value("OPENVPN_PORT_TCP", "1194")) or "").strip()
     return value or "1194"
 
 
+def _openvpn_public_tcp_ports_label() -> str:
     ports = _edge_runtime_ports(
         "EDGE_PUBLIC_TLS_PORTS",
         "EDGE_PUBLIC_TLS_PORT",
@@ -440,16 +495,22 @@ def _zivpn_password_read(username: str) -> str:
         seen.add(port)
         merged.append(port)
     if not merged:
+        return _openvpn_public_tcp_port()
     return _edge_runtime_ports_label(merged)
 
 
+def _openvpn_download_link(username: str) -> str:
     username_n = str(username or "").strip()
     if not username_n:
         return "-"
+    host = str(_openvpn_public_host() or "").strip()
     if not host or host == "-":
         return "-"
+    return f"https://{host}/ovpn/{username_n}.ovpn"
 
 
+def _openvpn_ws_public_path() -> str:
+    path = str(_openvpn_env_value("OPENVPN_WS_PUBLIC_PATH", "") or "").strip()
     if not path:
         return "-"
     if not path.startswith("/"):
@@ -457,20 +518,31 @@ def _zivpn_password_read(username: str) -> str:
     return path
 
 
+def _openvpn_ws_alt_path() -> str:
+    path = _openvpn_ws_public_path()
     if path == "-":
         return "-"
     return _path_alt_placeholder(path)
 
 
+def _openvpn_profile_file(username: str) -> Path:
+    profile_dir = Path(_openvpn_env_value("OPENVPN_PROFILE_DIR", str(OPENVPN_PROFILE_DIR)))
+    return profile_dir / f"{str(username or '').strip()}@openvpn.ovpn"
 
 
+def _openvpn_download_token_file(token: str) -> Path:
+    return OPENVPN_DOWNLOAD_TOKEN_DIR / f"{str(token or '').strip()}.json"
 
 
+def _openvpn_prune_download_tokens(now_ts: int | None = None) -> None:
     current = int(now_ts or time.time())
     try:
+        OPENVPN_DOWNLOAD_TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+        OPENVPN_DOWNLOAD_TOKEN_DIR.chmod(0o700)
     except Exception:
         return
     try:
+        for path in OPENVPN_DOWNLOAD_TOKEN_DIR.glob("*.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
             except Exception:
@@ -483,11 +555,16 @@ def _zivpn_password_read(username: str) -> str:
         pass
 
 
+def _openvpn_issue_download_token(username: str, ttl_seconds: int = OPENVPN_DOWNLOAD_TTL_SECONDS) -> str:
+    _openvpn_prune_download_tokens()
+    OPENVPN_DOWNLOAD_TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        OPENVPN_DOWNLOAD_TOKEN_DIR.chmod(0o700)
     except Exception:
         pass
     expires_at = int(time.time()) + max(60, int(ttl_seconds))
     username_n = str(username or "").strip()
+    for token_path in OPENVPN_DOWNLOAD_TOKEN_DIR.glob("*.json"):
         try:
             payload = json.loads(token_path.read_text(encoding="utf-8", errors="ignore"))
         except Exception:
@@ -500,6 +577,7 @@ def _zivpn_password_read(username: str) -> str:
         token = secrets.token_urlsafe(6).rstrip("=")
         if not token:
             continue
+        token_path = _openvpn_download_token_file(token)
         if token_path.exists():
             continue
         payload = {
@@ -515,7 +593,11 @@ def _zivpn_password_read(username: str) -> str:
     return ""
 
 
+def _openvpn_manage_json(*args: str, timeout: int = 60) -> tuple[bool, dict[str, Any] | str]:
+    if not _openvpn_runtime_available():
+        return False, "OpenVPN runtime tidak tersedia"
     ok, out = _run_cmd(
+        [str(OPENVPN_MANAGE_BIN), "--config", str(OPENVPN_CONFIG_ENV_FILE), *args],
         timeout=timeout,
     )
     if not ok:
@@ -523,11 +605,16 @@ def _zivpn_password_read(username: str) -> str:
     try:
         payload = json.loads(out)
     except Exception as exc:
+        return False, f"Gagal parse output openvpn-manage: {exc}"
     if not isinstance(payload, dict):
+        return False, "Format output openvpn-manage tidak valid"
     return True, payload
 
 
+def _openvpn_ensure_user(username: str) -> tuple[bool, str]:
+    if not _openvpn_runtime_available():
         return True, "skip"
+    ok, payload = _openvpn_manage_json("ensure-user", "--username", str(username or "").strip(), timeout=300)
     if not ok:
         return False, str(payload)
     if not bool(payload.get("ok")):
@@ -535,7 +622,10 @@ def _zivpn_password_read(username: str) -> str:
     return True, str(payload.get("profile_path") or "")
 
 
+def _openvpn_delete_user(username: str) -> tuple[bool, str]:
+    if not _openvpn_runtime_available():
         return True, "skip"
+    ok, payload = _openvpn_manage_json("delete-user", "--username", str(username or "").strip(), timeout=300)
     if not ok:
         return False, str(payload)
     if not bool(payload.get("ok", True)):
@@ -546,6 +636,9 @@ def _zivpn_password_read(username: str) -> str:
     return True, "ok"
 
 
+def _openvpn_cleanup_local_artifacts(username: str) -> tuple[bool, str]:
+    profile = _openvpn_profile_file(username)
+    metadata = Path(_openvpn_env_value("OPENVPN_METADATA_DIR", str(OPENVPN_METADATA_DIR))) / f"{str(username or '').strip()}@openvpn.json"
     notes: list[str] = []
     for path in (profile, metadata):
         try:
@@ -560,6 +653,8 @@ def _zivpn_password_read(username: str) -> str:
     return True, "ok"
 
 
+def _openvpn_policy_state_load(username: str) -> dict[str, Any]:
+    target = _resolve_existing(_quota_candidates(OPENVPN_POLICY_PROTOCOL, username))
     if target is None:
         return {}
     ok, payload = _read_json(target)
@@ -568,10 +663,15 @@ def _zivpn_password_read(username: str) -> str:
     return payload
 
 
+def _openvpn_load_state(username: str, *, create_missing: bool = False) -> tuple[bool, Path | str, dict[str, Any] | str]:
+    target = _resolve_existing(_quota_candidates(OPENVPN_POLICY_PROTOCOL, username))
     if target is None and create_missing:
+        ok_ensure, ensure_msg = _openvpn_ensure_user(username)
         if not ok_ensure:
             return False, ensure_msg, ""
+        target = _resolve_existing(_quota_candidates(OPENVPN_POLICY_PROTOCOL, username))
     if target is None:
+        return False, f"File quota tidak ditemukan untuk {username} [{OPENVPN_POLICY_PROTOCOL}]", ""
     ok, payload = _read_json(target)
     if not ok:
         return False, str(payload), ""
@@ -899,9 +999,11 @@ def _ensure_runtime_dirs() -> None:
         ACCOUNT_ROOT / "vless",
         ACCOUNT_ROOT / "vmess",
         ACCOUNT_ROOT / "trojan",
+        SSH_ACCOUNT_DIR,
         QUOTA_ROOT / "vless",
         QUOTA_ROOT / "vmess",
         QUOTA_ROOT / "trojan",
+        SSH_QUOTA_DIR,
         SPEED_POLICY_ROOT / "vless",
         SPEED_POLICY_ROOT / "vmess",
         SPEED_POLICY_ROOT / "trojan",
@@ -993,6 +1095,8 @@ def _is_valid_username(username: str) -> bool:
     return bool(USERNAME_RE.match(username or ""))
 
 
+def _is_valid_ssh_username(username: str) -> bool:
+    return bool(SSH_USERNAME_RE.match(username or ""))
 
 
 def _email(proto: str, username: str) -> str:
@@ -1157,6 +1261,7 @@ def _capture_domain_runtime_snapshot() -> dict[str, Any]:
         "cert_fullchain": _snapshot_optional_file(CERT_FULLCHAIN),
         "cert_privkey": _snapshot_optional_file(CERT_PRIVKEY),
         "nginx_was_active": _service_exists("nginx") and _service_is_active("nginx"),
+        "sshws_stunnel_was_active": _service_exists("sshws-stunnel") and _service_is_active("sshws-stunnel"),
         "edge_service_name": edge_service,
         "edge_service_was_active": bool(
             edge_service and _service_exists(edge_service) and _service_is_active(edge_service)
@@ -1318,10 +1423,14 @@ def _restore_warp_runtime_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]
                 failures.append(f"{WARP_ZEROTRUST_SERVICE} gagal dikembalikan ke state inactive saat rollback WARP.")
 
     if not failures:
+        ok_apply, msg_apply = _ssh_network_apply_runtime()
         if not ok_apply:
+            failures.append(f"SSH Network gagal direkonsiliasi saat rollback WARP: {msg_apply}")
         else:
             with _user_data_mutation_lock():
+                ok_refresh, refresh_msg = _ssh_refresh_all_account_info()
             if not ok_refresh:
+                failures.append(f"SSH ACCOUNT INFO gagal direfresh saat rollback WARP: {refresh_msg}")
 
     if failures:
         return False, " | ".join(failures)
@@ -1335,9 +1444,12 @@ def _manage_script_path() -> Path | None:
     return None
 
 
+def _ssh_network_env_map() -> dict[str, str]:
     data: dict[str, str] = {}
     try:
+        if not SSH_NETWORK_ENV_FILE.exists():
             return data
+        for raw in SSH_NETWORK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -1348,12 +1460,18 @@ def _manage_script_path() -> Path | None:
     return data
 
 
+def _ssh_network_env_value(key: str, default: str = "") -> str:
+    value = _ssh_network_env_map().get(key)
     return value if isinstance(value, str) and value.strip() else default
 
 
+def _ssh_network_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
     lines: list[str] = []
+    if SSH_NETWORK_ENV_FILE.exists():
         try:
+            lines = SSH_NETWORK_ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception as exc:
+            return False, f"Gagal membaca config env SSH Network: {exc}"
 
     out: list[str] = []
     seen: set[str] = set()
@@ -1377,16 +1495,26 @@ def _manage_script_path() -> Path | None:
         out.append(f"{key}={value}")
 
     try:
+        SSH_NETWORK_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(SSH_NETWORK_ENV_FILE, "\n".join(out).rstrip("\n") + "\n")
+        os.chmod(SSH_NETWORK_ENV_FILE, 0o600)
     except Exception as exc:
+        return False, f"Gagal menulis config env SSH Network: {exc}"
     return True, "ok"
 
 
+def _ssh_network_global_mode_get() -> str:
+    value = _ssh_network_env_value("SSH_NETWORK_ROUTE_GLOBAL", "direct").strip().lower()
     return value if value in {"direct", "warp"} else "direct"
 
 
+def _ssh_network_backend_get() -> str:
+    value = _ssh_network_env_value("SSH_NETWORK_WARP_BACKEND", "auto").strip().lower()
     return value if value in {"auto", "local-proxy", "interface"} else "auto"
 
 
+def _ssh_network_backend_effective(configured: str | None = None) -> str:
+    value = str(configured or _ssh_network_backend_get()).strip().lower()
     if value in {"local-proxy", "interface"}:
         return value
     if shutil.which("xray") and shutil.which("iptables"):
@@ -1394,9 +1522,13 @@ def _manage_script_path() -> Path | None:
     return "interface"
 
 
+def _ssh_network_effective_rows() -> list[dict[str, str]]:
+    global_mode = _ssh_network_global_mode_get()
     rows: list[dict[str, str]] = []
+    if not SSH_QUOTA_DIR.exists():
         return rows
 
+    for quota_path in sorted(SSH_QUOTA_DIR.glob("*.json")):
         ok, payload = _read_json(quota_path)
         if not ok or not isinstance(payload, dict):
             continue
@@ -1424,6 +1556,7 @@ def _manage_script_path() -> Path | None:
     return rows
 
 
+def _ssh_network_host_mode_state() -> str:
     value = _network_state_get(WARP_MODE_STATE_KEY).strip().lower()
     if value in {"consumer", "zerotrust"}:
         return value
@@ -1432,9 +1565,12 @@ def _manage_script_path() -> Path | None:
     return "consumer"
 
 
+def _ssh_network_require_backend_compatible(backend: str) -> tuple[bool, str]:
     backend_n = str(backend or "").strip().lower()
+    if backend_n == "interface" and _ssh_network_host_mode_state() == "zerotrust":
         return (
             False,
+            "Dedicated Interface SSH tidak kompatibel saat host aktif di Zero Trust. "
             "Gunakan Local Proxy atau kembalikan host ke Free/Plus lebih dulu.",
         )
     return True, "ok"
@@ -1443,6 +1579,7 @@ def _manage_script_path() -> Path | None:
 def _warp_restart_target_service() -> tuple[bool, str, str, str]:
     zerotrust_exists = _service_exists(WARP_ZEROTRUST_SERVICE)
     zerotrust_active = zerotrust_exists and _service_is_active(WARP_ZEROTRUST_SERVICE)
+    if zerotrust_active or _ssh_network_host_mode_state() == "zerotrust":
         if not zerotrust_exists:
             return False, "", "Zero Trust", f"{WARP_ZEROTRUST_SERVICE}.service tidak terdeteksi."
         return True, WARP_ZEROTRUST_SERVICE, "Zero Trust", "ok"
@@ -1453,19 +1590,27 @@ def _warp_restart_target_service() -> tuple[bool, str, str, str]:
     return False, "", "Free/Plus", "wireproxy.service tidak terdeteksi."
 
 
+def _ssh_network_apply_runtime(*, skip_network_lock: bool = False) -> tuple[bool, str]:
     manage_script = _manage_script_path()
     if manage_script is None:
+        return False, "manage script tidak ditemukan untuk apply SSH Network."
     env = os.environ.copy()
     if skip_network_lock:
+        env["SSH_NETWORK_LOCK_HELD"] = "1"
+    return _run_cmd(["bash", str(manage_script), "__apply-ssh-network"], timeout=180, env=env)
 
 
+def _ssh_network_snapshot() -> dict[str, Any]:
     return {
+        "env": _snapshot_optional_file(SSH_NETWORK_ENV_FILE),
     }
 
 
+def _ssh_network_restore_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]:
     entry = snapshot.get("env")
     if not isinstance(entry, dict):
         return True, "ok"
+    return _restore_optional_file(SSH_NETWORK_ENV_FILE, entry)
 
 
 def _normalize_ip_literal(value: str) -> str:
@@ -1485,16 +1630,25 @@ def _listener_present(port: int) -> bool:
 
 
 def _adblock_dnsmasq_conf_path() -> Path:
+    return _adblock_path_from_env("SSH_DNS_ADBLOCK_DNSMASQ_CONF", ADBLOCK_DEFAULT_DNSMASQ_CONF)
 
 
+def _ssh_dns_resolver_runtime_conf_write() -> tuple[bool, str]:
+    dns_port = str(_adblock_env_value("SSH_DNS_ADBLOCK_PORT", "5353")).strip()
     if not dns_port.isdigit():
         dns_port = "5353"
     try:
+        primary = _normalize_ip_literal(_adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY", "1.1.1.1"))
     except Exception:
+        return False, "Primary DNS SSH di config tidak valid."
     try:
+        secondary = _normalize_ip_literal(_adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY", "8.8.8.8"))
     except Exception:
+        return False, "Secondary DNS SSH di config tidak valid."
+    rendered = _adblock_path_from_env("SSH_DNS_ADBLOCK_RENDERED_FILE", ADBLOCK_DEFAULT_RENDERED)
     dnsmasq_conf = _adblock_dnsmasq_conf_path()
     content = (
+        "# SSH Adblock resolver\n"
         f"port={dns_port}\n"
         "listen-address=127.0.0.1\n"
         "bind-interfaces\n"
@@ -1512,15 +1666,20 @@ def _adblock_dnsmasq_conf_path() -> Path:
         _write_text_atomic(dnsmasq_conf, content)
         os.chmod(dnsmasq_conf, 0o644)
     except Exception as exc:
+        return False, f"Gagal menulis dnsmasq SSH Adblock: {exc}"
     return True, "ok"
 
 
+def _ssh_dns_resolver_apply_now() -> tuple[bool, str]:
+    ok_write, msg_write = _ssh_dns_resolver_runtime_conf_write()
     if not ok_write:
         return False, msg_write
 
     dns_service = _adblock_dns_service_name()
     if not _service_exists(dns_service):
+        return False, f"Service DNS SSH tidak ditemukan: {dns_service}"
     if not _restart_and_wait(dns_service, timeout_sec=20):
+        return False, f"Service DNS SSH gagal start/restart: {dns_service}"
 
     if not ADBLOCK_SYNC_BIN.exists():
         return False, "adblock-sync tidak ditemukan."
@@ -1530,23 +1689,32 @@ def _adblock_dnsmasq_conf_path() -> Path:
     return True, out_apply
 
 
+def _ssh_dns_resolver_restore_dnsmasq_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str]:
     ok_restore, msg_restore = _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot)
     if not ok_restore:
         return False, msg_restore
     dns_service = _adblock_dns_service_name()
     if not _service_exists(dns_service):
+        return False, f"Service DNS SSH tidak ditemukan: {dns_service}"
     if not _restart_and_wait(dns_service, timeout_sec=20):
+        return False, f"Service DNS SSH gagal start/restart: {dns_service}"
     return True, "ok"
 
 
+def _ssh_network_user_route_mode_set(username: str, mode: str) -> tuple[bool, str]:
     username_n = str(username or "").strip()
     mode_n = str(mode or "").strip().lower()
+    if not _is_valid_ssh_username(username_n):
+        return False, "Username SSH tidak valid."
     if mode_n not in {"inherit", "direct", "warp"}:
+        return False, "Mode routing SSH harus inherit/direct/warp."
 
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, username_n))
     payload: dict[str, Any]
     if target is None:
         if not _linux_user_exists(username_n):
             return False, f"User Linux '{username_n}' belum ada."
+        ok_state, target_or_err, payload_or_err = _ssh_load_state(
             username_n,
             create_missing=True,
             created_at=_local_now().strftime("%Y-%m-%d %H:%M"),
@@ -1563,7 +1731,9 @@ def _adblock_dnsmasq_conf_path() -> Path:
         if ok_raw and isinstance(raw_payload, dict):
             payload = raw_payload
         else:
+            ok_state, _, payload_or_err = _ssh_load_state(username_n, create_missing=True)
             if not ok_state or not isinstance(payload_or_err, dict):
+                return False, f"Gagal membaca metadata SSH untuk '{username_n}'."
             payload = payload_or_err
 
     network = payload.get("network")
@@ -1576,6 +1746,7 @@ def _adblock_dnsmasq_conf_path() -> Path:
         _write_json_atomic(target, payload)
         _chmod_600(target)
     except Exception as exc:
+        return False, f"Gagal menyimpan route_mode SSH untuk '{username_n}': {exc}"
     return True, "ok"
 
 
@@ -1718,9 +1889,13 @@ def _warp_zero_trust_render_mdm_file() -> tuple[bool, str]:
     return True, "ok"
 
 
+def _warp_zero_trust_ssh_guard() -> tuple[bool, str]:
+    backend_effective = _ssh_network_backend_effective()
+    effective_warp_users = sum(1 for row in _ssh_network_effective_rows() if row.get("effective") == "warp")
     if effective_warp_users > 0 and backend_effective != "local-proxy":
         return (
             False,
+            "Zero Trust belum kompatibel dengan SSH Network yang effective WARP users-nya aktif di backend non-Local Proxy.",
         )
     return True, "ok"
 
@@ -1755,9 +1930,11 @@ def _adblock_path_from_env(key: str, default: str) -> Path:
 
 
 def _adblock_sync_service_name() -> str:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_SYNC_SERVICE", ADBLOCK_DEFAULT_SYNC_SERVICE)
 
 
 def _adblock_dns_service_name() -> str:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_SERVICE", ADBLOCK_DEFAULT_DNS_SERVICE)
 
 
 def _adblock_auto_update_service_name() -> str:
@@ -1810,6 +1987,7 @@ def _adblock_update_env_many(updates: dict[str, str]) -> tuple[bool, str]:
 
 
 def _adblock_enabled_flag() -> bool:
+    return _adblock_env_value("SSH_DNS_ADBLOCK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def _adblock_status_map() -> dict[str, str]:
@@ -2453,9 +2631,12 @@ def _linux_user_exists(username: str) -> bool:
         return False
 
 
+def _ssh_password_output(password_raw: str) -> str:
     return str(password_raw or "-")
 
 
+def _ssh_password_from_account_info(username: str) -> str:
+    account_file = _resolve_existing(_account_candidates(SSH_PROTOCOL, username))
     if account_file is None:
         return "-"
     fields = _read_account_fields(account_file)
@@ -2463,11 +2644,14 @@ def _linux_user_exists(username: str) -> bool:
     return password or "-"
 
 
+def _ssh_previous_password(username: str) -> str:
     password = _zivpn_password_read(username)
     if password and password != "-":
         return password
+    return _ssh_password_from_account_info(username)
 
 
+def _ssh_collect_existing_tokens(state_dir: Path, current_path: Path | None = None) -> set[str]:
     tokens: set[str] = set()
     current_real = current_path.resolve() if current_path and current_path.exists() else None
     try:
@@ -2483,6 +2667,7 @@ def _linux_user_exists(username: str) -> bool:
         ok, payload = _read_json(candidate)
         if not ok or not isinstance(payload, dict):
             continue
+        token = str(payload.get("sshws_token") or "").strip().lower()
         if re.fullmatch(r"[a-f0-9]{10}", token or ""):
             tokens.add(token)
     return tokens
@@ -2534,20 +2719,28 @@ def _account_portal_url(token: str) -> str:
     return f"https://{host}/account/{token_n}"
 
 
+def _ssh_ensure_state_token(payload: dict[str, Any], state_path: Path | None = None) -> str:
+    candidate = str(payload.get("sshws_token") or "").strip().lower()
+    state_dir = state_path.parent if state_path is not None else SSH_QUOTA_DIR
+    used = _ssh_collect_existing_tokens(state_dir, current_path=state_path)
     if re.fullmatch(r"[a-f0-9]{10}", candidate or "") and candidate not in used:
         return candidate
     for _ in range(128):
         token = secrets.token_hex(5)
         if token not in used:
             return token
+    raise RuntimeError("Gagal membuat sshws_token unik.")
 
 
+def _ssh_ws_public_ports_label() -> str:
     return _edge_runtime_ws_ports_label()
 
 
+def _ssh_direct_public_ports_label() -> str:
     return _edge_runtime_ws_ports_label()
 
 
+def _ssh_ssl_tls_public_ports_label() -> str:
     return _edge_runtime_ws_ports_label()
 
 
@@ -2610,12 +2803,23 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return _local_now().strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M")
 
 
+def _ssh_traffic_enforcement_ready() -> bool:
+    return SSHWS_PROXY_BIN.exists() or _service_exists("sshws-proxy")
 
 
+def _ssh_traffic_scope_label() -> str:
+    if _ssh_traffic_enforcement_ready():
+        return "SSHWS only"
+    return "Metadata only (SSHWS not installed)"
 
 
+def _ssh_traffic_scope_note() -> str:
+    if _ssh_traffic_enforcement_ready():
+        return "Quota/IP-login/speed berlaku pada jalur SSHWS; native SSH port 22 tidak dihitung atau di-throttle."
+    return "SSHWS belum terpasang; quota/IP-login/speed SSH masih metadata dan native SSH port 22 tidak dihitung atau di-throttle."
 
 
+def _ssh_normalize_state_payload(
     username: str,
     payload: dict[str, Any] | None = None,
     *,
@@ -2634,11 +2838,13 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     normalized: dict[str, Any] = {
         "managed_by": "autoscript-manage",
         "username": str(username or "").strip(),
+        "protocol": SSH_PROTOCOL,
         "created_at": str(created_at or existing.get("created_at") or "").strip() or _local_now().strftime("%Y-%m-%d %H:%M"),
         "expired_at": (str(expired_at or existing.get("expired_at") or "-").strip() or "-")[:10],
         "quota_limit": quota_limit,
         "quota_unit": quota_unit,
         "quota_used": quota_used,
+        "sshws_token": _ssh_ensure_state_token(existing, state_path=state_path),
         "portal_token": _portal_ensure_token(existing, state_path=state_path),
         "status": {
             "manual_block": bool(status_raw.get("manual_block")),
@@ -2659,14 +2865,18 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return normalized
 
 
+def _ssh_load_state(
     username: str,
     *,
     create_missing: bool = False,
     created_at: str = "",
     expired_at: str = "",
 ) -> tuple[bool, Path | str, dict[str, Any] | str]:
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, username))
     if target is None:
         if not create_missing:
+            return False, f"File quota tidak ditemukan untuk {username} [{SSH_PROTOCOL}]", ""
+        target = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
         payload: dict[str, Any] = {}
     else:
         ok, raw = _read_json(target)
@@ -2676,6 +2886,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
             return False, f"Format quota tidak valid: {target}", ""
         payload = raw
 
+    normalized = _ssh_normalize_state_payload(
         username,
         payload,
         created_at=created_at,
@@ -2685,6 +2896,8 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return True, target, normalized
 
 
+def _ssh_save_state(path: Path, payload: dict[str, Any]) -> None:
+    normalized = _ssh_normalize_state_payload(
         str(payload.get("username") or ""),
         payload,
         created_at=str(payload.get("created_at") or ""),
@@ -2695,11 +2908,13 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     _chmod_600(path)
 
 
+def _ssh_quota_limit_display(quota_bytes: int) -> str:
     if quota_bytes <= 0:
         return "0 GB"
     return f"{_fmt_number(quota_bytes / (1024**3))} GB"
 
 
+def _ssh_expired_display(expired_at: str) -> str:
     value = str(expired_at or "").strip()[:10]
     if not value or value == "-":
         return "unlimited"
@@ -2711,6 +2926,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         return "unknown"
 
 
+def _ssh_ip_limit_display(enabled: bool, limit: int) -> str:
     if not enabled:
         return "OFF"
     if limit > 0:
@@ -2718,26 +2934,31 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return "ON"
 
 
+def _ssh_speed_limit_display(enabled: bool, down: float, up: float) -> str:
     if not enabled:
         return "OFF"
     return f"ON (DOWN {_fmt_number(down)} Mbps | UP {_fmt_number(up)} Mbps)"
 
 
+def _ssh_route_mode_details(quota_payload: dict[str, Any]) -> tuple[str, str]:
     network = quota_payload.get("network") if isinstance(quota_payload.get("network"), dict) else {}
     override = str(network.get("route_mode") or "").strip().lower()
     if override not in {"inherit", "direct", "warp"}:
         override = "inherit"
+    effective = _ssh_network_global_mode_get() if override == "inherit" else override
     if effective not in {"direct", "warp"}:
         effective = "direct"
     return override, effective
 
 
+def _ssh_write_account_info(
     username: str,
     *,
     password: str,
     quota_payload: dict[str, Any],
 ) -> tuple[bool, str]:
     status = quota_payload.get("status") if isinstance(quota_payload.get("status"), dict) else {}
+    account_file = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
     created_at = str(quota_payload.get("created_at") or "").strip() or _local_now().strftime("%Y-%m-%d %H:%M")
     created_disp = _normalize_created_display(created_at, date_only=True)
     expired_at = str(quota_payload.get("expired_at") or "-").strip()[:10] or "-"
@@ -2747,26 +2968,70 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     speed_enabled = bool(status.get("speed_limit_enabled"))
     speed_down = max(0.0, _to_float(status.get("speed_down_mbit"), 0.0))
     speed_up = max(0.0, _to_float(status.get("speed_up_mbit"), 0.0))
+    sshws_token = str(quota_payload.get("sshws_token") or "").strip().lower()
     portal_url = _account_portal_url(str(quota_payload.get("portal_token") or "").strip())
+    if re.fullmatch(r"[a-f0-9]{10}", sshws_token or ""):
+        sshws_path = f"/{sshws_token}"
+        sshws_alt_path = f"/<bebas>/{sshws_token}/<bebas>"
+        sshws_main = sshws_path
     else:
+        sshws_path = "-"
+        sshws_alt_path = "-"
+        sshws_main = "-"
     domain = _detect_domain() or "-"
     ok_ip, public_ip = _get_public_ipv4()
     ip = (public_ip if ok_ip else (_detect_public_ipv4() or "-")).strip() or "-"
     isp, country = _geo_lookup(ip)
 
     account_info_labels = [
+        "SSH WS Path",
+        "SSH WS Path Alt",
+        "SSH WS Port",
+        "SSH Direct Port",
+        "SSH SSL/TLS Port",
         "Alt Port SSL/TLS",
         "Alt Port HTTP",
         "BadVPN UDPGW",
         "ZIVPN Password",
     ]
+    openvpn_enabled = _openvpn_runtime_available()
+    openvpn_quota_limit = 0
+    openvpn_ip_enabled = False
+    openvpn_ip_limit = 0
+    openvpn_speed_enabled = False
+    openvpn_speed_down = 0.0
+    openvpn_speed_up = 0.0
+    if openvpn_enabled:
+        openvpn_state = _openvpn_policy_state_load(username)
+        openvpn_status = openvpn_state.get("status") if isinstance(openvpn_state.get("status"), dict) else {}
+        openvpn_quota_limit = max(0, _to_int(openvpn_state.get("quota_limit"), 0))
+        openvpn_ip_enabled = bool(openvpn_status.get("ip_limit_enabled"))
+        openvpn_ip_limit = max(0, _to_int(openvpn_status.get("ip_limit"), 0))
+        openvpn_speed_enabled = bool(openvpn_status.get("speed_limit_enabled"))
+        openvpn_speed_down = max(0.0, _to_float(openvpn_status.get("speed_down_mbit"), 0.0))
+        openvpn_speed_up = max(0.0, _to_float(openvpn_status.get("speed_up_mbit"), 0.0))
+    openvpn_portal_url = _account_portal_url(str(openvpn_state.get("portal_token") or "").strip()) if openvpn_enabled else "-"
+    if openvpn_enabled:
         account_info_labels.extend(
             [
+                "OpenVPN WS Path",
+                "OpenVPN WS Path Alt",
+                "OpenVPN WS Port",
+                "OpenVPN TCP",
+                "OpenVPN Link",
+                "Portal OpenVPN",
                 "Alt Port SSL/TLS",
                 "Alt Port HTTP",
             ]
         )
     running_label_width = max(len(label) for label in account_info_labels)
+    running_ssh_ws_path = f"{'SSH WS Path':<{running_label_width}} : {sshws_main}"
+    running_ssh_ws_alt = f"{'SSH WS Path Alt':<{running_label_width}} : {sshws_alt_path}"
+    running_ssh_ws_port = f"{'SSH WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}"
+    running_ssh_direct = f"{'SSH Direct Port':<{running_label_width}} : {_ssh_direct_public_ports_label()}"
+    running_ssh_ssl_tls = f"{'SSH SSL/TLS Port':<{running_label_width}} : {_ssh_ssl_tls_public_ports_label()}"
+    running_ssh_alt_tls = f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}"
+    running_ssh_alt_http = f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}"
     running_badvpn = f"{'BadVPN UDPGW':<{running_label_width}} : {_badvpn_public_port_label()}"
     lines = [
         "=== ACCOUNT INFO ===",
@@ -2775,12 +3040,27 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         f"ISP         : {isp}",
         f"Country     : {country}",
         f"Username    : {username}",
+        f"Password    : {_ssh_password_output(password)}",
+        f"Quota Limit : {_ssh_quota_limit_display(quota_limit)}",
+        f"Expired     : {_ssh_expired_display(expired_at)}",
         f"Valid Until : {expired_at}",
         f"Created     : {created_disp}",
+        f"IP Limit    : {_ssh_ip_limit_display(ip_enabled, ip_limit)}",
+        f"Speed Limit : {_ssh_speed_limit_display(speed_enabled, speed_down, speed_up)}",
+        f"Portal SSH  : {portal_url}",
         "",
+        "=== SSH ===",
+        running_ssh_ws_path,
+        running_ssh_ws_alt,
+        running_ssh_ws_port,
+        running_ssh_direct,
+        running_ssh_ssl_tls,
+        running_ssh_alt_tls,
+        running_ssh_alt_http,
         running_badvpn,
     ]
     if _zivpn_account_info_enabled():
+        zivpn_password_state = "same as SSH password" if _zivpn_user_password_synced(username) else "not synced to runtime"
         lines.extend(
             [
                 "",
@@ -2788,9 +3068,19 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
                 f"{'ZIVPN Password':<{running_label_width}} : {zivpn_password_state}",
             ]
         )
+    if openvpn_enabled:
+        openvpn_ws_path = _openvpn_ws_public_path()
+        openvpn_ws_alt_path = _openvpn_ws_alt_path()
         lines.extend(
             [
                 "",
+                "=== OPENVPN ===",
+                f"{'OpenVPN WS Path':<{running_label_width}} : {openvpn_ws_path}",
+                f"{'OpenVPN WS Path Alt':<{running_label_width}} : {openvpn_ws_alt_path}",
+                f"{'OpenVPN WS Port':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
+                f"{'OpenVPN TCP':<{running_label_width}} : {_ssh_ws_public_ports_label()}",
+                f"{'OpenVPN Link':<{running_label_width}} : {_openvpn_download_link(username)}",
+                f"{'Portal OpenVPN':<{running_label_width}} : {openvpn_portal_url}",
                 f"{'Alt Port SSL/TLS':<{running_label_width}} : {_edge_runtime_alt_tls_ports_label()}",
                 f"{'Alt Port HTTP':<{running_label_width}} : {_edge_runtime_alt_http_ports_label()}",
             ]
@@ -2802,8 +3092,11 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         _chmod_600(account_file)
         return True, str(account_file)
     except Exception as exc:
+        return False, f"Gagal menulis SSH account info: {exc}"
 
 
+def _ssh_refresh_account_info(username: str, password_override: str = "") -> tuple[bool, str]:
+    ok_state, state_path_or_err, payload_or_err = _ssh_load_state(username)
     if not ok_state:
         return False, str(state_path_or_err)
     state_path = state_path_or_err
@@ -2811,23 +3104,35 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     assert isinstance(state_path, Path)
     assert isinstance(quota_payload, dict)
     try:
+        _ssh_save_state(state_path, quota_payload)
     except Exception as exc:
+        return False, f"Gagal menyimpan state SSH: {exc}"
+    password = str(password_override or "").strip() or _ssh_password_from_account_info(username)
+    return _ssh_write_account_info(username, password=password, quota_payload=quota_payload)
 
 
+def _ssh_account_info_paths_for_all_users() -> list[Path]:
     paths: list[Path] = []
     seen: set[str] = set()
+    if not SSH_QUOTA_DIR.exists():
         return paths
+    for quota_path in sorted(SSH_QUOTA_DIR.glob("*.json")):
         ok, payload = _read_json(quota_path)
         if not ok or not isinstance(payload, dict):
             continue
         username = str(payload.get("username") or quota_path.stem.split("@", 1)[0]).strip()
+        if not _is_valid_ssh_username(username) or username in seen:
             continue
         seen.add(username)
+        paths.append(SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt")
     return paths
 
 
+def _ssh_snapshot_account_info_files() -> dict[str, dict[str, Any]]:
+    return {str(path): _snapshot_optional_file(path) for path in _ssh_account_info_paths_for_all_users()}
 
 
+def _ssh_restore_account_info_snapshots(snapshots: dict[str, dict[str, Any]]) -> tuple[bool, str]:
     failures: list[str] = []
     for path_text, snapshot in snapshots.items():
         ok_restore, msg_restore = _restore_optional_file(Path(path_text), snapshot)
@@ -2838,13 +3143,18 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return True, "ok"
 
 
+def _ssh_refresh_all_account_info() -> tuple[bool, str]:
     failures: list[str] = []
+    if not SSH_QUOTA_DIR.exists():
         return True, "ok"
+    for quota_path in sorted(SSH_QUOTA_DIR.glob("*.json")):
         ok, payload = _read_json(quota_path)
         if not ok or not isinstance(payload, dict):
             continue
         username = str(payload.get("username") or quota_path.stem.split("@", 1)[0]).strip()
+        if not _is_valid_ssh_username(username):
             continue
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
         if not ok_refresh:
             failures.append(f"{username}: {refresh_msg}")
     if failures:
@@ -2855,7 +3165,12 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return True, "ok"
 
 
+def _ssh_run_enforcer(*, username: str = "", require_available: bool = False) -> tuple[bool, str]:
+    if not SSHWS_QAC_ENFORCER_BIN.exists():
         if require_available:
+            return False, "sshws-qac-enforcer tidak tersedia"
+        return True, "skip: sshws-qac-enforcer tidak tersedia"
+    args = [str(SSHWS_QAC_ENFORCER_BIN), "--once"]
     target_user = str(username or "").strip()
     if target_user:
         args.extend(["--user", target_user])
@@ -2865,14 +3180,18 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return False, out
 
 
+def _ssh_post_update_warnings(username: str, password_override: str = "") -> list[str]:
     warnings: list[str] = []
+    ok_enforce, enforce_msg = _ssh_run_enforcer(username=username)
     if not ok_enforce:
         warnings.append(f"enforcer: {enforce_msg}")
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
     if not ok_refresh:
         warnings.append(f"account-info: {refresh_msg}")
     return warnings
 
 
+def _ssh_apply_state_update(
     username: str,
     path: Path,
     previous_payload: dict[str, Any],
@@ -2883,18 +3202,24 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     require_account_info: bool = False,
 ) -> tuple[bool, list[str], str]:
     try:
+        _ssh_save_state(path, next_payload)
     except Exception as exc:
+        return False, [], f"Gagal menyimpan state SSH: {exc}"
 
     if not require_enforcer and not require_account_info:
+        return True, _ssh_post_update_warnings(username, password_override=password_override), ""
 
     if not require_enforcer:
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
         if ok_refresh:
             return True, [], ""
         rollback_notes: list[str] = []
         try:
+            _ssh_save_state(path, previous_payload)
         except Exception as exc:
             rollback_notes.append(f"rollback-state: {exc}")
         else:
+            ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
                 username,
                 password_override=password_override,
             )
@@ -2908,20 +3233,25 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
             detail += " | state di-rollback"
         return False, [], detail
 
+    ok_enforce, enforce_msg = _ssh_run_enforcer(username=username, require_available=True)
     if ok_enforce:
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=password_override)
         if ok_refresh:
             return True, [], ""
 
         rollback_notes: list[str] = []
         try:
+            _ssh_save_state(path, previous_payload)
         except Exception as exc:
             rollback_notes.append(f"rollback-state: {exc}")
         else:
+            ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
                 username=username,
                 require_available=True,
             )
             if not ok_rollback_enforce:
                 rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+            ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
                 username,
                 password_override=password_override,
             )
@@ -2937,14 +3267,17 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
 
     rollback_notes: list[str] = []
     try:
+        _ssh_save_state(path, previous_payload)
     except Exception as exc:
         rollback_notes.append(f"rollback-state: {exc}")
     else:
+        ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
             username=username,
             require_available=True,
         )
         if not ok_rollback_enforce:
             rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+        ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(
             username,
             password_override=password_override,
         )
@@ -2959,13 +3292,20 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return False, [], detail
 
 
+def _openvpn_speed_reconcile_now() -> tuple[bool, str]:
+    if _service_exists("openvpn-speed-reconcile"):
+        ok, out = _run_cmd(["systemctl", "start", "openvpn-speed-reconcile.service"], timeout=20)
         return ok, out
+    if _service_exists("openvpn-speed"):
+        ok, out = _run_cmd(["systemctl", "start", "openvpn-speed-reconcile.service"], timeout=20)
         if ok:
             return True, out
+        ok_once, out_once = _run_cmd(["/usr/local/bin/openvpn-speed", "once", "--config", "/etc/autoscript/openvpn/speed.json"], timeout=30)
         return ok_once, out_once
     return True, "skip"
 
 
+def _openvpn_apply_state_update(
     username: str,
     path: Path,
     previous_payload: dict[str, Any],
@@ -2974,7 +3314,9 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     try:
         _save_quota(path, next_payload)
     except Exception as exc:
+        return False, [], f"Gagal menyimpan state OpenVPN: {exc}"
 
+    ok_enforce, enforce_msg = _ssh_run_enforcer(username=username, require_available=True)
     if not ok_enforce:
         rollback_notes: list[str] = []
         try:
@@ -2982,11 +3324,13 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         except Exception as exc:
             rollback_notes.append(f"rollback-state: {exc}")
         else:
+            ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
                 username=username,
                 require_available=True,
             )
             if not ok_rollback_enforce:
                 rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+            ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(username)
             if not ok_rollback_refresh:
                 rollback_notes.append(f"rollback-account-info: {rollback_refresh_msg}")
         detail = f"enforcer: {enforce_msg}"
@@ -2997,9 +3341,11 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
         return False, [], detail
 
     warnings: list[str] = []
+    ok_speed, speed_msg = _openvpn_speed_reconcile_now()
     if not ok_speed:
         warnings.append(f"speed-reconcile: {speed_msg}")
 
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
     if ok_refresh:
         return True, warnings, ""
 
@@ -3009,13 +3355,16 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     except Exception as exc:
         rollback_notes.append(f"rollback-state: {exc}")
     else:
+        ok_rollback_enforce, rollback_enforce_msg = _ssh_run_enforcer(
             username=username,
             require_available=True,
         )
         if not ok_rollback_enforce:
             rollback_notes.append(f"rollback-enforcer: {rollback_enforce_msg}")
+        ok_rollback_speed, rollback_speed_msg = _openvpn_speed_reconcile_now()
         if not ok_rollback_speed:
             rollback_notes.append(f"rollback-speed: {rollback_speed_msg}")
+        ok_rollback_refresh, rollback_refresh_msg = _ssh_refresh_account_info(username)
         if not ok_rollback_refresh:
             rollback_notes.append(f"rollback-account-info: {rollback_refresh_msg}")
 
@@ -3027,6 +3376,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return False, warnings, detail
 
 
+def _openvpn_quota_update(
     title: str,
     username: str,
     success_msg: str,
@@ -3034,6 +3384,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     *,
     create_missing: bool = True,
 ) -> tuple[bool, str, str]:
+    ok_q, q_path_or_msg, q_data_or_msg = _openvpn_load_state(username, create_missing=create_missing)
     if not ok_q:
         return False, title, str(q_path_or_msg)
     q_path = q_path_or_msg
@@ -3042,18 +3393,23 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     assert isinstance(q_data, dict)
     previous_payload = copy.deepcopy(q_data)
     mutate_fn(q_data)
+    ok_apply, warnings, apply_error = _openvpn_apply_state_update(username, q_path, previous_payload, q_data)
     if not ok_apply:
+        return False, title, f"{success_msg} gagal diterapkan untuk {username}@{OPENVPN_POLICY_PROTOCOL}: {apply_error}"
+    msg = f"{success_msg} untuk {username}@{OPENVPN_POLICY_PROTOCOL}"
     if warnings:
         msg += "\n- Warning: " + " | ".join(warnings)
     return True, title, msg
 
 
+def _ssh_restore_linux_password(username: str, password: str) -> tuple[bool, str]:
     return _run_cmd(
         ["bash", "-lc", 'printf "%s:%s\\n" "$0" "$1" | chpasswd', username, password],
         timeout=20,
     )
 
 
+def _ssh_delete_linux_user(username: str) -> tuple[bool, str]:
     if not _linux_user_exists(username):
         return True, "skip"
     ok_del, out_del = _run_cmd(["userdel", "-r", username], timeout=20)
@@ -3065,12 +3421,15 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return False, out_del2
 
 
+def _ssh_password_reset_rollback(username: str, previous_password: str) -> tuple[bool, str]:
     previous = str(previous_password or "").strip()
     if not previous or previous == "-":
         return False, "password lama tidak tersedia untuk rollback"
+    ok_restore, restore_msg = _ssh_restore_linux_password(username, previous)
     if not ok_restore:
         return False, f"rollback Linux password gagal: {restore_msg}"
     rollback_notes: list[str] = []
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=previous)
     if not ok_refresh:
         rollback_notes.append(f"account info rollback gagal: {refresh_msg}")
     ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, previous)
@@ -3081,12 +3440,14 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     return True, "ok"
 
 
+def _ssh_delete_zivpn_rollback(username: str, previous_password: str) -> tuple[bool, str]:
     previous = str(previous_password or "").strip()
     if not previous or previous == "-":
         return False, "password lama tidak tersedia untuk rollback ZIVPN"
     return _zivpn_sync_user_password(username, previous)
 
 
+def _ssh_add_user_rollback(
     username: str,
     quota_path: Path | None,
     account_path: Path,
@@ -3096,6 +3457,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
     cleanup_zivpn: bool,
 ) -> tuple[bool, str, str]:
     title = "User Management - Add User"
+    ok_openvpn_cleanup, openvpn_cleanup_msg = _openvpn_cleanup_local_artifacts(username)
     if cleanup_zivpn:
         ok_cleanup, cleanup_msg = _zivpn_remove_user_password(username)
         if not ok_cleanup:
@@ -3109,6 +3471,7 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
                 ),
             )
 
+    ok_del, del_msg = _ssh_delete_linux_user(username)
     if not ok_del:
         rollback_note = ""
         if cleanup_zivpn:
@@ -3139,26 +3502,33 @@ def _normalize_created_display(raw: Any, *, date_only: bool = False) -> str:
             continue
         if path.exists() or path.is_symlink():
             error_prefix += f"\n- Cleanup artefak gagal: {path} masih ada"
+    if not ok_openvpn_cleanup:
+        error_prefix += f"\n- Cleanup OpenVPN gagal: {openvpn_cleanup_msg}"
     return False, title, error_prefix
 
 
+def _ssh_apply_linux_expiry(username: str, expiry: str) -> tuple[bool, str]:
     expiry_n = str(expiry or "").strip()
     if not expiry_n or expiry_n == "-":
         return _run_cmd(["chage", "-E", "-1", username], timeout=20)
     return _run_cmd(["chage", "-E", expiry_n, username], timeout=20)
 
 
+def _ssh_expiry_update_rollback(
     username: str,
     previous_expiry: str,
     quota_path: Path,
     previous_payload: dict[str, Any],
 ) -> tuple[bool, str]:
     notes: list[str] = []
+    ok_expiry, expiry_msg = _ssh_apply_linux_expiry(username, previous_expiry)
     if not ok_expiry:
         notes.append(f"rollback-expiry: {expiry_msg}")
     try:
+        _ssh_save_state(quota_path, previous_payload)
     except Exception as exc:
         notes.append(f"rollback-state: {exc}")
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
     if not ok_refresh:
         notes.append(f"rollback-account-info: {refresh_msg}")
     if notes:
@@ -4555,6 +4925,10 @@ def _write_account_artifacts(
 def _refresh_account_info_for_user(proto: str, username: str, domain: str | None = None, ip: str | None = None) -> tuple[bool, str]:
     if proto not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Username SSH tidak valid"
+        return _ssh_refresh_account_info(username)
     if not _is_valid_username(username):
         return False, "Username tidak valid"
 
@@ -4684,6 +5058,7 @@ def _refresh_all_account_info(domain: str | None = None, ip: str | None = None) 
 
         for username in sorted(selected.keys()):
             target = selected[username]
+            if proto == SSH_PROTOCOL:
                 quota_target = _resolve_existing(_quota_candidates(proto, username))
                 if quota_target is None and not _linux_user_exists(username):
                     skipped += 1
@@ -4769,6 +5144,7 @@ def _account_info_needs_compat_refresh() -> bool:
             if _account_info_has_display_mismatch(text):
                 return True
 
+            if proto == SSH_PROTOCOL:
                 if is_noncanonical_name:
                     return True
                 continue
@@ -5476,6 +5852,9 @@ def op_user_add(
 ) -> tuple[bool, str, str]:
     if proto not in USER_PROTOCOLS:
         return False, "User Management - Add User", f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Add User", "Username SSH tidak valid. Gunakan huruf kecil/angka/_/-."
     elif not _is_valid_username(username):
         return False, "User Management - Add User", "Username tidak valid."
     if days <= 0:
@@ -5495,13 +5874,18 @@ def op_user_add(
     if exists:
         return False, "User Management - Add User", f"Username sudah ada: {username} ({where})"
 
+    if proto == SSH_PROTOCOL:
         raw_password = str(password or "")
         if not raw_password.strip():
+            return False, "User Management - Add User", "Password SSH wajib diisi."
         if username.strip().lower() == raw_password.strip().lower():
+            return False, "User Management - Add User", "Password SSH tidak boleh sama dengan username."
 
         expiry = (_local_today() + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
         created_at = _local_now().strftime("%Y-%m-%d %H:%M")
         quota_bytes = int(round(quota_gb * (1024**3)))
+        quota_path = SSH_QUOTA_DIR / f"{username}@{SSH_PROTOCOL}.json"
+        account_path = SSH_ACCOUNT_DIR / f"{username}@{SSH_PROTOCOL}.txt"
 
         ok_add_user, out_add_user = _run_cmd(["useradd", "-m", "-s", "/bin/bash", username], timeout=20)
         if not ok_add_user:
@@ -5512,6 +5896,7 @@ def op_user_add(
             timeout=20,
         )
         if not ok_passwd:
+            return _ssh_add_user_rollback(
                 username,
                 None,
                 account_path,
@@ -5520,7 +5905,9 @@ def op_user_add(
                 cleanup_zivpn=False,
             )
 
+        ok_expiry, out_expiry = _ssh_apply_linux_expiry(username, expiry)
         if not ok_expiry:
+            return _ssh_add_user_rollback(
                 username,
                 None,
                 account_path,
@@ -5530,6 +5917,8 @@ def op_user_add(
             )
 
         try:
+            with file_lock(str(SSHWS_LOCK_FILE)):
+                ok_state, quota_path_or_err, payload_or_err = _ssh_load_state(
                     username,
                     create_missing=True,
                     created_at=created_at,
@@ -5560,27 +5949,35 @@ def op_user_add(
                 status["lock_shell_restore"] = ""
                 _status_apply_lock_fields(status)
                 quota_payload["status"] = status
+                _ssh_save_state(quota_path, quota_payload)
         except Exception as exc:
+            return _ssh_add_user_rollback(
                 username,
                 quota_path if "quota_path" in locals() else None,
                 account_path,
                 raw_password=raw_password,
+                error_prefix=f"Gagal menulis metadata SSH: {exc}",
                 cleanup_zivpn=False,
             )
 
         if ip_enabled:
+            ok_enforce, enforce_msg = _ssh_run_enforcer(
                 username=username,
                 require_available=True,
             )
             if not ok_enforce:
+                return _ssh_add_user_rollback(
                     username,
                     quota_path,
                     account_path,
                     raw_password=raw_password,
+                    error_prefix=f"Gagal enforcement awal SSH untuk '{username}': {enforce_msg}",
                     cleanup_zivpn=False,
                 )
 
+        ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
         if not ok_account:
+            return _ssh_add_user_rollback(
                 username,
                 quota_path,
                 account_path,
@@ -5591,6 +5988,7 @@ def op_user_add(
 
         ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, raw_password)
         if not ok_zivpn:
+            return _ssh_add_user_rollback(
                 username,
                 quota_path,
                 account_path,
@@ -5598,21 +5996,30 @@ def op_user_add(
                 error_prefix=f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}",
                 cleanup_zivpn=True,
             )
+        ok_openvpn, openvpn_msg = _openvpn_ensure_user(username)
+        if not ok_openvpn:
+            return _ssh_add_user_rollback(
                 username,
                 quota_path,
                 account_path,
                 raw_password=raw_password,
+                error_prefix=f"Gagal membuat linked profile OpenVPN untuk '{username}': {openvpn_msg}",
                 cleanup_zivpn=True,
             )
+        ok_account, account_msg = _ssh_refresh_account_info(username, password_override=raw_password)
         if not ok_account:
+            return _ssh_add_user_rollback(
                 username,
                 quota_path,
                 account_path,
                 raw_password=raw_password,
+                error_prefix=f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {account_msg}",
                 cleanup_zivpn=True,
             )
 
+        warnings = _ssh_post_update_warnings(username, password_override=raw_password)
         msg = (
+            f"Add user SSH sukses.\n"
             f"- User: {username}@{proto}\n"
             f"- Account: {account_path}\n"
             f"- Quota: {quota_path}"
@@ -5687,6 +6094,9 @@ def op_user_add(
 def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict[str, str] | str]:
     if proto not in USER_PROTOCOLS:
         return False, f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Username SSH tidak valid."
     elif not _is_valid_username(username):
         return False, "Username tidak valid."
 
@@ -5699,6 +6109,7 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
     except Exception as exc:
         return False, f"Gagal membaca file account: {exc}"
 
+    if proto == SSH_PROTOCOL:
         try:
             text = raw.decode("utf-8", errors="ignore")
             text = re.sub(
@@ -5727,20 +6138,31 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
     }
 
 
+def op_openvpn_profile_file_download(username: str) -> tuple[bool, dict[str, str] | str]:
+    if not _openvpn_runtime_available():
+        return False, "OpenVPN runtime tidak tersedia."
+    if not _is_valid_ssh_username(username):
+        return False, "Username SSH tidak valid."
 
+    ok_profile, payload_or_err = _openvpn_manage_json("profile-download", "--username", username, timeout=300)
     if not ok_profile:
         return False, str(payload_or_err)
     if not isinstance(payload_or_err, dict):
+        return False, "Format profile-download OpenVPN tidak valid."
 
     profile_path = Path(str(payload_or_err.get("profile_path") or "").strip())
     if not profile_path.exists():
+        return False, f"Profile OpenVPN tidak ditemukan: {profile_path}"
 
     try:
         raw = profile_path.read_bytes()
     except Exception as exc:
+        return False, f"Gagal membaca profile OpenVPN: {exc}"
 
     return True, {
+        "filename": f"{username}@openvpn.ovpn",
         "content_base64": base64.b64encode(raw).decode("ascii"),
+        "content_type": "application/x-openvpn-profile",
     }
 
 
@@ -5748,9 +6170,14 @@ def op_user_account_file_download(proto: str, username: str) -> tuple[bool, dict
 def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
     if proto not in USER_PROTOCOLS:
         return False, "User Management - Delete User", f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Delete User", "Username SSH tidak valid."
     elif not _is_valid_username(username):
         return False, "User Management - Delete User", "Username tidak valid."
 
+    if proto == SSH_PROTOCOL:
+        previous_password = _ssh_previous_password(username)
         linux_exists = _linux_user_exists(username)
         if linux_exists and _zivpn_runtime_available() and (not previous_password or previous_password == "-"):
             return (
@@ -5773,7 +6200,9 @@ def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
                     f"- Akun belum dihapus agar bisa dicoba ulang dengan aman"
                 ),
             )
+        ok_del, del_msg = _ssh_delete_linux_user(username)
         if not ok_del:
+            ok_rollback, rollback_msg = _ssh_delete_zivpn_rollback(username, previous_password)
             suffix = (
                 f" Rollback ZIVPN: {rollback_msg}"
                 if ok_rollback
@@ -5784,7 +6213,10 @@ def op_user_delete(proto: str, username: str) -> tuple[bool, str, str]:
                 "User Management - Delete User",
                 f"Gagal menghapus user Linux '{username}': {del_msg}.{suffix}",
             )
+        ok_openvpn, openvpn_msg = _openvpn_delete_user(username)
         cleanup_notes = _delete_account_artifacts_checked(proto, username)
+        if not ok_openvpn:
+            cleanup_notes.append(f"cleanup OpenVPN gagal: {openvpn_msg}")
         if cleanup_notes:
             return (
                 False,
@@ -5880,12 +6312,17 @@ def _user_exists_in_inbounds(proto: str, username: str) -> bool:
 def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> tuple[bool, str, str]:
     if proto not in USER_PROTOCOLS:
         return False, "User Management - Extend Expiry", f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "User Management - Extend Expiry", "Username SSH tidak valid."
     elif not _is_valid_username(username):
         return False, "User Management - Extend Expiry", "Username tidak valid."
 
+    if proto == SSH_PROTOCOL:
         if not _linux_user_exists(username):
             return False, "User Management - Extend Expiry", f"User Linux '{username}' tidak ditemukan."
 
+        ok_state, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_state:
             return False, "User Management - Extend Expiry", str(q_path_or_msg)
         quota_path = q_path_or_msg
@@ -5913,12 +6350,15 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
         else:
             return False, "User Management - Extend Expiry", "Mode harus extend atau set."
 
+        ok_expiry, out_expiry = _ssh_apply_linux_expiry(username, new_expiry)
         if not ok_expiry:
             return False, "User Management - Extend Expiry", f"Gagal update expiry untuk '{username}': {out_expiry}"
 
         quota_data["expired_at"] = new_expiry
         try:
+            _ssh_save_state(quota_path, quota_data)
         except Exception as exc:
+            ok_rollback, rollback_msg = _ssh_expiry_update_rollback(
                 username,
                 current_expiry,
                 quota_path,
@@ -5930,7 +6370,9 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
                 "User Management - Extend Expiry",
                 f"Gagal menyimpan metadata expiry untuk '{username}': {exc}.{suffix}",
             )
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(username)
         if not ok_refresh:
+            ok_rollback, rollback_msg = _ssh_expiry_update_rollback(
                 username,
                 current_expiry,
                 quota_path,
@@ -5940,6 +6382,7 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
             return (
                 False,
                 "User Management - Extend Expiry",
+                f"Gagal sinkron SSH ACCOUNT INFO untuk '{username}': {refresh_msg}.{suffix}",
             )
         return (
             True,
@@ -6010,12 +6453,18 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
 
 
 @_user_data_mutation_locked
+def op_ssh_reset_password(username: str, password: str) -> tuple[bool, str, str]:
     title = "User Management - Reset Password"
+    if not _is_valid_ssh_username(username):
+        return False, title, "Username SSH tidak valid."
     raw_password = str(password or "")
     if not raw_password.strip():
+        return False, title, "Password SSH wajib diisi."
     if username.strip().lower() == raw_password.strip().lower():
+        return False, title, "Password SSH tidak boleh sama dengan username."
     if not _linux_user_exists(username):
         return False, title, f"User Linux '{username}' tidak ditemukan."
+    previous_password = _ssh_previous_password(username)
     if not previous_password or previous_password == "-":
         return False, title, (
             f"Password lama untuk '{username}' tidak tersedia, jadi rollback aman tidak bisa dijamin."
@@ -6028,19 +6477,28 @@ def op_user_extend_expiry(proto: str, username: str, mode: str, value: str) -> t
     if not ok_passwd:
         return False, title, f"Gagal reset password user '{username}': {out_passwd}"
 
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=raw_password)
     if not ok_refresh:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
         suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+        return False, title, f"Gagal sinkron SSH ACCOUNT INFO untuk '{username}': {refresh_msg}.{suffix}"
 
     ok_zivpn, zivpn_msg = _zivpn_sync_user_password(username, raw_password)
     if not ok_zivpn:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
         suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
         return False, title, f"Gagal sinkronisasi ZIVPN untuk '{username}': {zivpn_msg}.{suffix}"
+    ok_refresh, refresh_msg = _ssh_refresh_account_info(username, password_override=raw_password)
     if not ok_refresh:
+        ok_rollback, rollback_msg = _ssh_password_reset_rollback(username, previous_password)
         suffix = f" Rollback: {rollback_msg}" if ok_rollback else f" Rollback gagal: {rollback_msg}"
+        return False, title, f"Gagal refresh SSH ACCOUNT INFO final untuk '{username}': {refresh_msg}.{suffix}"
 
     warnings: list[str] = []
+    ok_enforce, enforce_msg = _ssh_run_enforcer()
     if not ok_enforce:
         warnings.append(f"enforcer: {enforce_msg}")
+    msg = f"Password berhasil direset untuk {username}@{SSH_PROTOCOL}"
     if warnings:
         msg += "\n- Warning: " + " | ".join(warnings)
     return True, title, msg
@@ -6101,11 +6559,16 @@ def op_xray_reset_credential(proto: str, username: str) -> tuple[bool, str, str]
 def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool, str, str]:
     if proto not in QAC_PROTOCOLS:
         return False, "Quota - Set Limit", f"Proto tidak valid: {proto}"
+    if proto == SSH_PROTOCOL:
+        if not _is_valid_ssh_username(username):
+            return False, "Quota - Set Limit", "Username SSH tidak valid"
     elif not _is_valid_username(username):
         return False, "Quota - Set Limit", "Username tidak valid"
     if quota_gb <= 0:
         return False, "Quota - Set Limit", "Quota harus > 0 GB"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Set Limit", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6118,6 +6581,7 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         _status_apply_lock_fields(status)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6133,6 +6597,8 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Set Limit", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        return _openvpn_quota_update(
             "Quota - Set Limit",
             username,
             f"Quota limit diubah ke {_fmt_number(quota_gb)} GB",
@@ -6166,6 +6632,8 @@ def op_quota_set_limit(proto: str, username: str, quota_gb: float) -> tuple[bool
 
 
 def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Reset Used", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6179,6 +6647,7 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
         status["quota_exhausted"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6194,14 +6663,18 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Reset Used", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             q_data["quota_used"] = 0
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["quota_exhausted"] = False
             status["lock_reason"] = ""
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Reset Used",
             username,
             "Quota used di-reset",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6231,6 +6704,8 @@ def op_quota_reset_used(proto: str, username: str) -> tuple[bool, str, str]:
 
 
 def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Manual Block", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6243,6 +6718,7 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
         status["manual_block"] = bool(enabled)
         _status_apply_lock_fields(status)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6259,12 +6735,16 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Manual Block", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["manual_block"] = bool(enabled)
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Manual Block",
             username,
             f"Manual block {'ON' if enabled else 'OFF'}",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6293,6 +6773,8 @@ def op_quota_manual_block(proto: str, username: str, enabled: bool) -> tuple[boo
 
 
 def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - IP Limit", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6307,6 +6789,7 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
             status["ip_limit_locked"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6323,15 +6806,19 @@ def op_quota_ip_limit_enable(proto: str, username: str, enabled: bool) -> tuple[
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - IP Limit", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["ip_limit_enabled"] = bool(enabled)
             if not enabled:
                 status["ip_limit_locked"] = False
                 status["lock_reason"] = ""
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - IP Limit",
             username,
             f"IP limit {'ON' if enabled else 'OFF'}",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6364,6 +6851,8 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
     if limit <= 0:
         return False, "Quota - Set IP Limit", "IP limit harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Set IP Limit", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6375,6 +6864,7 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["ip_limit"] = int(limit)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6390,12 +6880,16 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Set IP Limit", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["ip_limit"] = int(limit)
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Set IP Limit",
             username,
             f"IP limit diubah ke {limit}",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6425,6 +6919,8 @@ def op_quota_set_ip_limit(proto: str, username: str, limit: int) -> tuple[bool, 
 
 
 def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Unlock IP Lock", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6437,6 +6933,7 @@ def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
         status["ip_limit_locked"] = False
         _status_apply_lock_fields(status)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6452,14 +6949,18 @@ def op_quota_unlock_ip_lock(proto: str, username: str) -> tuple[bool, str, str]:
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Unlock IP Lock", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["ip_limit_locked"] = False
             if str(status.get("lock_reason") or "").strip().lower() == "ip_limit":
                 status["lock_reason"] = ""
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Unlock IP Lock",
             username,
             "IP lock di-unlock",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6498,6 +6999,8 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
     if speed_down <= 0:
         return False, "Quota - Speed Download", "Speed download harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Speed Download", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6509,6 +7012,7 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["speed_down_mbit"] = float(speed_down)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6524,12 +7028,16 @@ def op_quota_set_speed_down(proto: str, username: str, speed_down: float) -> tup
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Speed Download", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["speed_down_mbit"] = float(speed_down)
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Speed Download",
             username,
             f"Speed download diubah ke {_fmt_number(speed_down)} Mbps",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6560,6 +7068,8 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
     if speed_up <= 0:
         return False, "Quota - Speed Upload", "Speed upload harus > 0"
 
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Speed Upload", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6571,6 +7081,7 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
         status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
         status["speed_up_mbit"] = float(speed_up)
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6586,12 +7097,16 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Speed Upload", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["speed_up_mbit"] = float(speed_up)
             q_data["status"] = status
+        return _openvpn_quota_update(
             "Quota - Speed Upload",
             username,
             f"Speed upload diubah ke {_fmt_number(speed_up)} Mbps",
+            _mutate_openvpn,
         )
 
     ok_q, q_path_or_msg, q_data_or_msg = _load_quota(proto, username)
@@ -6619,6 +7134,8 @@ def op_quota_set_speed_up(proto: str, username: str, speed_up: float) -> tuple[b
 
 
 def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool, str, str]:
+    if proto == SSH_PROTOCOL:
+        ok_q, q_path_or_msg, q_data_or_msg = _ssh_load_state(username)
         if not ok_q:
             return False, "Quota - Speed Limit", str(q_path_or_msg)
         q_path = q_path_or_msg
@@ -6635,6 +7152,7 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
             if down <= 0 or up <= 0:
                 return False, "Quota - Speed Limit", "Set speed download/upload > 0 dulu sebelum ON."
         q_data["status"] = status
+        ok_apply, warnings, apply_error = _ssh_apply_state_update(
             username,
             q_path,
             previous_payload,
@@ -6651,6 +7169,8 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
             msg += "\n- Warning: " + " | ".join(warnings)
         return True, "Quota - Speed Limit", msg
 
+    if proto == OPENVPN_POLICY_PROTOCOL:
+        def _mutate_openvpn(q_data: dict[str, Any]) -> None:
             status = q_data.get("status") if isinstance(q_data.get("status"), dict) else {}
             status["speed_limit_enabled"] = bool(enabled)
             if enabled:
@@ -6660,9 +7180,11 @@ def op_quota_speed_limit(proto: str, username: str, enabled: bool) -> tuple[bool
                     raise ValueError("Set speed download/upload > 0 dulu sebelum ON.")
             q_data["status"] = status
         try:
+            return _openvpn_quota_update(
                 "Quota - Speed Limit",
                 username,
                 f"Speed limit {'ON' if enabled else 'OFF'}",
+                _mutate_openvpn,
             )
         except ValueError as exc:
             return False, "Quota - Speed Limit", str(exc)
@@ -6947,6 +7469,7 @@ def _restore_services(services: list[str]) -> list[str]:
 
 def _restart_tls_runtime_consumers(skipped_services: set[str] | None = None) -> tuple[bool, str]:
     skipped = skipped_services or set()
+    targets = ["sshws-stunnel"]
     edge_svc = _edge_runtime_service_name()
     if edge_svc and edge_svc != "nginx":
         targets.append(edge_svc)
@@ -6974,8 +7497,10 @@ def _restore_tls_runtime_consumers_from_snapshot(
     skipped = skipped_services or set()
     failures: list[str] = []
     targets: list[tuple[str, bool]] = [
+        ("sshws-stunnel", bool(snapshot.get("sshws_stunnel_was_active"))),
     ]
     edge_service = str(snapshot.get("edge_service_name") or "").strip()
+    if edge_service and edge_service not in {"nginx", "sshws-stunnel"}:
         targets.append((edge_service, bool(snapshot.get("edge_service_was_active"))))
 
     for svc, should_be_active in targets:
@@ -7518,6 +8043,7 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
     if ok_ip:
         ip_override = str(ip_or_err)
     updated, failed, skipped = _refresh_all_account_info(domain=domain_n, ip=ip_override)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_n)
     lines = [
         f"Domain aktif sekarang: {domain_n}",
         "- Certificate mode : standalone",
@@ -7529,8 +8055,14 @@ def op_domain_setup_custom(domain: str) -> tuple[bool, str, str]:
         )
     if skipped > 0:
         lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
+    if ovpn_failed > 0:
         lines.append(
+            f"- Warning: {ovpn_failed} profil OpenVPN gagal direfresh. Jalankan refresh eksplisit bila diperlukan."
         )
+    elif ovpn_msg != "ok":
+        lines.append(f"- Catatan OpenVPN: {ovpn_msg}")
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        lines.append(f"- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}")
     return True, title, "\n".join(lines)
 
 
@@ -7659,6 +8191,7 @@ def op_domain_setup_cloudflare(
         return False, title, f"{error_msg}\nRollback domain gagal:\n{msg_rb}"
 
     updated, failed, skipped = _refresh_all_account_info(domain=domain_final, ip=vps_ipv4)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_final)
     lines = [
         f"Domain aktif sekarang: {domain_final}",
         f"- Root domain      : {root_domain}",
@@ -7675,6 +8208,12 @@ def op_domain_setup_cloudflare(
     if skipped > 0:
         lines.append(f"- Catatan: {skipped} entri account-info yatim dilewati otomatis.")
     lines.append(f"- ACCOUNT INFO updated: {updated}")
+    if ovpn_failed > 0:
+        lines.append(f"- Warning OpenVPN : {ovpn_failed} profil gagal direfresh.")
+    elif ovpn_msg != "ok":
+        lines.append(f"- Catatan OpenVPN : {ovpn_msg}")
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        lines.append(f"- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}")
     return True, title, "\n".join(lines)
 
 
@@ -7696,6 +8235,7 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
         return False, title, ng_msg
 
     updated, failed, skipped = _refresh_all_account_info(domain=domain_n)
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles(domain_n)
     if failed > 0:
         return True, title, (
             f"Domain berhasil diubah ke: {domain_n}\n"
@@ -7705,19 +8245,32 @@ def op_domain_set(domain: str, issue_cert: bool = False) -> tuple[bool, str, str
     msg = f"Domain berhasil diubah ke: {domain_n}\n- ACCOUNT INFO updated: {updated}"
     if skipped > 0:
         msg += f"\n- Catatan: {skipped} entri account-info yatim dilewati otomatis."
+    if ovpn_failed > 0:
+        msg += f"\n- Warning OpenVPN: {ovpn_failed} profil gagal direfresh."
+    elif ovpn_msg != 'ok':
+        msg += f"\n- Catatan OpenVPN: {ovpn_msg}"
+    if ovpn_updated > 0 or ovpn_skipped > 0:
+        msg += f"\n- OpenVPN profiles: updated={ovpn_updated}, skipped={ovpn_skipped}"
     return True, title, msg
 
 
 @_user_data_mutation_locked
 def op_domain_refresh_accounts() -> tuple[bool, str, str]:
     updated, failed, skipped = _refresh_all_account_info()
+    ovpn_updated, ovpn_failed, ovpn_skipped, ovpn_msg = _openvpn_sync_public_host_and_profiles()
     title = "Domain Control - Refresh Account Info"
     msg = f"Selesai: updated={updated}, failed={failed}"
     if skipped > 0:
         msg += f", skipped={skipped}"
+    if ovpn_updated > 0 or ovpn_failed > 0 or ovpn_skipped > 0:
+        msg += f"\nOpenVPN profiles: updated={ovpn_updated}, failed={ovpn_failed}, skipped={ovpn_skipped}"
+    elif ovpn_msg != "ok":
+        msg += f"\nOpenVPN: {ovpn_msg}"
     if failed > 0:
         msg += "\nSebagian ACCOUNT INFO gagal direfresh."
         return False, title, msg
+    if ovpn_failed > 0:
+        msg += "\nSebagian profil OpenVPN gagal direfresh."
         return False, title, msg
     if skipped > 0:
         msg += "\nEntri account-info yatim dilewati otomatis."
@@ -8109,9 +8662,12 @@ def op_network_warp_tier_switch_free() -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state target WARP free: {exc}"
             return False, title, f"Gagal menyimpan state target WARP free: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
         if not ok_refresh:
             ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
             if ok_rb:
+                return False, title, f"Switch free berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Switch free berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     msg = (
         "Switch tier ke free berhasil.\n"
@@ -8182,9 +8738,12 @@ def op_network_warp_tier_switch_plus(license_key: str) -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state target WARP plus: {exc}"
             return False, title, f"Gagal menyimpan state target WARP plus: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
         if not ok_refresh:
             ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
             if ok_rb:
+                return False, title, f"Switch plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Switch plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     msg = (
         "Switch tier ke plus berhasil.\n"
@@ -8264,9 +8823,12 @@ def op_network_warp_tier_reconnect() -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state target WARP setelah reconnect: {exc}"
             return False, title, f"Gagal menyimpan state target WARP setelah reconnect: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
         if not ok_refresh:
             ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
             if ok_rb:
+                return False, title, f"Reconnect WARP berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Reconnect WARP berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     msg = f"Reconnect/regenerate selesai untuk target: {target}\n- Apply: {msg_apply}\n\n{_warp_tier_status_message()}"
     return True, title, msg
@@ -8361,6 +8923,7 @@ def op_network_warp_tier_zero_trust_apply() -> tuple[bool, str, str]:
     if not _service_exists(WARP_ZEROTRUST_SERVICE):
         return False, title, f"Service {WARP_ZEROTRUST_SERVICE} tidak ditemukan."
 
+    ok_guard, msg_guard = _warp_zero_trust_ssh_guard()
     if not ok_guard:
         return False, title, msg_guard
 
@@ -8397,9 +8960,12 @@ def op_network_warp_tier_zero_trust_apply() -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state Zero Trust: {exc}"
             return False, title, f"Gagal menyimpan state Zero Trust: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
         if not ok_refresh:
             ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
             if ok_rb:
+                return False, title, f"Zero Trust aktif, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Zero Trust aktif, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     return True, title, f"Zero Trust berhasil diaktifkan.\n\n{_warp_zero_trust_status_message()}"
 
@@ -8457,30 +9023,43 @@ def op_network_warp_tier_zero_trust_return_free_plus() -> tuple[bool, str, str]:
                 return False, title, f"Gagal menyimpan state Free/Plus: {exc}"
             return False, title, f"Gagal menyimpan state Free/Plus: {exc}\nRollback WARP gagal:\n{msg_rb}"
 
+        ok_refresh, msg_refresh = _ssh_network_apply_runtime()
         if not ok_refresh:
             ok_rb, msg_rb = _restore_warp_runtime_snapshot(snapshot)
             if ok_rb:
+                return False, title, f"Kembali ke Free/Plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}"
+            return False, title, f"Kembali ke Free/Plus berhasil, tetapi refresh SSH Network gagal:\n{msg_refresh}\nRollback WARP gagal:\n{msg_rb}"
 
     return True, title, f"Host dikembalikan ke Free/Plus (target: {target}).\n\n{_warp_tier_status_message()}"
 
 
+def op_ssh_network_dns_set_enabled(enabled: bool) -> tuple[bool, str, str]:
+    title = "SSH Network - DNS for SSH"
     snapshot = {
         "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
         "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
     }
     with file_lock(ADBLOCK_LOCK_FILE):
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "1" if enabled else "0"})
         if not ok_env:
             return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
         if not ok_apply:
             _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
             _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
             return False, title, msg_apply
     state = "diaktifkan" if enabled else "dinonaktifkan"
+    return True, title, f"DNS steering SSH berhasil {state}."
 
 
+def op_ssh_network_dns_set_primary(value: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Set Primary DNS"
     try:
         primary = _normalize_ip_literal(value)
     except Exception:
+        return False, title, "Primary DNS SSH harus IPv4/IPv6 literal."
+    secondary = _adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY", "8.8.8.8")
     snapshot = {
         "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
         "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
@@ -8488,19 +9067,28 @@ def op_network_warp_tier_zero_trust_return_free_plus() -> tuple[bool, str, str]:
     with file_lock(ADBLOCK_LOCK_FILE):
         ok_env, msg_env = _adblock_update_env_many(
             {
+                "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY": primary,
+                "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY": _normalize_ip_literal(secondary),
             }
         )
         if not ok_env:
             return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
         if not ok_apply:
             _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
             _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
             return False, title, msg_apply
+    return True, title, f"Primary DNS SSH diubah ke {primary}."
 
 
+def op_ssh_network_dns_set_secondary(value: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Set Secondary DNS"
     try:
         secondary = _normalize_ip_literal(value)
     except Exception:
+        return False, title, "Secondary DNS SSH harus IPv4/IPv6 literal."
+    primary = _adblock_env_value("SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY", "1.1.1.1")
     snapshot = {
         "env": _snapshot_optional_file(ADBLOCK_ENV_FILE),
         "dnsmasq": _snapshot_optional_file(_adblock_dnsmasq_conf_path()),
@@ -8508,81 +9096,145 @@ def op_network_warp_tier_zero_trust_return_free_plus() -> tuple[bool, str, str]:
     with file_lock(ADBLOCK_LOCK_FILE):
         ok_env, msg_env = _adblock_update_env_many(
             {
+                "SSH_DNS_ADBLOCK_UPSTREAM_PRIMARY": _normalize_ip_literal(primary),
+                "SSH_DNS_ADBLOCK_UPSTREAM_SECONDARY": secondary,
             }
         )
         if not ok_env:
             return False, title, msg_env
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
         if not ok_apply:
             _restore_optional_file(ADBLOCK_ENV_FILE, snapshot["env"])
             _restore_optional_file(_adblock_dnsmasq_conf_path(), snapshot["dnsmasq"])
+            _ssh_dns_resolver_apply_now()
             return False, title, msg_apply
+    return True, title, f"Secondary DNS SSH diubah ke {secondary}."
 
 
+def op_ssh_network_dns_apply_runtime() -> tuple[bool, str, str]:
+    title = "SSH Network - Apply DNS Runtime"
     snapshot = _snapshot_optional_file(_adblock_dnsmasq_conf_path())
     with file_lock(ADBLOCK_LOCK_FILE):
+        ok_apply, msg_apply = _ssh_dns_resolver_apply_now()
         if not ok_apply:
+            ok_rb, msg_rb = _ssh_dns_resolver_restore_dnsmasq_snapshot(snapshot)
             if ok_rb:
                 return False, title, msg_apply
+            return False, title, f"{msg_apply}\nRollback DNS SSH gagal:\n{msg_rb}"
+    return True, title, "Runtime DNS SSH berhasil disinkronkan."
 
 
+def op_ssh_network_set_global_mode(mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Routing SSH Global"
     mode_n = str(mode or "").strip().lower()
     if mode_n not in {"direct", "warp"}:
+        return False, title, "Mode routing SSH harus direct/warp."
+    with file_lock(SSH_NETWORK_LOCK_FILE):
+        current_mode = _ssh_network_env_map().get("SSH_NETWORK_ROUTE_GLOBAL", "direct").strip().lower()
         if current_mode == mode_n:
+            return True, title, f"Routing SSH global sudah {mode_n.upper()}; runtime tidak diubah."
+        snapshot = _ssh_network_snapshot()
+        account_snapshots = _ssh_snapshot_account_info_files()
+        ok_env, msg_env = _ssh_network_update_env_many({"SSH_NETWORK_ROUTE_GLOBAL": mode_n})
         if not ok_env:
             return False, title, msg_env
+        ok_apply, msg_apply = _ssh_network_apply_runtime(skip_network_lock=True)
         if not ok_apply:
+            _ssh_network_restore_snapshot(snapshot)
+            _ssh_network_apply_runtime(skip_network_lock=True)
             return False, title, msg_apply
         with _user_data_mutation_lock():
+            ok_refresh, refresh_msg = _ssh_refresh_all_account_info()
         if not ok_refresh:
+            _ssh_network_restore_snapshot(snapshot)
+            ok_rb_apply, msg_rb_apply = _ssh_network_apply_runtime(skip_network_lock=True)
+            ok_rb_files, msg_rb_files = _ssh_restore_account_info_snapshots(account_snapshots)
             notes: list[str] = [f"refresh account-info: {refresh_msg}"]
             if not ok_rb_apply:
                 notes.append(f"rollback runtime: {msg_rb_apply}")
             if not ok_rb_files:
                 notes.append(f"rollback account-info: {msg_rb_files}")
             return False, title, " | ".join(notes)
+    return True, title, f"Routing SSH global diubah ke {mode_n.upper()}."
 
 
+def op_ssh_network_set_backend(backend: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Save WARP Backend"
     backend_n = str(backend or "").strip().lower()
     if backend_n not in {"auto", "local-proxy", "interface"}:
+        return False, title, "Backend WARP SSH harus auto/local-proxy/interface."
+    ok_guard, msg_guard = _ssh_network_require_backend_compatible(backend_n)
     if not ok_guard:
         return False, title, msg_guard
+    with file_lock(SSH_NETWORK_LOCK_FILE):
+        current_backend = _ssh_network_backend_get()
         if current_backend == backend_n:
+            return True, title, f"Backend WARP SSH sudah {backend_n}; config tidak diubah."
+        ok_env, msg_env = _ssh_network_update_env_many({"SSH_NETWORK_WARP_BACKEND": backend_n})
         if not ok_env:
             return False, title, msg_env
     return True, title, (
+        f"Backend WARP SSH disimpan: {backend_n}. "
         "Jalankan Apply Routing Runtime untuk merekonsiliasi runtime."
     )
 
 
+def op_ssh_network_apply_runtime() -> tuple[bool, str, str]:
+    title = "SSH Network - Apply Routing Runtime"
+    ok_apply, msg_apply = _ssh_network_apply_runtime()
     if not ok_apply:
         return False, title, msg_apply
     with _user_data_mutation_lock():
+        ok_refresh, refresh_msg = _ssh_refresh_all_account_info()
     if not ok_refresh:
+        return False, title, f"Runtime routing SSH berhasil disinkronkan, tetapi refresh SSH ACCOUNT INFO gagal: {refresh_msg}"
+    return True, title, "Runtime routing SSH berhasil disinkronkan."
 
 
+def op_ssh_network_set_user_route_mode(username: str, mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - Routing SSH Per-User"
     target_user = str(username or "").strip()
     mode_n = str(mode or "").strip().lower()
+    target = _resolve_existing(_quota_candidates(SSH_PROTOCOL, target_user))
     snapshot = _snapshot_optional_file(target) if isinstance(target, Path) else {"exists": False}
+    account_path = SSH_ACCOUNT_DIR / f"{target_user}@{SSH_PROTOCOL}.txt"
     account_snapshot = _snapshot_optional_file(account_path)
     with _user_data_mutation_lock():
+        ok_set, msg_set = _ssh_network_user_route_mode_set(target_user, mode_n)
         if not ok_set:
             return False, title, msg_set
+        ok_apply, msg_apply = _ssh_network_apply_runtime()
         if not ok_apply:
+            restored_path = target or SSH_QUOTA_DIR / f"{target_user}@{SSH_PROTOCOL}.json"
             _restore_optional_file(restored_path, snapshot)
             _restore_optional_file(account_path, account_snapshot)
+            _ssh_network_apply_runtime()
             return False, title, msg_apply
+        ok_refresh, refresh_msg = _ssh_refresh_account_info(target_user)
         if not ok_refresh:
+            restored_path = target or SSH_QUOTA_DIR / f"{target_user}@{SSH_PROTOCOL}.json"
             _restore_optional_file(restored_path, snapshot)
             _restore_optional_file(account_path, account_snapshot)
+            _ssh_network_apply_runtime()
+            return False, title, f"Gagal refresh SSH ACCOUNT INFO untuk '{target_user}': {refresh_msg}"
+    return True, title, f"Routing SSH '{target_user}' diubah ke {mode_n}."
 
 
+def op_ssh_network_set_warp_global(enabled: bool) -> tuple[bool, str, str]:
+    return op_ssh_network_set_global_mode("warp" if enabled else "direct")
 
 
+def op_ssh_network_set_warp_user_mode(username: str, mode: str) -> tuple[bool, str, str]:
+    title = "SSH Network - WARP SSH Per-User"
+    ok_op, _, msg = op_ssh_network_set_user_route_mode(username, mode)
     if not ok_op:
         return False, title, msg
     target_user = str(username or "").strip()
     if mode == "warp":
+        return True, title, f"Mode WARP SSH '{target_user}' diubah ke warp."
     if mode == "direct":
+        return True, title, f"Mode WARP SSH '{target_user}' diubah ke direct."
+    return True, title, f"Mode WARP SSH '{target_user}' dikembalikan ke inherit."
 
 
 def op_network_set_dns_primary(value: str) -> tuple[bool, str, str]:
@@ -8620,15 +9272,19 @@ def op_network_toggle_dns_cache() -> tuple[bool, str, str]:
     return True, title, msg_apply
 
 
+def _adblock_restore_runtime_state(*, xray_enabled: bool, ssh_enabled: bool) -> tuple[bool, str]:
     notes: list[str] = []
     target_mode = "blocked" if xray_enabled else "off"
     ok_xray, msg_xray = _adblock_set_xray_rule(target_mode)
     if not ok_xray:
         notes.append(f"rollback Xray gagal: {msg_xray}")
+    ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "1" if ssh_enabled else "0"})
     if not ok_env:
+        notes.append(f"rollback config SSH gagal: {msg_env}")
     else:
         ok_apply, msg_apply = _adblock_apply_now()
         if not ok_apply:
+            notes.append(f"rollback SSH apply gagal: {msg_apply}")
     if notes:
         return False, " | ".join(notes)
     return True, "ok"
@@ -8655,24 +9311,33 @@ def op_network_adblock_enable() -> tuple[bool, str, str]:
         if not ok_xray:
             return False, title, msg_xray
 
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "1"})
         if not ok_env:
+            ok_rb, msg_rb = _adblock_restore_runtime_state(xray_enabled=xray_enabled, ssh_enabled=False)
             if ok_rb:
                 return False, title, msg_env
             return False, title, f"{msg_env}\nRollback gagal:\n{msg_rb}"
 
         ok_apply, msg_apply = _adblock_apply_now()
         if not ok_apply:
+            ok_rb, msg_rb = _adblock_restore_runtime_state(xray_enabled=xray_enabled, ssh_enabled=False)
             if ok_rb:
+                return False, title, f"DNS Adblock SSH gagal diterapkan.\n{msg_apply}"
+            return False, title, f"DNS Adblock SSH gagal diterapkan.\n{msg_apply}\nRollback gagal:\n{msg_rb}"
+    return True, title, "Adblock diaktifkan (shared source -> Xray + SSH)."
 
 
 def op_network_adblock_disable() -> tuple[bool, str, str]:
     title = "Network - Disable Adblock"
     with file_lock(ADBLOCK_LOCK_FILE):
         previous_xray_enabled = str(_adblock_xray_rule_state().get("enabled") or "0") == "1"
+        previous_ssh_enabled = _adblock_status_map().get("enabled", "0") == "1"
         ok_xray, msg_xray = _adblock_set_xray_rule("off")
+        ok_env, msg_env = _adblock_update_env_many({"SSH_DNS_ADBLOCK_ENABLED": "0"})
         ok_apply, msg_apply = _adblock_apply_now()
 
     if ok_xray and ok_env and ok_apply:
+        return True, title, "Adblock dinonaktifkan (Xray + SSH)."
 
     parts = []
     if not ok_xray:
@@ -8680,9 +9345,11 @@ def op_network_adblock_disable() -> tuple[bool, str, str]:
     if not ok_env:
         parts.append(f"Config: {msg_env}")
     if not ok_apply:
+        parts.append(f"SSH: {msg_apply}")
     rollback_notes: list[str] = []
     ok_rb, msg_rb = _adblock_restore_runtime_state(
         xray_enabled=previous_xray_enabled,
+        ssh_enabled=previous_ssh_enabled,
     )
     if not ok_rb:
         rollback_notes.append(msg_rb)
@@ -8696,6 +9363,7 @@ def op_network_adblock_add_domain(domain: str) -> tuple[bool, str, str]:
     normalized = _adblock_manual_domain_normalize(domain)
     if not normalized:
         return False, title, "Domain tidak valid."
+    blocklist_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", ADBLOCK_DEFAULT_BLOCKLIST)
     with file_lock(ADBLOCK_LOCK_FILE):
         snapshot = _snapshot_optional_file(blocklist_path)
         current = []
@@ -8726,6 +9394,7 @@ def op_network_adblock_delete_domain(domain: str) -> tuple[bool, str, str]:
     normalized = _adblock_manual_domain_normalize(domain)
     if not normalized:
         return False, title, "Domain tidak valid."
+    blocklist_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_BLOCKLIST_FILE", ADBLOCK_DEFAULT_BLOCKLIST)
     with file_lock(ADBLOCK_LOCK_FILE):
         snapshot = _snapshot_optional_file(blocklist_path)
         current = []
@@ -8759,6 +9428,7 @@ def op_network_adblock_add_url_source(url: str) -> tuple[bool, str, str]:
     normalized = _adblock_url_normalize(url)
     if not normalized:
         return False, title, "URL tidak valid."
+    urls_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_URLS_FILE", ADBLOCK_DEFAULT_URLS)
     with file_lock(ADBLOCK_LOCK_FILE):
         snapshot = _snapshot_optional_file(urls_path)
         current = []
@@ -8789,6 +9459,7 @@ def op_network_adblock_delete_url_source(url: str) -> tuple[bool, str, str]:
     normalized = _adblock_url_normalize(url)
     if not normalized:
         return False, title, "URL tidak valid."
+    urls_path = _adblock_path_from_env("SSH_DNS_ADBLOCK_URLS_FILE", ADBLOCK_DEFAULT_URLS)
     with file_lock(ADBLOCK_LOCK_FILE):
         snapshot = _snapshot_optional_file(urls_path)
         current = []

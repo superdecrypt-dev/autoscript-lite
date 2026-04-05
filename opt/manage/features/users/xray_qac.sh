@@ -269,6 +269,7 @@ def fmt_gb(v):
   return s if s else "0"
 
 u=str(d.get("username") or username_fallback or "-")
+if u.endswith("@ssh"):
   u=u[:-4]
 if "@" in u:
   u=u.split("@", 1)[0]
@@ -394,6 +395,7 @@ def fmt_mbit(v):
   return s if s else "0"
 
 u=str(d.get("username") or username_fallback or "-")
+if u.endswith("@ssh"):
   u=u[:-4]
 if "@" in u:
   u=u.split("@", 1)[0]

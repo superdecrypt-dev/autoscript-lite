@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenVPN per-user speed limiter (tc + ifb)
+After=network-online.target __OPENVPN_TCP_SERVICE__.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openvpn-speed watch --config __OPENVPN_SPEED_CONFIG_FILE__ --interval __OPENVPN_SPEED_INTERVAL__
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

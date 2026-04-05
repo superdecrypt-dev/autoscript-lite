@@ -91,18 +91,38 @@ sanity_check() {
     warn "check: Zero Trust backend belum terpasang (opsional)"
   fi
 
+  if systemctl is-active --quiet sshws-dropbear; then
+    ok "check: sshws-dropbear active"
   else
+    warn "check: sshws-dropbear inactive"
+    systemctl status sshws-dropbear --no-pager >&2 || true
+    journalctl -u sshws-dropbear -n 120 --no-pager >&2 || true
     failed=1
   fi
 
+  if systemctl is-active --quiet sshws-stunnel; then
+    ok "check: sshws-stunnel active"
   else
+    warn "check: sshws-stunnel inactive"
+    systemctl status sshws-stunnel --no-pager >&2 || true
+    journalctl -u sshws-stunnel -n 120 --no-pager >&2 || true
+    warn "check: sshws-stunnel opsional"
   fi
 
+  if systemctl is-active --quiet sshws-proxy; then
+    ok "check: sshws-proxy active"
   else
+    warn "check: sshws-proxy inactive"
+    systemctl status sshws-proxy --no-pager >&2 || true
+    journalctl -u sshws-proxy -n 120 --no-pager >&2 || true
     failed=1
   fi
 
+  if systemctl is-active --quiet sshws-qac-enforcer.timer; then
+    ok "check: ssh qac timer active"
   else
+    warn "check: ssh qac timer inactive"
+    systemctl status sshws-qac-enforcer.timer --no-pager >&2 || true
     failed=1
   fi
 
@@ -115,7 +135,12 @@ sanity_check() {
     failed=1
   fi
 
+  if systemctl is-active --quiet "${SSH_DNS_ADBLOCK_SERVICE}"; then
+    ok "check: ssh adblock active"
   else
+    warn "check: ssh adblock inactive"
+    systemctl status "${SSH_DNS_ADBLOCK_SERVICE}" --no-pager >&2 || true
+    journalctl -u "${SSH_DNS_ADBLOCK_SERVICE}" -n 120 --no-pager >&2 || true
     failed=1
   fi
 

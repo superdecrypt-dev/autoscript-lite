@@ -19,6 +19,10 @@ const (
 	defaultPublicTLSPorts      = "443,2053,2083,2087,2096,8443"
 	defaultMetricsListenAddr   = "127.0.0.1:9910"
 	defaultHTTPBackend         = "127.0.0.1:18080"
+	defaultSSHBackend          = "127.0.0.1:22022"
+	defaultSSHTLSBackend       = "127.0.0.1:22443"
+	defaultSSHWSBackend        = "127.0.0.1:10015"
+	defaultOpenVPNRawBackend   = "127.0.0.1:1194"
 	defaultVLESSRawBackend     = "127.0.0.1:28080"
 	defaultTrojanRawBackend    = "127.0.0.1:28081"
 	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
@@ -27,6 +31,12 @@ const (
 	defaultMetricsEnabled      = true
 	defaultTLSOn80             = true
 	defaultTLSHandshakeTimeout = 5 * time.Second
+	defaultSSHQuotaRoot        = "/opt/quota/ssh"
+	defaultSSHDropbearUnit     = "sshws-dropbear"
+	defaultSSHQACEnforcer      = "/usr/local/bin/sshws-qac-enforcer"
+	defaultSSHManageBin        = "/usr/local/bin/manage"
+	defaultSSHSessionRoot      = "/run/autoscript/sshws-sessions"
+	defaultSSHSessionHeartbeat = 15 * time.Second
 	defaultMaxConnections      = 4096
 	defaultMaxConnectionsPerIP = 128
 	defaultAcceptRatePerIP     = 60
@@ -42,6 +52,9 @@ const (
 
 var validSNIRouteAliases = map[string]struct{}{
 	"http":       {},
+	"ssh_direct": {},
+	"ssh_tls":    {},
+	"ssh_ws":     {},
 	"vless_tcp":  {},
 	"trojan_tcp": {},
 }
@@ -55,6 +68,10 @@ type Config struct {
 	MetricsEnabled      bool
 	MetricsListenAddr   string
 	HTTPBackend         string
+	SSHBackend          string
+	SSHTLSBackend       string
+	SSHWSBackend        string
+	OpenVPNRawBackend   string
 	VLESSRawBackend     string
 	TrojanRawBackend    string
 	XrayInboundsFile    string
@@ -65,6 +82,12 @@ type Config struct {
 	DetectTimeout       time.Duration
 	ClassicTLSOn80      bool
 	TLSHandshakeTimeout time.Duration
+	SSHQuotaRoot        string
+	SSHDropbearUnit     string
+	SSHQACEnforcer      string
+	SSHManageBin        string
+	SSHSessionRoot      string
+	SSHSessionHeartbeat time.Duration
 	MaxConnections      int
 	MaxConnectionsPerIP int
 	AcceptRatePerIP     int
@@ -90,6 +113,10 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	handshakeTimeout, err := envDurationMS(source, "EDGE_TLS_HANDSHAKE_TIMEOUT_MS", defaultTLSHandshakeTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionHeartbeat, err := envDurationSec(source, "EDGE_SSH_SESSION_HEARTBEAT_SEC", defaultSSHSessionHeartbeat)
 	if err != nil {
 		return Config{}, err
 	}
@@ -169,6 +196,10 @@ func LoadConfig() (Config, error) {
 		MetricsEnabled:      metricsEnabled,
 		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
 		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
+		SSHBackend:          normalizeAddr(envString(source, "EDGE_SSH_CLASSIC_BACKEND", defaultSSHBackend), "127.0.0.1"),
+		SSHTLSBackend:       normalizeAddr(envString(source, "EDGE_SSH_TLS_BACKEND", defaultSSHTLSBackend), "127.0.0.1"),
+		SSHWSBackend:        normalizeAddr(envString(source, "EDGE_SSH_WS_BACKEND", defaultSSHWSBackend), "127.0.0.1"),
+		OpenVPNRawBackend:   normalizeAddr(envString(source, "EDGE_OPENVPN_TCP_BACKEND", defaultOpenVPNRawBackend), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
@@ -179,6 +210,12 @@ func LoadConfig() (Config, error) {
 		DetectTimeout:       timeout,
 		ClassicTLSOn80:      classicTLSOn80,
 		TLSHandshakeTimeout: handshakeTimeout,
+		SSHQuotaRoot:        envString(source, "EDGE_SSH_QUOTA_ROOT", defaultSSHQuotaRoot),
+		SSHDropbearUnit:     envString(source, "EDGE_SSH_DROPBEAR_UNIT", defaultSSHDropbearUnit),
+		SSHQACEnforcer:      envString(source, "EDGE_SSH_QAC_ENFORCER", defaultSSHQACEnforcer),
+		SSHManageBin:        envString(source, "EDGE_SSH_MANAGE_BIN", defaultSSHManageBin),
+		SSHSessionRoot:      envString(source, "EDGE_SSH_SESSION_ROOT", defaultSSHSessionRoot),
+		SSHSessionHeartbeat: sessionHeartbeat,
 		MaxConnections:      maxConnections,
 		MaxConnectionsPerIP: maxConnectionsPerIP,
 		AcceptRatePerIP:     acceptRatePerIP,
@@ -220,7 +257,7 @@ func (c Config) Validate() error {
 			return errors.New("EDGE_METRICS_LISTEN must stay local-only (loopback)")
 		}
 	}
-	if c.HTTPBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
+	if c.HTTPBackend == "" || c.SSHBackend == "" || c.SSHTLSBackend == "" || c.SSHWSBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
 		return errors.New("backend addresses must not be empty")
 	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
@@ -231,6 +268,9 @@ func (c Config) Validate() error {
 	}
 	if c.TLSHandshakeTimeout <= 0 {
 		return errors.New("TLS handshake timeout must be > 0")
+	}
+	if c.SSHSessionHeartbeat <= 0 {
+		return errors.New("SSH session heartbeat must be > 0")
 	}
 	if c.AcceptRateWindow <= 0 {
 		return errors.New("accept rate window must be > 0")
@@ -326,6 +366,10 @@ func (c Config) TLSListenAddrs() []string {
 
 func (c Config) MetricsAddr() string           { return c.MetricsListenAddr }
 func (c Config) HTTPBackendAddr() string       { return c.HTTPBackend }
+func (c Config) SSHBackendAddr() string        { return c.SSHBackend }
+func (c Config) SSHTLSBackendAddr() string     { return c.SSHTLSBackend }
+func (c Config) SSHWSBackendAddr() string      { return c.SSHWSBackend }
+func (c Config) OpenVPNRawBackendAddr() string { return c.OpenVPNRawBackend }
 func (c Config) VLESSRawBackendAddr() string   { return c.VLESSRawBackend }
 func (c Config) TrojanRawBackendAddr() string  { return c.TrojanRawBackend }
 

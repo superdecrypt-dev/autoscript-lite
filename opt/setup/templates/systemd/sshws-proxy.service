@@ -1,0 +1,17 @@
+[Unit]
+Description=Websocket Proxy (Go) service
+After=network-online.target sshws-dropbear.service
+Requires=sshws-dropbear.service
+PartOf=sshws-dropbear.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/sshws-runtime
+ExecStart=/usr/local/bin/ws-proxy --listen-host 127.0.0.1 --listen-port __SSHWS_PROXY_PORT__ --backend-host 127.0.0.1 --backend-port __SSHWS_DROPBEAR_PORT__ --path / --handshake-timeout ${SSHWS_HANDSHAKE_TIMEOUT_SEC}
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
