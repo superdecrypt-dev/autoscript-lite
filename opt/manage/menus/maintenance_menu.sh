@@ -172,17 +172,9 @@ maintenance_menu() {
     "7|WARP Status"
     "8|Restart WARP"
     "9|Xray Daemons"
-    "10|SSH WS Status"
-    "11|Restart SSH WS"
-    "12|SSH WS Diagnose"
-    "13|OpenVPN Status"
-    "14|Restart OpenVPN"
-    "15|OpenVPN Logs"
-    "16|Edge Status"
-    "17|Restart Edge"
-    "18|Edge Info"
-    "19|BadVPN Status"
-    "20|Restart BadVPN"
+    "10|Edge Status"
+    "11|Restart Edge"
+    "12|Edge Info"
     "0|Back"
   )
   while true; do
@@ -224,17 +216,9 @@ maintenance_menu() {
       7) menu_run_isolated_report "Wireproxy Status" wireproxy_status_menu ;;
       8) menu_run_isolated_report "Wireproxy Restart" wireproxy_restart_menu ;;
       9) menu_run_isolated_report "Daemon Status" daemon_status_menu ;;
-      10) menu_run_isolated_report "SSHWS Status" ssh_runtime_context_run maintenance sshws_status_menu ;;
-      11) menu_run_isolated_report "SSHWS Restart" ssh_runtime_context_run maintenance sshws_restart_menu ;;
-      12) menu_run_isolated_report "SSHWS Diagnostics" ssh_runtime_context_run maintenance sshws_diagnostics_menu ;;
-      13) menu_run_isolated_report "OpenVPN Status" openvpn_status_menu ;;
-      14) menu_run_isolated_report "OpenVPN Restart" openvpn_restart_menu ;;
-      15) menu_run_isolated_report "OpenVPN Logs" openvpn_logs_menu ;;
-      16) menu_run_isolated_report "Edge Runtime Status" edge_runtime_status_menu ;;
-      17) menu_run_isolated_report "Edge Runtime Restart" edge_runtime_restart_menu ;;
-      18) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;
-      19) menu_run_isolated_report "BadVPN Status" badvpn_status_menu ;;
-      20) menu_run_isolated_report "BadVPN Restart" badvpn_restart_menu ;;
+      10) menu_run_isolated_report "Edge Runtime Status" edge_runtime_status_menu ;;
+      11) menu_run_isolated_report "Edge Runtime Restart" edge_runtime_restart_menu ;;
+      12) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

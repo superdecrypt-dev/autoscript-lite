@@ -113,17 +113,13 @@ CLEANUP_MAX_SCAN_IDS = 2000
 DELETE_PICK_PAGE_SIZE = 12
 FORM_CHOICE_PAGE_SIZE = 12
 XRAY_PROTOCOLS = ("vless", "vmess", "trojan")
-USER_PROTOCOLS = XRAY_PROTOCOLS + ("ssh",)
+USER_PROTOCOLS = XRAY_PROTOCOLS
 XRAY_USER_MENU_ID = "22"
-SSH_USER_MENU_ID = "23"
 XRAY_QAC_MENU_ID = "24"
-SSH_QAC_MENU_ID = "25"
-OPENVPN_QAC_MENU_ID = "44"
 BACKUP_MENU_ID = "32"
-SSH_NETWORK_MENU_IDS = {"34", "37", "40", "41"}
-DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID, SSH_USER_MENU_ID}
-QAC_MENU_IDS = {XRAY_QAC_MENU_ID, SSH_QAC_MENU_ID, OPENVPN_QAC_MENU_ID}
-ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_password", "reset_credential"}
+DELETE_PICK_MENU_IDS = {XRAY_USER_MENU_ID}
+QAC_MENU_IDS = {XRAY_QAC_MENU_ID}
+ACCOUNT_PICK_ACTION_IDS = {"account_info", "delete_user", "extend_expiry", "reset_credential"}
 ROOT_DOMAIN_FALLBACK_OPTIONS = (
     "vyxara1.web.id",
     "vyxara2.web.id",
@@ -139,7 +135,6 @@ BACKUP_ARCHIVE_SELECT_ACTIONS = {
 FORM_CHOICE_USERNAME_ACTIONS = {
     "extend_expiry",
     "account_info",
-    "reset_password",
     "reset_credential",
     "detail",
     "set_quota_limit",
@@ -152,15 +147,6 @@ FORM_CHOICE_USERNAME_ACTIONS = {
     "set_speed_upload",
     "speed_limit",
     "set_warp_user_mode",
-    "routing_ssh_user_inherit",
-    "routing_ssh_user_direct",
-    "routing_ssh_user_warp",
-    "warp_ssh_user_enable",
-    "warp_ssh_user_disable",
-    "warp_ssh_user_inherit",
-}
-SSH_ONLY_PROTOCOL_ACTIONS = {
-    "reset_password",
 }
 KEY_PENDING_FORM = "pending_form"
 KEY_PENDING_CONFIRM = "pending_confirm"
@@ -559,10 +545,6 @@ def _safe_int(raw: str, default: int = 0) -> int:
 def _menu_protocol_scope(menu_id: str) -> tuple[str, ...]:
     if menu_id in {XRAY_USER_MENU_ID, XRAY_QAC_MENU_ID}:
         return XRAY_PROTOCOLS
-    if menu_id == OPENVPN_QAC_MENU_ID:
-        return ("openvpn",)
-    if menu_id in {SSH_USER_MENU_ID, SSH_QAC_MENU_ID} | SSH_NETWORK_MENU_IDS:
-        return ("ssh",)
     return USER_PROTOCOLS
 
 
@@ -570,8 +552,6 @@ def _qac_picker_title(menu_id: str) -> str:
     return qac_ui_picker_title(
         menu_id,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
-        ssh_qac_menu_id=SSH_QAC_MENU_ID,
-        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -642,8 +622,6 @@ def _qac_menu_text(menu: MenuSpec, selection: dict, summary: dict[str, str] | No
         page,
         total_pages,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
-        ssh_qac_menu_id=SSH_QAC_MENU_ID,
-        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -684,8 +662,6 @@ def _qac_pick_text(menu_id: str, page: int, users: list[dict[str, str]]) -> str:
         users,
         delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
         xray_qac_menu_id=XRAY_QAC_MENU_ID,
-        ssh_qac_menu_id=SSH_QAC_MENU_ID,
-        openvpn_qac_menu_id=OPENVPN_QAC_MENU_ID,
     )
 
 
@@ -697,7 +673,6 @@ def _delete_picker_title(menu_id: str) -> str:
     return picker_delete_picker_title(
         menu_id,
         xray_user_menu_id=XRAY_USER_MENU_ID,
-        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -705,7 +680,6 @@ def _account_picker_title(menu_id: str) -> str:
     return picker_account_picker_title(
         menu_id,
         xray_user_menu_id=XRAY_USER_MENU_ID,
-        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -745,7 +719,6 @@ def _account_pick_text(menu_id: str, action_label: str, page: int, users: list[d
         users,
         delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
         xray_user_menu_id=XRAY_USER_MENU_ID,
-        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -846,7 +819,6 @@ def _protocol_choices_for_action(menu_id: str, action_id: str) -> tuple[str, ...
         action_id,
         scoped=_menu_protocol_scope(menu_id),
         user_protocols=USER_PROTOCOLS,
-        ssh_only_protocol_actions=SSH_ONLY_PROTOCOL_ACTIONS,
         xray_protocols=XRAY_PROTOCOLS,
     )
 
@@ -869,7 +841,6 @@ def _delete_pick_text_proto(menu_id: str) -> str:
     return picker_delete_pick_text_proto(
         menu_id,
         xray_user_menu_id=XRAY_USER_MENU_ID,
-        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 
@@ -881,7 +852,6 @@ def _delete_pick_text_users(menu_id: str, proto: str, page: int, users: list[str
         users,
         delete_pick_page_size=DELETE_PICK_PAGE_SIZE,
         xray_user_menu_id=XRAY_USER_MENU_ID,
-        ssh_user_menu_id=SSH_USER_MENU_ID,
     )
 
 

@@ -7,13 +7,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from .commands_loader import MenuSpec
 
 
-def qac_picker_title(menu_id: str, *, xray_qac_menu_id: str, ssh_qac_menu_id: str, openvpn_qac_menu_id: str) -> str:
+def qac_picker_title(menu_id: str, *, xray_qac_menu_id: str) -> str:
     if menu_id == xray_qac_menu_id:
         return "Xray QAC"
-    if menu_id == ssh_qac_menu_id:
-        return "SSH QAC"
-    if menu_id == openvpn_qac_menu_id:
-        return "OpenVPN QAC"
     return "Quota & Access Control"
 
 
@@ -56,8 +52,6 @@ def qac_menu_text(
     total_pages: int,
     *,
     xray_qac_menu_id: str,
-    ssh_qac_menu_id: str,
-    openvpn_qac_menu_id: str,
 ) -> str:
     lines = [f"<b>{html.escape(menu.label)}</b>"]
     if menu.description:
@@ -65,88 +59,29 @@ def qac_menu_text(
 
     active_label = qac_selection_label(menu.id, selection, xray_qac_menu_id=xray_qac_menu_id)
     if summary:
-        if menu.id == ssh_qac_menu_id:
-            lines.extend(
-                [
-                    "",
-                    "<pre>"
-                    + html.escape(
-                        "\n".join(
-                            [
-                                f"Username           : {str(summary.get('username') or active_label)}",
-                                f"Quota Limit        : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used (SSH)   : {str(summary.get('quota_used') or '-')}",
-                                f"Expired At         : {str(summary.get('expired_at') or '-')}",
-                                f"IP/Login Limit     : {str(summary.get('ip_limit') or '-')}",
-                                f"IP/Login Limit Max : {str(summary.get('ip_limit_max') or '-')}",
-                                f"IP Unik Aktif      : {str(summary.get('distinct_ip_count') or '0')}",
-                                f"Daftar IP Aktif    : {str(summary.get('distinct_ips') or '-')}",
-                                f"IP/Login Metric    : {str(summary.get('ip_limit_metric') or '0')}",
-                                f"Block Reason       : {str(summary.get('block_reason') or '-')}",
-                                f"Account Locked     : {str(summary.get('account_locked') or 'OFF')}",
-                                f"Sesi Aktif         : {str(summary.get('active_sessions_total') or '0')}",
-                                f"Speed Download     : {str(summary.get('speed_download') or '-')}",
-                                f"Speed Upload       : {str(summary.get('speed_upload') or '-')}",
-                                f"Speed Limit        : {str(summary.get('speed_limit') or '-')}",
-                            ]
-                        )
+        lines.extend(
+            [
+                "",
+                "<pre>"
+                + html.escape(
+                    "\n".join(
+                        [
+                            f"Username       : {str(summary.get('username') or active_label)}",
+                            f"Quota Limit    : {str(summary.get('quota_limit') or '-')}",
+                            f"Quota Used     : {str(summary.get('quota_used') or '-')}",
+                            f"Expired At     : {str(summary.get('expired_at') or '-')}",
+                            f"IP Limit       : {str(summary.get('ip_limit') or '-')}",
+                            f"Block Reason   : {str(summary.get('block_reason') or '-')}",
+                            f"IP Limit Max   : {str(summary.get('ip_limit_max') or '-')}",
+                            f"Speed Download : {str(summary.get('speed_download') or '-')}",
+                            f"Speed Upload   : {str(summary.get('speed_upload') or '-')}",
+                            f"Speed Limit    : {str(summary.get('speed_limit') or '-')}",
+                        ]
                     )
-                    + "</pre>",
-                ]
-            )
-        elif menu.id == openvpn_qac_menu_id:
-            lines.extend(
-                [
-                    "",
-                    "<pre>"
-                    + html.escape(
-                        "\n".join(
-                            [
-                                f"Username               : {str(summary.get('username') or active_label)}",
-                                f"Quota Limit            : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used (OpenVPN)   : {str(summary.get('quota_used') or '-')}",
-                                f"Expired At             : {str(summary.get('expired_at') or '-')}",
-                                f"IP Limit               : {str(summary.get('ip_limit') or '-')}",
-                                f"IP Limit Max           : {str(summary.get('ip_limit_max') or '-')}",
-                                f"IP Unik Aktif          : {str(summary.get('distinct_ip_count') or '0')}",
-                                f"Daftar IP Aktif        : {str(summary.get('distinct_ips') or '-')}",
-                                f"IP Metric              : {str(summary.get('ip_limit_metric') or '0')}",
-                                f"Block Reason           : {str(summary.get('block_reason') or '-')}",
-                                f"Account Locked         : {str(summary.get('account_locked') or 'OFF')}",
-                                f"Sesi Aktif             : {str(summary.get('active_sessions_total') or '0')}",
-                                f"Speed Download         : {str(summary.get('speed_download') or '-')}",
-                                f"Speed Upload           : {str(summary.get('speed_upload') or '-')}",
-                                f"Speed Limit            : {str(summary.get('speed_limit') or '-')}",
-                            ]
-                        )
-                    )
-                    + "</pre>",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "",
-                    "<pre>"
-                    + html.escape(
-                        "\n".join(
-                            [
-                                f"Username       : {str(summary.get('username') or active_label)}",
-                                f"Quota Limit    : {str(summary.get('quota_limit') or '-')}",
-                                f"Quota Used     : {str(summary.get('quota_used') or '-')}",
-                                f"Expired At     : {str(summary.get('expired_at') or '-')}",
-                                f"IP Limit       : {str(summary.get('ip_limit') or '-')}",
-                                f"Block Reason   : {str(summary.get('block_reason') or '-')}",
-                                f"IP Limit Max   : {str(summary.get('ip_limit_max') or '-')}",
-                                f"Speed Download : {str(summary.get('speed_download') or '-')}",
-                                f"Speed Upload   : {str(summary.get('speed_upload') or '-')}",
-                                f"Speed Limit    : {str(summary.get('speed_limit') or '-')}",
-                            ]
-                        )
-                    )
-                    + "</pre>",
-                ]
-            )
+                )
+                + "</pre>",
+            ]
+        )
     else:
         lines.extend(["", f"User aktif: <code>{html.escape(active_label)}</code>"])
 
@@ -241,12 +176,10 @@ def qac_pick_text(
     *,
     delete_pick_page_size: int,
     xray_qac_menu_id: str,
-    ssh_qac_menu_id: str,
-    openvpn_qac_menu_id: str,
 ) -> str:
     total_pages = ((len(users) - 1) // delete_pick_page_size) + 1 if users else 1
     return (
-        f"<b>{html.escape(qac_picker_title(menu_id, xray_qac_menu_id=xray_qac_menu_id, ssh_qac_menu_id=ssh_qac_menu_id, openvpn_qac_menu_id=openvpn_qac_menu_id))}</b>\n"
+        f"<b>{html.escape(qac_picker_title(menu_id, xray_qac_menu_id=xray_qac_menu_id))}</b>\n"
         "Pilih user dulu untuk membuka menu QAC.\n\n"
         f"Total user: <code>{len(users)}</code>\n"
         f"Halaman: <code>{page + 1}/{total_pages}</code>"

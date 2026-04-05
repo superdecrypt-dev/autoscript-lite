@@ -127,8 +127,6 @@ load_persisted_edge_runtime_env
 # Precedence: env eksplisit > env runtime tersimpan > default first install.
 EDGE_PROVIDER="${EDGE_PROVIDER:-go}"
 EDGE_ACTIVATE_RUNTIME="${EDGE_ACTIVATE_RUNTIME:-true}"
-# shellcheck source=opt/setup/install/badvpn.sh
-source_setup_module "opt/setup/install/badvpn.sh"
 # shellcheck source=opt/setup/install/network.sh
 source_setup_module "opt/setup/install/network.sh"
 # shellcheck source=opt/setup/install/xray.sh
@@ -139,14 +137,6 @@ source_setup_module "opt/setup/install/management.sh"
 source_setup_module "opt/setup/install/account_portal.sh"
 # shellcheck source=opt/setup/install/license.sh
 source_setup_module "opt/setup/install/license.sh"
-# shellcheck source=opt/setup/install/sshws.sh
-source_setup_module "opt/setup/install/sshws.sh"
-# shellcheck source=opt/setup/install/openvpn.sh
-source_setup_module "opt/setup/install/openvpn.sh"
-# shellcheck source=opt/setup/install/zivpn.sh
-source_setup_module "opt/setup/install/zivpn.sh"
-# shellcheck source=opt/setup/install/adblock.sh
-source_setup_module "opt/setup/install/adblock.sh"
 # shellcheck source=opt/setup/install/domain_guard.sh
 source_setup_module "opt/setup/install/domain_guard.sh"
 # shellcheck source=opt/setup/install/sanity.sh
@@ -172,8 +162,6 @@ setup_run_step() {
 setup_post_domain_main() {
   setup_run_step "Validasi Python" need_python3
   setup_run_step "Install dependency tambahan" install_extra_deps
-  # Re-validasi setelah dependency terpasang: jika stunnel tersedia, conflict port stunnel juga wajib lolos.
-  setup_run_step "Validasi port SSH WS" validate_sshws_ports_config
   setup_run_step "Install speedtest" install_speedtest_snap
   setup_run_step "Aktifkan cron" enable_cron_service
   setup_run_step "Aktifkan chrony" setup_time_sync_chrony
@@ -187,7 +175,6 @@ setup_post_domain_main() {
   setup_run_step "Siapkan wgcf" setup_wgcf
   setup_run_step "Siapkan wireproxy" setup_wireproxy
   setup_run_step "Siapkan backend Zero Trust" setup_warp_zero_trust_backend
-  setup_run_step "Siapkan SSH WARP" setup_ssh_warp_interface
   setup_run_step "Bersihkan file wgcf" cleanup_wgcf_files
   setup_run_step "Install repo nginx" install_nginx_official_repo
   setup_run_step "Tulis config utama nginx" write_nginx_main_conf
@@ -206,13 +193,6 @@ setup_post_domain_main() {
   else
     warn "Gagal menulis compat domain file: ${XRAY_DOMAIN_FILE}"
   fi
-  setup_run_step "Install SSH WS" install_sshws_stack
-  setup_run_step "Install SSH QAC enforcer" install_sshws_qac_enforcer
-  setup_run_step "Install SSH expired cleaner" install_ssh_expired_cleaner
-  setup_run_step "Install OpenVPN" install_openvpn_stack
-  setup_run_step "Install ZIVPN UDP" install_zivpn_stack
-  setup_run_step "Install SSH Adblock" install_ssh_dns_adblock_foundation
-  setup_run_step "Install BadVPN UDPGW" install_badvpn_udpgw_stack
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
@@ -241,7 +221,7 @@ setup_run_post_domain_with_spinner() {
   ui_section_title "Menyiapkan Server"
   ui_hr
   ui_subtle "Domain     : ${DOMAIN}"
-  ui_subtle "Transport  : Edge Gateway + Xray + SSH"
+  ui_subtle "Transport  : Edge Gateway + Xray"
   ui_subtle "Output log : ${setup_log_file}"
   ui_hr
   ui_section_title "Proses setup berjalan di latar belakang."
@@ -285,7 +265,6 @@ main() {
   need_root
   ensure_runtime_lock_dirs
   ensure_stdin_available
-  validate_sshws_ports_config
   check_os
   autoscript_license_setup_preflight
   install_base_deps

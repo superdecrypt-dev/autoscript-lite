@@ -20,25 +20,14 @@ Prinsip:
   - `install/`
   - `bin/`
   - `templates/`
-- Tambahan aktif:
-  - `opt/adblock/`
-  - `opt/badvpn/`
-  - `install/adblock.sh`
-  - `install/badvpn.sh`
-  - `templates/systemd/adblock-sync.service`
-  - `templates/systemd/adblock-update.service`
-  - `templates/systemd/badvpn-udpgw.service`
-  - `templates/config/badvpn-runtime.env`
 - `install/edge.sh` sekarang sudah dipakai untuk jalur `Edge Gateway`.
-- `install/adblock.sh` sekarang sudah dipakai untuk jalur `Shared Adblock`.
-- `install/badvpn.sh` sekarang sudah dipakai untuk jalur `BadVPN UDPGW`.
 - `install/network.sh` sekarang juga memegang fondasi backend `Zero Trust` berbasis `cloudflare-warp`.
 - Full E2E live `run.sh` dengan source lokal repo sudah PASS pada `2026-03-08`.
 - Validasi minimum yang sudah lolos:
   - `bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
   - `shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh`
-  - `python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py`
-  - `go -C opt/edge/go test ./cmd/wsproxy`
+  - `python3 -m py_compile opt/setup/bin/*.py`
+  - `go -C opt/edge/go test ./...`
 
 ## Target Struktur
 
@@ -51,12 +40,10 @@ opt/setup/
     helpers.sh
   install/
     bootstrap.sh
-    badvpn.sh
     domain.sh
     edge.sh
     nginx.sh
     xray.sh
-    sshws.sh
     network.sh
     domain_guard.sh
     management.sh
@@ -72,36 +59,31 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
 
 1. `need_root`, `ensure_runtime_lock_dirs`, `ensure_stdin_available`, `check_os`
    - target modul: `core/*.sh`, `install/bootstrap.sh`
-2. `validate_sshws_ports_config`
-   - target modul: `install/sshws.sh`
-3. `install_base_deps`, `install_extra_deps`, `install_speedtest_snap`
+2. `install_base_deps`, `install_extra_deps`, `install_speedtest_snap`
    - target modul: `install/bootstrap.sh`
-4. `enable_cron_service`, `setup_time_sync_chrony`, `enable_bbr`,
+3. `enable_cron_service`, `setup_time_sync_chrony`, `enable_bbr`,
    `setup_swap_2gb`, `tune_ulimit`, `install_fail2ban_aggressive`
    - target modul: `install/network.sh`
-5. `install_wgcf`, `setup_wgcf`, `install_wireproxy`, `setup_wireproxy`,
-   `install_cloudflare_warp`, `setup_warp_zero_trust_backend`,
-   `setup_ssh_warp_interface`
+4. `install_wgcf`, `setup_wgcf`, `install_wireproxy`, `setup_wireproxy`,
+   `install_cloudflare_warp`, `setup_warp_zero_trust_backend`
    - target modul: `install/network.sh`
-6. `domain_menu_v2`, Cloudflare helpers, `install_acme_and_issue_cert`
+5. `domain_menu_v2`, Cloudflare helpers, `install_acme_and_issue_cert`
    - target modul: `install/domain.sh`
-7. `install_nginx_official_repo`, `write_nginx_main_conf`, `write_nginx_config`
+6. `install_nginx_official_repo`, `write_nginx_main_conf`, `write_nginx_config`
    - target modul: `install/nginx.sh`
-8. `install_edge_provider_stack`
+7. `install_edge_provider_stack`
    - target modul: `install/edge.sh`
-9. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
+8. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
    `configure_xray_service_confdir`, `setup_xray_geodata_updater`
    - target modul: `install/xray.sh`
-10. `install_sshws_stack`, `install_sshws_qac_enforcer`
-   - target modul: `install/sshws.sh`
-11. `install_xray_speed_limiter_foundation`
+9. `install_xray_speed_limiter_foundation`
     - target modul: `install/xray.sh`
-12. `setup_logrotate`, `install_domain_cert_guard`
+10. `setup_logrotate`, `install_domain_cert_guard`
     - target modul: `install/domain_guard.sh`
-13. `install_management_scripts`, `sync_manage_modules_layout`,
+11. `install_management_scripts`, `sync_manage_modules_layout`,
     `install_bot_installer_if_present`
     - target modul: `install/management.sh`
-14. `setup_logrotate`, `sanity_check`, `cleanup`
+12. `setup_logrotate`, `sanity_check`, `cleanup`
     - target modul: `install/bootstrap.sh`, `install/domain_guard.sh`
 
 ## Tahapan Refactor

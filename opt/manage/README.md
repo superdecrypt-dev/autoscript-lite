@@ -46,23 +46,18 @@ opt/manage/
 - `opt/manage/features/domain.sh`: aggregator live untuk `8) Domain Control`
 - `opt/manage/features/domain/cloudflare.sh`: helper Cloudflare/DNS domain
 - `opt/manage/features/domain/control.sh`: source of truth `Domain Control`
-- `opt/manage/features/network.sh`: aggregator live untuk `5) Xray Network`, `7) Adblocker`, `9) Speedtest`, dan flow `WARP Tier`
+- `opt/manage/features/network.sh`: aggregator live untuk `5) Xray Network`, `9) Speedtest`, dan flow `WARP Tier`
 - `opt/manage/features/network/warp.sh`: WARP/Tier/runtime WARP
 - `opt/manage/features/network/routing.sh`: routing Xray untuk WARP/domain/geosite
-- `opt/manage/features/network/adblock.sh`: adblock Xray + SSH
 - `opt/manage/features/network/dns.sh`: DNS settings dan DNS add-ons
 - `opt/manage/features/network/diagnostics.sh`: checks/menu network
 - `opt/manage/features/network/speedtest.sh`: speedtest
-- `opt/manage/features/analytics.sh`: aggregator live untuk `2) SSH Users`, `4) SSH QAC`, `6) SSH Network`, `10) Security`, `12) Traffic`, dan layar utilitas di `13) Tools`
+- `opt/manage/features/analytics.sh`: aggregator live untuk `10) Security`, `12) Traffic`, dan layar utilitas di `13) Tools`
 - `opt/manage/features/analytics/traffic.sh`: `12) Traffic`
 - `opt/manage/features/analytics/security.sh`: `10) Security`
-- `opt/manage/features/analytics/runtime_services.sh`: helper runtime SSH/SSHWS
-- `opt/manage/features/analytics/ssh_users.sh`: `2) SSH Users`
-- `opt/manage/features/analytics/ssh_network.sh`: `6) SSH Network`
-- `opt/manage/features/analytics/ssh_qac.sh`: `4) SSH QAC`
 - `opt/manage/features/analytics/tools.sh`: `13) Tools > Telegram Bot`
 - `opt/manage/features/maintenance.sh`: aggregator live untuk helper `11) Maintenance`
-- `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, BadVPN, daemon status
+- `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, daemon status
 - `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
 - `opt/manage/features/maintenance/diagnostics.sh`: diagnostic menu tambahan maintenance
 - `opt/manage/menus/main_menu.sh`: router menu utama
@@ -76,18 +71,10 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 
 - `1) Xray Users`
   CRUD user Xray, expiry, reset credential, listing, dan recovery journal.
-- `2) SSH Users`
-  CRUD user SSH, expiry, reset password, sesi aktif, SSH WS status/restart, dan recovery journal.
 - `3) Xray QAC`
   Quota, block, IP limit, speed limit, dan detail metadata user Xray.
-- `4) SSH QAC`
-  Quota, block, login/IP limit, speed limit, sync/enforcement, dan detail metadata SSH.
 - `5) Xray Network`
   WARP, DNS settings/add-ons, dan diagnostics runtime Xray.
-- `6) SSH Network`
-  DNS steering SSH dan kontrol WARP SSH global/per-user.
-- `7) Adblocker`
-  Shared source Adblock untuk Xray + SSH, termasuk URL source, auto update, dan rebuild artifact.
 - `8) Domain Control`
   Set domain, current domain, guard check/renew, refresh account info, repair compat drift, dan repair target DNS.
 - `9) Speedtest`

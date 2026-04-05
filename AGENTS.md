@@ -2,10 +2,10 @@
 
 ## Struktur Proyek dan Organisasi Modul
 
-`run.sh` adalah launcher installer, `setup.sh` menangani provisioning VPS, dan `manage.sh` adalah CLI operasional setelah instalasi. Simpan logic installer di `opt/setup/`, logic CLI runtime di `opt/manage/`, kode bot Telegram di `bot-telegram/`, source edge gateway di `opt/edge/go/`, dan utilitas tambahan di `tools/`.
+`run.sh` adalah launcher installer, `setup.sh` menangani provisioning VPS, dan `manage.sh` adalah CLI operasional setelah instalasi. Repo `autoscript-lite` hanya menyajikan stack `Xray-core` + `edge-mux` + `WARP` + tooling operasional. Simpan logic installer di `opt/setup/`, logic CLI runtime di `opt/manage/`, kode bot Telegram di `bot-telegram/`, source edge gateway di `opt/edge/go/`, dan utilitas tambahan di `tools/`.
 
 Modul shell dipisah per domain:
-- `opt/setup/install/*.sh`: langkah provisioning seperti `xray.sh`, `sshws.sh`, `openvpn.sh`
+- `opt/setup/install/*.sh`: langkah provisioning aktif seperti `xray.sh`, `edge.sh`, `network.sh`, `management.sh`
 - `opt/manage/features/*` dan subfoldernya: action menu dan operasi runtime
 - `opt/setup/templates/` dan `opt/setup/bin/`: template config, unit systemd, dan helper script
 
@@ -17,13 +17,13 @@ Gunakan source repo lokal saat menguji perubahan installer:
 RUN_USE_LOCAL_SOURCE=1 bash run.sh
 bash -n setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
 shellcheck -x -S warning setup.sh opt/setup/core/*.sh opt/setup/install/*.sh
-python3 -m py_compile opt/setup/bin/sshws-qac-enforcer.py opt/setup/bin/xray-speed.py
+python3 -m py_compile opt/setup/bin/*.py bot-telegram/backend-py/app/**/*.py bot-telegram/gateway-py/app/**/*.py
 go -C opt/edge/go test ./...
 bash bot-telegram/scripts/gate-all.sh
 sudo /opt/bot-telegram/scripts/smoke-test.sh
 ```
 
-`gate-all.sh` memvalidasi kode Python bot. Test Go berada di `opt/edge/go/**` dan `opt/adblock/go/**`.
+`gate-all.sh` memvalidasi kode Python bot. Test Go untuk varian `lite` berfokus di `opt/edge/go/**`.
 
 ## Gaya Kode dan Konvensi Penamaan
 

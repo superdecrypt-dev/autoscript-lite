@@ -2,7 +2,7 @@
 
 ## Tujuan
 
-Repo `autoscript` mengelola provisioning dan operasi VPS untuk `Xray`, `SSH WS`, `OpenVPN`, `WARP`, `edge-mux`, dan bot `Telegram`. Karena perubahan bisa berdampak langsung ke host produksi, pengujian harus mencakup validasi statis, smoke test, regression test per domain, dan E2E di VPS bersih.
+Repo `autoscript-lite` mengelola provisioning dan operasi VPS untuk `Xray`, `WARP`, `edge-mux`, dan bot `Telegram`. Karena perubahan bisa berdampak langsung ke host produksi, pengujian harus mencakup validasi statis, smoke test, regression test per domain, dan E2E di VPS bersih.
 
 ## Level Pengujian
 
@@ -19,13 +19,13 @@ Repo `autoscript` mengelola provisioning dan operasi VPS untuk `Xray`, `SSH WS`,
 | --- | --- |
 | Dokumentasi saja (`README`, `AGENTS`, `TESTING`) | `Level 0` |
 | Perubahan kecil helper shell/Python/Go tanpa ubah flow user | `Level 0-1` |
-| Perubahan module Go (`opt/edge/go`, `opt/adblock/go`) | `Level 0-2` |
+| Perubahan module Go (`opt/edge/go`) | `Level 0-2` |
 | Perubahan bot Telegram UI, callback, ACL, atau form input | `Level 0-3` |
 | Perubahan menu `manage.sh` atau `opt/manage/` yang user-facing | `Level 0-3` |
 | Perubahan `install-telegram-bot.sh` | `Level 0-3` |
 | Perubahan `run.sh` atau `setup.sh` | `Level 0-5` |
 | Perubahan domain, cert, DNS flow, atau cleanup DNS A record | `Level 0-5` |
-| Perubahan network, WARP, SSH Network, routing, atau service runtime | `Level 0-5` |
+| Perubahan network, WARP, routing, atau service runtime | `Level 0-5` |
 | Perubahan backup/restore, rollback, atau data mutation penting | `Level 0-5` |
 
 ## 1. Validasi Statis
@@ -35,7 +35,6 @@ Jalankan ini setelah mengubah script shell, Python, atau Go:
 ```bash
 bash tools/test-noninteractive.sh
 go -C opt/edge/go test ./...
-go -C opt/adblock/go test ./...
 bash bot-telegram/scripts/gate-all.sh
 ```
 
@@ -60,10 +59,9 @@ Untuk uji manual/operator flow, gunakan checklist di [tools/test-interactive-che
 
 Setelah mengubah area tertentu, uji minimal flow berikut:
 - Domain: set domain, renew cert, cleanup DNS A record, refresh `ACCOUNT INFO`.
-- Xray/SSH users: create, extend expiry, reset credential/password, delete.
+- Xray users: create, extend expiry, reset credential, delete.
 - QAC: quota, speed, block/unblock, IP/login limit.
-- OpenVPN: sinkron metadata dengan akun SSH dan QAC.
-- WARP dan SSH Network: mode global, per-user, apply runtime.
+- WARP dan Xray routing: mode global, per-user, apply runtime.
 - Backup/Restore: create backup, list backup, restore, validasi rollback saat gagal.
 - Telegram bot: menu render, callback aman, ACL admin, upload restore bila diubah.
 
@@ -78,8 +76,8 @@ Target minimum:
 Checklist:
 - Install dari nol.
 - Reboot host.
-- Pastikan `xray`, `nginx`, `edge-mux`, `sshws`, `openvpn`, dan service bot aktif sesuai fitur yang dipasang.
-- Uji koneksi nyata untuk `VLESS/VMess/Trojan`, `SSH WS`, dan `OpenVPN`.
+- Pastikan `xray`, `nginx`, `edge-mux`, dan service bot aktif sesuai fitur yang dipasang.
+- Uji koneksi nyata untuk `VLESS/VMess/Trojan`.
 - Jalankan installer lagi untuk cek idempotency.
 
 ## 5. Skenario Negatif

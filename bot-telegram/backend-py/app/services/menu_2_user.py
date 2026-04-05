@@ -12,10 +12,8 @@ from ..utils.validators import (
     require_username,
 )
 
-USER_PROTOCOLS = tuple(system.USER_PROTOCOLS)
+USER_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
 XRAY_ONLY_PROTOCOLS = tuple(system.XRAY_PROTOCOLS)
-SSH_ONLY_PROTOCOLS = (system.SSH_PROTOCOL,)
-PASSWORD_VISIBLE_PROTOCOLS = {system.SSH_PROTOCOL}
 
 
 def _fmt_number(value: float) -> str:
@@ -29,7 +27,6 @@ def _fmt_number(value: float) -> str:
 def _scope_title(scope: str, label: str) -> str:
     prefix = {
         "xray": "Xray Users",
-        "ssh": "SSH Users",
     }.get(scope, "User Management")
     return f"{prefix} - {label}" if label else prefix
 
@@ -37,8 +34,6 @@ def _scope_title(scope: str, label: str) -> str:
 def _scope_protocols(scope: str) -> tuple[str, ...]:
     if scope == "xray":
         return XRAY_ONLY_PROTOCOLS
-    if scope == "ssh":
-        return SSH_ONLY_PROTOCOLS
     return USER_PROTOCOLS
 
 
@@ -64,16 +59,6 @@ def _decode_download_text(download_payload: dict[str, object]) -> str:
         return ""
 
 
-def _allow_sensitive_output(data: dict[str, object] | None = None) -> dict[str, object]:
-    payload = dict(data or {})
-    payload["allow_sensitive_output"] = True
-    return payload
-
-
-def _proto_requires_sensitive_output(proto: str) -> bool:
-    return str(proto).strip().lower() in PASSWORD_VISIBLE_PROTOCOLS
-
-
 def _mark_account_info_render(data: dict[str, object] | None = None) -> dict[str, object]:
     payload = dict(data or {})
     payload["render_mode"] = "account_info"
@@ -82,8 +67,6 @@ def _mark_account_info_render(data: dict[str, object] | None = None) -> dict[str
 
 def _resolve_proto(params: dict, title: str, scope: str) -> tuple[bool, str | dict]:
     protocols = _scope_protocols(scope)
-    if protocols == SSH_ONLY_PROTOCOLS:
-        return True, system.SSH_PROTOCOL
     return require_protocol(params, title, allowed=set(protocols))
 
 
@@ -147,13 +130,6 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             speed_down = float(sd_or_err)
             speed_up = float(su_or_err)
 
-        password_value = ""
-        if proto == system.SSH_PROTOCOL:
-            ok_pw, pw_or_err = require_param(params, "password", title)
-            if not ok_pw:
-                return pw_or_err
-            password_value = str(pw_or_err)
-
         ok_add, _title_add, msg_add = system_mutations.op_user_add(
             proto=proto,
             username=str(user_or_err),
@@ -164,7 +140,7 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             speed_enabled=speed_enabled,
             speed_down_mbit=speed_down,
             speed_up_mbit=speed_up,
-            password=password_value,
+            password="",
         )
         if not ok_add:
             return error_response("user_add_failed", title, msg_add)
@@ -193,35 +169,9 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         else:
             data["download_error"] = str(download_or_err)
 
-        if proto == system.SSH_PROTOCOL:
-            account_path = _extract_add_user_path(msg_add, "Account")
-            quota_path = _extract_add_user_path(msg_add, "Quota")
-            _title_info, account_text = system.op_account_info(system.SSH_PROTOCOL, str(user_or_err))
-            lines = [
-                "Add SSH user sukses ✅",
-                "",
-                "Account file:",
-                f"  {account_path}",
-                "Metadata file:",
-                f"  {quota_path}",
-            ]
-            lines.extend(
-                [
-                    "",
-                    "SSH ACCOUNT INFO:",
-                ]
-            )
-            if account_text:
-                lines.append(account_text)
-            else:
-                lines.append(f"(SSH ACCOUNT INFO tidak ditemukan: {account_path})")
-            return ok_response(title, "\n".join(lines), data=_allow_sensitive_output(_mark_account_info_render(data)))
-
         account_path = _extract_add_user_path(msg_add, "Account")
         quota_path = _extract_add_user_path(msg_add, "Quota")
         account_text = _decode_download_text(download_or_err) if ok_download and isinstance(download_or_err, dict) else ""
-        if _proto_requires_sensitive_output(proto):
-            data = _allow_sensitive_output(data)
         lines = [
             "Add user sukses ✅",
             "",
@@ -280,8 +230,8 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
                 data["download_file"] = download_or_err
                 if _proto_requires_sensitive_output(proto):
                     data = _allow_sensitive_output(data)
-            else:
-                msg_ext = f"{msg_ext}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
+        else:
+            msg_ext = f"{msg_ext}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
             return ok_response(title, msg_ext, data=data)
         return error_response("user_extend_failed", title, msg_ext)
 
@@ -304,35 +254,9 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         ok_download, download_or_err = system_mutations.op_user_account_file_download(proto, username)
         if ok_download and isinstance(download_or_err, dict):
             data["download_file"] = download_or_err
-            if _proto_requires_sensitive_output(proto):
-                data = _allow_sensitive_output(data)
         else:
             msg_reset = f"{msg_reset}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
         return ok_response(title, msg_reset, data=data)
-
-    if action == "reset_password":
-        title = _scope_title(scope, "Reset Password")
-        ok_u, user_or_err = require_username(params, title)
-        if not ok_u:
-            return user_or_err
-        ok_pw, pw_or_err = require_param(params, "password", title)
-        if not ok_pw:
-            return pw_or_err
-        username = str(user_or_err)
-        ok_reset, _title_reset, msg_reset = system_mutations.op_ssh_reset_password(username, str(pw_or_err))
-        if ok_reset:
-            data: dict[str, object] = {}
-            ok_download, download_or_err = system_mutations.op_user_account_file_download(system.SSH_PROTOCOL, username)
-            if ok_download and isinstance(download_or_err, dict):
-                data["download_file"] = download_or_err
-            else:
-                msg_reset = f"{msg_reset}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
-            return ok_response(title, msg_reset, data=_allow_sensitive_output(data))
-        return error_response("user_reset_password_failed", title, msg_reset)
-
-    if action in {"active_sshws_sessions", "sshws_status", "restart_sshws_stack"}:
-        title = _scope_title(scope, "SSHWS")
-        return error_response("action_moved", title, "Aksi SSHWS dipindahkan ke menu Maintenance.")
 
     if action == "account_info":
         title = _scope_title(scope, "Account Info")
@@ -346,15 +270,11 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
         ok_download, download_or_err = system_mutations.op_user_account_file_download(str(proto_or_err), str(user_or_err))
         if not ok_download or not isinstance(download_or_err, dict):
             msg_warn = f"{msg_info}\n\n- Warning: file account tidak bisa diunduh ({download_or_err})"
-            if _proto_requires_sensitive_output(str(proto_or_err)):
-                return ok_response(title, msg_warn, data=_allow_sensitive_output(_mark_account_info_render()))
             return ok_response(title, msg_warn, data=_mark_account_info_render())
 
         data: dict[str, object] = {
             "download_file": download_or_err,
         }
-        if _proto_requires_sensitive_output(str(proto_or_err)):
-            data = _allow_sensitive_output(data)
         return ok_response(title, msg_info, data=_mark_account_info_render(data))
 
     return error_response("unknown_action", _scope_title(scope, ""), f"Action tidak dikenal: {action}")

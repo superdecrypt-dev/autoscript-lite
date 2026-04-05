@@ -85,13 +85,4 @@ if [[ -f "opt/edge/go/go.mod" ]]; then
   fi
 fi
 
-if [[ -f "opt/adblock/go/go.mod" ]]; then
-  if need_cmd go; then
-    log "Go test: adblock"
-    go -C opt/adblock/go test ./...
-  else
-    warn "go tidak ditemukan; test adblock dilewati."
-  fi
-fi
-
 log "Semua baseline non-interactive checks selesai."

@@ -5,19 +5,15 @@ import html
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def delete_picker_title(menu_id: str, *, xray_user_menu_id: str, ssh_user_menu_id: str) -> str:
+def delete_picker_title(menu_id: str, *, xray_user_menu_id: str) -> str:
     if menu_id == xray_user_menu_id:
         return "Xray Users"
-    if menu_id == ssh_user_menu_id:
-        return "SSH Users"
     return "User Management"
 
 
-def account_picker_title(menu_id: str, *, xray_user_menu_id: str, ssh_user_menu_id: str) -> str:
+def account_picker_title(menu_id: str, *, xray_user_menu_id: str) -> str:
     if menu_id == xray_user_menu_id:
         return "Xray Users"
-    if menu_id == ssh_user_menu_id:
-        return "SSH Users"
     return "Accounts"
 
 
@@ -87,11 +83,10 @@ def account_pick_text(
     *,
     delete_pick_page_size: int,
     xray_user_menu_id: str,
-    ssh_user_menu_id: str,
 ) -> str:
     total_pages = ((len(users) - 1) // delete_pick_page_size) + 1 if users else 1
     return (
-        f"<b>{html.escape(account_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id, ssh_user_menu_id=ssh_user_menu_id))} · {html.escape(action_label)}</b>\n"
+        f"<b>{html.escape(account_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id))} · {html.escape(action_label)}</b>\n"
         "Pilih user dulu dari daftar.\n\n"
         f"Total user: <code>{len(users)}</code>\n"
         f"Halaman: <code>{page + 1}/{total_pages}</code>"
@@ -150,13 +145,10 @@ def protocol_choices_for_action(
     *,
     scoped: tuple[str, ...],
     user_protocols: tuple[str, ...],
-    ssh_only_protocol_actions: set[str],
     xray_protocols: tuple[str, ...],
 ) -> tuple[str, ...]:
     if scoped != user_protocols:
         return scoped
-    if action_id in ssh_only_protocol_actions:
-        return ("ssh",)
     return xray_protocols
 
 
@@ -204,10 +196,9 @@ def delete_pick_text_proto(
     menu_id: str,
     *,
     xray_user_menu_id: str,
-    ssh_user_menu_id: str,
 ) -> str:
     return (
-        f"<b>{html.escape(delete_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id, ssh_user_menu_id=ssh_user_menu_id))} · Delete User</b>\n"
+        f"<b>{html.escape(delete_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id))} · Delete User</b>\n"
         "Pilih protocol dulu, lalu pilih username dari daftar."
     )
 
@@ -220,11 +211,10 @@ def delete_pick_text_users(
     *,
     delete_pick_page_size: int,
     xray_user_menu_id: str,
-    ssh_user_menu_id: str,
 ) -> str:
     total_pages = ((len(users) - 1) // delete_pick_page_size) + 1 if users else 1
     return (
-        f"<b>{html.escape(delete_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id, ssh_user_menu_id=ssh_user_menu_id))} · Delete User</b>\n"
+        f"<b>{html.escape(delete_picker_title(menu_id, xray_user_menu_id=xray_user_menu_id))} · Delete User</b>\n"
         f"Protocol: <code>{html.escape(proto.upper())}</code>\n"
         f"Total user: <code>{len(users)}</code>\n"
         f"Halaman: <code>{page + 1}/{total_pages}</code>\n"

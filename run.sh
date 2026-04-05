@@ -52,43 +52,19 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/setup/install/xray.sh"
   "opt/setup/install/management.sh"
   "opt/setup/install/license.sh"
-  "opt/setup/install/sshws.sh"
-  "opt/setup/bin/ssh-expired-cleaner.py"
   "opt/setup/bin/backup-manage.py"
-  "opt/setup/templates/systemd/ssh-expired-cleaner.service"
-  "opt/setup/templates/systemd/ssh-expired-cleaner.timer"
   "opt/setup/templates/config/backup-cloud.env"
-  "opt/setup/bin/openvpn-speed.py"
   "opt/setup/bin/autoscript-license-check"
-  "opt/setup/bin/openvpn-auth-guard.py"
-  "opt/setup/bin/openvpn-connect-guard.py"
-  "opt/setup/bin/openvpn-qac-hook.py"
-  "opt/setup/templates/config/openvpn-speed-config.json"
   "opt/setup/templates/config/autoscript-license.env"
-  "opt/setup/templates/systemd/openvpn-speed.service"
-  "opt/setup/templates/systemd/openvpn-speed-reconcile.service"
-  "opt/setup/templates/systemd/openvpn-speed-reconcile.path"
   "opt/setup/templates/systemd/autoscript-license-enforcer.service"
   "opt/setup/templates/systemd/autoscript-license-enforcer.timer"
-  "opt/setup/templates/tmpfiles/openvpn-qac.conf"
-  "opt/setup/install/zivpn.sh"
-  "opt/setup/bin/zivpn-password-sync.py"
   "opt/setup/install/edge.sh"
-  "opt/setup/install/badvpn.sh"
-  "opt/setup/bin/badvpn-udpgw-launcher.sh"
   "opt/setup/install/domain_guard.sh"
-  "opt/setup/templates/systemd/ssh-network-restore.service"
   "opt/setup/templates/config/edge-runtime.env"
-  "opt/setup/templates/config/badvpn-runtime.env"
   "opt/setup/templates/systemd/edge-mux.service"
-  "opt/setup/templates/systemd/badvpn-udpgw.service"
   "opt/manage/features/network.sh"
   "opt/manage/features/analytics.sh"
   "opt/manage/core/license.sh"
-  "opt/manage/features/users/ssh_users.sh"
-  "opt/manage/features/users/ssh_qac.sh"
-  "opt/manage/features/users/openvpn_qac.sh"
-  "opt/manage/features/network/ssh_network.sh"
   "opt/manage/features/maintenance/security.sh"
   "opt/manage/features/maintenance/tools.sh"
   "opt/manage/features/maintenance/runtime_services.sh"
@@ -312,9 +288,7 @@ preflight_repo_layout() {
 
   arch_suffix="$(run_prebuilt_arch_suffix 2>/dev/null || true)"
   if [[ -n "${arch_suffix}" ]]; then
-    [[ -f "${root}/opt/adblock/dist/adblock-sync-linux-${arch_suffix}" ]] || missing+=("opt/adblock/dist/adblock-sync-linux-${arch_suffix}")
     [[ -f "${root}/opt/edge/dist/edge-mux-linux-${arch_suffix}" ]] || missing+=("opt/edge/dist/edge-mux-linux-${arch_suffix}")
-    [[ -f "${root}/opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}" ]] || missing+=("opt/badvpn/dist/badvpn-udpgw-linux-${arch_suffix}")
   fi
 
   if (( ${#missing[@]} > 0 )); then
@@ -531,11 +505,9 @@ clone_repo() {
 install_manage() {
   local src="${REPO_DIR}/manage.sh"
   local telegram_installer_src="${REPO_DIR}/install-telegram-bot.sh"
-  local restore_service_src="${REPO_DIR}/opt/setup/templates/systemd/ssh-network-restore.service"
 
   [[ -f "${src}" ]] || die "File manage.sh tidak ditemukan di repositori."
   [[ -f "${telegram_installer_src}" ]] || die "File install-telegram-bot.sh tidak ditemukan di repositori."
-  [[ -f "${restore_service_src}" ]] || die "Template ssh-network-restore.service tidak ditemukan di repositori."
   preflight_repo_layout "${REPO_DIR}"
 
   log "Sync manage -> ${MANAGE_MODULES_DST_DIR} ..."
@@ -556,24 +528,7 @@ install_manage() {
   install -m 0755 "${src}" "${MANAGE_BIN}"
   ok "manage siap."
 
-  log "Pasang ssh-network-restore.service ..."
-  install -m 0644 "${restore_service_src}" /etc/systemd/system/ssh-network-restore.service
-  local restore_result=""
   systemctl daemon-reload
-  systemctl enable ssh-network-restore.service >/dev/null 2>&1 || die "Gagal mengaktifkan ssh-network-restore.service."
-  systemctl reset-failed ssh-network-restore.service >/dev/null 2>&1 || true
-  if ! systemctl restart ssh-network-restore.service >/dev/null 2>&1; then
-    systemctl status ssh-network-restore.service --no-pager >&2 || true
-    journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
-    die "Gagal menjalankan ssh-network-restore.service."
-  fi
-  restore_result="$(systemctl show -p Result --value ssh-network-restore.service 2>/dev/null || true)"
-  if [[ "${restore_result}" != "success" ]] || ! systemctl is-active --quiet ssh-network-restore.service; then
-    systemctl status ssh-network-restore.service --no-pager >&2 || true
-    journalctl -u ssh-network-restore.service -n 80 --no-pager >&2 || true
-    die "ssh-network-restore.service tidak sehat setelah restart (Result=${restore_result:-unknown})."
-  fi
-  ok "ssh-network-restore.service aktif."
 
   log "Pasang installer Telegram -> ${TELEGRAM_INSTALLER_BIN} ..."
   install -m 0755 "${telegram_installer_src}" "${TELEGRAM_INSTALLER_BIN}"
