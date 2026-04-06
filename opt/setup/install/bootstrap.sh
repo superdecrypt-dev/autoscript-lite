@@ -196,24 +196,6 @@ legacy_runtime_unit_patterns() {
     'zivpn*'
 }
 
-legacy_runtime_package_names() {
-  printf '%s\n' \
-    dropbear \
-    dropbear-bin \
-    easy-rsa \
-    openvpn \
-    stunnel4
-}
-
-legacy_runtime_list_installed_packages() {
-  local pkg=""
-  while IFS= read -r pkg; do
-    [[ -n "${pkg}" ]] || continue
-    dpkg-query -W -f='${Status}\n' "${pkg}" 2>/dev/null | grep -qx 'install ok installed' || continue
-    printf '%s\n' "${pkg}"
-  done < <(legacy_runtime_package_names)
-}
-
 legacy_runtime_list_units() {
   local pattern=""
   while IFS= read -r pattern; do
@@ -233,9 +215,8 @@ legacy_runtime_list_active_units() {
 }
 
 cleanup_legacy_runtime_services() {
-  local unit="" unit_file="" removed_unit_file=0 failed=0 pkg=""
+  local unit="" unit_file="" removed_unit_file=0 failed=0
   local -a units=()
-  local -a installed_packages=()
   local -a custom_unit_files=(
     /etc/systemd/system/badvpn-udpgw.service
     /etc/systemd/system/openvpn-speed-reconcile.path
@@ -250,8 +231,7 @@ cleanup_legacy_runtime_services() {
   )
 
   mapfile -t units < <(legacy_runtime_list_units)
-  mapfile -t installed_packages < <(legacy_runtime_list_installed_packages)
-  if [[ "${#units[@]}" -eq 0 && "${#installed_packages[@]}" -eq 0 ]]; then
+  if [[ "${#units[@]}" -eq 0 ]]; then
     ok "Runtime legacy host tidak ditemukan."
     return 0
   fi
@@ -270,17 +250,6 @@ cleanup_legacy_runtime_services() {
   done
   if [[ "${removed_unit_file}" -eq 1 ]]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
-  fi
-
-  if [[ "${#installed_packages[@]}" -gt 0 ]]; then
-    ok "Purge paket legacy host..."
-    export DEBIAN_FRONTEND=noninteractive
-    ensure_dpkg_consistent
-    apt_get_with_lock_retry purge -y "${installed_packages[@]}" || die "Gagal purge paket legacy host."
-    apt_get_with_lock_retry autoremove -y >/dev/null 2>&1 || true
-    for pkg in "${installed_packages[@]}"; do
-      systemctl reset-failed "${pkg}.service" >/dev/null 2>&1 || true
-    done
   fi
 
   while IFS= read -r unit; do
