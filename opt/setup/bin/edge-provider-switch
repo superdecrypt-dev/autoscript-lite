@@ -18,7 +18,7 @@ esac
 
 SETUP_CANDIDATES=(
   "/usr/local/lib/autoscript-setup/setup.sh"
-  "/root/project/autoscript/setup.sh"
+  "/root/project/autoscript-lite/setup.sh"
 )
 
 SETUP_FILE=""

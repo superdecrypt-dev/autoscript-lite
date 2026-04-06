@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/abuse"
-	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/accounting"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/detect"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/ingress"
 	"github.com/superdecrypt-dev/autoscript/opt/edge/go/internal/observability"
@@ -827,39 +826,7 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 	}
 	leftPrefix = backendIngressPrefix(cfg, target, left, leftPrefix)
 
-	var stats proxy.BridgeStats
-	if target == cfg.XrayDirectBackendAddr() {
-		quotaCfg := xrayQuotaConfig(cfg)
-		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
-			speedCtl := accounting.NewXraySpeedController(logger, quotaCfg, tcpAddr.Port)
-			speedCtl.Start()
-			defer speedCtl.Stop()
-			speedCtl.WaitForInitialPolicy(0)
-			sessionTracker := accounting.NewXrayRuntimeSessionTracker(logger, quotaCfg, tcpAddr.Port, safeRemote(left), contextLabel, func() string {
-				return speedCtl.Username()
-			})
-			if sessionTracker != nil {
-				sessionTracker.Start()
-				defer sessionTracker.Stop()
-			}
-			stats, err = proxy.BridgeWithStatsAndOptions(left, backend, leftPrefix, nil, proxy.BridgeOptions{
-				LeftToRight: speedCtl.UploadLimiter(),
-				RightToLeft: speedCtl.DownloadLimiter(),
-			})
-			collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
-			speedCtl.WaitForReady(stats.LeftToRight + stats.RightToLeft)
-			accounting.RecordXrayQuota(logger, quotaCfg, speedCtl.Username(), tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
-			if shouldLogBridgeError(err) {
-				collector.ObserveBridgeError(contextLabel)
-				logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
-			} else if err != nil {
-				collector.ObserveBridgeError(contextLabel)
-			}
-			return
-		}
-	}
-
-	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
+	stats, err := proxy.BridgeWithStats(left, backend, leftPrefix, nil)
 	collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
 	if shouldLogBridgeError(err) {
 		collector.ObserveBridgeError(contextLabel)
@@ -1472,15 +1439,6 @@ func formatSNIBackendMap(routes map[string]string) string {
 		parts = append(parts, host+"="+routes[host])
 	}
 	return strings.Join(parts, ",")
-}
-
-func xrayQuotaConfig(cfg runtime.Config) accounting.XrayQuotaConfig {
-	return accounting.XrayQuotaConfig{
-		StateRoot:        cfg.XrayQuotaRoot,
-		EnforcerPath:     cfg.XrayQACEnforcer,
-		SessionRoot:      cfg.XraySessionRoot,
-		SessionHeartbeat: cfg.XraySessionHeartbeat,
-	}
 }
 
 func safeRemote(conn net.Conn) string {

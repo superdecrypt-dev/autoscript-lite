@@ -12,40 +12,35 @@ import (
 )
 
 const (
-	defaultProvider             = "go"
-	defaultPublicHTTPAddr       = "0.0.0.0:80"
-	defaultPublicTLSAddr        = "0.0.0.0:443"
-	defaultPublicHTTPPorts      = "80,8080,8880,2052,2082,2086,2095"
-	defaultPublicTLSPorts       = "443,2053,2083,2087,2096,8443"
-	defaultMetricsListenAddr    = "127.0.0.1:9910"
-	defaultHTTPBackend          = "127.0.0.1:18080"
-	defaultXrayDirectBackend    = "127.0.0.1:18080"
-	defaultXrayTLSBackend       = "127.0.0.1:18443"
-	defaultXrayWSBackend        = "127.0.0.1:18080"
-	defaultVLESSRawBackend      = "127.0.0.1:28080"
-	defaultTrojanRawBackend     = "127.0.0.1:28081"
-	defaultTLSCertFile          = "/opt/cert/fullchain.pem"
-	defaultTLSKeyFile           = "/opt/cert/privkey.pem"
-	defaultDetectTimeout        = 1500 * time.Millisecond
-	defaultMetricsEnabled       = true
-	defaultTLSOn80              = true
-	defaultTLSHandshakeTimeout  = 5 * time.Second
-	defaultXrayQuotaRoot        = "/opt/quota/xray"
-	defaultXrayQACEnforcer      = "/usr/local/bin/true"
-	defaultXrayManageBin        = "/usr/local/bin/manage"
-	defaultXraySessionRoot      = "/run/autoscript/xray-edge-sessions"
-	defaultXraySessionHeartbeat = 15 * time.Second
-	defaultMaxConnections       = 4096
-	defaultMaxConnectionsPerIP  = 128
-	defaultAcceptRatePerIP      = 60
-	defaultAcceptRateWindow     = 10 * time.Second
-	defaultCooldownRejects      = 8
-	defaultCooldownWindow       = 30 * time.Second
-	defaultCooldownDuration     = 120 * time.Second
-	defaultRuntimeEnvFile       = "/etc/default/edge-runtime"
-	defaultXrayInboundsFile     = "/usr/local/etc/xray/conf.d/10-inbounds.json"
-	defaultAcceptProxyProtocol  = false
-	defaultTrustedProxyCIDRs    = "127.0.0.1/32,::1/128"
+	defaultProvider            = "go"
+	defaultPublicHTTPAddr      = "0.0.0.0:80"
+	defaultPublicTLSAddr       = "0.0.0.0:443"
+	defaultPublicHTTPPorts     = "80,8080,8880,2052,2082,2086,2095"
+	defaultPublicTLSPorts      = "443,2053,2083,2087,2096,8443"
+	defaultMetricsListenAddr   = "127.0.0.1:9910"
+	defaultHTTPBackend         = "127.0.0.1:18080"
+	defaultXrayDirectBackend   = "127.0.0.1:18080"
+	defaultXrayTLSBackend      = "127.0.0.1:18443"
+	defaultXrayWSBackend       = "127.0.0.1:18080"
+	defaultVLESSRawBackend     = "127.0.0.1:28080"
+	defaultTrojanRawBackend    = "127.0.0.1:28081"
+	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
+	defaultTLSKeyFile          = "/opt/cert/privkey.pem"
+	defaultDetectTimeout       = 1500 * time.Millisecond
+	defaultMetricsEnabled      = true
+	defaultTLSOn80             = true
+	defaultTLSHandshakeTimeout = 5 * time.Second
+	defaultMaxConnections      = 4096
+	defaultMaxConnectionsPerIP = 128
+	defaultAcceptRatePerIP     = 60
+	defaultAcceptRateWindow    = 10 * time.Second
+	defaultCooldownRejects     = 8
+	defaultCooldownWindow      = 30 * time.Second
+	defaultCooldownDuration    = 120 * time.Second
+	defaultRuntimeEnvFile      = "/etc/default/edge-runtime"
+	defaultXrayInboundsFile    = "/usr/local/etc/xray/conf.d/10-inbounds.json"
+	defaultAcceptProxyProtocol = false
+	defaultTrustedProxyCIDRs   = "127.0.0.1/32,::1/128"
 )
 
 var validSNIRouteAliases = map[string]struct{}{
@@ -58,43 +53,38 @@ var validSNIRouteAliases = map[string]struct{}{
 }
 
 type Config struct {
-	Provider             string
-	PublicHTTPAddr       string
-	PublicTLSAddr        string
-	PublicHTTPAddrs      []string
-	PublicTLSAddrs       []string
-	MetricsEnabled       bool
-	MetricsListenAddr    string
-	HTTPBackend          string
-	XrayDirectBackend    string
-	XrayTLSBackend       string
-	XrayWSBackend        string
-	VLESSRawBackend      string
-	TrojanRawBackend     string
-	XrayInboundsFile     string
-	VLESSRawSource       string
-	TrojanRawSource      string
-	TLSCertFile          string
-	TLSKeyFile           string
-	DetectTimeout        time.Duration
-	ClassicTLSOn80       bool
-	TLSHandshakeTimeout  time.Duration
-	XrayQuotaRoot        string
-	XrayQACEnforcer      string
-	XrayManageBin        string
-	XraySessionRoot      string
-	XraySessionHeartbeat time.Duration
-	MaxConnections       int
-	MaxConnectionsPerIP  int
-	AcceptRatePerIP      int
-	AcceptRateWindow     time.Duration
-	CooldownRejects      int
-	CooldownWindow       time.Duration
-	CooldownDuration     time.Duration
-	AcceptProxyProtocol  bool
-	TrustedProxyCIDRs    []string
-	SNIRoutes            map[string]string
-	SNIPassthrough       map[string]string
+	Provider            string
+	PublicHTTPAddr      string
+	PublicTLSAddr       string
+	PublicHTTPAddrs     []string
+	PublicTLSAddrs      []string
+	MetricsEnabled      bool
+	MetricsListenAddr   string
+	HTTPBackend         string
+	XrayDirectBackend   string
+	XrayTLSBackend      string
+	XrayWSBackend       string
+	VLESSRawBackend     string
+	TrojanRawBackend    string
+	XrayInboundsFile    string
+	VLESSRawSource      string
+	TrojanRawSource     string
+	TLSCertFile         string
+	TLSKeyFile          string
+	DetectTimeout       time.Duration
+	ClassicTLSOn80      bool
+	TLSHandshakeTimeout time.Duration
+	MaxConnections      int
+	MaxConnectionsPerIP int
+	AcceptRatePerIP     int
+	AcceptRateWindow    time.Duration
+	CooldownRejects     int
+	CooldownWindow      time.Duration
+	CooldownDuration    time.Duration
+	AcceptProxyProtocol bool
+	TrustedProxyCIDRs   []string
+	SNIRoutes           map[string]string
+	SNIPassthrough      map[string]string
 }
 
 func LoadConfig() (Config, error) {
@@ -109,10 +99,6 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	handshakeTimeout, err := envDurationMS(source, "EDGE_TLS_HANDSHAKE_TIMEOUT_MS", defaultTLSHandshakeTimeout)
-	if err != nil {
-		return Config{}, err
-	}
-	sessionHeartbeat, err := envDurationSec(source, "EDGE_XRAY_SESSION_HEARTBEAT_SEC", defaultXraySessionHeartbeat)
 	if err != nil {
 		return Config{}, err
 	}
@@ -184,43 +170,38 @@ func LoadConfig() (Config, error) {
 	}
 
 	cfg := Config{
-		Provider:             envString(source, "EDGE_PROVIDER", defaultProvider),
-		PublicHTTPAddr:       publicHTTPAddr,
-		PublicTLSAddr:        publicTLSAddr,
-		PublicHTTPAddrs:      publicHTTPAddrs,
-		PublicTLSAddrs:       publicTLSAddrs,
-		MetricsEnabled:       metricsEnabled,
-		MetricsListenAddr:    normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
-		HTTPBackend:          normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
-		XrayDirectBackend:    normalizeAddr(envString(source, "EDGE_XRAY_DIRECT_BACKEND", defaultXrayDirectBackend), "127.0.0.1"),
-		XrayTLSBackend:       normalizeAddr(envString(source, "EDGE_XRAY_TLS_BACKEND", defaultXrayTLSBackend), "127.0.0.1"),
-		XrayWSBackend:        normalizeAddr(envString(source, "EDGE_XRAY_WS_BACKEND", defaultXrayWSBackend), "127.0.0.1"),
-		VLESSRawBackend:      normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
-		TrojanRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
-		XrayInboundsFile:     strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
-		VLESSRawSource:       "env:EDGE_XRAY_VLESS_RAW_BACKEND",
-		TrojanRawSource:      "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
-		TLSCertFile:          envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
-		TLSKeyFile:           envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
-		DetectTimeout:        timeout,
-		ClassicTLSOn80:       classicTLSOn80,
-		TLSHandshakeTimeout:  handshakeTimeout,
-		XrayQuotaRoot:        envString(source, "EDGE_XRAY_QUOTA_ROOT", defaultXrayQuotaRoot),
-		XrayQACEnforcer:      envString(source, "EDGE_XRAY_QAC_ENFORCER", defaultXrayQACEnforcer),
-		XrayManageBin:        envString(source, "EDGE_XRAY_MANAGE_BIN", defaultXrayManageBin),
-		XraySessionRoot:      envString(source, "EDGE_XRAY_SESSION_ROOT", defaultXraySessionRoot),
-		XraySessionHeartbeat: sessionHeartbeat,
-		MaxConnections:       maxConnections,
-		MaxConnectionsPerIP:  maxConnectionsPerIP,
-		AcceptRatePerIP:      acceptRatePerIP,
-		AcceptRateWindow:     acceptRateWindow,
-		CooldownRejects:      cooldownRejects,
-		CooldownWindow:       cooldownWindow,
-		CooldownDuration:     cooldownDuration,
-		AcceptProxyProtocol:  acceptProxyProtocol,
-		TrustedProxyCIDRs:    envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
-		SNIRoutes:            sniRoutes,
-		SNIPassthrough:       sniPassthrough,
+		Provider:            envString(source, "EDGE_PROVIDER", defaultProvider),
+		PublicHTTPAddr:      publicHTTPAddr,
+		PublicTLSAddr:       publicTLSAddr,
+		PublicHTTPAddrs:     publicHTTPAddrs,
+		PublicTLSAddrs:      publicTLSAddrs,
+		MetricsEnabled:      metricsEnabled,
+		MetricsListenAddr:   normalizeAddr(envString(source, "EDGE_METRICS_LISTEN", defaultMetricsListenAddr), "127.0.0.1"),
+		HTTPBackend:         normalizeAddr(envString(source, "EDGE_NGINX_HTTP_BACKEND", defaultHTTPBackend), "127.0.0.1"),
+		XrayDirectBackend:   normalizeAddr(envString(source, "EDGE_XRAY_DIRECT_BACKEND", defaultXrayDirectBackend), "127.0.0.1"),
+		XrayTLSBackend:      normalizeAddr(envString(source, "EDGE_XRAY_TLS_BACKEND", defaultXrayTLSBackend), "127.0.0.1"),
+		XrayWSBackend:       normalizeAddr(envString(source, "EDGE_XRAY_WS_BACKEND", defaultXrayWSBackend), "127.0.0.1"),
+		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
+		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
+		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
+		VLESSRawSource:      "env:EDGE_XRAY_VLESS_RAW_BACKEND",
+		TrojanRawSource:     "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
+		TLSCertFile:         envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
+		TLSKeyFile:          envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
+		DetectTimeout:       timeout,
+		ClassicTLSOn80:      classicTLSOn80,
+		TLSHandshakeTimeout: handshakeTimeout,
+		MaxConnections:      maxConnections,
+		MaxConnectionsPerIP: maxConnectionsPerIP,
+		AcceptRatePerIP:     acceptRatePerIP,
+		AcceptRateWindow:    acceptRateWindow,
+		CooldownRejects:     cooldownRejects,
+		CooldownWindow:      cooldownWindow,
+		CooldownDuration:    cooldownDuration,
+		AcceptProxyProtocol: acceptProxyProtocol,
+		TrustedProxyCIDRs:   envCSV(source, "EDGE_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs),
+		SNIRoutes:           sniRoutes,
+		SNIPassthrough:      sniPassthrough,
 	}
 	cfg.applyProviderBackendDefaults(source)
 	refreshed, _, err := RefreshDiscoveredRawBackends(cfg)
@@ -302,9 +283,6 @@ func (c Config) Validate() error {
 	}
 	if c.TLSHandshakeTimeout <= 0 {
 		return errors.New("TLS handshake timeout must be > 0")
-	}
-	if c.XraySessionHeartbeat <= 0 {
-		return errors.New("xray session heartbeat must be > 0")
 	}
 	if c.AcceptRateWindow <= 0 {
 		return errors.New("accept rate window must be > 0")
@@ -398,13 +376,13 @@ func (c Config) TLSListenAddrs() []string {
 	return []string{c.PublicTLSAddr}
 }
 
-func (c Config) MetricsAddr() string             { return c.MetricsListenAddr }
-func (c Config) HTTPBackendAddr() string         { return c.HTTPBackend }
-func (c Config) XrayDirectBackendAddr() string   { return c.XrayDirectBackend }
-func (c Config) XrayTLSBackendAddr() string      { return c.XrayTLSBackend }
-func (c Config) XrayWSBackendAddr() string       { return c.XrayWSBackend }
-func (c Config) VLESSRawBackendAddr() string     { return c.VLESSRawBackend }
-func (c Config) TrojanRawBackendAddr() string    { return c.TrojanRawBackend }
+func (c Config) MetricsAddr() string           { return c.MetricsListenAddr }
+func (c Config) HTTPBackendAddr() string       { return c.HTTPBackend }
+func (c Config) XrayDirectBackendAddr() string { return c.XrayDirectBackend }
+func (c Config) XrayTLSBackendAddr() string    { return c.XrayTLSBackend }
+func (c Config) XrayWSBackendAddr() string     { return c.XrayWSBackend }
+func (c Config) VLESSRawBackendAddr() string   { return c.VLESSRawBackend }
+func (c Config) TrojanRawBackendAddr() string  { return c.TrojanRawBackend }
 
 func (c Config) Clone() Config {
 	clone := c

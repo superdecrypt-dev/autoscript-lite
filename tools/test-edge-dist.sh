@@ -52,6 +52,16 @@ main() {
     assert_binary_strings "${file}" '__sync-ssh-network-session-targets'
     assert_binary_strings "${file}" 'tls-port:ssh-direct-timeout'
     assert_binary_strings "${file}" 'http-port:ssh-direct-unknown'
+    assert_binary_strings "${file}" 'EDGE_XRAY_QUOTA_ROOT'
+    assert_binary_strings "${file}" 'EDGE_XRAY_QAC_ENFORCER'
+    assert_binary_strings "${file}" 'EDGE_XRAY_MANAGE_BIN'
+    assert_binary_strings "${file}" 'EDGE_XRAY_SESSION_ROOT'
+    assert_binary_strings "${file}" 'xray-edge-sessions'
+    assert_binary_strings "${file}" 'edge-mux quota resolve empty'
+    assert_binary_strings "${file}" 'edge-mux quota updated user='
+    assert_binary_strings "${file}" 'edge-mux quota enforcer failed'
+    assert_binary_strings "${file}" 'edge-mux session write failed'
+    assert_binary_strings "${file}" 'edge-mux speed policy load failed'
     log "validated ${file}"
   done
 }
