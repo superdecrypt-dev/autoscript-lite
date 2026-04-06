@@ -28,6 +28,10 @@ cleanup_legacy_adblock_runtime() {
   local unit_changed=0
   local migrated=0
 
+  ADBLOCK_MIGRATED_ENABLED=""
+  ADBLOCK_MIGRATED_DIRTY=""
+  ADBLOCK_MIGRATED_LAST_UPDATE=""
+
   adblock_legacy_env_value() {
     local env_file="$1"
     shift
@@ -87,9 +91,9 @@ cleanup_legacy_adblock_runtime() {
     adblock_migrate_legacy_file "${legacy_root}/merged.domains" "${ADBLOCK_MERGED_FILE}" || true
     adblock_migrate_legacy_file "${legacy_root}/blocklist.generated.conf" "${ADBLOCK_RENDERED_FILE}" || true
     if [[ -f "${legacy_config}" ]]; then
-      ADBLOCK_MIGRATED_ENABLED="${ADBLOCK_MIGRATED_ENABLED:-$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_ENABLED SSH_DNS_ADBLOCK_ENABLED || true)}"
-      ADBLOCK_MIGRATED_DIRTY="${ADBLOCK_MIGRATED_DIRTY:-$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_DIRTY SSH_DNS_ADBLOCK_DIRTY || true)}"
-      ADBLOCK_MIGRATED_LAST_UPDATE="${ADBLOCK_MIGRATED_LAST_UPDATE:-$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_LAST_UPDATE SSH_DNS_ADBLOCK_LAST_UPDATE || true)}"
+      ADBLOCK_MIGRATED_ENABLED="$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_ENABLED SSH_DNS_ADBLOCK_ENABLED || true)"
+      ADBLOCK_MIGRATED_DIRTY="$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_DIRTY SSH_DNS_ADBLOCK_DIRTY || true)"
+      ADBLOCK_MIGRATED_LAST_UPDATE="$(adblock_legacy_env_value "${legacy_config}" AUTOSCRIPT_ADBLOCK_LAST_UPDATE SSH_DNS_ADBLOCK_LAST_UPDATE || true)"
     fi
     rm -rf -- "${legacy_root}"
   fi
