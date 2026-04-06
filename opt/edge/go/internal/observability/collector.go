@@ -129,7 +129,6 @@ type StatusSnapshot struct {
 	XrayDirectBackend         string                           `json:"xray_direct_backend"`
 	XrayTLSBackend            string                           `json:"xray_tls_backend"`
 	XrayWSBackend             string                           `json:"xray_ws_backend"`
-	XrayFallbackBackend       string                           `json:"xray_fallback_backend"`
 	VLESSRawBackend           string                           `json:"vless_raw_backend"`
 	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
 	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
@@ -469,7 +468,6 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		XrayDirectBackend:         cfg.XrayDirectBackendAddr(),
 		XrayTLSBackend:            cfg.XrayTLSBackendAddr(),
 		XrayWSBackend:             cfg.XrayWSBackendAddr(),
-		XrayFallbackBackend:       cfg.XrayFallbackBackendAddr(),
 		VLESSRawBackend:           cfg.VLESSRawBackendAddr(),
 		VLESSRawBackendSource:     cfg.VLESSRawSource,
 		TrojanRawBackend:          cfg.TrojanRawBackendAddr(),

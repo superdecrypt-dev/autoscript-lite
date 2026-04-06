@@ -42,7 +42,7 @@ Binary `edge-mux` akan:
 - TLS termination di `:443`
 - klasifikasi awal:
   - HTTP/WebSocket -> backend HTTP internal
-  - non-HTTP / timeout singkat -> backend fallback yang dikonfigurasi
+  - non-HTTP / timeout singkat -> ditolak di ingress publik
 - route decision berbasis `Host/path/ALPN/SNI`
 - override route berbasis `SNI` exact-match lewat `EDGE_SNI_ROUTES`
 - passthrough TLS exact-match berbasis `SNI` lewat `EDGE_SNI_PASSTHROUGH`

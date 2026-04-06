@@ -66,7 +66,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s xray_tls_backend=%s xray_ws_backend=%s xray_fallback_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s xray_tls_backend=%s xray_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		formatListenAddrs(cfg.HTTPListenAddrs()),
 		formatListenAddrs(cfg.TLSListenAddrs()),
@@ -76,7 +76,6 @@ func main() {
 		cfg.XrayDirectBackendAddr(),
 		cfg.XrayTLSBackendAddr(),
 		cfg.XrayWSBackendAddr(),
-		cfg.XrayFallbackBackendAddr(),
 		cfg.VLESSRawBackendAddr(),
 		cfg.VLESSRawSource,
 		cfg.TrojanRawBackendAddr(),
@@ -1315,8 +1314,6 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "xray-tls"
 	case cfg.XrayWSBackendAddr():
 		return "xray-ws"
-	case cfg.XrayFallbackBackendAddr():
-		return "fallback"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
 	case cfg.TrojanRawBackendAddr():
@@ -1606,7 +1603,6 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 	addCheck("xray-direct", cfg.XrayDirectBackendAddr(), true)
 	addCheck("xray-tls", cfg.XrayTLSBackendAddr(), true)
 	addCheck("xray-ws", cfg.XrayWSBackendAddr(), true)
-	addCheck("fallback", cfg.XrayFallbackBackendAddr(), strings.TrimSpace(cfg.XrayFallbackBackendAddr()) != "")
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
 	for _, target := range uniquePassthroughTargets(cfg) {

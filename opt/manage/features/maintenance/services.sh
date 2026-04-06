@@ -200,7 +200,7 @@ edge_runtime_effective_xray_backend() {
       printf '%s\n' "${value:-${http_backend}}"
       return 0
       ;;
-    EDGE_XRAY_TLS_BACKEND|EDGE_XRAY_FALLBACK_BACKEND)
+    EDGE_XRAY_TLS_BACKEND)
       value="$(edge_runtime_get_env "${key}" 2>/dev/null || true)"
       if [[ -z "${value}" ]]; then
         if [[ "${provider}" == "go" ]]; then
@@ -227,6 +227,29 @@ edge_runtime_effective_xray_backend() {
   esac
 
   return 1
+}
+
+edge_runtime_log_unique_backend_listener() {
+  local label="${1:-}"
+  local addr="${2:-}"
+  local seen_name="${3:-}"
+  local fail_on_missing="${4:-false}"
+  [[ -n "${label}" && -n "${addr}" && -n "${seen_name}" ]] || return 0
+
+  local -n seen_ref="${seen_name}"
+  if [[ -n "${seen_ref[${addr}]:-}" ]]; then
+    return 0
+  fi
+  seen_ref["${addr}"]=1
+
+  local port
+  port="${addr##*:}"
+  if edge_runtime_socket_listening "${port}"; then
+    log "${label} ${addr} : LISTENING ✅"
+    return 0
+  fi
+  warn "${label} ${addr} : NOT listening ❌"
+  [[ "${fail_on_missing}" != "true" ]]
 }
 
 format_elapsed_seconds_pretty() {
@@ -443,7 +466,7 @@ edge_runtime_status_menu() {
   hr
 
   local svc env_file provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 tls_backend_required
-  local xray_direct_backend xray_tls_backend xray_ws_backend xray_fallback_backend
+  local xray_direct_backend xray_tls_backend xray_ws_backend
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -455,7 +478,6 @@ edge_runtime_status_menu() {
   xray_direct_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_DIRECT_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   xray_tls_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_TLS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   xray_ws_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_WS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
-  xray_fallback_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_FALLBACK_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   if edge_runtime_tls_backend_required "${provider}" "${active}"; then
@@ -478,7 +500,6 @@ edge_runtime_status_menu() {
   echo "Xray Direct : ${xray_direct_backend}"
   echo "Xray TLS    : ${xray_tls_backend}"
   echo "Xray WS     : ${xray_ws_backend}"
-  echo "Fallback    : ${xray_fallback_backend}"
   echo "Detect (ms) : ${detect_timeout}"
   echo "TLS on 80   : ${tls80}"
   hr
@@ -495,6 +516,7 @@ edge_runtime_status_menu() {
 
   hr
   if have_cmd ss; then
+    declare -A seen_backends=()
     local port missing_http=() missing_tls=()
     for port in ${http_ports}; do
       if ! ss -lnt 2>/dev/null | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)"; then
@@ -531,9 +553,16 @@ edge_runtime_status_menu() {
       else
         warn "Backend HTTPS ${http_tls_backend} : NOT listening ❌"
       fi
+      # shellcheck disable=SC2034
+      seen_backends["${http_tls_backend}"]=1
     else
       log "Backend HTTPS ${http_tls_backend} : unused for provider ${provider} ✅"
     fi
+    # shellcheck disable=SC2034
+    seen_backends["${http_backend}"]=1
+    edge_runtime_log_unique_backend_listener "Xray Direct" "${xray_direct_backend}" seen_backends || true
+    edge_runtime_log_unique_backend_listener "Xray TLS" "${xray_tls_backend}" seen_backends || true
+    edge_runtime_log_unique_backend_listener "Xray WS" "${xray_ws_backend}" seen_backends || true
   else
     warn "ss tidak tersedia, skip cek listener edge"
   fi
@@ -553,6 +582,7 @@ edge_runtime_socket_listening() {
 
 edge_runtime_post_restart_health_check() {
   local svc provider active http_ports tls_ports http_backend http_tls_backend tls_backend_required
+  local xray_direct_backend xray_tls_backend xray_ws_backend
   local backend_http_port backend_http_tls_port
   svc="$(edge_runtime_service_name)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -561,6 +591,9 @@ edge_runtime_post_restart_health_check() {
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
+  xray_direct_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_DIRECT_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
+  xray_tls_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_TLS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
+  xray_ws_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_WS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   if edge_runtime_tls_backend_required "${provider}" "${active}"; then
     tls_backend_required="true"
   else
@@ -596,6 +629,16 @@ edge_runtime_post_restart_health_check() {
     warn "Backend HTTPS ${http_tls_backend} belum listening setelah restart edge."
     return 1
   fi
+  declare -A seen_backends=()
+  # shellcheck disable=SC2034
+  seen_backends["${http_backend}"]=1
+  if [[ "${tls_backend_required}" == "true" ]]; then
+    # shellcheck disable=SC2034
+    seen_backends["${http_tls_backend}"]=1
+  fi
+  edge_runtime_log_unique_backend_listener "Xray Direct" "${xray_direct_backend}" seen_backends true || return 1
+  edge_runtime_log_unique_backend_listener "Xray TLS" "${xray_tls_backend}" seen_backends true || return 1
+  edge_runtime_log_unique_backend_listener "Xray WS" "${xray_ws_backend}" seen_backends true || return 1
   return 0
 }
 
@@ -643,7 +686,7 @@ edge_runtime_info_menu() {
   hr
 
   local provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 cert_file key_file
-  local xray_direct_backend xray_tls_backend xray_ws_backend xray_fallback_backend
+  local xray_direct_backend xray_tls_backend xray_ws_backend
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
   http_ports="$(edge_runtime_public_http_ports)"
@@ -653,7 +696,6 @@ edge_runtime_info_menu() {
   xray_direct_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_DIRECT_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   xray_tls_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_TLS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   xray_ws_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_WS_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
-  xray_fallback_backend="$(edge_runtime_effective_xray_backend EDGE_XRAY_FALLBACK_BACKEND "${provider}" "${http_backend}" "${http_tls_backend}" 2>/dev/null || echo "${http_backend}")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   cert_file="$(edge_runtime_get_env EDGE_TLS_CERT_FILE 2>/dev/null || echo "/opt/cert/fullchain.pem")"
@@ -671,7 +713,6 @@ edge_runtime_info_menu() {
   echo "Xray Direct     : ${xray_direct_backend}"
   echo "Xray TLS        : ${xray_tls_backend}"
   echo "Xray WS         : ${xray_ws_backend}"
-  echo "Fallback        : ${xray_fallback_backend}"
   echo "Detect Timeout  : ${detect_timeout} ms"
   echo "Classic TLS :80 : ${tls80}"
   echo "TLS Cert        : ${cert_file}"

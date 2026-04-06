@@ -183,7 +183,7 @@ func writeMaskedClientFrame(t *testing.T, conn net.Conn, opcode byte, payload []
 	}
 }
 
-func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForFallback(t *testing.T) {
+func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForSharedBackend(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -197,34 +197,34 @@ func TestSniffInitialClientRouteStillAcceptsTLSLikePayloadForFallback(t *testing
 
 	reader := bufio.NewReader(server)
 	writer := wsproxy.NewWSWriter(server)
-	frame, useFallback, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
+	frame, routeToSharedBackend, err := sniffInitialClientRoute(server, reader, writer, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("sniffInitialClientRoute error: %v", err)
 	}
 	if frame == nil {
 		t.Fatal("expected first frame, got nil")
 	}
-	if !useFallback {
-		t.Fatal("expected fallback route for TLS-like payload")
+	if !routeToSharedBackend {
+		t.Fatal("expected shared-backend route for TLS-like payload")
 	}
 	<-done
 }
 
-func TestSniffInitialClientRouteTimeoutFallsBackToPrimaryBackend(t *testing.T) {
+func TestSniffInitialClientRouteTimeoutKeepsPrimaryBackend(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
 
 	reader := bufio.NewReader(server)
 	writer := wsproxy.NewWSWriter(server)
-	frame, useFallback, err := sniffInitialClientRoute(server, reader, writer, 50*time.Millisecond)
+	frame, routeToSharedBackend, err := sniffInitialClientRoute(server, reader, writer, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("sniffInitialClientRoute timeout error: %v", err)
 	}
 	if frame != nil {
 		t.Fatalf("expected nil frame on timeout, got %#v", frame)
 	}
-	if useFallback {
+	if routeToSharedBackend {
 		t.Fatal("expected primary backend on timeout")
 	}
 }

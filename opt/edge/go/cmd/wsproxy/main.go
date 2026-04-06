@@ -43,9 +43,9 @@ type config struct {
 	listenPort           int
 	backendHost          string
 	backendPort          int
-	fallbackBackendHost  string
-	fallbackBackendPort  int
-	fallbackProbeTimeout time.Duration
+	sharedBackendHost  string
+	sharedBackendPort  int
+	sharedProbeTimeout time.Duration
 	path                 string
 	handshakeTimeout     time.Duration
 	xrayStateRoot        string
@@ -533,7 +533,7 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 
 	clientIP := wsproxy.ExtractClientIP(headers, conn)
 	probeOnly := cfg.mode == "xray" && isLoopbackIP(clientIP) && isDiagnosticProbePath(pathOnly, cfg.path)
-	sharedFallback := cfg.mode == "xray" && cfg.fallbackBackendPort > 0
+	sharedBackendEnabled := cfg.mode == "xray" && cfg.sharedBackendPort > 0
 
 	var username string
 	var res *reservation
@@ -576,14 +576,14 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 	backendPort := cfg.backendPort
 	var firstClientFrame *wsproxy.WSFrame
 	xrayRuntime := cfg.mode == "xray" && !probeOnly
-	if sharedFallback {
+	if sharedBackendEnabled {
 		if err := wsproxy.SendHandshakeOK(conn, accept); err != nil {
 			if res != nil {
 				registry.finalize(res)
 			}
 			return
 		}
-		frame, useFallback, err := sniffInitialClientRoute(conn, wsr, wsw, cfg.fallbackProbeTimeout)
+		frame, routeToSharedBackend, err := sniffInitialClientRoute(conn, wsr, wsw, cfg.sharedProbeTimeout)
 		if err != nil {
 			if res != nil {
 				registry.finalize(res)
@@ -592,9 +592,9 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 			return
 		}
 		firstClientFrame = frame
-		if useFallback {
-			backendHost = cfg.fallbackBackendHost
-			backendPort = cfg.fallbackBackendPort
+		if routeToSharedBackend {
+			backendHost = cfg.sharedBackendHost
+			backendPort = cfg.sharedBackendPort
 			xrayRuntime = false
 		}
 	}
@@ -637,7 +637,7 @@ func handleClient(conn net.Conn, cfg *config, registry *connectionRegistry, ctl 
 		registry.finalize(res)
 	}
 
-	if !sharedFallback {
+	if !sharedBackendEnabled {
 		if err := wsproxy.SendHandshakeOK(conn, accept); err != nil {
 			return
 		}
@@ -848,13 +848,13 @@ func parseArgs() *config {
 	flag.IntVar(&cfg.listenPort, "listen-port", 10015, "Listen port")
 	flag.StringVar(&cfg.backendHost, "backend-host", "127.0.0.1", "Backend host")
 	flag.IntVar(&cfg.backendPort, "backend-port", 18080, "Backend port")
-	flag.StringVar(&cfg.fallbackBackendHost, "fallback-backend-host", "127.0.0.1", "Fallback backend host")
-	flag.IntVar(&cfg.fallbackBackendPort, "fallback-backend-port", 0, "Optional fallback backend port for shared WS path")
+	flag.StringVar(&cfg.sharedBackendHost, "shared-backend-host", "127.0.0.1", "Shared backend host for TLS-like WS payloads")
+	flag.IntVar(&cfg.sharedBackendPort, "shared-backend-port", 0, "Optional shared backend port for shared WS path")
 	flag.StringVar(&cfg.path, "path", "/", "Expected public path prefix")
 	var hsTimeout float64
 	flag.Float64Var(&hsTimeout, "handshake-timeout", handshakeTimeoutDefault.Seconds(), "Handshake timeout in seconds")
-	var fallbackProbeMS int
-	flag.IntVar(&fallbackProbeMS, "fallback-probe-timeout-ms", 250, "Timeout in milliseconds to wait for initial fallback payload after WS upgrade")
+	var sharedProbeMS int
+	flag.IntVar(&sharedProbeMS, "shared-probe-timeout-ms", 250, "Timeout in milliseconds to wait for initial shared-backend payload after WS upgrade")
 	flag.StringVar(&cfg.xrayStateRoot, "xray-state-root", "/opt/quota/xray", "Xray quota state root")
 	flag.StringVar(&cfg.xrayLockFile, "xray-lock-file", "/run/autoscript/locks/xray-ws-qac.lock", "Xray quota lock file")
 	flag.StringVar(&cfg.xrayEnforcerBin, "xray-enforcer-bin", "/usr/local/bin/true", "Xray quota enforcer binary")
@@ -877,10 +877,10 @@ func parseArgs() *config {
 	default:
 		cfg.mode = "tcp"
 	}
-	if fallbackProbeMS < 0 {
-		fallbackProbeMS = 0
+	if sharedProbeMS < 0 {
+		sharedProbeMS = 0
 	}
-	cfg.fallbackProbeTimeout = time.Duration(fallbackProbeMS) * time.Millisecond
+	cfg.sharedProbeTimeout = time.Duration(sharedProbeMS) * time.Millisecond
 	return cfg
 }
 
@@ -909,8 +909,8 @@ func sniffInitialClientRoute(conn net.Conn, reader *bufio.Reader, writer *wsprox
 		case wsproxy.OpClose:
 			return frame, false, context.Canceled
 		case wsproxy.OpBinary, wsproxy.OpText, wsproxy.OpContinuation:
-			useFallback := detect.IsTLSClientHello(frame.Payload)
-			return frame, useFallback, nil
+			routeToSharedBackend := detect.IsTLSClientHello(frame.Payload)
+			return frame, routeToSharedBackend, nil
 		default:
 			continue
 		}

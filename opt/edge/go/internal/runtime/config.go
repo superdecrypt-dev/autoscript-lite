@@ -22,7 +22,6 @@ const (
 	defaultXrayDirectBackend    = "127.0.0.1:18080"
 	defaultXrayTLSBackend       = "127.0.0.1:18443"
 	defaultXrayWSBackend        = "127.0.0.1:18080"
-	defaultXrayFallbackBackend  = "127.0.0.1:18443"
 	defaultVLESSRawBackend      = "127.0.0.1:28080"
 	defaultTrojanRawBackend     = "127.0.0.1:28081"
 	defaultTLSCertFile          = "/opt/cert/fullchain.pem"
@@ -70,7 +69,6 @@ type Config struct {
 	XrayDirectBackend    string
 	XrayTLSBackend       string
 	XrayWSBackend        string
-	XrayFallbackBackend  string
 	VLESSRawBackend      string
 	TrojanRawBackend     string
 	XrayInboundsFile     string
@@ -197,7 +195,6 @@ func LoadConfig() (Config, error) {
 		XrayDirectBackend:    normalizeAddr(envString(source, "EDGE_XRAY_DIRECT_BACKEND", defaultXrayDirectBackend), "127.0.0.1"),
 		XrayTLSBackend:       normalizeAddr(envString(source, "EDGE_XRAY_TLS_BACKEND", defaultXrayTLSBackend), "127.0.0.1"),
 		XrayWSBackend:        normalizeAddr(envString(source, "EDGE_XRAY_WS_BACKEND", defaultXrayWSBackend), "127.0.0.1"),
-		XrayFallbackBackend:  normalizeAddr(envString(source, "EDGE_XRAY_FALLBACK_BACKEND", defaultXrayFallbackBackend), "127.0.0.1"),
 		VLESSRawBackend:      normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
 		TrojanRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:     strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
@@ -240,9 +237,6 @@ func (c *Config) applyProviderBackendDefaults(source envSource) {
 	if !envSourceHasValue(source, "EDGE_XRAY_TLS_BACKEND") {
 		c.XrayTLSBackend = c.HTTPBackend
 	}
-	if !envSourceHasValue(source, "EDGE_XRAY_FALLBACK_BACKEND") {
-		c.XrayFallbackBackend = c.HTTPBackend
-	}
 	c.normalizeLegacyGoTLSBackends(source)
 }
 
@@ -259,17 +253,19 @@ func (c *Config) normalizeLegacyGoTLSBackends(source envSource) {
 		envString(source, "EDGE_NGINX_TLS_BACKEND", defaultXrayTLSBackend),
 		"127.0.0.1",
 	)
+	if c.HTTPBackend != defaultHTTPBackend || legacyTLSBackend != defaultXrayTLSBackend {
+		return
+	}
 	if c.HTTPBackend == legacyTLSBackend {
 		return
 	}
 	if c.XrayDirectBackend != c.HTTPBackend || c.XrayWSBackend != c.HTTPBackend {
 		return
 	}
-	if c.XrayTLSBackend != legacyTLSBackend || c.XrayFallbackBackend != legacyTLSBackend {
+	if c.XrayTLSBackend != legacyTLSBackend {
 		return
 	}
 	c.XrayTLSBackend = c.HTTPBackend
-	c.XrayFallbackBackend = c.HTTPBackend
 }
 
 func (c Config) Validate() error {
@@ -407,7 +403,6 @@ func (c Config) HTTPBackendAddr() string         { return c.HTTPBackend }
 func (c Config) XrayDirectBackendAddr() string   { return c.XrayDirectBackend }
 func (c Config) XrayTLSBackendAddr() string      { return c.XrayTLSBackend }
 func (c Config) XrayWSBackendAddr() string       { return c.XrayWSBackend }
-func (c Config) XrayFallbackBackendAddr() string { return c.XrayFallbackBackend }
 func (c Config) VLESSRawBackendAddr() string     { return c.VLESSRawBackend }
 func (c Config) TrojanRawBackendAddr() string    { return c.TrojanRawBackend }
 

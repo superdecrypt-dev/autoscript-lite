@@ -360,21 +360,17 @@ func TestLoadConfigGoProviderDefaultsTLSAndFallbackToHTTPBackend(t *testing.T) {
 	if cfg.XrayTLSBackend != "127.0.0.1:19080" {
 		t.Fatalf("XrayTLSBackend = %q, want 127.0.0.1:19080", cfg.XrayTLSBackend)
 	}
-	if cfg.XrayFallbackBackend != "127.0.0.1:19080" {
-		t.Fatalf("XrayFallbackBackend = %q, want 127.0.0.1:19080", cfg.XrayFallbackBackend)
-	}
 }
 
 func TestLoadConfigGoProviderNormalizesLegacyTLSBackendPattern(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "edge-runtime.env")
 	writeConfigTestFile(t, envFile, strings.Join([]string{
 		"EDGE_PROVIDER=go",
-		"EDGE_NGINX_HTTP_BACKEND=127.0.0.1:19080",
+		"EDGE_NGINX_HTTP_BACKEND=127.0.0.1:18080",
 		"EDGE_NGINX_TLS_BACKEND=127.0.0.1:18443",
-		"EDGE_XRAY_DIRECT_BACKEND=127.0.0.1:19080",
-		"EDGE_XRAY_WS_BACKEND=127.0.0.1:19080",
+		"EDGE_XRAY_DIRECT_BACKEND=127.0.0.1:18080",
+		"EDGE_XRAY_WS_BACKEND=127.0.0.1:18080",
 		"EDGE_XRAY_TLS_BACKEND=127.0.0.1:18443",
-		"EDGE_XRAY_FALLBACK_BACKEND=127.0.0.1:18443",
 		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
 		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
 	}, "\n")+"\n")
@@ -384,11 +380,31 @@ func TestLoadConfigGoProviderNormalizesLegacyTLSBackendPattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig error = %v", err)
 	}
-	if cfg.XrayTLSBackend != "127.0.0.1:19080" {
-		t.Fatalf("XrayTLSBackend = %q, want 127.0.0.1:19080", cfg.XrayTLSBackend)
+	if cfg.XrayTLSBackend != "127.0.0.1:18080" {
+		t.Fatalf("XrayTLSBackend = %q, want 127.0.0.1:18080", cfg.XrayTLSBackend)
 	}
-	if cfg.XrayFallbackBackend != "127.0.0.1:19080" {
-		t.Fatalf("XrayFallbackBackend = %q, want 127.0.0.1:19080", cfg.XrayFallbackBackend)
+}
+
+func TestLoadConfigGoProviderKeepsCustomTLSOverridePattern(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "edge-runtime.env")
+	writeConfigTestFile(t, envFile, strings.Join([]string{
+		"EDGE_PROVIDER=go",
+		"EDGE_NGINX_HTTP_BACKEND=127.0.0.1:19080",
+		"EDGE_NGINX_TLS_BACKEND=127.0.0.1:19443",
+		"EDGE_XRAY_DIRECT_BACKEND=127.0.0.1:19080",
+		"EDGE_XRAY_WS_BACKEND=127.0.0.1:19080",
+		"EDGE_XRAY_TLS_BACKEND=127.0.0.1:19443",
+		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
+		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
+	}, "\n")+"\n")
+	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig error = %v", err)
+	}
+	if cfg.XrayTLSBackend != "127.0.0.1:19443" {
+		t.Fatalf("XrayTLSBackend = %q, want 127.0.0.1:19443", cfg.XrayTLSBackend)
 	}
 }
 
