@@ -39,9 +39,9 @@ Catatan installer:
 ## Ringkasan Menu
 Menu bot Telegram sekarang mengikuti urutan `CLI Menu` di `manage.sh` untuk top-level utama:
 - `1) Xray Users`
-- `2) SSH Users`
+- `2) Xray Users`
 - `3) Xray QAC`
-- `4) SSH QAC`
+- `4) Xray QAC`
 - `5) Xray Network`
 - `7) Adblocker`
 - `8) Domain Control`
@@ -60,7 +60,7 @@ Catatan perilaku:
 - `Xray Network`, `Adblocker`, dan `WARP Tier` dipisah supaya domain action-nya lebih jelas seperti di CLI.
 - `Maintenance`, `Traffic`, dan `Speedtest` juga tampil sebagai domain utama tersendiri, bukan lagi digabung di `Ops`.
 - `Domain Control` dan `Security` tetap mempertahankan action sensitif yang sama, tetapi mengikuti penamaan dan urutan CLI.
-- `WARP SSH Per-User` tetap memakai state metadata SSH yang sama (`network.route_mode`) seperti di CLI.
+- `WARP Per-User` tetap memakai state metadata routing yang sama (`network.route_mode`) seperti di CLI.
 
 ## Backup/Restore
 Fitur `Backup/Restore` dipakai untuk membuat arsip backup lokal, melihat daftar backup, restore backup lokal terbaru, dan restore dari upload `.tar.gz`. Pada struktur baru, fitur ini diakses lewat kategori `Ops`.

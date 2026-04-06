@@ -872,8 +872,6 @@ func parseArgs() *config {
 		cfg.quotaFlushInterval = time.Second
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.mode)) {
-	case "ssh":
-		cfg.mode = "xray"
 	case "xray":
 		cfg.mode = "xray"
 	default:

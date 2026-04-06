@@ -1715,7 +1715,7 @@
     {
       "id": "48",
       "label": "Google Drive Setup",
-      "description": "Setup Google Drive lewat 2 opsi:\n1. Termux langsung\n2. VPS + SSH tunnel\n\nSetelah JSON auth didapat, tempel lewat menu Paste JSON Auth Google.\n\nDefault target:\n- Remote Name : gdrive\n- Folder Name : autoscript-backups",
+      "description": "Setup Google Drive lewat 2 opsi:\n1. Termux langsung\n2. VPS + port forwarding\n\nSetelah JSON auth didapat, tempel lewat menu Paste JSON Auth Google.\n\nDefault target:\n- Remote Name : gdrive\n- Folder Name : autoscript-backups",
       "hidden": true,
       "parent_menu": "46",
       "actions": [

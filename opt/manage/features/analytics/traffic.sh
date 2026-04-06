@@ -210,7 +210,7 @@ print()
 print("By Protocol:")
 
 protocols = data.get("protocols") or {}
-for proto in ("vless", "vmess", "trojan", "ssh"):
+for proto in ("vless", "vmess", "trojan"):
   info = protocols.get(proto) or {}
   users = int(info.get("users") or 0)
   used = int(info.get("used_bytes") or 0)

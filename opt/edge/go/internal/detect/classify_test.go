@@ -169,47 +169,6 @@ func TestReadInitialDoesNotClassifyTruncatedTLSRecordAsClientHelloOnEOF(t *testi
 	}
 }
 
-func TestReadInitialWaitsForSplitSSHBanner(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-
-	type result struct {
-		data  []byte
-		class InitialClass
-		err   error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		data, class, err := ReadInitial(serverConn, 2*time.Second, MaxPeekBytes)
-		resultCh <- result{data: data, class: class, err: err}
-	}()
-
-	payload := []byte("SSH-2.0-dropbear_2024.84\r\n")
-	if _, err := clientConn.Write(payload[:3]); err != nil {
-		t.Fatalf("clientConn.Write first chunk failed: %v", err)
-	}
-	time.Sleep(20 * time.Millisecond)
-	if _, err := clientConn.Write(payload[3:]); err != nil {
-		t.Fatalf("clientConn.Write second chunk failed: %v", err)
-	}
-
-	select {
-	case got := <-resultCh:
-		if got.err != nil {
-			t.Fatalf("ReadInitial err = %v", got.err)
-		}
-		if got.class != ClassSSH {
-			t.Fatalf("ReadInitial class = %v, want ClassSSH", got.class)
-		}
-		if string(got.data) != string(payload) {
-			t.Fatalf("ReadInitial payload mismatch")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ReadInitial timed out")
-	}
-}
-
 func TestReadInitialWaitsForSplitVLESSRequest(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -309,43 +268,6 @@ func TestReadInitialWaitsForSplitTrojanRequest(t *testing.T) {
 	}
 }
 
-func TestReadInitialTimeoutKeepsPartialSSHOnSSHRoute(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-
-	type result struct {
-		data  []byte
-		class InitialClass
-		err   error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		data, class, err := ReadInitial(serverConn, 50*time.Millisecond, MaxPeekBytes)
-		resultCh <- result{data: data, class: class, err: err}
-	}()
-
-	payload := []byte("SSH")
-	if _, err := clientConn.Write(payload); err != nil {
-		t.Fatalf("clientConn.Write failed: %v", err)
-	}
-
-	select {
-	case got := <-resultCh:
-		if got.err != nil {
-			t.Fatalf("ReadInitial err = %v", got.err)
-		}
-		if got.class != ClassSSH {
-			t.Fatalf("ReadInitial class = %v, want ClassSSH", got.class)
-		}
-		if string(got.data) != string(payload) {
-			t.Fatalf("ReadInitial payload mismatch")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ReadInitial timed out")
-	}
-}
-
 func TestReadInitialTimeoutKeepsPartialVLESSOnRawRoute(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -419,43 +341,6 @@ func TestReadInitialTimeoutKeepsPartialTrojanOnRawRoute(t *testing.T) {
 		}
 		if got.class != ClassTrojanRaw {
 			t.Fatalf("ReadInitial class = %v, want ClassTrojanRaw", got.class)
-		}
-		if string(got.data) != string(payload) {
-			t.Fatalf("ReadInitial payload mismatch")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ReadInitial timed out")
-	}
-}
-
-func TestReadInitialTimeoutDoesNotPromoteShortSSHPrefixToSSH(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-
-	type result struct {
-		data  []byte
-		class InitialClass
-		err   error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		data, class, err := ReadInitial(serverConn, 50*time.Millisecond, MaxPeekBytes)
-		resultCh <- result{data: data, class: class, err: err}
-	}()
-
-	payload := []byte("S")
-	if _, err := clientConn.Write(payload); err != nil {
-		t.Fatalf("clientConn.Write failed: %v", err)
-	}
-
-	select {
-	case got := <-resultCh:
-		if got.err != nil {
-			t.Fatalf("ReadInitial err = %v", got.err)
-		}
-		if got.class != ClassTimeout {
-			t.Fatalf("ReadInitial class = %v, want ClassTimeout", got.class)
 		}
 		if string(got.data) != string(payload) {
 			t.Fatalf("ReadInitial payload mismatch")

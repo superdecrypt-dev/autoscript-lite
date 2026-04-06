@@ -25,7 +25,7 @@ rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlIn0"
 3. Login Google lalu copy JSON token hasil auth
 4. Tempel token itu ke flow `Paste OAuth Token JSON`
 
-### Opsi B. VPS + SSH tunnel
+### Opsi B. VPS + port forwarding
 
 1. Di VPS jalankan:
 
@@ -34,11 +34,7 @@ rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlIn0"
 ```
 
 2. Copy URL lokal yang muncul
-3. Di Termux jalankan:
-
-```bash
-ssh -L 53682:127.0.0.1:53682 root@IP_VPS
-```
+3. Jalankan port forwarding ke VPS dengan tool pilihan Anda, dan arahkan `127.0.0.1:53682` ke `IP_VPS:53682`
 
 4. Buka URL tadi di browser HP
 5. Login Google lalu copy JSON token hasil auth
@@ -59,7 +55,7 @@ BACKUP_GDRIVE_REMOTE="gdrive:autoscript-backups"
 
 Catatan:
 - Jika port `53682` sudah terpakai, jalankan `pkill -f rclone`
-- Jika tunnel menampilkan zombie process, itu normal selama SSH tetap aktif
+- Jika sesi port forwarding menampilkan zombie process, itu normal selama koneksi tetap aktif
 - Setelah remote jadi, cek lagi dari bot/CLI lewat `Status Config`
 - Setelah token tersimpan, operasi backup/restore bisa jalan penuh dari VPS
 

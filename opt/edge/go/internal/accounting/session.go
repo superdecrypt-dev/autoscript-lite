@@ -47,7 +47,7 @@ func NewXrayRuntimeSessionTracker(logger *log.Logger, cfg XrayQuotaConfig, local
 		localPort: localPort,
 		clientIP:  normalizeSessionIP(clientIP),
 		transport: strings.TrimSpace(transport),
-		backend:   "dropbear",
+		backend:   "xray",
 		resolver:  resolver,
 		heartbeat: cfg.SessionHeartbeat,
 		sessionID: fmt.Sprintf("edge-%d-%d-%s", os.Getpid(), localPort, randomHex(4)),

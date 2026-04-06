@@ -78,17 +78,6 @@ maxretry = 3
 backend  = auto
 ignoreip = 127.0.0.1/8 ::1
 
-[sshd]
-enabled  = true
-port     = ssh
-mode     = aggressive
-# sshd log ke systemd journal di distro modern, override backend khusus untuk jail ini.
-backend  = systemd
-logpath  = %(sshd_log)s
-maxretry = 3
-findtime = 10m
-bantime  = 1d
-
 [nginx-bad-request-access]
 enabled  = true
 port     = http,https

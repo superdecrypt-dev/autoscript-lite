@@ -694,8 +694,6 @@ func detectClassName(class detect.InitialClass) string {
 		return "http"
 	case detect.ClassTLSClientHello:
 		return "tls_client_hello"
-	case detect.ClassSSH:
-		return "xray_direct"
 	case detect.ClassVLESSRaw:
 		return "vless_raw"
 	case detect.ClassTrojanRaw:

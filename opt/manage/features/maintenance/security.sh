@@ -1034,7 +1034,7 @@ security_overview_menu() {
   echo "TLS Expiry        : ${tls_line}"
   echo "Fail2ban          : ${f2b_line}"
   echo "Banned IP         : ${banned}"
-  echo "SSH Protection    : ${ssh_line}"
+  echo "Access Protection : ${ssh_line}"
   echo "Nginx Protection  : ${nginx_line}"
   echo "Recidive          : ${rec_line}"
   echo "BBR               : ${bbr_line}"
