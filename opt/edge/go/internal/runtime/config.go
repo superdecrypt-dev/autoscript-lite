@@ -225,11 +225,29 @@ func LoadConfig() (Config, error) {
 		SNIRoutes:            sniRoutes,
 		SNIPassthrough:       sniPassthrough,
 	}
+	cfg.applyProviderBackendDefaults(source)
 	refreshed, _, err := RefreshDiscoveredRawBackends(cfg)
 	if err != nil {
 		return Config{}, fmt.Errorf("discover raw backends from %s: %w", cfg.XrayInboundsFile, err)
 	}
 	return refreshed, nil
+}
+
+func (c *Config) applyProviderBackendDefaults(source envSource) {
+	if c == nil || c.Provider != "go" {
+		return
+	}
+	if !envSourceHasValue(source, "EDGE_XRAY_TLS_BACKEND") {
+		c.XrayTLSBackend = c.HTTPBackend
+	}
+	if !envSourceHasValue(source, "EDGE_XRAY_FALLBACK_BACKEND") {
+		c.XrayFallbackBackend = c.HTTPBackend
+	}
+}
+
+func envSourceHasValue(source envSource, key string) bool {
+	value, ok := source[key]
+	return ok && strings.TrimSpace(value) != ""
 }
 
 func (c Config) Validate() error {

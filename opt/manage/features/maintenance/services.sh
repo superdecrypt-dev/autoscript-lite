@@ -602,15 +602,24 @@ edge_runtime_info_menu() {
   echo "Public HTTP     : $(edge_runtime_ports_label "${http_ports}")"
   echo "Public TLS      : $(edge_runtime_ports_label "${tls_ports}")"
   echo "HTTP Backend    : ${http_backend}"
-  echo "HTTPS Backend   : ${http_tls_backend}"
+  if [[ "${provider}" == "nginx-stream" && "${active}" == "true" ]]; then
+    echo "HTTPS Backend   : ${http_tls_backend}"
+  else
+    echo "HTTPS Backend   : ${http_tls_backend} (nginx-stream only)"
+  fi
   echo "Detect Timeout  : ${detect_timeout} ms"
   echo "Classic TLS :80 : ${tls80}"
   echo "TLS Cert        : ${cert_file}"
   echo "TLS Key         : ${key_file}"
   hr
   echo "Mode ringkas:"
-  echo "  - HTTP / WebSocket -> backend HTTP (${http_backend})"
-  echo "  - TLS ingress -> backend HTTPS (${http_tls_backend})"
+  if [[ "${provider}" == "nginx-stream" && "${active}" == "true" ]]; then
+    echo "  - HTTP ingress -> backend HTTP (${http_backend})"
+    echo "  - TLS ingress -> backend HTTPS (${http_tls_backend})"
+  else
+    echo "  - edge-go pegang port publik 80/443"
+    echo "  - nginx route path Xray di backend HTTP (${http_backend})"
+  fi
   echo "  - edge gateway aktif pada seluruh port Cloudflare HTTP/HTTPS yang didukung"
   hr
   pause

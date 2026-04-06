@@ -446,6 +446,48 @@ func TestDecideTLSPayloadRouteFallsBackWhenSNIMissing(t *testing.T) {
 	}
 }
 
+func TestDecideTLSPayloadRouteRejectsTimedOutUnknownPayload(t *testing.T) {
+	cfg := runtime.Config{
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
+	}
+
+	decision := decideTLSPayloadRoute(cfg, "tls-inner", nil, detect.ClassTimeout, "", "", false)
+
+	if decision.target != "" {
+		t.Fatalf("target = %q, want empty", decision.target)
+	}
+	if decision.route != "reject-timeout" {
+		t.Fatalf("route = %q, want reject-timeout", decision.route)
+	}
+	if decision.status != 408 {
+		t.Fatalf("status = %d, want 408", decision.status)
+	}
+}
+
+func TestDecideTLSPayloadRouteRejectsUnknownPayload(t *testing.T) {
+	cfg := runtime.Config{
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		TrojanRawBackend:  "127.0.0.1:48778",
+	}
+
+	decision := decideTLSPayloadRoute(cfg, "tls-inner", []byte("noise"), detect.ClassUnknown, "", "", false)
+
+	if decision.target != "" {
+		t.Fatalf("target = %q, want empty", decision.target)
+	}
+	if decision.route != "reject-unknown" {
+		t.Fatalf("route = %q, want reject-unknown", decision.route)
+	}
+	if decision.status != 400 {
+		t.Fatalf("status = %d, want 400", decision.status)
+	}
+}
+
 func TestResolveSNIRouteDecisionUsesConfiguredBackend(t *testing.T) {
 	cfg := runtime.Config{
 		HTTPBackend:       "127.0.0.1:18080",

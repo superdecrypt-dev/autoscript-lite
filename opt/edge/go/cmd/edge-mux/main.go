@@ -1016,28 +1016,20 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.TrojanRawBackendAddr(), initial, "http-port:trojan-tcp", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, "", "reject-timeout", "", "", "", "", "unsupported_partial_non_http", 408, "detect", "")
 		event.Surface = "http-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "http-port:xray-direct-timeout", false)
+		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassPossibleHTTP:
 		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-unknown", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, "", "reject-unknown", "", "", "", "", "unsupported_non_http", 400, "detect", "")
 		event.Surface = "http-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "http-port:xray-direct-unknown", false)
+		_ = writeHTTPError(conn, 400, "Bad Request")
 	}
 }
 
@@ -1126,24 +1118,16 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		bridgeToBackend(logger, cfg, collector, health, conn, cfg.TrojanRawBackendAddr(), initial, "tls-port:trojan-tcp", false)
 		return
 	case detect.ClassTimeout:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-timeout", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, "", "reject-timeout", "", "", "", "", "unsupported_partial_non_tls", 0, "detect", "")
 		event.Surface = "tls-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), nil, "tls-port:xray-direct-timeout", false)
+		logger.Printf("edge-mux tls port rejected partial unsupported payload from %s", safeRemote(conn))
 		return
 	default:
-		event := routeDecisionEvent(cfg, health, class, cfg.XrayDirectBackendAddr(), "xray-direct-unknown", "", "", "", "", "", 0, "detect", "")
+		event := routeDecisionEvent(cfg, health, class, "", "reject-unknown", "", "", "", "", "unsupported_non_tls", 0, "detect", "")
 		event.Surface = "tls-port"
-		if snapshot, blocked := routeBlockedByHealth(health, cfg, cfg.XrayDirectBackendAddr()); blocked {
-			emitBlockedRoute(logger, collector, conn, event, snapshot, false)
-			return
-		}
 		emitRouteDecision(logger, collector, conn, event)
-		bridgeToBackend(logger, cfg, collector, health, conn, cfg.XrayDirectBackendAddr(), initial, "tls-port:xray-direct-unknown", false)
+		logger.Printf("edge-mux tls port rejected unsupported payload from %s", safeRemote(conn))
 		return
 	}
 }
@@ -1222,9 +1206,11 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.status = 408
 		decision.reason = "Request Timeout"
 	case detect.ClassTimeout:
-		decision.target = cfg.XrayDirectBackendAddr()
-		decision.route = "xray-direct-timeout"
-		decision.contextLabel = fmt.Sprintf("%s:xray-direct-timeout", surface)
+		decision.target = ""
+		decision.route = "reject-timeout"
+		decision.contextLabel = fmt.Sprintf("%s:reject-timeout", surface)
+		decision.reason = "Request Timeout"
+		decision.status = 408
 	case detect.ClassVLESSRaw:
 		decision.target = cfg.VLESSRawBackendAddr()
 		decision.route = "vless-tcp"
@@ -1234,8 +1220,11 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.route = "trojan-tcp"
 		decision.contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
 	default:
-		decision.route = "unknown"
-		decision.contextLabel = fmt.Sprintf("%s:unknown", surface)
+		decision.target = ""
+		decision.route = "reject-unknown"
+		decision.contextLabel = fmt.Sprintf("%s:reject-unknown", surface)
+		decision.reason = "Bad Request"
+		decision.status = 400
 	}
 	return decision
 }
