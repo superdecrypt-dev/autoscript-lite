@@ -79,6 +79,9 @@ bash bot-telegram/scripts/gate-all.sh
 log "Shell test: adblock upgrade"
 bash tools/test-adblock-upgrade.sh
 
+log "Shell test: edge dist"
+bash tools/test-edge-dist.sh
+
 if [[ -f "opt/edge/go/go.mod" ]]; then
   if need_cmd go; then
     log "Go test: edge"
