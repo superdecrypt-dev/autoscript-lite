@@ -782,7 +782,7 @@ def _capture_domain_runtime_snapshot() -> dict[str, Any]:
         edge_service = ""
     return {
         "nginx_conf": _snapshot_optional_file(NGINX_CONF),
-        "compat_domain": _snapshot_optional_file(XRAY_DOMAIN_FILE),
+        "domain_state": _snapshot_optional_file(XRAY_DOMAIN_FILE),
         "cert_fullchain": _snapshot_optional_file(CERT_FULLCHAIN),
         "cert_privkey": _snapshot_optional_file(CERT_PRIVKEY),
         "nginx_was_active": _service_exists("nginx") and _service_is_active("nginx"),
@@ -794,10 +794,10 @@ def _capture_domain_runtime_snapshot() -> dict[str, Any]:
 
 
 def _domain_snapshot_active_domain(snapshot: dict[str, Any]) -> str:
-    compat = snapshot.get("compat_domain")
-    if isinstance(compat, dict) and compat.get("exists"):
+    domain_state = snapshot.get("domain_state")
+    if isinstance(domain_state, dict) and domain_state.get("exists"):
         try:
-            value = bytes(compat.get("payload") or b"").decode("utf-8", errors="ignore").strip()
+            value = bytes(domain_state.get("payload") or b"").decode("utf-8", errors="ignore").strip()
         except Exception:
             value = ""
         if DOMAIN_RE.match(value):
@@ -827,7 +827,7 @@ def _restore_domain_runtime_snapshot(
     for path, key in (
         (CERT_FULLCHAIN, "cert_fullchain"),
         (CERT_PRIVKEY, "cert_privkey"),
-        (XRAY_DOMAIN_FILE, "compat_domain"),
+        (XRAY_DOMAIN_FILE, "domain_state"),
         (NGINX_CONF, "nginx_conf"),
     ):
         entry = snapshot.get(key)
@@ -3523,7 +3523,7 @@ def _account_info_has_display_mismatch(text: str) -> bool:
     return shown_days != expected_days
 
 
-def _account_info_needs_compat_refresh() -> bool:
+def _account_info_refresh_needed() -> bool:
     _ensure_runtime_dirs()
     for proto in USER_PROTOCOLS:
         d = ACCOUNT_ROOT / proto
@@ -3550,10 +3550,10 @@ def _account_info_needs_compat_refresh() -> bool:
 
 
 @_user_data_mutation_locked
-def op_account_info_compat_refresh_if_needed() -> tuple[bool, str, str]:
-    title = "User Management - Account Info Compat Refresh"
-    if not _account_info_needs_compat_refresh():
-        return True, title, "Skip: format account info sudah kompatibel."
+def op_account_info_refresh_if_needed() -> tuple[bool, str, str]:
+    title = "User Management - Account Info Refresh"
+    if not _account_info_refresh_needed():
+        return True, title, "Skip: account info sudah pada format canonical."
 
     domain = _detect_domain()
     ip_override: str | None = None
@@ -3562,7 +3562,7 @@ def op_account_info_compat_refresh_if_needed() -> tuple[bool, str, str]:
         ip_override = str(ip_or_err)
 
     updated, failed, skipped = _refresh_all_account_info(domain=domain, ip=ip_override)
-    msg = f"Compat refresh selesai: updated={updated}, failed={failed}"
+    msg = f"Account info refresh selesai: updated={updated}, failed={failed}"
     if skipped > 0:
         msg += f", skipped={skipped}"
     if failed > 0:
@@ -4880,7 +4880,7 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
             return False, f"Gagal apply domain ke nginx: {exc}\nPerubahan nginx sudah di-rollback."
         return False, f"Gagal apply domain ke nginx: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
-    # Keep compatibility with compatibility scripts that still read active domain from /etc/xray/domain.
+    # Keep shared domain state file in sync for local runtime helpers.
     try:
         XRAY_DOMAIN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(XRAY_DOMAIN_FILE, f"{domain}\n")
@@ -4888,10 +4888,10 @@ def _apply_nginx_domain(domain: str) -> tuple[bool, str]:
         ok_rb, msg_rb = _rollback_nginx_domain_change(original)
         if ok_rb:
             return False, (
-                f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\n"
+                f"Gagal sinkron domain state ke {XRAY_DOMAIN_FILE}: {exc}\n"
                 "Perubahan nginx sudah di-rollback."
             )
-        return False, f"Gagal sinkron domain kompatibilitas ke {XRAY_DOMAIN_FILE}: {exc}\nRollback nginx gagal:\n{msg_rb}"
+        return False, f"Gagal sinkron domain state ke {XRAY_DOMAIN_FILE}: {exc}\nRollback nginx gagal:\n{msg_rb}"
 
     return True, "ok"
 

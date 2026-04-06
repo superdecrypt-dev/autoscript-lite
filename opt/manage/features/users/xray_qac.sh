@@ -23,7 +23,7 @@ quota_collect_files() {
 
       key="${proto}:${u}"
 
-      # Prefer file "username@proto.json" over compatibility-format "username.json" if both exist.
+      # Prefer canonical file "username@proto.json" if both variants exist.
       if [[ -n "${pos[${key}]:-}" ]]; then
         if [[ "${base}" == *"@"* && "${has_at[${key}]:-0}" != "1" ]]; then
           QUOTA_FILES[${pos[${key}]}]="${f}"
@@ -96,16 +96,13 @@ quota_metadata_bootstrap_if_missing() {
   local proto="$1"
   local username="$2"
   local qf="$3"
-  local acc_file acc_compat
+  local acc_file
 
   [[ -n "${proto}" && -n "${username}" && -n "${qf}" ]] || return 1
   [[ -f "${qf}" ]] && return 0
 
-  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  acc_compat="${ACCOUNT_ROOT}/${proto}/${username}.txt"
-  if [[ ! -f "${acc_file}" && -f "${acc_compat}" ]]; then
-    acc_file="${acc_compat}"
-  fi
+  xray_migrate_user_compat_artifacts_if_needed "${proto}" "${username}"
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
   if [[ ! -f "${acc_file}" ]]; then
     warn "Bootstrap quota ${username}@${proto} dibatalkan: XRAY ACCOUNT INFO managed tidak ditemukan."
     return 1

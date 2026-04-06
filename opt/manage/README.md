@@ -75,7 +75,7 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `5) Xray Network`
   WARP, DNS settings/add-ons, dan diagnostics runtime Xray.
 - `8) Domain Control`
-  Set domain, current domain, guard check/renew, refresh account info, repair compat drift, dan repair target DNS.
+  Set domain, current domain, guard check/renew, refresh account info, dan repair target DNS.
 - `9) Speedtest`
   Run speedtest dan version check.
 - `10) Security`

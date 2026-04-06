@@ -989,7 +989,7 @@ is_back_word_choice() {
 }
 
 detect_domain() {
-  # Try nginx conf server_name first, then compatibility file, then hostname -f.
+  # Try nginx server_name first, then shared domain state file, then hostname -f.
   local dom=""
   if [[ -f "${NGINX_CONF}" ]]; then
     dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' || true)"
@@ -1306,68 +1306,6 @@ account_info_sync_after_domain_change_if_needed() {
   return 0
 }
 
-account_info_compat_needs_refresh() {
-  # Return 0 jika ditemukan file account info format kompatibilitas yang perlu disegarkan.
-  # Kriteria:
-  # - nama file format kompatibilitas (username.txt, belum username@proto.txt)
-  # - belum memiliki blok "Links Import" modern
-  # - belum memiliki baris link gRPC
-  # - belum memiliki field ISP/Country
-  # - belum memiliki field Path/Path Alt/Port modern
-  ensure_account_quota_dirs
-  account_collect_files
-
-  if (( ${#ACCOUNT_FILES[@]} == 0 )); then
-    return 1
-  fi
-
-  local i f proto base
-  for i in "${!ACCOUNT_FILES[@]}"; do
-    f="${ACCOUNT_FILES[$i]}"
-    proto="${ACCOUNT_FILE_PROTOS[$i]}"
-    base="$(basename "${f}")"
-
-    if [[ "${base}" != *@${proto}.txt ]]; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*(Links Import:|=== LINKS IMPORT ===)[[:space:]]*$' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*gRPC[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*ISP[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*Country[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path(?:[[:space:]]+(WS|HUP|Service))?[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9]+)?[[:space:]]+Path(?:[[:space:]]+(WS|HUP|Service))?[[:space:]]+Alt[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-
-    if ! grep -Eq '^[[:space:]]*[A-Za-z0-9]+(?:[[:space:]][A-Za-z0-9+]+)?[[:space:]]+(?:WS|HUP|gRPC|TCP\+TLS[[:space:]]+Port|Port)[[:space:]]*:' "${f}" 2>/dev/null; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-account_info_compat_refresh_if_needed() {
-  # Deprecated on CLI: compatibility refresh must be triggered explicitly from menu.
-  return 0
-}
-
 cert_snapshot_create() {
   # args: backup_dir
   local backup_dir="$1"
@@ -1557,7 +1495,7 @@ domain_control_txn_restore() {
 
   if [[ -n "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" && -d "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" ]]; then
     if ! domain_control_optional_file_snapshot_restore "${XRAY_DOMAIN_FILE}" "${DOMAIN_CTRL_TXN_COMPAT_SNAPSHOT}" compat_domain; then
-      notes_ref+=("restore compat domain gagal")
+      notes_ref+=("restore domain state gagal")
       rc=1
     fi
   fi

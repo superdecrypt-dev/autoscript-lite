@@ -166,10 +166,10 @@ detect_domain() {
   local dom=""
   if [[ -n "${DOMAIN:-}" ]]; then
     dom="${DOMAIN}"
-  elif [[ -s "${XRAY_DOMAIN_FILE}" ]]; then
-    dom="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
   elif [[ -f "${NGINX_CONF}" ]]; then
     dom="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
+  elif [[ -s "${XRAY_DOMAIN_FILE}" ]]; then
+    dom="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
   fi
   echo "${dom}"
 }

@@ -15,8 +15,8 @@ main() {
       return 1
       ;;
     __sync-domain-file)
-      warn "Hidden sync compat domain dinonaktifkan."
-      warn "Sinkronisasi compat domain hanya dikelola internal oleh flow Set Domain."
+      warn "Hidden sync domain state dinonaktifkan."
+      warn "Sinkronisasi domain state hanya dikelola internal oleh flow Set Domain."
       return 1
       ;;
   esac

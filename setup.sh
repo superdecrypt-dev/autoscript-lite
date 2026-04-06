@@ -189,9 +189,9 @@ setup_post_domain_main() {
   setup_run_step "Install Edge Gateway" install_edge_provider_stack
   setup_set_progress "Sinkron domain Xray"
   if sync_xray_domain_file "${DOMAIN}"; then
-    ok "Compat domain file tersimpan: ${XRAY_DOMAIN_FILE}"
+    ok "Domain state file tersimpan: ${XRAY_DOMAIN_FILE}"
   else
-    warn "Gagal menulis compat domain file: ${XRAY_DOMAIN_FILE}"
+    warn "Gagal menulis domain state file: ${XRAY_DOMAIN_FILE}"
   fi
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Install license guard" install_autoscript_license_runtime

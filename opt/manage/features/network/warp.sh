@@ -2932,7 +2932,7 @@ warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
   printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan routing tambahan via Local Proxy\n"
   printf "Rollout Note  : Routing tambahan kompatibel bila backend WARP memakai local proxy bersama port lokal WARP\n"
-  printf "Rollout Note  : Backend dedicated lama dipertahankan sebagai fallback Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
+  printf "Rollout Note  : Backend dedicated lama dipertahankan untuk mode Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
 }
 
 warp_free_plus_backend_prepare_activate_unlocked() {

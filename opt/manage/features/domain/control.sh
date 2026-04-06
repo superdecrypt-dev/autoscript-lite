@@ -976,13 +976,13 @@ domain_control_apply_nginx_domain() {
   fi
 
   if ! sync_xray_domain_file "${applied_domain}"; then
-    warn "Compat domain file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Mengembalikan candidate nginx agar domain tidak aktif setengah jadi."
-    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan; restore backup nginx juga gagal."
-    nginx -t >/dev/null 2>&1 || die "Compat domain file gagal disinkronkan; backup nginx tidak valid saat rollback."
+    warn "Domain state file gagal disinkronkan ke ${XRAY_DOMAIN_FILE}. Mengembalikan candidate nginx agar domain tidak aktif setengah jadi."
+    cp -a "${backup}" "${NGINX_CONF}" >/dev/null 2>&1 || die "Domain state file gagal disinkronkan; restore backup nginx juga gagal."
+    nginx -t >/dev/null 2>&1 || die "Domain state file gagal disinkronkan; backup nginx tidak valid saat rollback."
     if ! svc_restart_checked nginx 60; then
-      die "Compat domain file gagal disinkronkan; rollback nginx juga gagal."
+      die "Domain state file gagal disinkronkan; rollback nginx juga gagal."
     fi
-    die "Compat domain file gagal disinkronkan setelah apply domain."
+    die "Domain state file gagal disinkronkan setelah apply domain."
   fi
 
   log "server_name nginx diperbarui ke: ${domain}"
@@ -1099,7 +1099,7 @@ domain_control_set_domain_after_prompt() {
   cp -a "${NGINX_CONF}" "${nginx_conf_backup}" || die "Gagal membuat backup nginx sebelum set domain."
   if ! domain_control_optional_file_snapshot_create "${XRAY_DOMAIN_FILE}" "${compat_snapshot_dir}" compat_domain; then
     rm -rf "${compat_snapshot_dir}" >/dev/null 2>&1 || true
-    die "Gagal membuat snapshot compat domain sebelum set domain."
+    die "Gagal membuat snapshot domain state file sebelum set domain."
   fi
   domain_control_txn_begin "${cert_backup_dir}" "${nginx_conf_backup}" "${compat_snapshot_dir}" "${DOMAIN}"
 
@@ -1379,138 +1379,6 @@ domain_control_refresh_account_info_now() {
   return 1
 }
 
-# shellcheck disable=SC2120
-domain_control_sync_compat_domain_now() {
-  local domain ask_rc=0 current_compat=""
-  local snapshot_dir="" preview_report="" nginx_domain="" sync_state_domain=""
-  if [[ "${DOMAIN_CONTROL_LOCK_HELD:-0}" != "1" ]]; then
-    domain_control_run_locked domain_control_sync_compat_domain_now "$@"
-    return $?
-  fi
-
-  title
-  echo "8) Domain Control > Repair Compat Domain Drift (Repair-Only)"
-  hr
-
-  domain="$(normalize_domain_token "$(detect_domain)")"
-  if [[ -z "${domain}" ]]; then
-    warn "Domain aktif tidak terdeteksi."
-    pause
-    return 1
-  fi
-
-  echo "Domain aktif    : ${domain}"
-  echo "Compat file     : ${XRAY_DOMAIN_FILE}"
-  current_compat="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
-  nginx_domain="$(grep -E '^[[:space:]]*server_name[[:space:]]+' "${NGINX_CONF}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/;.*$//' | awk '{print $1}' | tr -d ';' || true)"
-  echo "Compat saat ini : ${current_compat:-"(kosong)"}"
-  echo "Nginx server_name : ${nginx_domain:-"(tidak terdeteksi)"}"
-  echo "Catatan         : ini adalah repair artefak kompatibilitas ke domain aktif, bukan set domain baru."
-  sync_state_domain="$(normalize_domain_token "$(account_info_domain_sync_state_read)")"
-  echo "Sync state dom : ${sync_state_domain:-"(tidak tercatat)"}"
-  preview_report="$(preview_report_path_prepare "compat-domain-sync" 2>/dev/null || true)"
-  if [[ -n "${preview_report}" ]]; then
-    {
-      printf 'Current compat : %s\n' "${current_compat:-"(kosong)"}"
-      printf 'Target domain  : %s\n' "${domain}"
-      printf '\n'
-      printf -- '--- current\n'
-      printf -- '+++ target\n'
-      printf -- '@@ compat-domain @@\n'
-      printf -- '-%s\n' "${current_compat:-"(kosong)"}"
-      printf -- '+%s\n' "${domain}"
-    } > "${preview_report}" 2>/dev/null || true
-    [[ -f "${preview_report}" ]] && echo "Preview repair : ${preview_report}"
-  fi
-  hr
-
-  if [[ -n "${current_compat}" && "${current_compat}" == "${domain}" ]]; then
-    log "Compat domain file sudah sinkron dengan domain aktif."
-    pause
-    return 0
-  fi
-  if [[ -n "${sync_state_domain}" && "${sync_state_domain}" != "-" && "${sync_state_domain}" != "${domain}" ]]; then
-    warn "Repair compat domain dibatalkan: state sinkronisasi domain terakhir (${sync_state_domain}) tidak cocok dengan domain aktif (${domain})."
-    warn "Selesaikan refresh batch domain saat ini atau jalankan set domain/guard renew hingga state benar-benar final."
-    pause
-    return 1
-  fi
-  if domain_control_cf_sync_pending_exists; then
-    warn "Repair compat domain dibatalkan: masih ada pending repair target DNS Cloudflare."
-    warn "Selesaikan 'Repair Target DNS Record' dulu agar compat repair tetap mengikuti runtime utama yang benar-benar final."
-    pause
-    return 1
-  fi
-  if [[ -n "${nginx_domain}" && "${nginx_domain}" != "${domain}" ]]; then
-    warn "Repair compat domain dibatalkan: domain aktif (${domain}) tidak cocok dengan server_name nginx (${nginx_domain})."
-    warn "Gunakan Set Domain agar compat repair tetap terikat ke runtime utama."
-    pause
-    return 1
-  fi
-  if [[ ! -s "${CERT_FULLCHAIN}" || ! -s "${CERT_PRIVKEY}" ]]; then
-    warn "Repair compat domain dibatalkan: file cert live belum siap."
-    pause
-    return 1
-  fi
-  if declare -F cert_runtime_hostname_tls_handshake_check >/dev/null 2>&1; then
-    if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
-      warn "Repair compat domain dibatalkan: probe TLS hostname untuk domain aktif belum sehat."
-      warn "Gunakan Set Domain atau perbaiki runtime TLS dulu sebelum mensinkronkan compat domain."
-      pause
-      return 1
-    fi
-  fi
-
-  confirm_yn_or_back "Sinkronkan compat domain file ke domain aktif sekarang?"
-  ask_rc=$?
-  if (( ask_rc != 0 )); then
-    if (( ask_rc == 2 )); then
-      warn "Sinkronisasi compat domain dibatalkan (kembali)."
-    else
-      warn "Sinkronisasi compat domain dibatalkan."
-    fi
-    pause
-    return 0
-  fi
-  if ! confirm_menu_apply_now "Konfirmasi final: repair compat domain file ke domain aktif ${domain}?"; then
-    warn "Sinkronisasi compat domain dibatalkan pada checkpoint final."
-    pause
-    return 0
-  fi
-  local compat_ack=""
-  read -r -p "Ketik persis 'SYNC COMPAT ${domain}' untuk lanjut repair compat domain (atau kembali): " compat_ack
-  if is_back_choice "${compat_ack}"; then
-    warn "Sinkronisasi compat domain dibatalkan pada checkpoint final."
-    pause
-    return 0
-  fi
-  if [[ "${compat_ack}" != "SYNC COMPAT ${domain}" ]]; then
-    warn "Konfirmasi repair compat domain tidak cocok. Dibatalkan."
-    pause
-    return 0
-  fi
-
-  snapshot_dir="$(mktemp -d "${WORK_DIR}/.compat-domain-sync.XXXXXX" 2>/dev/null || true)"
-  if [[ -n "${snapshot_dir}" ]]; then
-    domain_control_optional_file_snapshot_create "${XRAY_DOMAIN_FILE}" "${snapshot_dir}" compat_domain >/dev/null 2>&1 || true
-  fi
-
-  if sync_xray_domain_file "${domain}"; then
-    log "Compat domain file berhasil disinkronkan ke ${domain}."
-    [[ -n "${snapshot_dir}" ]] && rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
-    pause
-    return 0
-  fi
-
-  if [[ -n "${snapshot_dir}" && -d "${snapshot_dir}" ]]; then
-    domain_control_optional_file_snapshot_restore "${XRAY_DOMAIN_FILE}" "${snapshot_dir}" compat_domain >/dev/null 2>&1 || true
-    rm -rf "${snapshot_dir}" >/dev/null 2>&1 || true
-  fi
-  warn "Sinkronisasi compat domain file gagal."
-  pause
-  return 1
-}
-
 domain_control_sync_target_dns_now() {
   local pending_domain_hint="${1:-}"
   local pending_file=""
@@ -1760,9 +1628,8 @@ domain_control_guard_renew_if_needed() {
   fi
 
   local ask_rc=0 rc=0 spin_log="" check_rc=0 check_log="" status_log="" post_check_log="" post_check_rc=0
-  local domain="" nginx_domain="" compat_domain=""
+  local domain="" nginx_domain="" domain_state_value=""
   local -a post_notes=()
-  local compat_prompt_rc=0
   local dns_prompt_rc=0
   if ui_run_logged_command_with_spinner check_log "Menjalankan guard preflight" "${XRAY_DOMAIN_GUARD_BIN}" check; then
     check_rc=0
@@ -1794,7 +1661,7 @@ domain_control_guard_renew_if_needed() {
   echo "Perkiraan artefak/runtime yang bisa disentuh:"
   echo "  - Cert files : ${CERT_FULLCHAIN}, ${CERT_PRIVKEY}"
   echo "  - Nginx conf : ${NGINX_CONF}"
-  echo "  - Compat file: ${XRAY_DOMAIN_FILE}"
+  echo "  - Domain file: ${XRAY_DOMAIN_FILE}"
   echo "  - Service    : nginx, xray, edge runtime (jika aktif)"
   echo "Command    : ${XRAY_DOMAIN_GUARD_BIN} renew-if-needed"
   echo "Catatan    : renew-if-needed dijalankan oleh binary eksternal dan dapat memperbarui cert/domain artefak terkait."
@@ -1851,16 +1718,16 @@ domain_control_guard_renew_if_needed() {
   fi
   domain="$(normalize_domain_token "$(detect_domain)")"
   nginx_domain="$(normalize_domain_token "$(domain_control_current_nginx_domain_get)")"
-  compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
-  compat_domain="$(normalize_domain_token "${compat_domain}")"
+  domain_state_value="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+  domain_state_value="$(normalize_domain_token "${domain_state_value}")"
   if [[ -z "${domain}" ]]; then
     post_notes+=("domain aktif tidak terdeteksi")
   fi
   if [[ -n "${domain}" && -n "${nginx_domain}" && "${nginx_domain}" != "${domain}" ]]; then
     post_notes+=("server_name nginx tidak sinkron (${nginx_domain})")
   fi
-  if [[ -n "${domain}" && -n "${compat_domain}" && "${compat_domain}" != "${domain}" ]]; then
-    post_notes+=("compat domain tidak sinkron (${compat_domain})")
+  if [[ -n "${domain}" && -n "${domain_state_value}" && "${domain_state_value}" != "${domain}" ]]; then
+    post_notes+=("domain state file tidak sinkron (${domain_state_value})")
   fi
   if [[ -n "${domain}" ]] && declare -F cert_runtime_hostname_tls_handshake_check >/dev/null 2>&1; then
     if ! cert_runtime_hostname_tls_handshake_check "${domain}" >/dev/null 2>&1; then
@@ -1893,7 +1760,7 @@ domain_control_guard_renew_if_needed() {
   if (( rc == 0 )); then
     if (( post_check_rc == 0 && ${#post_notes[@]} == 0 )); then
       local guard_followup_pending="false"
-      log "Postflight guard sehat: domain/nginx/compat/cert tetap sinkron."
+      log "Postflight guard sehat: domain/nginx/domain-state/cert tetap sinkron."
       if [[ -n "${domain}" ]] && domain_control_cf_sync_pending_exists; then
         if confirm_yn_or_back "Terdapat pending repair target DNS Cloudflare setelah guard renew. Repair sekarang?"; then
           domain_control_sync_target_dns_now "${domain}" || rc=1
@@ -1908,22 +1775,17 @@ domain_control_guard_renew_if_needed() {
       if [[ "${rc}" == "0" && -n "${domain}" ]] && domain_control_cf_sync_pending_exists; then
         guard_followup_pending="true"
       fi
-      compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
-      compat_domain="$(normalize_domain_token "${compat_domain}")"
-      if [[ "${rc}" == "0" && -n "${domain}" && "${compat_domain}" != "${domain}" ]] && ! domain_control_cf_sync_pending_exists; then
-        if confirm_yn_or_back "Compat domain file belum sinkron setelah guard renew. Sinkronkan sekarang?"; then
-          domain_control_sync_compat_domain_now || rc=1
-        else
-          compat_prompt_rc=$?
-          if (( compat_prompt_rc == 1 || compat_prompt_rc == 2 )); then
-            warn "Repair compat domain ditunda. Anda masih bisa menjalankannya manual dari Domain Control."
-            guard_followup_pending="true"
-          fi
+      domain_state_value="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+      domain_state_value="$(normalize_domain_token "${domain_state_value}")"
+      if [[ "${rc}" == "0" && -n "${domain}" && "${domain_state_value}" != "${domain}" ]] && ! domain_control_cf_sync_pending_exists; then
+        if ! sync_xray_domain_file "${domain}"; then
+          warn "Domain state file belum berhasil disinkronkan setelah guard renew."
+          guard_followup_pending="true"
         fi
       fi
-      compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
-      compat_domain="$(normalize_domain_token "${compat_domain}")"
-      if [[ "${rc}" == "0" && -n "${domain}" && "${compat_domain}" != "${domain}" ]]; then
+      domain_state_value="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
+      domain_state_value="$(normalize_domain_token "${domain_state_value}")"
+      if [[ "${rc}" == "0" && -n "${domain}" && "${domain_state_value}" != "${domain}" ]]; then
         guard_followup_pending="true"
       fi
       if [[ "${rc}" == "0" && -n "${domain}" ]]; then
@@ -1960,7 +1822,6 @@ domain_control_guard_renew_if_needed() {
 
 domain_control_menu() {
   local pending_prompted="false"
-  local compat_prompted="false"
   while true; do
     local -a items=()
     local cf_pending_total="false"
@@ -1969,12 +1830,9 @@ domain_control_menu() {
     local cf_pending_active_count=0
     local cf_pending_other_count=0
     local pending_prompt_rc=0
-    local compat_prompt_rc=0
-    local active_domain="" sync_state_domain="" compat_domain=""
+    local active_domain="" sync_state_domain=""
     active_domain="$(normalize_domain_token "$(detect_domain 2>/dev/null || true)")"
     sync_state_domain="$(normalize_domain_token "$(account_info_domain_sync_state_read)")"
-    compat_domain="$(head -n1 "${XRAY_DOMAIN_FILE}" 2>/dev/null | tr -d '\r' | awk '{print $1}' | tr -d ';' || true)"
-    compat_domain="$(normalize_domain_token "${compat_domain}")"
     cf_pending_count="$(domain_control_cf_sync_pending_count)"
     [[ "${cf_pending_count}" =~ ^[0-9]+$ ]] || cf_pending_count=0
     if (( cf_pending_count > 0 )); then
@@ -1999,8 +1857,7 @@ domain_control_menu() {
       "3|Guard Check"
       "4|Guard Renew (external binary)"
       "5|Refresh Account Info"
-      "6|Repair Compat Domain Drift (repair-only)"
-      "7|Repair Target DNS Record (manual repair)$([[ "${cf_pending_total}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
+      "6|Repair Target DNS Record (manual repair)$([[ "${cf_pending_total}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
       "0|Back"
     )
     ui_menu_screen_begin "8) Domain Control"
@@ -2032,24 +1889,6 @@ domain_control_menu() {
     elif [[ -n "${active_domain}" && -n "${sync_state_domain}" && "${sync_state_domain}" != "${active_domain}" ]]; then
       warn "Sync state ACCOUNT INFO terakhir (${sync_state_domain}) belum cocok dengan domain aktif (${active_domain})."
       hr
-    fi
-    if [[ "${cf_pending_active}" != "true" && -n "${active_domain}" && -n "${compat_domain}" && "${compat_domain}" != "${active_domain}" ]]; then
-      warn "Compat domain drift terdeteksi: ${compat_domain} != ${active_domain}"
-      hr
-      if [[ "${compat_prompted}" != "true" ]]; then
-        compat_prompted="true"
-        if confirm_yn_or_back "Buka repair 'Repair Compat Domain Drift' sekarang?"; then
-          menu_run_isolated_report "Repair Compat Domain" domain_control_sync_compat_domain_now
-          continue
-        fi
-        compat_prompt_rc=$?
-        if (( compat_prompt_rc == 1 || compat_prompt_rc == 2 )); then
-          warn "Repair compat domain tidak dibuka otomatis. Anda masih bisa memilih menu 6 kapan saja."
-          hr
-        fi
-      fi
-    else
-      compat_prompted="false"
     fi
     ui_menu_render_options items 76
     hr
@@ -2087,16 +1926,7 @@ domain_control_menu() {
         fi
         menu_run_isolated_report "Refresh Account Info" domain_control_refresh_account_info_now
         ;;
-      6)
-        if [[ "${cf_pending_active}" == "true" ]]; then
-          warn "Repair Compat Domain ditahan: masih ada pending repair target DNS Cloudflare."
-          warn "Selesaikan repair target DNS dulu agar artefak compat tidak disinkronkan ke state yang belum final."
-          pause
-          continue
-        fi
-        menu_run_isolated_report "Repair Compat Domain" domain_control_sync_compat_domain_now
-        ;;
-      7) menu_run_isolated_report "Repair Target DNS" domain_control_sync_target_dns_now ;;
+      6) menu_run_isolated_report "Repair Target DNS" domain_control_sync_target_dns_now ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

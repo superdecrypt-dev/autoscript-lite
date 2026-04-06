@@ -125,6 +125,82 @@ xray_edge_runtime_alt_http_ports_label() {
   fi
 }
 
+xray_account_info_file_path() {
+  local proto="$1"
+  local username="$2"
+  printf '%s/%s/%s@%s.txt\n' "${ACCOUNT_ROOT}" "${proto}" "${username}" "${proto}"
+}
+
+xray_account_info_compat_file_path() {
+  local proto="$1"
+  local username="$2"
+  printf '%s/%s/%s.txt\n' "${ACCOUNT_ROOT}" "${proto}" "${username}"
+}
+
+xray_quota_file_path() {
+  local proto="$1"
+  local username="$2"
+  printf '%s/%s/%s@%s.json\n' "${QUOTA_ROOT}" "${proto}" "${username}" "${proto}"
+}
+
+xray_quota_compat_file_path() {
+  local proto="$1"
+  local username="$2"
+  printf '%s/%s/%s.json\n' "${QUOTA_ROOT}" "${proto}" "${username}"
+}
+
+xray_migrate_compat_artifact_if_needed() {
+  local canonical="$1"
+  local compat="$2"
+  local mode="${3:-600}"
+  local canonical_lock="${4:-}"
+  local compat_lock="${5:-}"
+
+  [[ -n "${canonical}" && -n "${compat}" ]] || return 0
+  [[ -e "${compat}" ]] || {
+    [[ -n "${compat_lock}" && -n "${canonical_lock}" && -e "${compat_lock}" && ! -e "${canonical_lock}" ]] && mv -f "${compat_lock}" "${canonical_lock}" >/dev/null 2>&1 || true
+    return 0
+  }
+
+  mkdir -p "$(dirname "${canonical}")" >/dev/null 2>&1 || true
+
+  if [[ ! -e "${canonical}" ]]; then
+    mv -f "${compat}" "${canonical}" >/dev/null 2>&1 || cp -f "${compat}" "${canonical}" >/dev/null 2>&1 || return 0
+    [[ -e "${compat}" ]] && rm -f "${compat}" >/dev/null 2>&1 || true
+    chmod "${mode}" "${canonical}" >/dev/null 2>&1 || true
+    if [[ -n "${compat_lock}" && -e "${compat_lock}" && -n "${canonical_lock}" && ! -e "${canonical_lock}" ]]; then
+      mv -f "${compat_lock}" "${canonical_lock}" >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  if cmp -s -- "${canonical}" "${compat}" 2>/dev/null; then
+    rm -f "${compat}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${compat_lock}" && -e "${compat_lock}" ]]; then
+    if [[ -n "${canonical_lock}" && ! -e "${canonical_lock}" ]]; then
+      mv -f "${compat_lock}" "${canonical_lock}" >/dev/null 2>&1 || true
+    else
+      rm -f "${compat_lock}" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+xray_migrate_user_compat_artifacts_if_needed() {
+  local proto="$1"
+  local username="$2"
+  local acc_file quota_file legacy_account_file legacy_quota_file
+
+  ensure_account_quota_dirs
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
+  quota_file="$(xray_quota_file_path "${proto}" "${username}")"
+  legacy_account_file="$(xray_account_info_compat_file_path "${proto}" "${username}")"
+  legacy_quota_file="$(xray_quota_compat_file_path "${proto}" "${username}")"
+
+  xray_migrate_compat_artifact_if_needed "${acc_file}" "${legacy_account_file}" 600
+  xray_migrate_compat_artifact_if_needed "${quota_file}" "${legacy_quota_file}" 600 "${quota_file}.lock" "${legacy_quota_file}.lock"
+}
+
 
 xray_backup_config() {
   # Create operation-local backup file to avoid cross-operation overwrite.
@@ -1530,8 +1606,8 @@ write_account_artifacts() {
   [[ -n "${country}" ]] || country="-"
 
   local acc_file quota_file
-  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
+  quota_file="$(xray_quota_file_path "${proto}" "${username}")"
   [[ -n "${account_output_override}" ]] && acc_file="${account_output_override}"
   [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
@@ -1896,6 +1972,14 @@ PY
     return "${py_rc}"
   fi
 
+  if [[ -z "${account_output_override}" ]]; then
+    rm -f -- "$(xray_account_info_compat_file_path "${proto}" "${username}")" >/dev/null 2>&1 || true
+  fi
+  if [[ -z "${quota_output_override}" ]]; then
+    rm -f -- "$(xray_quota_compat_file_path "${proto}" "${username}")" >/dev/null 2>&1 || true
+    rm -f -- "$(xray_quota_compat_file_path "${proto}" "${username}").lock" >/dev/null 2>&1 || true
+  fi
+
   chmod 600 "${acc_file}" "${quota_file}" || true
   return 0
 }
@@ -1912,18 +1996,10 @@ account_info_refresh_for_user() {
   ensure_account_quota_dirs
   need_python3
 
-  local acc_file quota_file acc_compatfmt quota_compatfmt
-  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
-  acc_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
-  quota_compatfmt="${QUOTA_ROOT}/${proto}/${username}.json"
-
-  if [[ ! -f "${acc_file}" && -f "${acc_compatfmt}" ]]; then
-    acc_file="${acc_compatfmt}"
-  fi
-  if [[ ! -f "${quota_file}" && -f "${quota_compatfmt}" ]]; then
-    quota_file="${quota_compatfmt}"
-  fi
+  local acc_file quota_file
+  xray_migrate_user_compat_artifacts_if_needed "${proto}" "${username}"
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
+  quota_file="$(xray_quota_file_path "${proto}" "${username}")"
 
   [[ -n "${domain}" ]] || domain="$(detect_domain)"
   if [[ -z "${ip}" ]]; then
@@ -2526,12 +2602,9 @@ account_info_refresh_warn() {
 account_info_refresh_target_file_for_user() {
   local proto="$1"
   local username="$2"
-  local acc_file acc_compatfmt
-  acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
-  acc_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
-  if [[ ! -f "${acc_file}" && -f "${acc_compatfmt}" ]]; then
-    acc_file="${acc_compatfmt}"
-  fi
+  local acc_file
+  xray_migrate_user_compat_artifacts_if_needed "${proto}" "${username}"
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
   printf '%s\n' "${acc_file}"
 }
 
