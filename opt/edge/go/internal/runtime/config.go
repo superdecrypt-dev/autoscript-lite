@@ -243,11 +243,33 @@ func (c *Config) applyProviderBackendDefaults(source envSource) {
 	if !envSourceHasValue(source, "EDGE_XRAY_FALLBACK_BACKEND") {
 		c.XrayFallbackBackend = c.HTTPBackend
 	}
+	c.normalizeLegacyGoTLSBackends(source)
 }
 
 func envSourceHasValue(source envSource, key string) bool {
 	value, ok := source[key]
 	return ok && strings.TrimSpace(value) != ""
+}
+
+func (c *Config) normalizeLegacyGoTLSBackends(source envSource) {
+	if c == nil || c.Provider != "go" {
+		return
+	}
+	legacyTLSBackend := normalizeAddr(
+		envString(source, "EDGE_NGINX_TLS_BACKEND", defaultXrayTLSBackend),
+		"127.0.0.1",
+	)
+	if c.HTTPBackend == legacyTLSBackend {
+		return
+	}
+	if c.XrayDirectBackend != c.HTTPBackend || c.XrayWSBackend != c.HTTPBackend {
+		return
+	}
+	if c.XrayTLSBackend != legacyTLSBackend || c.XrayFallbackBackend != legacyTLSBackend {
+		return
+	}
+	c.XrayTLSBackend = c.HTTPBackend
+	c.XrayFallbackBackend = c.HTTPBackend
 }
 
 func (c Config) Validate() error {

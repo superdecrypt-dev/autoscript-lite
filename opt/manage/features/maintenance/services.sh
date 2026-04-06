@@ -396,6 +396,7 @@ edge_runtime_status_menu() {
   hr
 
   local svc env_file provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 tls_backend_required
+  local xray_direct_backend xray_tls_backend xray_ws_backend xray_fallback_backend
   svc="$(edge_runtime_service_name)"
   env_file="$(edge_runtime_env_file)"
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
@@ -404,6 +405,10 @@ edge_runtime_status_menu() {
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
+  xray_direct_backend="$(edge_runtime_get_env EDGE_XRAY_DIRECT_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_tls_backend="$(edge_runtime_get_env EDGE_XRAY_TLS_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_ws_backend="$(edge_runtime_get_env EDGE_XRAY_WS_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_fallback_backend="$(edge_runtime_get_env EDGE_XRAY_FALLBACK_BACKEND 2>/dev/null || echo "${http_backend}")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   if edge_runtime_tls_backend_required "${provider}" "${active}"; then
@@ -417,12 +422,16 @@ edge_runtime_status_menu() {
   echo "Activate    : ${active}"
   echo "HTTP ports  : $(edge_runtime_ports_label "${http_ports}")"
   echo "TLS ports   : $(edge_runtime_ports_label "${tls_ports}")"
-  echo "HTTP backend: ${http_backend}"
+  echo "Nginx HTTP  : ${http_backend}"
   if [[ "${tls_backend_required}" == "true" ]]; then
-    echo "HTTPS b/e   : ${http_tls_backend}"
+    echo "Nginx HTTPS : ${http_tls_backend}"
   else
-    echo "HTTPS b/e   : ${http_tls_backend} (unused)"
+    echo "Nginx HTTPS : ${http_tls_backend} (unused)"
   fi
+  echo "Xray Direct : ${xray_direct_backend}"
+  echo "Xray TLS    : ${xray_tls_backend}"
+  echo "Xray WS     : ${xray_ws_backend}"
+  echo "Fallback    : ${xray_fallback_backend}"
   echo "Detect (ms) : ${detect_timeout}"
   echo "TLS on 80   : ${tls80}"
   hr
@@ -587,12 +596,17 @@ edge_runtime_info_menu() {
   hr
 
   local provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 cert_file key_file
+  local xray_direct_backend xray_tls_backend xray_ws_backend xray_fallback_backend
   provider="$(edge_runtime_get_env EDGE_PROVIDER 2>/dev/null || echo "none")"
   active="$(edge_runtime_get_env EDGE_ACTIVATE_RUNTIME 2>/dev/null || echo "false")"
   http_ports="$(edge_runtime_public_http_ports)"
   tls_ports="$(edge_runtime_public_tls_ports)"
   http_backend="$(edge_runtime_get_env EDGE_NGINX_HTTP_BACKEND 2>/dev/null || echo "127.0.0.1:18080")"
   http_tls_backend="$(edge_runtime_get_env EDGE_NGINX_TLS_BACKEND 2>/dev/null || echo "127.0.0.1:18443")"
+  xray_direct_backend="$(edge_runtime_get_env EDGE_XRAY_DIRECT_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_tls_backend="$(edge_runtime_get_env EDGE_XRAY_TLS_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_ws_backend="$(edge_runtime_get_env EDGE_XRAY_WS_BACKEND 2>/dev/null || echo "${http_backend}")"
+  xray_fallback_backend="$(edge_runtime_get_env EDGE_XRAY_FALLBACK_BACKEND 2>/dev/null || echo "${http_backend}")"
   detect_timeout="$(edge_runtime_get_env EDGE_HTTP_DETECT_TIMEOUT_MS 2>/dev/null || echo "250")"
   tls80="$(edge_runtime_get_env EDGE_CLASSIC_TLS_ON_80 2>/dev/null || echo "true")"
   cert_file="$(edge_runtime_get_env EDGE_TLS_CERT_FILE 2>/dev/null || echo "/opt/cert/fullchain.pem")"
@@ -601,12 +615,16 @@ edge_runtime_info_menu() {
   echo "Runtime Active  : ${active}"
   echo "Public HTTP     : $(edge_runtime_ports_label "${http_ports}")"
   echo "Public TLS      : $(edge_runtime_ports_label "${tls_ports}")"
-  echo "HTTP Backend    : ${http_backend}"
+  echo "Nginx HTTP      : ${http_backend}"
   if [[ "${provider}" == "nginx-stream" && "${active}" == "true" ]]; then
-    echo "HTTPS Backend   : ${http_tls_backend}"
+    echo "Nginx HTTPS     : ${http_tls_backend}"
   else
-    echo "HTTPS Backend   : ${http_tls_backend} (nginx-stream only)"
+    echo "Nginx HTTPS     : ${http_tls_backend} (nginx-stream only)"
   fi
+  echo "Xray Direct     : ${xray_direct_backend}"
+  echo "Xray TLS        : ${xray_tls_backend}"
+  echo "Xray WS         : ${xray_ws_backend}"
+  echo "Fallback        : ${xray_fallback_backend}"
   echo "Detect Timeout  : ${detect_timeout} ms"
   echo "Classic TLS :80 : ${tls80}"
   echo "TLS Cert        : ${cert_file}"
