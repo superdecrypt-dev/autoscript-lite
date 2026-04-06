@@ -79,18 +79,29 @@ func (t *XrayRuntimeSessionTracker) Stop() {
 
 func (t *XrayRuntimeSessionTracker) run() {
 	started := time.Now()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
+		select {
+		case <-t.done:
+			return
+		case <-timer.C:
+		}
+
 		resolved := t.update()
 		wait := t.heartbeat
 		if !resolved && time.Since(started) < startupResolveWindow {
 			wait = startupResolveInterval
 		}
-		select {
-		case <-t.done:
-			return
-		case <-time.After(wait):
+
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
 		}
+		timer.Reset(wait)
 	}
 }
 

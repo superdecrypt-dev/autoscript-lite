@@ -99,6 +99,8 @@ func (c *XraySpeedController) WaitForReady(transferred uint64) {
 		return
 	}
 	startedAt := time.Unix(0, c.startedAt.Load())
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if c.ready.Load() {
 			return
@@ -109,7 +111,7 @@ func (c *XraySpeedController) WaitForReady(transferred uint64) {
 		select {
 		case <-c.done:
 			return
-		case <-time.After(25 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 }
@@ -122,6 +124,8 @@ func (c *XraySpeedController) WaitForInitialPolicy(timeout time.Duration) {
 		timeout = initialResolveWait
 	}
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if c.ready.Load() || c.Username() != "" {
 			return
@@ -132,7 +136,7 @@ func (c *XraySpeedController) WaitForInitialPolicy(timeout time.Duration) {
 		select {
 		case <-c.done:
 			return
-		case <-time.After(25 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 }

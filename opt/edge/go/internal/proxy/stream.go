@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+const bridgeBufferSize = 32 * 1024
+
+var bridgeBufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, bridgeBufferSize)
+	},
+}
+
 type BridgeStats struct {
 	LeftToRight uint64
 	RightToLeft uint64
@@ -39,6 +47,9 @@ func BridgeWithStatsAndOptions(left net.Conn, right net.Conn, leftToRightPrefix 
 	copyOne := func(dst net.Conn, src net.Conn, prefix []byte, counter *uint64, limiter RateProvider) {
 		defer wg.Done()
 		var throttle paceLimiter
+		buf := bridgeBufferPool.Get().([]byte)
+		buf = buf[:bridgeBufferSize]
+		defer bridgeBufferPool.Put(buf)
 		if len(prefix) > 0 {
 			throttle.Gate(uint64(len(prefix)), limiter)
 			n, err := dst.Write(prefix)
@@ -51,7 +62,6 @@ func BridgeWithStatsAndOptions(left net.Conn, right net.Conn, leftToRightPrefix 
 				return
 			}
 		}
-		buf := make([]byte, 32*1024)
 		for {
 			nr, er := src.Read(buf)
 			if nr > 0 {
