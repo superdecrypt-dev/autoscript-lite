@@ -186,6 +186,114 @@ install_extra_deps() {
   ensure_nodejs_runtime_for_account_portal
 }
 
+legacy_runtime_unit_patterns() {
+  printf '%s\n' \
+    'badvpn*' \
+    'openvpn*' \
+    'sshws*' \
+    'dropbear*' \
+    'stunnel*' \
+    'zivpn*'
+}
+
+legacy_runtime_package_names() {
+  printf '%s\n' \
+    dropbear \
+    dropbear-bin \
+    easy-rsa \
+    openvpn \
+    stunnel4
+}
+
+legacy_runtime_list_installed_packages() {
+  local pkg=""
+  while IFS= read -r pkg; do
+    [[ -n "${pkg}" ]] || continue
+    dpkg-query -W -f='${Status}\n' "${pkg}" 2>/dev/null | grep -qx 'install ok installed' || continue
+    printf '%s\n' "${pkg}"
+  done < <(legacy_runtime_package_names)
+}
+
+legacy_runtime_list_units() {
+  local pattern=""
+  while IFS= read -r pattern; do
+    [[ -n "${pattern}" ]] || continue
+    systemctl list-unit-files --plain --no-legend "${pattern}" 2>/dev/null | awk 'NF { print $1 }' || true
+    systemctl list-units --all --plain --no-legend "${pattern}" 2>/dev/null | awk 'NF { print $1 }' || true
+  done < <(legacy_runtime_unit_patterns) | sort -u
+}
+
+legacy_runtime_list_active_units() {
+  local pattern=""
+  while IFS= read -r pattern; do
+    [[ -n "${pattern}" ]] || continue
+    systemctl list-units --all --plain --no-legend "${pattern}" 2>/dev/null \
+      | awk '$3 == "active" { print $1 }' || true
+  done < <(legacy_runtime_unit_patterns) | sort -u
+}
+
+cleanup_legacy_runtime_services() {
+  local unit="" unit_file="" removed_unit_file=0 failed=0 pkg=""
+  local -a units=()
+  local -a installed_packages=()
+  local -a custom_unit_files=(
+    /etc/systemd/system/badvpn-udpgw.service
+    /etc/systemd/system/openvpn-speed-reconcile.path
+    /etc/systemd/system/openvpn-speed-reconcile.service
+    /etc/systemd/system/openvpn-speed.service
+    /etc/systemd/system/sshws-dropbear.service
+    /etc/systemd/system/sshws-proxy.service
+    /etc/systemd/system/sshws-qac-enforcer.service
+    /etc/systemd/system/sshws-qac-enforcer.timer
+    /etc/systemd/system/sshws-stunnel.service
+    /etc/systemd/system/zivpn.service
+  )
+
+  mapfile -t units < <(legacy_runtime_list_units)
+  mapfile -t installed_packages < <(legacy_runtime_list_installed_packages)
+  if [[ "${#units[@]}" -eq 0 && "${#installed_packages[@]}" -eq 0 ]]; then
+    ok "Runtime legacy host tidak ditemukan."
+    return 0
+  fi
+
+  ok "Bersihkan runtime legacy host..."
+  for unit in "${units[@]}"; do
+    [[ -n "${unit}" ]] || continue
+    systemctl disable --now "${unit}" >/dev/null 2>&1 || systemctl stop "${unit}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${unit}" >/dev/null 2>&1 || true
+  done
+
+  for unit_file in "${custom_unit_files[@]}"; do
+    [[ -e "${unit_file}" ]] || continue
+    rm -f -- "${unit_file}"
+    removed_unit_file=1
+  done
+  if [[ "${removed_unit_file}" -eq 1 ]]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  if [[ "${#installed_packages[@]}" -gt 0 ]]; then
+    ok "Purge paket legacy host..."
+    export DEBIAN_FRONTEND=noninteractive
+    ensure_dpkg_consistent
+    apt_get_with_lock_retry purge -y "${installed_packages[@]}" || die "Gagal purge paket legacy host."
+    apt_get_with_lock_retry autoremove -y >/dev/null 2>&1 || true
+    for pkg in "${installed_packages[@]}"; do
+      systemctl reset-failed "${pkg}.service" >/dev/null 2>&1 || true
+    done
+  fi
+
+  while IFS= read -r unit; do
+    [[ -n "${unit}" ]] || continue
+    warn "Runtime legacy masih aktif: ${unit}"
+    systemctl status "${unit}" --no-pager >&2 || true
+    failed=1
+  done < <(legacy_runtime_list_active_units)
+
+  [[ "${failed}" -eq 0 ]] || die "Masih ada runtime legacy aktif setelah cleanup."
+  ok "Runtime legacy host dibersihkan."
+}
+
 install_speedtest_snap() {
   ok "Install speedtest via snap..."
 

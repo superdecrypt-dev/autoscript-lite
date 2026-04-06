@@ -4,7 +4,7 @@
 
 sanity_check() {
   local failed=0
-  local edge_provider edge_active edge_runtime_service warp_runtime_mode
+  local edge_provider edge_active edge_runtime_service warp_runtime_mode legacy_unit
   edge_provider="${EDGE_PROVIDER:-none}"
   edge_active="${EDGE_ACTIVATE_RUNTIME:-false}"
   warp_runtime_mode="$(cloudflare_warp_mode_state_get 2>/dev/null || true)"
@@ -112,6 +112,13 @@ sanity_check() {
     journalctl -u "${ACCOUNT_PORTAL_SERVICE}.service" -n 120 --no-pager >&2 || true
     failed=1
   fi
+
+  while IFS= read -r legacy_unit; do
+    [[ -n "${legacy_unit}" ]] || continue
+    warn "check: runtime legacy masih aktif (${legacy_unit})"
+    systemctl status "${legacy_unit}" --no-pager >&2 || true
+    failed=1
+  done < <(legacy_runtime_list_active_units 2>/dev/null || true)
 
   if [[ "${edge_provider}" != "none" ]]; then
     case "${edge_provider}" in

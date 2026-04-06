@@ -162,6 +162,7 @@ setup_run_step() {
 setup_post_domain_main() {
   setup_run_step "Validasi Python" need_python3
   setup_run_step "Install dependency tambahan" install_extra_deps
+  setup_run_step "Bersihkan runtime legacy" cleanup_legacy_runtime_services
   setup_run_step "Install speedtest" install_speedtest_snap
   setup_run_step "Aktifkan cron" enable_cron_service
   setup_run_step "Aktifkan chrony" setup_time_sync_chrony
