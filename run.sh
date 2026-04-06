@@ -9,7 +9,7 @@ export PATH
 
 # ============================================================
 # run.sh — Installer otomatis Xray VPN Server
-# Repo: https://github.com/superdecrypt-dev/autoscript
+# Repo: https://github.com/superdecrypt-dev/autoscript-lite
 # ============================================================
 
 # -------------------------
@@ -17,7 +17,7 @@ export PATH
 # -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_USE_LOCAL_SOURCE="${RUN_USE_LOCAL_SOURCE:-0}"
-REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript.git}"
+REPO_URL="${REPO_URL:-https://github.com/superdecrypt-dev/autoscript-lite.git}"
 REPO_DEFAULT_BRANCH="${REPO_DEFAULT_BRANCH:-main}"
 REPO_REF="${REPO_REF:-}"
 REPO_DIR="${REPO_DIR:-/opt/autoscript}"
@@ -68,7 +68,6 @@ RUN_FALLBACK_REQUIRED_FILES=(
   "opt/manage/core/license.sh"
   "opt/manage/features/maintenance/security.sh"
   "opt/manage/features/maintenance/tools.sh"
-  "opt/manage/features/maintenance/runtime_services.sh"
   "opt/manage/features/backup.sh"
   "opt/manage/menus/maintenance_menu.sh"
   "opt/manage/menus/main_menu.sh"

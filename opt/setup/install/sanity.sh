@@ -89,10 +89,9 @@ sanity_check() {
   if systemctl is-active --quiet "${adblock_dns_service}"; then
     ok "check: dns adblock active"
   else
-    warn "check: dns adblock inactive"
+    warn "check: dns adblock inactive (opsional)"
     systemctl status "${adblock_dns_service}" --no-pager >&2 || true
     journalctl -u "${adblock_dns_service}" -n 120 --no-pager >&2 || true
-    failed=1
   fi
 
   if systemctl is-active --quiet xray-domain-guard.timer; then

@@ -120,7 +120,7 @@ GATEWAY_SERVICE="bot-telegram-gateway"
 MONITOR_SERVICE="bot-telegram-monitor"
 
 SRC_OWNER="${BOT_SOURCE_OWNER:-superdecrypt-dev}"
-SRC_REPO="${BOT_SOURCE_REPO:-autoscript}"
+SRC_REPO="${BOT_SOURCE_REPO:-autoscript-lite}"
 SRC_REF="${BOT_SOURCE_REF:-main}"
 SRC_ARCHIVE_DEFAULT_URL="https://github.com/${SRC_OWNER}/${SRC_REPO}/raw/${SRC_REF}/bot_telegram.zip"
 SRC_ARCHIVE_URL="${BOT_SOURCE_ARCHIVE_URL:-${SRC_ARCHIVE_DEFAULT_URL}}"

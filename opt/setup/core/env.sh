@@ -147,7 +147,7 @@ ACME_SH_SCRIPT_URL="https://raw.githubusercontent.com/acmesh-official/acme.sh/${
 
 # Paths for manage/setup modules
 MANAGE_MODULES_DST_DIR="/opt/manage"
-MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript/main/manage_bundle.zip}"
+MANAGE_BUNDLE_URL="${MANAGE_BUNDLE_URL:-https://raw.githubusercontent.com/superdecrypt-dev/autoscript-lite/main/manage_bundle.zip}"
 MANAGE_BIN="${MANAGE_BIN:-/usr/local/bin/manage}"
 MANAGE_FALLBACK_MODULES_DST_DIR="${MANAGE_FALLBACK_MODULES_DST_DIR:-/usr/local/lib/autoscript-manage/opt/manage}"
 ACCOUNT_PORTAL_ROOT="${ACCOUNT_PORTAL_ROOT:-/opt/account-portal}"
