@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -373,6 +374,8 @@ func (l *reloadableListener) Healthy() bool {
 }
 
 func (l *reloadableListener) Accept(ctx context.Context) (net.Conn, error) {
+	ticker := time.NewTicker(reloadableListenerRetryDelay)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -392,7 +395,7 @@ func (l *reloadableListener) Accept(ctx context.Context) (net.Conn, error) {
 			if result.conn != nil {
 				return result.conn, nil
 			}
-		case <-time.After(reloadableListenerRetryDelay):
+		case <-ticker.C:
 			if l.allListenersInactive() {
 				return nil, errNoActiveListeners
 			}
@@ -489,6 +492,8 @@ func (l *reloadableListener) Close() error {
 
 func (l *reloadableListener) serveAcceptLoop(addr string, ln net.Listener) {
 	go func() {
+		ticker := time.NewTicker(reloadableListenerRetryDelay)
+		defer ticker.Stop()
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
@@ -506,7 +511,7 @@ func (l *reloadableListener) serveAcceptLoop(addr string, ln net.Listener) {
 				}
 				l.deliverAcceptError(err)
 				select {
-				case <-time.After(reloadableListenerRetryDelay):
+				case <-ticker.C:
 				case <-l.closeCh:
 					return
 				}
@@ -844,31 +849,23 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 			collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
 			speedCtl.WaitForReady(stats.LeftToRight + stats.RightToLeft)
 			accounting.RecordXrayQuota(logger, quotaCfg, speedCtl.Username(), tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
-			if err != nil {
+			if shouldLogBridgeError(err) {
 				collector.ObserveBridgeError(contextLabel)
 				logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
+			} else if err != nil {
+				collector.ObserveBridgeError(contextLabel)
 			}
 			return
 		}
 	}
 
-	var sessionTracker *accounting.XrayRuntimeSessionTracker
-	if target == cfg.XrayDirectBackendAddr() {
-		quotaCfg := xrayQuotaConfig(cfg)
-		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
-			sessionTracker = accounting.NewXrayRuntimeSessionTracker(logger, quotaCfg, tcpAddr.Port, safeRemote(left), contextLabel, nil)
-			if sessionTracker != nil {
-				sessionTracker.Start()
-				defer sessionTracker.Stop()
-			}
-		}
-	}
-
 	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
 	collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
-	if err != nil {
+	if shouldLogBridgeError(err) {
 		collector.ObserveBridgeError(contextLabel)
 		logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
+	} else if err != nil {
+		collector.ObserveBridgeError(contextLabel)
 	}
 }
 
@@ -1021,7 +1018,6 @@ func handleHTTPPortConn(logger *log.Logger, cfg runtime.Config, tlsServer *tlsmu
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassPossibleHTTP:
-		logger.Printf("edge-mux http port timed out with partial http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	default:
@@ -1093,7 +1089,6 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		bridgeToBackend(logger, cfg, collector, health, conn, decision.Backend, initial, decision.Context, true)
 		return
 	case detect.ClassPossibleHTTP:
-		logger.Printf("edge-mux tls port timed out with partial plaintext http request from %s", safeRemote(conn))
 		_ = writeHTTPError(conn, 408, "Request Timeout")
 		return
 	case detect.ClassVLESSRaw:
@@ -1120,13 +1115,11 @@ func handleTLSPortConn(logger *log.Logger, cfg runtime.Config, server *tlsmux.Se
 		event := routeDecisionEvent(cfg, health, class, "", "reject-timeout", "", "", "", "", "unsupported_partial_non_tls", 0, "detect", "")
 		event.Surface = "tls-port"
 		emitRouteDecision(logger, collector, conn, event)
-		logger.Printf("edge-mux tls port rejected partial unsupported payload from %s", safeRemote(conn))
 		return
 	default:
 		event := routeDecisionEvent(cfg, health, class, "", "reject-unknown", "", "", "", "", "unsupported_non_tls", 0, "detect", "")
 		event.Surface = "tls-port"
 		emitRouteDecision(logger, collector, conn, event)
-		logger.Printf("edge-mux tls port rejected unsupported payload from %s", safeRemote(conn))
 		return
 	}
 }
@@ -1143,7 +1136,6 @@ func handleTLSPayloadConn(logger *log.Logger, cfg runtime.Config, collector *obs
 	sni := negotiatedSNI(tlsConn)
 	decision := decideTLSPayloadRoute(cfg, surface, initial, class, alpn, sni, remoteIsLoopback(tlsConn))
 	if decision.status == 408 {
-		logger.Printf("edge-mux tls request timed out with partial http request from %s", safeRemote(tlsConn))
 		_ = writeHTTPError(tlsConn, 408, "Request Timeout")
 		return
 	}
@@ -1186,7 +1178,7 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 
 	decision := tlsRouteDecision{
 		target:       cfg.XrayDirectBackendAddr(),
-		contextLabel: fmt.Sprintf("%s:default", surface),
+		contextLabel: routeContextLabel(surface, "default"),
 		route:        "unknown",
 		routeSource:  "detect",
 	}
@@ -1207,21 +1199,21 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 	case detect.ClassTimeout:
 		decision.target = ""
 		decision.route = "reject-timeout"
-		decision.contextLabel = fmt.Sprintf("%s:reject-timeout", surface)
+		decision.contextLabel = routeContextLabel(surface, "reject-timeout")
 		decision.reason = "Request Timeout"
 		decision.status = 408
 	case detect.ClassVLESSRaw:
 		decision.target = cfg.VLESSRawBackendAddr()
 		decision.route = "vless-tcp"
-		decision.contextLabel = fmt.Sprintf("%s:vless-tcp", surface)
+		decision.contextLabel = routeContextLabel(surface, "vless-tcp")
 	case detect.ClassTrojanRaw:
 		decision.target = cfg.TrojanRawBackendAddr()
 		decision.route = "trojan-tcp"
-		decision.contextLabel = fmt.Sprintf("%s:trojan-tcp", surface)
+		decision.contextLabel = routeContextLabel(surface, "trojan-tcp")
 	default:
 		decision.target = ""
 		decision.route = "reject-unknown"
-		decision.contextLabel = fmt.Sprintf("%s:reject-unknown", surface)
+		decision.contextLabel = routeContextLabel(surface, "reject-unknown")
 		decision.reason = "Bad Request"
 		decision.status = 400
 	}
@@ -1236,7 +1228,7 @@ func resolveSNIRouteDecision(cfg runtime.Config, sni, surface string) (tlsRouteD
 	routeSuffix := strings.ReplaceAll(alias, "_", "-")
 	decision := tlsRouteDecision{
 		route:        "sni-" + routeSuffix,
-		contextLabel: fmt.Sprintf("%s:sni-%s", surface, routeSuffix),
+		contextLabel: routeContextLabel(surface, "sni-"+routeSuffix),
 		routeSource:  "sni",
 		matchedRoute: alias,
 		reason:       "sni_match",
@@ -1269,7 +1261,7 @@ func resolveSNIPassthroughDecision(cfg runtime.Config, sni, surface string) (tls
 	}
 	return tlsRouteDecision{
 		target:       target,
-		contextLabel: fmt.Sprintf("%s:sni-passthrough", surface),
+		contextLabel: routeContextLabel(surface, "sni-passthrough"),
 		route:        "sni-passthrough",
 		routeSource:  "passthrough",
 		reason:       "sni_passthrough",
@@ -1409,8 +1401,16 @@ func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, s
 	} else if alpn == "h2" {
 		decision.Route = "http2"
 	}
-	decision.Context = fmt.Sprintf("%s:http:%s", surface, decision.Route)
+	decision.Context = routeHTTPContextLabel(surface, decision.Route)
 	return decision
+}
+
+func routeContextLabel(surface, suffix string) string {
+	return surface + ":" + suffix
+}
+
+func routeHTTPContextLabel(surface, route string) string {
+	return surface + ":http:" + route
 }
 
 func remoteIsLoopback(conn net.Conn) bool {
@@ -1488,6 +1488,26 @@ func safeRemote(conn net.Conn) string {
 		return "-"
 	}
 	return conn.RemoteAddr().String()
+}
+
+func shouldLogBridgeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "use of closed network connection"):
+		return false
+	case strings.Contains(text, "broken pipe"):
+		return false
+	case strings.Contains(text, "connection reset by peer"):
+		return false
+	default:
+		return true
+	}
 }
 
 func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendHealthSnapshot {

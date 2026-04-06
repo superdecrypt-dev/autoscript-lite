@@ -36,11 +36,11 @@ const (
 )
 
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
-	lines := bytes.Split(initial, []byte{'\n'})
-	if len(lines) == 0 {
+	requestLineRaw, rest, ok := nextHeaderLine(initial)
+	if !ok {
 		return HTTPRequest{}, false
 	}
-	requestLine := strings.TrimSpace(strings.TrimRight(string(lines[0]), "\r"))
+	requestLine := trimHTTPLine(string(requestLineRaw))
 	fields := strings.Fields(requestLine)
 	if len(fields) < 3 {
 		return HTTPRequest{}, false
@@ -55,8 +55,13 @@ func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
 		req.Path = "/"
 		return req, true
 	}
-	for _, raw := range lines[1:] {
-		line := strings.TrimSpace(strings.TrimRight(string(raw), "\r"))
+	for len(rest) > 0 {
+		raw, next, ok := nextHeaderLine(rest)
+		if !ok {
+			break
+		}
+		rest = next
+		line := trimHTTPLine(string(raw))
 		if line == "" {
 			break
 		}
@@ -76,6 +81,20 @@ func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
 		}
 	}
 	return req, true
+}
+
+func nextHeaderLine(b []byte) ([]byte, []byte, bool) {
+	if len(b) == 0 {
+		return nil, nil, false
+	}
+	if idx := bytes.IndexByte(b, '\n'); idx >= 0 {
+		return b[:idx], b[idx+1:], true
+	}
+	return b, nil, true
+}
+
+func trimHTTPLine(line string) string {
+	return strings.TrimSpace(strings.TrimRight(line, "\r"))
 }
 
 func RouteLabel(req HTTPRequest, alpn string) string {

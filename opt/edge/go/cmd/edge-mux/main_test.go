@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -230,6 +231,27 @@ func TestReloadableListenerMarksNonRetryableAcceptErrorInactive(t *testing.T) {
 	})
 	if got := listener.ActiveAddrs(); len(got) != 0 {
 		t.Fatalf("ActiveAddrs() = %v, want empty after non-retryable accept error", got)
+	}
+}
+
+func TestShouldLogBridgeErrorSuppressesBenignNetworkCloses(t *testing.T) {
+	cases := []error{
+		io.EOF,
+		net.ErrClosed,
+		errors.New("write tcp 127.0.0.1:1->127.0.0.1:2: use of closed network connection"),
+		errors.New("write tcp 127.0.0.1:1->127.0.0.1:2: broken pipe"),
+		errors.New("read tcp 127.0.0.1:1->127.0.0.1:2: connection reset by peer"),
+	}
+	for _, err := range cases {
+		if shouldLogBridgeError(err) {
+			t.Fatalf("shouldLogBridgeError(%v) = true, want false", err)
+		}
+	}
+}
+
+func TestShouldLogBridgeErrorKeepsUnexpectedErrors(t *testing.T) {
+	if !shouldLogBridgeError(errors.New("dial timeout")) {
+		t.Fatalf("shouldLogBridgeError(unexpected) = false, want true")
 	}
 }
 
