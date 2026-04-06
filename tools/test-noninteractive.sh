@@ -76,6 +76,9 @@ python_compile_files "${PYTHON_FILES[@]}"
 log "Python gate: Telegram bot"
 bash bot-telegram/scripts/gate-all.sh
 
+log "Shell test: adblock upgrade"
+bash tools/test-adblock-upgrade.sh
+
 if [[ -f "opt/edge/go/go.mod" ]]; then
   if need_cmd go; then
     log "Go test: edge"
