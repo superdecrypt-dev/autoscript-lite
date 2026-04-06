@@ -14,7 +14,6 @@ dengan shared public port `80` dan `443`.
 - `edge-mux` saat ini memegang publik `80/443`.
 - `nginx` berjalan di backend internal `127.0.0.1:18080`.
 - `nginx-stream` tersedia sebagai opsi experimental/non-default.
-- binary `wsproxy` masih dipertahankan sebagai helper runtime terpisah untuk jalur WebSocket control/session.
 
 ## Provider yang direncanakan
 

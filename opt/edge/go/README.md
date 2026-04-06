@@ -22,8 +22,6 @@ Binary `edge-mux` akan:
 
 - `cmd/edge-mux/`
   - entrypoint binary
-- `cmd/wsproxy/`
-  - helper WebSocket runtime untuk jalur session/control yang masih dipakai host
 - `internal/detect/`
   - deteksi awal traffic
 - `internal/proxy/`
