@@ -1,0 +1,13 @@
+[Unit]
+Description=Xray session tracker (runtime session state)
+After=network-online.target xray.service edge-mux.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xray-session watch --window-seconds 300 --prune-interval 15
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

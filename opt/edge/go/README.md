@@ -48,7 +48,7 @@ Binary `edge-mux` akan:
 - hot reload `cert/config` via `SIGHUP`
 - route map `EDGE_SNI_ROUTES` dan `EDGE_SNI_PASSTHROUGH` ikut hot reload tanpa restart penuh
 - hardening anti-abuse dasar
-- parity session runtime untuk jalur direct/TLS yang masih dipakai edge
+- observability dan health backend untuk jalur ingress aktif
 
 ## Endpoint Lokal
 

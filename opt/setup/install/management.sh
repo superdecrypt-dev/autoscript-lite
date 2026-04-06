@@ -2041,6 +2041,7 @@ if __name__ == "__main__":
 
 EOF
   chmod +x /usr/local/bin/xray-quota
+  install_setup_bin_or_die "xray-session.py" "/usr/local/bin/xray-session" 0755
   local backup_manage_src="${SETUP_BIN_SRC_DIR:-${SCRIPT_DIR}/opt/setup/bin}/backup-manage.py"
   if [[ -f "${backup_manage_src}" ]]; then
     install -d -m 0755 /usr/local/bin
@@ -2066,6 +2067,11 @@ EOF
     "/etc/systemd/system/xray-quota.service" \
     0644
 
+  render_setup_template_or_die \
+    "systemd/xray-session.service" \
+    "/etc/systemd/system/xray-session.service" \
+    0644
+
   systemctl daemon-reload
   if ! service_enable_restart_checked xray-expired; then
     journalctl -u xray-expired -n 120 --no-pager >&2 || true
@@ -2079,12 +2085,17 @@ EOF
     journalctl -u xray-quota -n 120 --no-pager >&2 || true
     die "xray-quota gagal diaktifkan. Cek log di atas."
   fi
+  if ! service_enable_restart_checked xray-session; then
+    journalctl -u xray-session -n 120 --no-pager >&2 || true
+    die "xray-session gagal diaktifkan. Cek log di atas."
+  fi
 
   ok "Tools runtime siap:"
   ok "  - /usr/local/bin/xray-expired (service: xray-expired)"
   ok "  - /usr/local/bin/limit-ip     (service: xray-limit-ip)"
   ok "  - /usr/local/bin/user-block   (CLI)"
   ok "  - /usr/local/bin/xray-quota    (service: xray-quota)"
+  ok "  - /usr/local/bin/xray-session  (service: xray-session)"
   ok "  - /usr/local/bin/backup-manage (CLI local/cloud backup)"
 }
 

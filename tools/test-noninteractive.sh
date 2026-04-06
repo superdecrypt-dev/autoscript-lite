@@ -79,6 +79,9 @@ bash bot-telegram/scripts/gate-all.sh
 log "Shell test: adblock upgrade"
 bash tools/test-adblock-upgrade.sh
 
+log "Shell test: xray session"
+bash tools/test-xray-session.sh
+
 log "Shell test: edge dist"
 bash tools/test-edge-dist.sh
 
