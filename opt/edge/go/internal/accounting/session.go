@@ -138,15 +138,6 @@ func (t *XrayRuntimeSessionTracker) resolveUsername() string {
 			return user
 		}
 	}
-	if t.localPort > 0 {
-		user, err := ResolveXrayUsernameByRuntimePort(t.cfg.RuntimeUnit, t.localPort)
-		if err == nil {
-			return normalizeUser(user)
-		}
-		if err != nil && t.logger != nil {
-			t.logger.Printf("edge-mux session resolve failed port=%d: %v", t.localPort, err)
-		}
-	}
 	return ""
 }
 

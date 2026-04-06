@@ -7,14 +7,12 @@ import (
 )
 
 const (
-	defaultResolveAttempts = 100
-	defaultResolveDelay    = 100 * time.Millisecond
 	defaultRefreshInterval = 2 * time.Second
 	initialResolveWait     = 1500 * time.Millisecond
 	warmupFreeBytes        = 64 * 1024
-	// Allow enough time for auth logs to become visible so the first post-auth
-	// payload does not escape shaping almost entirely on short-lived
-	// xray-direct sessions.
+	// Allow enough time for an upstream username resolver to populate the
+	// controller before short-lived xray-direct sessions finish completely
+	// unshaped.
 	warmupMaxWait = 8 * time.Second
 )
 
@@ -84,6 +82,15 @@ func (c *XraySpeedController) Username() string {
 	return ""
 }
 
+func (c *XraySpeedController) SetUsername(username string) {
+	if c == nil {
+		return
+	}
+	if user := normalizeUser(username); user != "" {
+		c.user.Store(user)
+	}
+}
+
 func (c *XraySpeedController) WaitForReady(transferred uint64) {
 	if c == nil || c.ready.Load() {
 		return
@@ -133,7 +140,6 @@ func (c *XraySpeedController) WaitForInitialPolicy(timeout time.Duration) {
 func (c *XraySpeedController) run() {
 	ticker := time.NewTicker(defaultRefreshInterval)
 	defer ticker.Stop()
-	attempts := 0
 	for {
 		select {
 		case <-c.done:
@@ -143,31 +149,12 @@ func (c *XraySpeedController) run() {
 
 		username := c.Username()
 		if username == "" {
-			if attempts < defaultResolveAttempts {
-				if resolved, err := ResolveXrayUsernameByRuntimePort(c.cfg.RuntimeUnit, c.localPort); err == nil && resolved != "" {
-					c.user.Store(resolved)
-					username = resolved
-				} else if err != nil && c.logger != nil {
-					c.logger.Printf("edge-mux speed resolve failed port=%d: %v", c.localPort, err)
-				}
-				attempts++
-				if username == "" {
-					select {
-					case <-c.done:
-						return
-					case <-time.After(defaultResolveDelay):
-					}
-					continue
-				}
+			select {
+			case <-c.done:
+				return
+			case <-ticker.C:
 			}
-			if username == "" {
-				select {
-				case <-c.done:
-					return
-				case <-ticker.C:
-				}
-				continue
-			}
+			continue
 		}
 
 		policy, err := LoadXraySpeedPolicy(c.cfg.StateRoot, username)

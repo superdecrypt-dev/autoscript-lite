@@ -867,12 +867,6 @@ func bridgeToBackend(logger *log.Logger, cfg runtime.Config, collector *observab
 
 	stats, err = proxy.BridgeWithStats(left, backend, leftPrefix, nil)
 	collector.ObserveBridgeBytes(contextLabel, stats.LeftToRight, stats.RightToLeft)
-	if target == cfg.XrayDirectBackendAddr() {
-		quotaCfg := xrayQuotaConfig(cfg)
-		if tcpAddr, ok := backend.LocalAddr().(*net.TCPAddr); ok {
-			accounting.RecordXrayQuotaByLocalPort(logger, quotaCfg, tcpAddr.Port, stats.LeftToRight+stats.RightToLeft)
-		}
-	}
 	if err != nil {
 		collector.ObserveBridgeError(contextLabel)
 		logger.Printf("edge-mux bridge error target=%s context=%s: %v", target, contextLabel, err)
@@ -1497,7 +1491,6 @@ func formatSNIBackendMap(routes map[string]string) string {
 func xrayQuotaConfig(cfg runtime.Config) accounting.XrayQuotaConfig {
 	return accounting.XrayQuotaConfig{
 		StateRoot:        cfg.XrayQuotaRoot,
-		RuntimeUnit:      cfg.XrayRuntimeUnit,
 		EnforcerPath:     cfg.XrayQACEnforcer,
 		SessionRoot:      cfg.XraySessionRoot,
 		SessionHeartbeat: cfg.XraySessionHeartbeat,

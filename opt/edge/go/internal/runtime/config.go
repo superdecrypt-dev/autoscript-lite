@@ -32,7 +32,6 @@ const (
 	defaultTLSOn80              = true
 	defaultTLSHandshakeTimeout  = 5 * time.Second
 	defaultXrayQuotaRoot        = "/opt/quota/xray"
-	defaultXrayRuntimeUnit      = "xray"
 	defaultXrayQACEnforcer      = "/usr/local/bin/true"
 	defaultXrayManageBin        = "/usr/local/bin/manage"
 	defaultXraySessionRoot      = "/run/autoscript/xray-edge-sessions"
@@ -83,7 +82,6 @@ type Config struct {
 	ClassicTLSOn80       bool
 	TLSHandshakeTimeout  time.Duration
 	XrayQuotaRoot        string
-	XrayRuntimeUnit      string
 	XrayQACEnforcer      string
 	XrayManageBin        string
 	XraySessionRoot      string
@@ -211,7 +209,6 @@ func LoadConfig() (Config, error) {
 		ClassicTLSOn80:       classicTLSOn80,
 		TLSHandshakeTimeout:  handshakeTimeout,
 		XrayQuotaRoot:        envString(source, "EDGE_XRAY_QUOTA_ROOT", defaultXrayQuotaRoot),
-		XrayRuntimeUnit:      envString(source, "EDGE_XRAY_RUNTIME_UNIT", defaultXrayRuntimeUnit),
 		XrayQACEnforcer:      envString(source, "EDGE_XRAY_QAC_ENFORCER", defaultXrayQACEnforcer),
 		XrayManageBin:        envString(source, "EDGE_XRAY_MANAGE_BIN", defaultXrayManageBin),
 		XraySessionRoot:      envString(source, "EDGE_XRAY_SESSION_ROOT", defaultXraySessionRoot),

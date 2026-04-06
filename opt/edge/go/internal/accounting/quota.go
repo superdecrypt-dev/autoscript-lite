@@ -1,7 +1,6 @@
 package accounting
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,27 +16,16 @@ import (
 
 type XrayQuotaConfig struct {
 	StateRoot        string
-	RuntimeUnit      string
 	EnforcerPath     string
 	SessionRoot      string
 	SessionHeartbeat time.Duration
 }
-
-var authLineRe = regexp.MustCompile(`(?:Password )?auth succeeded for '([^']+)' from 127\.0\.0\.1:(\d+)`)
 
 func RecordXrayQuota(logger *log.Logger, cfg XrayQuotaConfig, username string, localPort int, totalBytes uint64) {
 	if totalBytes == 0 {
 		return
 	}
 	resolved := normalizeUser(username)
-	if resolved == "" && localPort > 0 {
-		var err error
-		resolved, err = ResolveXrayUsernameByRuntimePort(cfg.RuntimeUnit, localPort)
-		if err != nil {
-			logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
-			return
-		}
-	}
 	if resolved == "" {
 		logger.Printf("edge-mux quota resolve empty port=%d", localPort)
 		return
@@ -49,49 +36,6 @@ func RecordXrayQuota(logger *log.Logger, cfg XrayQuotaConfig, username string, l
 	}
 	logger.Printf("edge-mux quota updated user=%s bytes=%d port=%d", resolved, totalBytes, localPort)
 	triggerEnforcer(logger, cfg.EnforcerPath, resolved)
-}
-
-func RecordXrayQuotaByLocalPort(logger *log.Logger, cfg XrayQuotaConfig, localPort int, totalBytes uint64) {
-	RecordXrayQuota(logger, cfg, "", localPort, totalBytes)
-}
-
-func ResolveXrayUsernameByRuntimePort(unit string, localPort int) (string, error) {
-	portText := strconv.Itoa(localPort)
-	if username := scanAuthOutput(runCmd("journalctl", "-u", unit, "--no-pager", "-n", "2000"), portText); username != "" {
-		return username, nil
-	}
-	if username := scanAuthOutput(runCmd("tail", "-n", "5000", "/var/log/auth.log"), portText); username != "" {
-		return username, nil
-	}
-	return "", nil
-}
-
-func runCmd(name string, args ...string) []byte {
-	out, err := exec.Command(name, args...).Output()
-	if err != nil {
-		return nil
-	}
-	return out
-}
-
-func scanAuthOutput(out []byte, portText string) string {
-	if len(out) == 0 || portText == "" {
-		return ""
-	}
-	var username string
-	s := bufio.NewScanner(strings.NewReader(string(out)))
-	for s.Scan() {
-		line := s.Text()
-		m := authLineRe.FindStringSubmatch(line)
-		if len(m) != 3 {
-			continue
-		}
-		if m[2] != portText {
-			continue
-		}
-		username = normalizeUser(m[1])
-	}
-	return username
 }
 
 func normalizeUser(v string) string {
