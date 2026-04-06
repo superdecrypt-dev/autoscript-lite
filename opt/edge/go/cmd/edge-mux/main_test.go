@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"net"
 	"sync"
 	"testing"
@@ -33,6 +34,32 @@ func TestReportFatalErrorSendsOnlyFirstError(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("unexpected extra fatal error reported: %v", err)
 	default:
+	}
+}
+
+func TestBindFlagOverridesAcceptsDeprecatedSSHBackendAlias(t *testing.T) {
+	fs := flag.NewFlagSet("edge-mux-test", flag.ContinueOnError)
+	var overrides flagOverrides
+	bindFlagOverrides(fs, &overrides)
+
+	if err := fs.Parse([]string{"--ssh-backend=127.0.0.1:22022"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if overrides.xrayDirectBackend != "127.0.0.1:22022" {
+		t.Fatalf("xrayDirectBackend = %q, want 127.0.0.1:22022", overrides.xrayDirectBackend)
+	}
+}
+
+func TestBindFlagOverridesAcceptsCanonicalXrayDirectBackendFlag(t *testing.T) {
+	fs := flag.NewFlagSet("edge-mux-test", flag.ContinueOnError)
+	var overrides flagOverrides
+	bindFlagOverrides(fs, &overrides)
+
+	if err := fs.Parse([]string{"--xray-direct-backend=127.0.0.1:22022"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if overrides.xrayDirectBackend != "127.0.0.1:22022" {
+		t.Fatalf("xrayDirectBackend = %q, want 127.0.0.1:22022", overrides.xrayDirectBackend)
 	}
 }
 

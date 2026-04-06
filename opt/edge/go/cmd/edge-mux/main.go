@@ -226,15 +226,23 @@ func main() {
 
 func parseFlagOverrides() flagOverrides {
 	var overrides flagOverrides
-	flag.StringVar(&overrides.httpListen, "http-listen", "", "public HTTP listen address")
-	flag.StringVar(&overrides.tlsListen, "tls-listen", "", "public TLS listen address")
-	flag.StringVar(&overrides.httpBackend, "http-backend", "", "internal HTTP backend address")
-	flag.StringVar(&overrides.xrayDirectBackend, "xray-direct-backend", "", "internal Xray direct backend address")
-	flag.StringVar(&overrides.certFile, "cert-file", "", "TLS certificate file")
-	flag.StringVar(&overrides.keyFile, "key-file", "", "TLS key file")
-	flag.IntVar(&overrides.timeoutMs, "detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
+	bindFlagOverrides(flag.CommandLine, &overrides)
 	flag.Parse()
 	return overrides
+}
+
+func bindFlagOverrides(fs *flag.FlagSet, overrides *flagOverrides) {
+	if fs == nil || overrides == nil {
+		return
+	}
+	fs.StringVar(&overrides.httpListen, "http-listen", "", "public HTTP listen address")
+	fs.StringVar(&overrides.tlsListen, "tls-listen", "", "public TLS listen address")
+	fs.StringVar(&overrides.httpBackend, "http-backend", "", "internal HTTP backend address")
+	fs.StringVar(&overrides.xrayDirectBackend, "xray-direct-backend", "", "internal Xray direct backend address")
+	fs.StringVar(&overrides.xrayDirectBackend, "ssh-backend", "", "deprecated alias for --xray-direct-backend")
+	fs.StringVar(&overrides.certFile, "cert-file", "", "TLS certificate file")
+	fs.StringVar(&overrides.keyFile, "key-file", "", "TLS key file")
+	fs.IntVar(&overrides.timeoutMs, "detect-timeout-ms", 0, "initial protocol detect timeout in milliseconds")
 }
 
 func (o flagOverrides) Apply(cfg *runtime.Config) {
