@@ -144,7 +144,7 @@ func (c *XraySpeedController) run() {
 		username := c.Username()
 		if username == "" {
 			if attempts < defaultResolveAttempts {
-				if resolved, err := ResolveXrayUsernameByLocalPort(c.cfg.DropbearUnit, c.localPort); err == nil && resolved != "" {
+				if resolved, err := ResolveXrayUsernameByRuntimePort(c.cfg.RuntimeUnit, c.localPort); err == nil && resolved != "" {
 					c.user.Store(resolved)
 					username = resolved
 				} else if err != nil && c.logger != nil {

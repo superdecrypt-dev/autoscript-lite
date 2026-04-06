@@ -28,4 +28,4 @@ Template aktif utama:
 - `systemd/xray-quota.service`
 - `systemd/xray-speed.service`
 
-Template legacy SSH/OpenVPN/BadVPN yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.
+Template legacy non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.

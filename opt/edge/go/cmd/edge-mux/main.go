@@ -1497,7 +1497,7 @@ func formatSNIBackendMap(routes map[string]string) string {
 func xrayQuotaConfig(cfg runtime.Config) accounting.XrayQuotaConfig {
 	return accounting.XrayQuotaConfig{
 		StateRoot:        cfg.XrayQuotaRoot,
-		DropbearUnit:     cfg.XrayRuntimeUnit,
+		RuntimeUnit:      cfg.XrayRuntimeUnit,
 		EnforcerPath:     cfg.XrayQACEnforcer,
 		SessionRoot:      cfg.XraySessionRoot,
 		SessionHeartbeat: cfg.XraySessionHeartbeat,

@@ -158,7 +158,7 @@ KEY_LAST_ACTION_TS = "last_action_ts"
 KEY_LAST_CLEANUP_TS = "last_cleanup_ts"
 KEY_QAC_SELECTIONS = "qac_selections"
 KEY_MENU_PARENT_PAGES = "menu_parent_pages"
-NON_SSH_SECRET_FIELD_IDS = frozenset(
+NON_EPHEMERAL_SECRET_FIELD_IDS = frozenset(
     {
         "client_id",
         "client_secret",
@@ -1112,7 +1112,7 @@ def _field_is_required(pending: dict, field: ActionSpec) -> bool:
     return False
 
 
-def _pending_non_ssh_secret_field(runtime: Runtime, pending: dict) -> bool:
+def _pending_non_ephemeral_secret_field(runtime: Runtime, pending: dict) -> bool:
     menu_id = str(pending.get("menu_id") or "").strip()
     action_id = str(pending.get("action_id") or "").strip()
     menu = runtime.catalog.get_menu(menu_id)
@@ -1123,7 +1123,7 @@ def _pending_non_ssh_secret_field(runtime: Runtime, pending: dict) -> bool:
     if idx < 0 or idx >= len(action.modal.fields):
         return False
     field_id = str(action.modal.fields[idx].id or "").strip()
-    return field_id in NON_SSH_SECRET_FIELD_IDS
+    return field_id in NON_EPHEMERAL_SECRET_FIELD_IDS
 
 
 async def _delete_message_quietly(message) -> None:
@@ -2141,7 +2141,7 @@ async def on_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.effective_message.reply_text(pending_err)
         return
 
-    delete_input_after_submit = _pending_non_ssh_secret_field(runtime, pending)
+    delete_input_after_submit = _pending_non_ephemeral_secret_field(runtime, pending)
     await _submit_pending_form_value(
         runtime=runtime,
         context=context,

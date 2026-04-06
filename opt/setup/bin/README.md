@@ -17,4 +17,4 @@ Komponen Go yang sekarang juga aktif:
 Catatan:
 - file di sini adalah source repo
 - saat provisioning, `setup.sh` menyalin/menaruhnya ke path runtime seperti `/usr/local/bin/...`
-- helper legacy SSH/OpenVPN/BadVPN yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini
+- helper legacy non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini

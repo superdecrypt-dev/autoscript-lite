@@ -975,7 +975,7 @@ security_overview_menu() {
     fi
   fi
 
-  local f2b_line banned ssh_line nginx_line rec_line
+  local f2b_line banned nginx_line rec_line
   if svc_is_active fail2ban 2>/dev/null; then
     f2b_line="Active"
   else
@@ -984,12 +984,6 @@ security_overview_menu() {
 
   banned="$(fail2ban_total_banned_get)"
   [[ -n "${banned}" ]] || banned="0"
-
-  if fail2ban_jail_active_bool sshd; then
-    ssh_line="Active"
-  else
-    ssh_line="Inactive"
-  fi
 
   if fail2ban_jail_active_bool nginx-bad-request-access || fail2ban_jail_active_bool nginx-bad-request-error; then
     nginx_line="Active"
@@ -1034,7 +1028,6 @@ security_overview_menu() {
   echo "TLS Expiry        : ${tls_line}"
   echo "Fail2ban          : ${f2b_line}"
   echo "Banned IP         : ${banned}"
-  echo "Access Protection : ${ssh_line}"
   echo "Nginx Protection  : ${nginx_line}"
   echo "Recidive          : ${rec_line}"
   echo "BBR               : ${bbr_line}"

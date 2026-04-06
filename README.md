@@ -2,7 +2,7 @@
 
 > Installer, runtime, dan panel operasional harian untuk stack `Xray-core`, `edge-mux`, `WARP`, dan bot `Telegram` di VPS Linux.
 
-`autoscript-lite` adalah varian yang hanya menyajikan layanan `Xray-core`. Repo ini tidak memuat surface installer, CLI, bot, atau dokumentasi operasional untuk `SSH WS`, `OpenVPN`, `BadVPN`, dan menu turunannya.
+`autoscript-lite` adalah varian yang hanya menyajikan layanan `Xray-core`. Repo ini tidak memuat surface installer, CLI, bot, atau dokumentasi operasional untuk protokol legacy non-Xray dan menu turunannya.
 
 Beberapa helper kompatibilitas internal masih tersisa untuk membaca state/runtime lama saat upgrade host lama ke snapshot terbaru. Itu bukan surface produk aktif dan tidak didokumentasikan sebagai fitur `lite`.
 

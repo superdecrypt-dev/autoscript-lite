@@ -50,7 +50,7 @@ def _decode_download_text(download_payload: dict[str, object]) -> str:
     try:
         text = base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
         text = re.sub(
-            r"(ZIVPN Password\s*:\s*[^\n]+?)\s*=== STANDARD PAYLOAD ===",
+            r"(Password\s*:\s*[^\n]+?)\s*=== STANDARD PAYLOAD ===",
             r"\1\n\n=== STANDARD PAYLOAD ===",
             text,
         )

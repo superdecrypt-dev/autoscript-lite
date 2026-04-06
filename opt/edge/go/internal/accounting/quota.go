@@ -18,7 +18,7 @@ import (
 
 type XrayQuotaConfig struct {
 	StateRoot        string
-	DropbearUnit     string
+	RuntimeUnit      string
 	EnforcerPath     string
 	SessionRoot      string
 	SessionHeartbeat time.Duration
@@ -33,7 +33,7 @@ func RecordXrayQuota(logger *log.Logger, cfg XrayQuotaConfig, username string, l
 	resolved := normalizeUser(username)
 	if resolved == "" && localPort > 0 {
 		var err error
-		resolved, err = ResolveXrayUsernameByLocalPort(cfg.DropbearUnit, localPort)
+		resolved, err = ResolveXrayUsernameByRuntimePort(cfg.RuntimeUnit, localPort)
 		if err != nil {
 			logger.Printf("edge-mux quota resolve failed port=%d: %v", localPort, err)
 			return
@@ -55,7 +55,7 @@ func RecordXrayQuotaByLocalPort(logger *log.Logger, cfg XrayQuotaConfig, localPo
 	RecordXrayQuota(logger, cfg, "", localPort, totalBytes)
 }
 
-func ResolveXrayUsernameByLocalPort(unit string, localPort int) (string, error) {
+func ResolveXrayUsernameByRuntimePort(unit string, localPort int) (string, error) {
 	portText := strconv.Itoa(localPort)
 	if username := scanAuthOutput(runCmd("journalctl", "-u", unit, "--no-pager", "-n", "2000"), portText); username != "" {
 		return username, nil

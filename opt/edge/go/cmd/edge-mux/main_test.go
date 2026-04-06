@@ -300,7 +300,7 @@ func TestDecideHTTPRouteUnauthorizedForUnknownWebSocket(t *testing.T) {
 	}
 }
 
-func TestDecideHTTPRouteKnownSSHWebSocketPathPassesThrough(t *testing.T) {
+func TestDecideHTTPRouteKnownWebSocketPathPassesThrough(t *testing.T) {
 	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
 	initial := []byte("GET /deadbeef00 HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 

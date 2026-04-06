@@ -43,7 +43,7 @@ Untuk perubahan menu atau flow yang terlihat user, verifikasi baik jalur repo lo
 
 ## Panduan Commit dan Pull Request
 
-Riwayat commit repo ini memakai subjek singkat berbentuk imperatif, misalnya `Fix OpenVPN QAC runtime sync and metadata drift` atau `Harden Telegram bot sensitive actions`. Ikuti pola itu: satu baris singkat, diawali aksi, dan jelas area perubahannya.
+Riwayat commit repo ini memakai subjek singkat berbentuk imperatif, misalnya `Fix Xray quota runtime sync` atau `Harden Telegram bot sensitive actions`. Ikuti pola itu: satu baris singkat, diawali aksi, dan jelas area perubahannya.
 
 PR harus menyertakan ringkasan perubahan, area yang terdampak, perintah test manual yang dijalankan, dan screenshot hanya jika output menu/Telegram berubah secara material.
 

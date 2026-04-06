@@ -139,7 +139,7 @@ func (t *XrayRuntimeSessionTracker) resolveUsername() string {
 		}
 	}
 	if t.localPort > 0 {
-		user, err := ResolveXrayUsernameByLocalPort(t.cfg.DropbearUnit, t.localPort)
+		user, err := ResolveXrayUsernameByRuntimePort(t.cfg.RuntimeUnit, t.localPort)
 		if err == nil {
 			return normalizeUser(user)
 		}

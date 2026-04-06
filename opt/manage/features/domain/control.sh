@@ -1204,7 +1204,7 @@ domain_control_refresh_account_info_now() {
     [[ -n "${target_country}" ]] || target_country="-"
   fi
   summary="$(account_info_refresh_targets_summary "${scope}" 5)"
-  IFS='|' read -r xray_count _ssh_count total_count xray_preview _ssh_preview <<<"${summary}"
+  IFS='|' read -r xray_count _legacy_count total_count xray_preview _legacy_preview <<<"${summary}"
 
   echo "Domain aktif : ${domain}"
   echo "IP aktif     : ${ip:-tidak terdeteksi}"

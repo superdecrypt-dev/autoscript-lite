@@ -1587,7 +1587,7 @@
     {
       "id": "46",
       "label": "Google Drive",
-      "description": "Google Drive:\n- cocok untuk backup pribadi\n- setup awal via OAuth, bisa dibantu bot atau SSH terminal VPS\n- paling nyaman untuk simpan arsip backup di Drive sendiri\n- restore penuh akan menimpa runtime aktif",
+      "description": "Google Drive:\n- cocok untuk backup pribadi\n- setup awal via OAuth, bisa dibantu bot atau terminal VPS\n- paling nyaman untuk simpan arsip backup di Drive sendiri\n- restore penuh akan menimpa runtime aktif",
       "hidden": true,
       "parent_menu": "45",
       "actions": [

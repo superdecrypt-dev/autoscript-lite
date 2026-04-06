@@ -8,7 +8,7 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Common Regex
-SSH_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
+SYSTEM_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{1,31}$")
 XRAY_WS_TOKEN_RE = re.compile(r"^[a-f0-9]{10}$")
 XRAY_WS_DIAGNOSTIC_TOKEN = "diagnostic-probe"
 

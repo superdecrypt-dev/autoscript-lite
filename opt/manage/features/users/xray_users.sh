@@ -2737,8 +2737,8 @@ domain_control_refresh_account_info_batches_run() {
   local ip="${2:-}"
   local scope="${3:-all}"
   local batch_limit="${4:-10}"
-  local summary="" xray_count=0 ssh_count=0 total_count=0
-  local xray_preview="" ssh_preview=""
+  local summary="" xray_count=0 legacy_count=0 total_count=0
+  local xray_preview="" legacy_preview=""
   local offset=0
 
   [[ "${batch_limit}" =~ ^[0-9]+$ ]] || batch_limit=10
@@ -2747,7 +2747,7 @@ domain_control_refresh_account_info_batches_run() {
   fi
 
   summary="$(account_info_refresh_targets_summary "${scope}" 1)"
-  IFS='|' read -r _xray_count _ssh_count total_count _xray_preview _ssh_preview <<<"${summary}"
+  IFS='|' read -r _xray_count _legacy_count total_count _xray_preview _legacy_preview <<<"${summary}"
   [[ "${total_count}" =~ ^[0-9]+$ ]] || total_count=0
   if (( total_count == 0 )); then
     return 0
