@@ -6,6 +6,12 @@
 
 Beberapa helper kompatibilitas internal masih tersisa untuk membaca state/runtime lama saat upgrade host lama ke snapshot terbaru. Itu bukan surface produk aktif dan tidak didokumentasikan sebagai fitur `lite`.
 
+## Status Biaya
+
+`autoscript-lite` dan source repo ini gratis untuk digunakan.
+
+Aktivasi lisensi IP VPS tetap menjadi bagian dari flow produk, tetapi dokumentasi ini menegaskan bahwa software/repo `autoscript-lite` sendiri tidak dijual berbayar.
+
 ## Sebelum Install
 
 Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:
@@ -82,6 +88,7 @@ Internet / Cloudflare
 | `VMess WS` | `443, 80` + alt port Cloudflare |
 | `VMess HUP` | `443, 80` + alt port Cloudflare |
 | `VMess gRPC` | `443, 80` + alt port Cloudflare |
+| `VMess TCP+TLS` | `443, 80` + alt port Cloudflare |
 | `Trojan XHTTP` | `443, 80` + alt port Cloudflare |
 | `Trojan WS` | `443, 80` + alt port Cloudflare |
 | `Trojan HUP` | `443, 80` + alt port Cloudflare |
