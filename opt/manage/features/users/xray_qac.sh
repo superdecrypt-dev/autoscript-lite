@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
+QUOTA_PAGE_SIZE="${QUOTA_PAGE_SIZE:-10}"
+QUOTA_PAGE="${QUOTA_PAGE:-0}"
+
 quota_collect_files() {
   QUOTA_FILES=()
   QUOTA_FILE_PROTOS=()
