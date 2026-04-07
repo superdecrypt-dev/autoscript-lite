@@ -183,6 +183,8 @@ if [[ -t 1 ]]; then
   UI_BOLD='\033[1m'
   UI_ACCENT='\033[0;36m'
   UI_OK='\033[0;32m'
+  UI_INFO='\033[1;34m'
+  UI_SECTION='\033[1;35m'
   UI_MUTED='\033[0;37m'
   UI_WARN='\033[1;33m'
   UI_ERR='\033[0;31m'
@@ -191,6 +193,8 @@ else
   UI_BOLD=''
   UI_ACCENT=''
   UI_OK=''
+  UI_INFO=''
+  UI_SECTION=''
   UI_MUTED=''
   UI_WARN=''
   UI_ERR=''
@@ -1993,15 +1997,15 @@ main_menu_info_header_print() {
   hr
   main_menu_center_line "$(ui_decorated_section_title "ACCOUNTS")"
   main_menu_center_segments \
-    "VLESS ${vless_count}" \
-    "VMESS ${vmess_count}" \
-    "TROJAN ${trojan_count}"
+    "$(printf '%bVLESS%b %b%s%b' "${UI_ACCENT}" "${UI_RESET}" "${UI_BOLD}" "${vless_count}" "${UI_RESET}")" \
+    "$(printf '%bVMESS%b %b%s%b' "${UI_ACCENT}" "${UI_RESET}" "${UI_BOLD}" "${vmess_count}" "${UI_RESET}")" \
+    "$(printf '%bTROJAN%b %b%s%b' "${UI_ACCENT}" "${UI_RESET}" "${UI_BOLD}" "${trojan_count}" "${UI_RESET}")"
   echo
   main_menu_center_line "$(ui_decorated_section_title "SERVICES")"
   main_menu_center_segments \
-    "Edge Mux ${edge_icon}" \
-    "Nginx ${nginx_icon}" \
-    "Xray ${xray_icon}"
+    "$(printf '%bEdge Mux%b %s' "${UI_ACCENT}" "${UI_RESET}" "${edge_icon}")" \
+    "$(printf '%bNginx%b %s' "${UI_ACCENT}" "${UI_RESET}" "${nginx_icon}")" \
+    "$(printf '%bXray%b %s' "${UI_ACCENT}" "${UI_RESET}" "${xray_icon}")"
   hr
 }
 
@@ -2213,15 +2217,17 @@ main_menu_center_line() {
   local text="$1"
   local w
   local pad
+  local visible_len
   w="$(ui_menu_terminal_width)"
   if (( w < 60 )); then
     w=60
   fi
-  if (( ${#text} >= w )); then
+  visible_len="$(ui_text_length "${text}")"
+  if (( visible_len >= w )); then
     echo "${text}"
     return 0
   fi
-  pad=$(( (w - ${#text}) / 2 ))
+  pad=$(( (w - visible_len) / 2 ))
   printf '%*s%s\n' "${pad}" '' "${text}"
 }
 
@@ -2241,6 +2247,7 @@ main_menu_center_segments() {
 
 ui_text_length() {
   local text="${1:-}"
+  text="$(printf '%s' "${text}" | sed -E $'s/\x1B\\[[0-9;]*[[:alpha:]]//g')"
   printf '%s' "${#text}"
 }
 
@@ -2254,14 +2261,14 @@ ui_menu_option_text() {
   local icon=""
   icon="$(ui_menu_label_icon "${key}" "${label}")"
   if [[ -n "${icon}" ]]; then
-    printf '%s %s' "${icon}" "${label}"
+    printf '%b%s %s%b' "${UI_BOLD}" "${icon}" "${label}" "${UI_RESET}"
   else
-    printf '%s' "${label}"
+    printf '%b%s%b' "${UI_BOLD}" "${label}" "${UI_RESET}"
   fi
 }
 
 ui_decorated_section_title() {
-  printf '%s' "${1:-}"
+  printf '%b%s%b' "${UI_SECTION}" "${1:-}" "${UI_RESET}"
 }
 
 ui_style_value_ok() {
@@ -2348,7 +2355,7 @@ ui_info_value_plain() {
   if [[ -z "${value}" || "${value}" == "-" ]]; then
     ui_style_value_muted "-"
   else
-    printf '%s' "${value}"
+    printf '%b%s%b' "${UI_BOLD}" "${value}" "${UI_RESET}"
   fi
 }
 
@@ -2376,12 +2383,13 @@ ui_info_print_line() {
       ;;
   esac
 
-  printf "%-*s : %s\n" \
-    "${info_label_width}" "${label}" "${formatted}"
+  printf "%b%-*s%b %b:%b %s\n" \
+    "${UI_INFO}" "${info_label_width}" "${label}" "${UI_RESET}" \
+    "${UI_MUTED}" "${UI_RESET}" "${formatted}"
 }
 
 ui_screen_title_text() {
-  printf '%s' "${1:-}"
+  printf '%b%s%b' "${UI_SECTION}" "${1:-}" "${UI_RESET}"
 }
 
 ui_menu_screen_begin() {
