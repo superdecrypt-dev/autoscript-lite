@@ -1644,7 +1644,7 @@ def fmt_gb(v):
     return "0"
   if abs(v - round(v)) < 1e-9:
     return str(int(round(v)))
-  s=f"{v:.2f}"
+  s=f"{v:.3f}"
   s=s.rstrip("0").rstrip(".")
   return s
 
@@ -2074,7 +2074,7 @@ def fmt_gb(v):
     return "0"
   if abs(n - round(n)) < 1e-9:
     return str(int(round(n)))
-  return f"{n:.2f}".rstrip("0").rstrip(".")
+  return f"{n:.3f}".rstrip("0").rstrip(".")
 
 
 def fmt_mbit(v):

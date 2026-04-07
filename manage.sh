@@ -2748,7 +2748,7 @@ def fmt_gb(v):
     return "0"
   if abs(v - round(v)) < 1e-9:
     return str(int(round(v)))
-  s = f"{v:.2f}"
+  s = f"{v:.3f}"
   s = s.rstrip("0").rstrip(".")
   return s
 
@@ -3013,7 +3013,7 @@ def fmt_gb(v):
     return "0"
   if abs(v - round(v)) < 1e-9:
     return str(int(round(v)))
-  s=f"{v:.2f}"
+  s=f"{v:.3f}"
   s=s.rstrip("0").rstrip(".")
   return s
 
