@@ -94,7 +94,7 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 - `8) Traffic`
   Analytics dan ringkasan traffic runtime.
 - `9) Tools`
-  Telegram Bot, WARP Tier, dan Backup/Restore.
+  Telegram Bot, WARP Tier, License Guard, dan Backup/Restore.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
   `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; backend WARP lokal tetap kompatibel untuk redirect runtime Xray.
   Fondasi paket/runtime `cloudflare-warp` sekarang dipersiapkan dari `setup.sh`, tetapi mode ini tetap idle sampai diaktifkan operator.

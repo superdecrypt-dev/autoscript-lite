@@ -12,10 +12,14 @@ legacy_patterns=(
   'ui_menu_screen_begin "9\) Speedtest'
   'ui_menu_screen_begin "8\) Domain Control'
   'ui_menu_screen_begin "3\) Xray QAC'
+  'echo "12\) Traffic >'
+  'echo "9\) Speedtest >'
+  'echo "8\) Domain Control >'
   'echo "11\) Maintenance >'
   'base="13\) Tools > WARP Tier"'
   'base="5\) Xray Network'
   'base="5\) Xray Network > WARP Controls > WARP Tier"'
+  'menu 7 kapan saja'
 )
 
 for pattern in "${legacy_patterns[@]}"; do
@@ -33,10 +37,16 @@ required_patterns=(
   'ui_menu_screen_begin "5\) Speedtest"'
   'ui_menu_screen_begin "4\) Domain Control'
   'ui_menu_screen_begin "2\) Xray QAC"'
+  'echo "8\) Traffic >'
+  'echo "5\) Speedtest >'
+  'echo "4\) Domain Control >'
   'echo "7\) Maintenance >'
   'local base="3\) Xray Network"'
   'local base="9\) Tools > WARP Tier"'
   'base="3\) Xray Network > WARP Controls > WARP Tier"'
+  '"3\|License Guard"'
+  'run_action "License Guard" autoscript_license_status_menu'
+  'menu 6 kapan saja'
 )
 
 for pattern in "${required_patterns[@]}"; do

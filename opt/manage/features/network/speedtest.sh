@@ -19,7 +19,7 @@ speedtest_bin_get() {
 
 speedtest_run_now() {
   title
-  echo "9) Speedtest > Run"
+  echo "5) Speedtest > Run"
   hr
 
   local speedtest_bin
@@ -51,7 +51,7 @@ speedtest_run_now() {
 
 speedtest_show_version() {
   title
-  echo "9) Speedtest > Version"
+  echo "5) Speedtest > Version"
   hr
 
   local speedtest_bin

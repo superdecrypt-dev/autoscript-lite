@@ -153,7 +153,7 @@ traffic_analytics_dataset_make_tmp() {
 
 traffic_analytics_overview_show() {
   title
-  echo "12) Traffic > Overview"
+  echo "8) Traffic > Overview"
   hr
 
   local dataset
@@ -237,7 +237,7 @@ PY
 
 traffic_analytics_top_users_show() {
   title
-  echo "12) Traffic > Top Users by Usage"
+  echo "8) Traffic > Top Users by Usage"
   hr
 
   local n
@@ -317,7 +317,7 @@ PY
 
 traffic_analytics_search_user_show() {
   title
-  echo "12) Traffic > Search User Traffic"
+  echo "8) Traffic > Search User Traffic"
   hr
 
   local q
@@ -401,7 +401,7 @@ PY
 
 traffic_analytics_export_json() {
   title
-  echo "12) Traffic > Export JSON"
+  echo "8) Traffic > Export JSON"
   hr
 
   local dataset out

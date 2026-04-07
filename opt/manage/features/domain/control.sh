@@ -1186,7 +1186,7 @@ domain_control_refresh_account_info_now() {
   local run_all_batches="false"
 
   title
-  echo "8) Domain Control > Refresh Account Info"
+  echo "4) Domain Control > Refresh Account Info"
   hr
 
   domain="$(normalize_domain_token "$(detect_domain)")"
@@ -1394,7 +1394,7 @@ domain_control_sync_target_dns_now() {
   fi
 
   title
-  echo "8) Domain Control > Repair Target DNS Record (Manual Repair)"
+  echo "4) Domain Control > Repair Target DNS Record (Manual Repair)"
   hr
 
   while IFS= read -r pending_file; do
@@ -1557,7 +1557,7 @@ domain_control_sync_target_dns_now() {
 
 domain_control_show_info() {
   title
-  echo "8) Domain Control > Current Domain"
+  echo "4) Domain Control > Current Domain"
   hr
   echo "Domain aktif : $(detect_domain)"
   echo "Cert file    : ${CERT_FULLCHAIN}"
@@ -1573,7 +1573,7 @@ domain_control_show_info() {
 
 domain_control_guard_check() {
   title
-  echo "8) Domain Control > Guard Check"
+  echo "4) Domain Control > Guard Check"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -1617,7 +1617,7 @@ domain_control_guard_renew_if_needed() {
     return $?
   fi
   title
-  echo "8) Domain Control > Guard Renew (External Binary)"
+  echo "4) Domain Control > Guard Renew (External Binary)"
   hr
 
   if [[ ! -x "${XRAY_DOMAIN_GUARD_BIN}" ]]; then
@@ -1872,7 +1872,7 @@ domain_control_menu() {
         fi
         pending_prompt_rc=$?
         if (( pending_prompt_rc == 1 || pending_prompt_rc == 2 )); then
-          warn "Repair target DNS tidak dibuka otomatis. Anda masih bisa memilih menu 7 kapan saja."
+          warn "Repair target DNS tidak dibuka otomatis. Anda masih bisa memilih menu 6 kapan saja."
           hr
         fi
       fi
