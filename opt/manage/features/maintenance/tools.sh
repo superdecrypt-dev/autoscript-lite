@@ -63,7 +63,7 @@ tools_external_installer_exec() {
 install_telegram_bot_menu() {
   local installer_cmd="/usr/local/bin/install-telegram-bot"
   tools_external_installer_exec \
-    "13) Tools > Telegram Bot" \
+    "9) Tools > Telegram Bot" \
     "bot Telegram" \
     "${installer_cmd}" \
     "Serahkan kontrol ke installer bot Telegram eksternal sekarang?" \
@@ -76,7 +76,7 @@ autoscript_license_status_menu() {
   local trusted_default_api_url="https://autoscript-license.minidecrypt.workers.dev/api/v1/license/check"
   local config_file="/etc/autoscript/license/config.env"
 
-  ui_menu_screen_begin "13) Tools > License Guard"
+  ui_menu_screen_begin "9) Tools > License Guard"
   if [[ ! -x "${license_bin}" ]]; then
     warn "Binary license guard tidak ditemukan / tidak executable:"
     echo "  ${license_bin}"

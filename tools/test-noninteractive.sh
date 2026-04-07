@@ -82,6 +82,12 @@ bash tools/test-adblock-upgrade.sh
 log "Shell test: xray session"
 bash tools/test-xray-session.sh
 
+log "Shell test: manage menu labels"
+bash tools/test-manage-menu-labels.sh
+
+log "Shell test: manage router"
+bash tools/test-manage-router.sh
+
 log "Shell test: edge dist"
 bash tools/test-edge-dist.sh
 

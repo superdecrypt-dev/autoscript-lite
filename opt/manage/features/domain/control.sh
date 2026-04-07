@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034
 
 domain_menu_v2() {
-  ui_menu_screen_begin "8) Domain Control > Set Domain" "Konfigurasi Domain TLS"
+  ui_menu_screen_begin "4) Domain Control > Set Domain" "Konfigurasi Domain TLS"
   echo -e "${UI_MUTED}Pilih metode domain untuk proses set domain.${UI_RESET}"
   echo -e "  ${UI_ACCENT}1)${UI_RESET} Input domain manual"
   echo -e "  ${UI_ACCENT}2)${UI_RESET} Gunakan domain yang disediakan"
@@ -1860,7 +1860,7 @@ domain_control_menu() {
       "6|Repair Target DNS Record (manual repair)$([[ "${cf_pending_total}" == "true" ]] && printf ' (%s pending)' "${cf_pending_count}")"
       "0|Back"
     )
-    ui_menu_screen_begin "8) Domain Control"
+    ui_menu_screen_begin "4) Domain Control"
     if [[ "${cf_pending_active}" == "true" ]]; then
       warn "Ada ${cf_pending_active_count} pending repair target DNS Cloudflare untuk domain aktif ${active_domain}. Gunakan 'Repair Target DNS Record' bila ingin menyelesaikannya."
       hr

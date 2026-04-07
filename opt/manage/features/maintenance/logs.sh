@@ -6,7 +6,7 @@ daemon_log_tail_show() {
   local svc="$1"
   local lines="${2:-20}"
   title
-  echo "11) Maintenance > Log ${svc}"
+  echo "7) Maintenance > Log ${svc}"
   hr
   if svc_exists "${svc}"; then
     journalctl -u "${svc}" --no-pager -n "${lines}" 2>/dev/null || true

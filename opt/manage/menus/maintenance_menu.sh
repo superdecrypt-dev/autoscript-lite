@@ -179,7 +179,7 @@ maintenance_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "11) Maintenance"
+    ui_menu_screen_begin "7) Maintenance"
     ui_menu_render_two_columns_fixed items
     hr
     if ! read -r -p "Pilih: " c; then

@@ -406,7 +406,7 @@ backup_gdrive_setup_apply_existing_remote() {
 }
 
 backup_cli_rclone_config_menu() {
-  ui_menu_screen_begin "13) Tools > Backup/Restore > rclone config"
+  ui_menu_screen_begin "9) Tools > Backup/Restore > rclone config"
   echo "Command ini akan membuka konfigurasi rclone interaktif."
   echo "Remote yang dipakai autoscript saat ini:"
   echo "  - Google Drive  -> gdrive"
@@ -442,7 +442,7 @@ backup_gdrive_setup_menu() {
       "3|Manual rclone config"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore > Google Drive > Setup"
+    ui_menu_screen_begin "9) Tools > Backup/Restore > Google Drive > Setup"
     echo "Setup default:"
     echo "  Remote Name : ${remote}"
     echo "  Folder Name : ${folder}"
@@ -488,7 +488,7 @@ backup_gdrive_setup_menu() {
     case "${c}" in
       1)
         backup_rclone_require || continue
-        ui_menu_screen_begin "13) Tools > Backup/Restore > Google Drive > Setup > Paste Token"
+        ui_menu_screen_begin "9) Tools > Backup/Restore > Google Drive > Setup > Paste Token"
         echo "Tempel hasil auth Google Drive satu baris, lalu Enter."
         echo "Bisa berupa JSON auth mentah atau blob panjang yang muncul setelah kembali ke rclone."
         echo "Ketik 'kembali' lalu Enter untuk batal dan kembali ke menu setup."
@@ -595,7 +595,7 @@ backup_r2_review_menu() {
       "2|Edit Again"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore > Cloudflare R2 > Setup > Review"
+    ui_menu_screen_begin "9) Tools > Backup/Restore > Cloudflare R2 > Setup > Review"
     echo "Review setup Cloudflare R2:"
     echo "  Remote Name       : ${remote}"
     echo "  Account ID        : ${account_id:-<belum diisi>}"
@@ -654,7 +654,7 @@ backup_r2_setup_menu() {
       "3|Manual rclone config"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore > Cloudflare R2 > Setup"
+    ui_menu_screen_begin "9) Tools > Backup/Restore > Cloudflare R2 > Setup"
     echo "Setup aktif:"
     echo "  Remote Name       : ${remote}"
     echo "  Account ID        : ${account_id:-<belum diisi>}"
@@ -773,7 +773,7 @@ backup_restore_local_menu() {
       "5|Restore From File"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore > Local"
+    ui_menu_screen_begin "9) Tools > Backup/Restore > Local"
     echo "Backup lokal:"
     echo "  - dipakai untuk arsip lokal dan restore dari server ini"
     echo "  - restore bersifat live dan akan menimpa runtime yang aktif"
@@ -786,30 +786,30 @@ backup_restore_local_menu() {
       break
     fi
     case "${c}" in
-      1) backup_cli_exec "13) Tools > Backup/Restore > Local > List" local list ;;
+      1) backup_cli_exec "9) Tools > Backup/Restore > Local > List" local list ;;
       2)
         if confirm_menu_apply_now "Buat backup lokal sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > Local > Create" local create
+          backup_cli_exec "9) Tools > Backup/Restore > Local > Create" local create
         else
           pause
         fi
         ;;
       3)
         if confirm_menu_apply_now "Restore backup lokal terbaru sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > Local > Restore Latest" local restore-latest
+          backup_cli_exec "9) Tools > Backup/Restore > Local > Restore Latest" local restore-latest
         else
           pause
         fi
         ;;
       4)
         if confirm_menu_apply_now "Terapkan domain dari backup lokal terbaru lalu refresh account info sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > Local > Apply Domain Only" local restore-domain-latest
+          backup_cli_exec "9) Tools > Backup/Restore > Local > Apply Domain Only" local restore-domain-latest
         else
           pause
         fi
         ;;
       5)
-        ui_menu_screen_begin "13) Tools > Backup/Restore > Local > Restore From File"
+        ui_menu_screen_begin "9) Tools > Backup/Restore > Local > Restore From File"
         backup_cli_require_helper || return 0
         read -r -p "Masukkan path arsip .tar.gz (atau kembali): " path || { echo; break; }
         path="${path#"${path%%[![:space:]]*}"}"
@@ -819,7 +819,7 @@ backup_restore_local_menu() {
         fi
         [[ -n "${path}" ]] || { warn "Path tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Restore dari file ${path} sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > Local > Restore From File" local restore-file "${path}"
+          backup_cli_exec "9) Tools > Backup/Restore > Local > Restore From File" local restore-file "${path}"
         else
           pause
         fi
@@ -847,7 +847,7 @@ backup_restore_cloud_menu() {
       "8|Delete Cloud Backup"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore > ${label}"
+    ui_menu_screen_begin "9) Tools > Backup/Restore > ${label}"
     status_line="$(backup_provider_status_summary "${provider}")"
     provider_status="${status_line%%|*}"
     provider_target="${status_line#*|}"
@@ -878,27 +878,27 @@ backup_restore_cloud_menu() {
           backup_r2_setup_menu
         fi
         ;;
-      2) backup_cli_exec "13) Tools > Backup/Restore > ${label} > Status" cloud status --provider "${provider}" ;;
+      2) backup_cli_exec "9) Tools > Backup/Restore > ${label} > Status" cloud status --provider "${provider}" ;;
       3)
-        backup_cli_exec "13) Tools > Backup/Restore > ${label} > Test Remote" cloud test --provider "${provider}"
+        backup_cli_exec "9) Tools > Backup/Restore > ${label} > Test Remote" cloud test --provider "${provider}"
         ;;
       4)
         if confirm_menu_apply_now "Buat backup baru lalu upload ke ${label} sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > ${label} > Create Upload" cloud create-upload --provider "${provider}"
+          backup_cli_exec "9) Tools > Backup/Restore > ${label} > Create Upload" cloud create-upload --provider "${provider}"
         else
           pause
         fi
         ;;
-      5) backup_cli_exec "13) Tools > Backup/Restore > ${label} > List" cloud list --provider "${provider}" ;;
+      5) backup_cli_exec "9) Tools > Backup/Restore > ${label} > List" cloud list --provider "${provider}" ;;
       6)
         if confirm_menu_apply_now "Restore backup remote terbaru dari ${label} sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > ${label} > Restore Latest" cloud restore-latest --provider "${provider}"
+          backup_cli_exec "9) Tools > Backup/Restore > ${label} > Restore Latest" cloud restore-latest --provider "${provider}"
         else
           pause
         fi
         ;;
       7)
-        ui_menu_screen_begin "13) Tools > Backup/Restore > ${label} > Restore Select Backup"
+        ui_menu_screen_begin "9) Tools > Backup/Restore > ${label} > Restore Select Backup"
         backup_cli_show_cloud_list "${provider}" || continue
         hr
         read -r -p "Masukkan NO backup dari hasil List Cloud Backups (atau kembali): " archive_name || { echo; break; }
@@ -908,13 +908,13 @@ backup_restore_cloud_menu() {
         fi
         [[ -n "${archive_name}" ]] || { warn "Nomor backup tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Restore backup nomor ${archive_name} dari ${label} sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > ${label} > Restore Select Backup" cloud restore-file --provider "${provider}" --index "${archive_name}"
+          backup_cli_exec "9) Tools > Backup/Restore > ${label} > Restore Select Backup" cloud restore-file --provider "${provider}" --index "${archive_name}"
         else
           pause
         fi
         ;;
       8)
-        ui_menu_screen_begin "13) Tools > Backup/Restore > ${label} > Delete Cloud Backup"
+        ui_menu_screen_begin "9) Tools > Backup/Restore > ${label} > Delete Cloud Backup"
         backup_cli_show_cloud_list "${provider}" || continue
         hr
         read -r -p "Masukkan NO backup dari hasil List Cloud Backups yang akan dihapus (atau kembali): " archive_name || { echo; break; }
@@ -924,7 +924,7 @@ backup_restore_cloud_menu() {
         fi
         [[ -n "${archive_name}" ]] || { warn "Nomor backup tidak boleh kosong."; pause; continue; }
         if confirm_menu_apply_now "Hapus backup nomor ${archive_name} dari ${label} sekarang?"; then
-          backup_cli_exec "13) Tools > Backup/Restore > ${label} > Delete Cloud Backup" cloud delete-file --provider "${provider}" --index "${archive_name}"
+          backup_cli_exec "9) Tools > Backup/Restore > ${label} > Delete Cloud Backup" cloud delete-file --provider "${provider}" --index "${archive_name}"
         else
           pause
         fi
@@ -959,7 +959,7 @@ backup_restore_menu() {
       "2|Cloudflare R2"
       "0|Back"
     )
-    ui_menu_screen_begin "13) Tools > Backup/Restore"
+    ui_menu_screen_begin "9) Tools > Backup/Restore"
     backup_restore_provider_header
     ui_menu_render_options items 76
     hr

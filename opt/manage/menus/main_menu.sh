@@ -22,7 +22,7 @@ tools_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "13) Tools"
+    ui_menu_screen_begin "9) Tools"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then

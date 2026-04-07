@@ -77,7 +77,7 @@ speedtest_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "9) Speedtest"
+    ui_menu_screen_begin "5) Speedtest"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then

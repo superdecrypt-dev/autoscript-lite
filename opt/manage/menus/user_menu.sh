@@ -2,5 +2,5 @@
 # shellcheck shell=bash
 
 manage_menu_user_render() {
-  return 0
+  user_menu "$@"
 }

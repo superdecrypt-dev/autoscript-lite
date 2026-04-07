@@ -1429,7 +1429,7 @@ quota_menu() {
   QUOTA_QUERY=""
 
   while true; do
-    ui_menu_screen_begin "3) Xray QAC"
+    ui_menu_screen_begin "2) Xray QAC"
 
     quota_collect_files
     quota_build_view_indexes

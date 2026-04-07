@@ -9,7 +9,7 @@
 # -------------------------
 xray_network_menu_title() {
   local suffix="${1:-}"
-  local base="5) Xray Network"
+  local base="3) Xray Network"
   if [[ -n "${suffix}" ]]; then
     printf '%s > %s\n' "${base}" "${suffix}"
   else
@@ -19,9 +19,9 @@ xray_network_menu_title() {
 
 warp_tier_menu_title() {
   local suffix="${1:-}"
-  local base="13) Tools > WARP Tier"
+  local base="9) Tools > WARP Tier"
   if [[ "${WARP_TIER_MENU_CONTEXT:-}" == "xray" ]]; then
-    base="5) Xray Network > WARP Controls > WARP Tier"
+    base="3) Xray Network > WARP Controls > WARP Tier"
   fi
   if [[ -n "${suffix}" ]]; then
     printf '%s > %s\n' "${base}" "${suffix}"

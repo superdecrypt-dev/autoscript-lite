@@ -12,11 +12,13 @@ Modularisasi CLI masih berjalan bertahap.
 
 - Loader `manage.sh` sekarang me-load module `core/`, aggregator `features/*.sh`,
   router `menus/`, dan entrypoint `app/main.sh`
+- `app/main.sh` tetap menjadi entrypoint runtime:
+  - tanpa argumen masuk ke menu interaktif
+  - dengan argumen action akan mendelegasikan ke `core/router.sh`
 - File besar `analytics.sh`, `network.sh`, serta area `users/domain/maintenance`
   kini dipecah ke child module per domain menu
 - `manage.sh` masih memegang helper runtime inti lintas-domain, tetapi bukan lagi
-  source of truth untuk menu `1`, `3`, `8`, `10`, `11`, `12`, `13`, dan area
-  besar di `5`
+  source of truth untuk menu `1` sampai `9`
 
 ## Tree Singkat
 
@@ -40,27 +42,34 @@ opt/manage/
 
 ## Peta Source of Truth
 
-- `opt/manage/features/users.sh`: aggregator live untuk `1) Xray Users` dan `3) Xray QAC`
+- `opt/manage/features/users.sh`: aggregator live untuk `1) Xray Users` dan `2) Xray QAC`
 - `opt/manage/features/users/xray_users.sh`: source of truth `Xray Users`
 - `opt/manage/features/users/xray_qac.sh`: source of truth `Xray QAC`
-- `opt/manage/features/domain.sh`: aggregator live untuk `8) Domain Control`
-- `opt/manage/features/domain/cloudflare.sh`: helper Cloudflare/DNS domain
-- `opt/manage/features/domain/control.sh`: source of truth `Domain Control`
-- `opt/manage/features/network.sh`: aggregator live untuk `5) Xray Network`, `9) Speedtest`, dan flow `WARP Tier`
+- `opt/manage/features/network.sh`: aggregator live untuk `3) Xray Network` dan `5) Speedtest`
 - `opt/manage/features/network/warp.sh`: WARP/Tier/runtime WARP
 - `opt/manage/features/network/routing.sh`: routing Xray untuk WARP/domain/geosite
 - `opt/manage/features/network/dns.sh`: DNS settings dan DNS add-ons
+- `opt/manage/features/network/adblock.sh`: adblock DNS runtime/add-ons
 - `opt/manage/features/network/diagnostics.sh`: checks/menu network
 - `opt/manage/features/network/speedtest.sh`: speedtest
-- `opt/manage/features/analytics.sh`: aggregator live untuk `10) Security`, `12) Traffic`, dan layar utilitas di `13) Tools`
-- `opt/manage/features/analytics/traffic.sh`: `12) Traffic`
-- `opt/manage/features/analytics/security.sh`: `10) Security`
-- `opt/manage/features/analytics/tools.sh`: `13) Tools > Telegram Bot`
-- `opt/manage/features/maintenance.sh`: aggregator live untuk helper `11) Maintenance`
+- `opt/manage/features/domain.sh`: aggregator live untuk `4) Domain Control`
+- `opt/manage/features/domain/cloudflare.sh`: helper Cloudflare/DNS domain
+- `opt/manage/features/domain/control.sh`: source of truth `Domain Control`
+- `opt/manage/features/maintenance.sh`: aggregator live untuk `6) Security`, `7) Maintenance`, dan utilitas `9) Tools`
 - `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, daemon status
 - `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
-- `opt/manage/menus/main_menu.sh`: router menu utama
-- `opt/manage/menus/maintenance_menu.sh`: router menu `11) Maintenance`
+- `opt/manage/features/maintenance/security.sh`: source of truth `6) Security`
+- `opt/manage/features/maintenance/tools.sh`: source of truth utilitas eksternal (`Telegram Bot`, `License Guard`)
+- `opt/manage/features/analytics.sh`: aggregator live untuk `8) Traffic`
+- `opt/manage/features/analytics/traffic.sh`: source of truth `8) Traffic`
+- `opt/manage/features/backup.sh`: source of truth `9) Tools > Backup/Restore`
+- `opt/manage/core/router.sh`: dispatch action CLI non-interaktif
+- `opt/manage/menus/main_menu.sh`: router menu utama interaktif
+- `opt/manage/menus/user_menu.sh`: wrapper ke handler `Xray Users`
+- `opt/manage/menus/network_menu.sh`: wrapper ke handler `Xray Network`
+- `opt/manage/menus/domain_menu.sh`: wrapper ke handler `Domain Control`
+- `opt/manage/menus/maintenance_menu.sh`: wrapper ke handler `7) Maintenance`
+- `opt/manage/app/main.sh`: entrypoint modular runtime `manage`
 - `manage.sh`: helper runtime inti lintas-domain, trusted loader, konstanta, dan bootstrap
 
 Gunakan peta ini saat audit atau patch agar perubahan masuk ke child module yang
@@ -70,21 +79,21 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
 
 - `1) Xray Users`
   CRUD user Xray, expiry, reset credential, listing, dan recovery journal.
-- `3) Xray QAC`
+- `2) Xray QAC`
   Quota, block, IP limit, speed limit, dan detail metadata user Xray.
-- `5) Xray Network`
+- `3) Xray Network`
   WARP, DNS settings/add-ons, dan diagnostics runtime Xray.
-- `8) Domain Control`
+- `4) Domain Control`
   Set domain, current domain, guard check/renew, refresh account info, dan repair target DNS.
-- `9) Speedtest`
+- `5) Speedtest`
   Run speedtest dan version check.
-- `10) Security`
+- `6) Security`
   TLS/cert menu, fail2ban, dan tuning sistem.
-- `11) Maintenance`
+- `7) Maintenance`
   Restart/status service, log, dan status daemon.
-- `12) Traffic`
+- `8) Traffic`
   Analytics dan ringkasan traffic runtime.
-- `13) Tools`
+- `9) Tools`
   Telegram Bot, WARP Tier, dan Backup/Restore.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
   `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; backend WARP lokal tetap kompatibel untuk redirect runtime Xray.

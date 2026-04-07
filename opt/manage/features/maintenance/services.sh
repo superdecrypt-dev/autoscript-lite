@@ -6,7 +6,7 @@
 # -------------------------
 wireproxy_status_menu() {
   title
-  echo "11) Maintenance > WARP Status"
+  echo "7) Maintenance > WARP Status"
   hr
 
   if ! svc_exists wireproxy; then
@@ -79,7 +79,7 @@ wireproxy_status_menu() {
 
 wireproxy_restart_menu() {
   title
-  echo "11) Maintenance > Restart WARP"
+  echo "7) Maintenance > Restart WARP"
   hr
 
   local confirm_rc=0
@@ -462,7 +462,7 @@ PY
 
 edge_runtime_status_menu() {
   title
-  echo "11) Maintenance > Edge Gateway Status"
+  echo "7) Maintenance > Edge Gateway Status"
   hr
 
   local svc env_file provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 tls_backend_required
@@ -644,7 +644,7 @@ edge_runtime_post_restart_health_check() {
 
 edge_runtime_restart_menu() {
   title
-  echo "11) Maintenance > Restart Edge Gateway"
+  echo "7) Maintenance > Restart Edge Gateway"
   hr
 
   local confirm_rc=0
@@ -682,7 +682,7 @@ edge_runtime_restart_menu() {
 
 edge_runtime_info_menu() {
   title
-  echo "11) Maintenance > Edge Gateway Info"
+  echo "7) Maintenance > Edge Gateway Info"
   hr
 
   local provider active http_ports tls_ports http_backend http_tls_backend detect_timeout tls80 cert_file key_file
@@ -820,7 +820,7 @@ xray_daemon_restart_checked() {
 
 daemon_status_menu() {
   title
-  echo "11) Maintenance > Xray Daemons"
+  echo "7) Maintenance > Xray Daemons"
   hr
 
   local daemons=(

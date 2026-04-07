@@ -1050,7 +1050,7 @@ fail2ban_menu() {
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "10) Security"
+    ui_menu_screen_begin "6) Security"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
