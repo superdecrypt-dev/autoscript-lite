@@ -178,15 +178,27 @@ declare -Ag QUOTA_FIELDS_CACHE=()
 # -------------------------
 # UI styling (subtle)
 # -------------------------
-UI_RESET=''
-UI_BOLD=''
-UI_ACCENT=''
-UI_OK=''
-UI_INFO=''
-UI_SECTION=''
-UI_MUTED=''
-UI_WARN=''
-UI_ERR=''
+if [[ -t 1 ]]; then
+  UI_RESET='\033[0m'
+  UI_BOLD='\033[1m'
+  UI_ACCENT='\033[0;36m'
+  UI_OK='\033[0;32m'
+  UI_INFO='\033[1;34m'
+  UI_SECTION='\033[1;35m'
+  UI_MUTED='\033[0;37m'
+  UI_WARN='\033[1;33m'
+  UI_ERR='\033[0;31m'
+else
+  UI_RESET=''
+  UI_BOLD=''
+  UI_ACCENT=''
+  UI_OK=''
+  UI_INFO=''
+  UI_SECTION=''
+  UI_MUTED=''
+  UI_WARN=''
+  UI_ERR=''
+fi
 
 UI_USE_ICONS=1
 if [[ "${MANAGE_UI_ASCII:-0}" == "1" ]]; then
