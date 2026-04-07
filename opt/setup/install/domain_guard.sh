@@ -16,7 +16,7 @@ setup_logrotate() {
   ok "Pasang logrotate..."
 
   cat > /etc/logrotate.d/xray-nginx <<'EOF'
-/var/log/nginx/*.log /var/log/xray/*.log {
+/var/log/xray/*.log {
   daily
   rotate 7
   missingok
