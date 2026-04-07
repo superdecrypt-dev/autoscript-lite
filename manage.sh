@@ -2245,37 +2245,7 @@ ui_text_length() {
 }
 
 ui_menu_label_icon() {
-  local key="${1:-}"
-  local label="${2:-}"
-  case "${label}" in
-    "Xray Users") printf '%s' "${UI_ICON_USERS}" ;;
-    "Xray QAC") printf '%s' "${UI_ICON_QAC}" ;;
-    "Xray Network") printf '%s' "${UI_ICON_NETWORK}" ;;
-    "Domain Control") printf '%s' "${UI_ICON_DOMAIN}" ;;
-    "Speedtest") printf '%s' "${UI_ICON_SPEEDTEST}" ;;
-    "Security") printf '%s' "${UI_ICON_SECURITY}" ;;
-    "Maintenance") printf '%s' "${UI_ICON_MAINTENANCE}" ;;
-    "Traffic") printf '%s' "${UI_ICON_TRAFFIC}" ;;
-    "Tools") printf '%s' "${UI_ICON_TOOLS}" ;;
-    "Telegram Bot") printf '%s' "${UI_ICON_TELEGRAM}" ;;
-    "WARP Tier") printf '%s' "${UI_ICON_WARP}" ;;
-    "License Guard") printf '%s' "${UI_ICON_LICENSE}" ;;
-    "Backup/Restore") printf '%s' "${UI_ICON_BACKUP}" ;;
-    "Setup") printf '%s' "${UI_ICON_SETUP}" ;;
-    "Status Config") printf '%s' "${UI_ICON_STATUS}" ;;
-    "Test Remote") printf '%s' "${UI_ICON_TEST}" ;;
-    "Create & Upload Backup") printf '%s' "${UI_ICON_CREATE}" ;;
-    "List Cloud Backups") printf '%s' "${UI_ICON_LIST}" ;;
-    "Restore Latest Cloud Backup"|"Restore Select Backup") printf '%s' "${UI_ICON_RESTORE}" ;;
-    "Delete Cloud Backup") printf '%s' "${UI_ICON_DELETE}" ;;
-    "Back"|"Kembali") printf '%s' "${UI_ICON_BACK}" ;;
-    "Keluar") printf '%s' "${UI_ICON_EXIT}" ;;
-    *)
-      if [[ "${key}" == "0" ]]; then
-        printf '%s' "${UI_ICON_BACK}"
-      fi
-      ;;
-  esac
+  return 0
 }
 
 ui_menu_option_text() {
@@ -2291,13 +2261,7 @@ ui_menu_option_text() {
 }
 
 ui_decorated_section_title() {
-  local text="${1:-}"
-  case "${text}" in
-    "Main Menu") printf '%s %s' "${UI_ICON_MENU}" "${text}" ;;
-    "ACCOUNTS") printf '%s %s' "${UI_ICON_ACCOUNTS}" "${text}" ;;
-    "SERVICES") printf '%s %s' "${UI_ICON_SERVICES}" "${text}" ;;
-    *) printf '%s' "${text}" ;;
-  esac
+  printf '%s' "${1:-}"
 }
 
 ui_style_value_ok() {
@@ -2395,6 +2359,7 @@ ui_info_print_line() {
   local mode="${4:-plain}"
   local formatted=""
   local info_label_width=18
+  : "${icon}"
 
   case "${mode}" in
     license)
@@ -2411,25 +2376,12 @@ ui_info_print_line() {
       ;;
   esac
 
-  printf "%b%s%b %-*s : %s\n" \
-    "${UI_ACCENT}" "${icon}" "${UI_RESET}" \
+  printf "%-*s : %s\n" \
     "${info_label_width}" "${label}" "${formatted}"
 }
 
 ui_screen_title_text() {
-  local title_text="${1:-}"
-  case "${title_text}" in
-    *"Xray Users"*) printf '%s %s' "${UI_ICON_USERS}" "${title_text}" ;;
-    *"Xray QAC"*) printf '%s %s' "${UI_ICON_QAC}" "${title_text}" ;;
-    *"Xray Network"*) printf '%s %s' "${UI_ICON_NETWORK}" "${title_text}" ;;
-    *"Domain Control"*) printf '%s %s' "${UI_ICON_DOMAIN}" "${title_text}" ;;
-    *"Speedtest"*) printf '%s %s' "${UI_ICON_SPEEDTEST}" "${title_text}" ;;
-    *"Security"*) printf '%s %s' "${UI_ICON_SECURITY}" "${title_text}" ;;
-    *"Maintenance"*) printf '%s %s' "${UI_ICON_MAINTENANCE}" "${title_text}" ;;
-    *"Traffic"*) printf '%s %s' "${UI_ICON_TRAFFIC}" "${title_text}" ;;
-    *"Tools"*) printf '%s %s' "${UI_ICON_TOOLS}" "${title_text}" ;;
-    *) printf '%s' "${title_text}" ;;
-  esac
+  printf '%s' "${1:-}"
 }
 
 ui_menu_screen_begin() {
@@ -2627,8 +2579,8 @@ title() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear || true
   fi
-  echo -e "${UI_BOLD}${UI_ACCENT}${UI_ICON_PANEL} Control Panel${UI_RESET}"
-  echo -e "${UI_MUTED}${UI_ICON_HOST} Host: $(hostname) | Script: ${0##*/}${UI_RESET}"
+  echo -e "${UI_BOLD}${UI_ACCENT}Control Panel${UI_RESET}"
+  echo -e "${UI_MUTED}Host: $(hostname) | Script: ${0##*/}${UI_RESET}"
   hr
 }
 
