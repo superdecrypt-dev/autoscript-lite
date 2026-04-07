@@ -1860,7 +1860,7 @@ xhttp_path = public_proto.get("xhttp", "") or "/"
 xhttp_path_alt = path_alt_placeholder(xhttp_path)
 grpc_service = public_proto.get("grpc", "") or "-"
 grpc_service_alt = service_alt_placeholder(grpc_service)
-if proto == "vmess":
+if proto in ("vless", "vmess", "trojan"):
   primary_ports_disp = "443, 80"
   tls_ports_disp = "443, 80"
   alt_tls_ports_disp = "2053, 2083, 2087, 2096, 8443"
@@ -2474,7 +2474,7 @@ xhttp_path = public_proto.get("xhttp", "") or "/"
 xhttp_path_alt = path_alt_placeholder(xhttp_path)
 grpc_service = public_proto.get("grpc", "") or "-"
 grpc_service_alt = service_alt_placeholder(grpc_service)
-if proto == "vmess":
+if proto in ("vless", "vmess", "trojan"):
   primary_ports_disp = "443, 80"
   tls_ports_disp = "443, 80"
   alt_tls_ports_disp = "2053, 2083, 2087, 2096, 8443"

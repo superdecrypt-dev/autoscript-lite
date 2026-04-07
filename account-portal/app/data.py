@@ -101,6 +101,7 @@ ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
         "Trojan HUP",
         "Trojan XHTTP",
         "Trojan gRPC",
+        "Trojan TCP+TLS Port",
         "Alt Port SSL/TLS",
         "Alt Port HTTP",
         "Trojan Path WS",
