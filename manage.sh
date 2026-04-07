@@ -196,16 +196,7 @@ else
   UI_ERR=''
 fi
 
-ui_detect_utf8() {
-  local locale_hint
-  locale_hint="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
-  [[ -n "${locale_hint}" && "${locale_hint,,}" == *"utf-8"* ]]
-}
-
 UI_USE_ICONS=0
-if [[ -t 1 ]] && ui_detect_utf8; then
-  UI_USE_ICONS=1
-fi
 
 if (( UI_USE_ICONS == 1 )); then
   UI_ICON_PANEL='◈'
