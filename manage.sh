@@ -238,8 +238,8 @@ if (( UI_USE_ICONS == 1 )); then
   UI_ICON_LIST='≡'
   UI_ICON_RESTORE='⤴'
   UI_ICON_DELETE='✖'
-  UI_ICON_OK='✓'
-  UI_ICON_FAIL='✗'
+  UI_ICON_OK='✅'
+  UI_ICON_FAIL='❌'
 else
   UI_ICON_PANEL='[*]'
   UI_ICON_HOST='[host]'
