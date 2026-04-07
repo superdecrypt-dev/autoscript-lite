@@ -191,7 +191,80 @@ else
   UI_ACCENT=''
   UI_MUTED=''
   UI_WARN=''
-UI_ERR=''
+  UI_ERR=''
+fi
+
+ui_detect_utf8() {
+  local locale_hint
+  locale_hint="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  [[ -n "${locale_hint}" && "${locale_hint,,}" == *"utf-8"* ]]
+}
+
+UI_USE_ICONS=0
+if [[ -t 1 ]] && ui_detect_utf8; then
+  UI_USE_ICONS=1
+fi
+
+if (( UI_USE_ICONS == 1 )); then
+  UI_ICON_PANEL='◈'
+  UI_ICON_HOST='⌂'
+  UI_ICON_MENU='☰'
+  UI_ICON_ACCOUNTS='◉'
+  UI_ICON_SERVICES='⚙'
+  UI_ICON_USERS='👥'
+  UI_ICON_QAC='◍'
+  UI_ICON_NETWORK='⇄'
+  UI_ICON_DOMAIN='🌐'
+  UI_ICON_SPEEDTEST='⟲'
+  UI_ICON_SECURITY='🛡'
+  UI_ICON_MAINTENANCE='🧰'
+  UI_ICON_TRAFFIC='▣'
+  UI_ICON_TOOLS='🧩'
+  UI_ICON_TELEGRAM='✈'
+  UI_ICON_WARP='☁'
+  UI_ICON_LICENSE='🔐'
+  UI_ICON_BACKUP='⟲'
+  UI_ICON_BACK='↩'
+  UI_ICON_EXIT='⏻'
+  UI_ICON_SETUP='⚑'
+  UI_ICON_STATUS='◎'
+  UI_ICON_TEST='◌'
+  UI_ICON_CREATE='✚'
+  UI_ICON_LIST='≡'
+  UI_ICON_RESTORE='⤴'
+  UI_ICON_DELETE='✖'
+  UI_ICON_OK='✅'
+  UI_ICON_FAIL='⛔'
+else
+  UI_ICON_PANEL='[*]'
+  UI_ICON_HOST='[host]'
+  UI_ICON_MENU='[menu]'
+  UI_ICON_ACCOUNTS='[acct]'
+  UI_ICON_SERVICES='[svc]'
+  UI_ICON_USERS='[usr]'
+  UI_ICON_QAC='[qac]'
+  UI_ICON_NETWORK='[net]'
+  UI_ICON_DOMAIN='[dns]'
+  UI_ICON_SPEEDTEST='[spd]'
+  UI_ICON_SECURITY='[sec]'
+  UI_ICON_MAINTENANCE='[mnt]'
+  UI_ICON_TRAFFIC='[trf]'
+  UI_ICON_TOOLS='[tool]'
+  UI_ICON_TELEGRAM='[tg]'
+  UI_ICON_WARP='[warp]'
+  UI_ICON_LICENSE='[lic]'
+  UI_ICON_BACKUP='[bak]'
+  UI_ICON_BACK='[<]'
+  UI_ICON_EXIT='[x]'
+  UI_ICON_SETUP='[set]'
+  UI_ICON_STATUS='[st]'
+  UI_ICON_TEST='[test]'
+  UI_ICON_CREATE='[+]'
+  UI_ICON_LIST='[list]'
+  UI_ICON_RESTORE='[rst]'
+  UI_ICON_DELETE='[del]'
+  UI_ICON_OK='OK'
+  UI_ICON_FAIL='NO'
 fi
 
 MAIN_INFO_REMOTE_LOOKUPS="${MAIN_INFO_REMOTE_LOOKUPS:-1}"
@@ -1905,13 +1978,13 @@ main_menu_info_header_print() {
   printf "%-*s : %s\n" "${info_label_width}" "TLS Expired" "${tls}"
   printf "%-*s : %s\n" "${info_label_width}" "WARP Status" "${warp}"
   hr
-  main_menu_center_line "ACCOUNTS"
+  main_menu_center_line "$(ui_decorated_section_title "ACCOUNTS")"
   main_menu_center_segments \
     "VLESS ${vless_count}" \
     "VMESS ${vmess_count}" \
     "TROJAN ${trojan_count}"
   echo
-  main_menu_center_line "SERVICES"
+  main_menu_center_line "$(ui_decorated_section_title "SERVICES")"
   main_menu_center_segments \
     "Edge Mux ${edge_icon}" \
     "Nginx ${nginx_icon}" \
@@ -2153,11 +2226,88 @@ main_menu_center_segments() {
   main_menu_center_line "${joined}"
 }
 
+ui_text_length() {
+  local text="${1:-}"
+  printf '%s' "${#text}"
+}
+
+ui_menu_label_icon() {
+  local key="${1:-}"
+  local label="${2:-}"
+  case "${label}" in
+    "Xray Users") printf '%s' "${UI_ICON_USERS}" ;;
+    "Xray QAC") printf '%s' "${UI_ICON_QAC}" ;;
+    "Xray Network") printf '%s' "${UI_ICON_NETWORK}" ;;
+    "Domain Control") printf '%s' "${UI_ICON_DOMAIN}" ;;
+    "Speedtest") printf '%s' "${UI_ICON_SPEEDTEST}" ;;
+    "Security") printf '%s' "${UI_ICON_SECURITY}" ;;
+    "Maintenance") printf '%s' "${UI_ICON_MAINTENANCE}" ;;
+    "Traffic") printf '%s' "${UI_ICON_TRAFFIC}" ;;
+    "Tools") printf '%s' "${UI_ICON_TOOLS}" ;;
+    "Telegram Bot") printf '%s' "${UI_ICON_TELEGRAM}" ;;
+    "WARP Tier") printf '%s' "${UI_ICON_WARP}" ;;
+    "License Guard") printf '%s' "${UI_ICON_LICENSE}" ;;
+    "Backup/Restore") printf '%s' "${UI_ICON_BACKUP}" ;;
+    "Setup") printf '%s' "${UI_ICON_SETUP}" ;;
+    "Status Config") printf '%s' "${UI_ICON_STATUS}" ;;
+    "Test Remote") printf '%s' "${UI_ICON_TEST}" ;;
+    "Create & Upload Backup") printf '%s' "${UI_ICON_CREATE}" ;;
+    "List Cloud Backups") printf '%s' "${UI_ICON_LIST}" ;;
+    "Restore Latest Cloud Backup"|"Restore Select Backup") printf '%s' "${UI_ICON_RESTORE}" ;;
+    "Delete Cloud Backup") printf '%s' "${UI_ICON_DELETE}" ;;
+    "Back"|"Kembali") printf '%s' "${UI_ICON_BACK}" ;;
+    "Keluar") printf '%s' "${UI_ICON_EXIT}" ;;
+    *)
+      if [[ "${key}" == "0" ]]; then
+        printf '%s' "${UI_ICON_BACK}"
+      fi
+      ;;
+  esac
+}
+
+ui_menu_option_text() {
+  local key="${1:-}"
+  local label="${2:-}"
+  local icon=""
+  icon="$(ui_menu_label_icon "${key}" "${label}")"
+  if [[ -n "${icon}" ]]; then
+    printf '%s %s' "${icon}" "${label}"
+  else
+    printf '%s' "${label}"
+  fi
+}
+
+ui_decorated_section_title() {
+  local text="${1:-}"
+  case "${text}" in
+    "Main Menu") printf '%s %s' "${UI_ICON_MENU}" "${text}" ;;
+    "ACCOUNTS") printf '%s %s' "${UI_ICON_ACCOUNTS}" "${text}" ;;
+    "SERVICES") printf '%s %s' "${UI_ICON_SERVICES}" "${text}" ;;
+    *) printf '%s' "${text}" ;;
+  esac
+}
+
+ui_screen_title_text() {
+  local title_text="${1:-}"
+  case "${title_text}" in
+    *"Xray Users"*) printf '%s %s' "${UI_ICON_USERS}" "${title_text}" ;;
+    *"Xray QAC"*) printf '%s %s' "${UI_ICON_QAC}" "${title_text}" ;;
+    *"Xray Network"*) printf '%s %s' "${UI_ICON_NETWORK}" "${title_text}" ;;
+    *"Domain Control"*) printf '%s %s' "${UI_ICON_DOMAIN}" "${title_text}" ;;
+    *"Speedtest"*) printf '%s %s' "${UI_ICON_SPEEDTEST}" "${title_text}" ;;
+    *"Security"*) printf '%s %s' "${UI_ICON_SECURITY}" "${title_text}" ;;
+    *"Maintenance"*) printf '%s %s' "${UI_ICON_MAINTENANCE}" "${title_text}" ;;
+    *"Traffic"*) printf '%s %s' "${UI_ICON_TRAFFIC}" "${title_text}" ;;
+    *"Tools"*) printf '%s %s' "${UI_ICON_TOOLS}" "${title_text}" ;;
+    *) printf '%s' "${title_text}" ;;
+  esac
+}
+
 ui_menu_screen_begin() {
   local title_text="$1"
   local subtitle="${2:-}"
   title
-  main_menu_center_line "${title_text}"
+  main_menu_center_line "$(ui_screen_title_text "${title_text}")"
   if [[ -n "${subtitle}" ]]; then
     echo -e "${UI_MUTED}${subtitle}${UI_RESET}"
   fi
@@ -2167,10 +2317,11 @@ ui_menu_screen_begin() {
 ui_menu_render_single_column() {
   local ref_name="$1"
   local -n menu_items="${ref_name}"
-  local item key label
+  local item key label rendered_label
   for item in "${menu_items[@]}"; do
     IFS='|' read -r key label <<<"${item}"
-    printf "  %b%s)%b %s\n" "${UI_ACCENT}" "${key}" "${UI_RESET}" "${label}"
+    rendered_label="$(ui_menu_option_text "${key}" "${label}")"
+    printf "  %b%s)%b %s\n" "${UI_ACCENT}" "${key}" "${UI_RESET}" "${rendered_label}"
   done
 }
 
@@ -2179,7 +2330,7 @@ ui_menu_render_two_columns() {
   local -n menu_items="${ref_name}"
   local width split total left_count right_count
   local left_num_width=0 right_num_width=0 left_label_width=0 right_label_width=0
-  local i left_key left_label right_key right_label
+  local i left_key left_label right_key right_label left_rendered_label right_rendered_label rendered_len
   width="$(ui_menu_terminal_width)"
   total="${#menu_items[@]}"
   split=$(( (total + 1) / 2 ))
@@ -2188,13 +2339,17 @@ ui_menu_render_two_columns() {
 
   for (( i=0; i<left_count; i++ )); do
     IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
+    rendered_len="$(ui_text_length "${left_rendered_label}")"
     (( ${#left_key} > left_num_width )) && left_num_width=${#left_key}
-    (( ${#left_label} > left_label_width )) && left_label_width=${#left_label}
+    (( rendered_len > left_label_width )) && left_label_width=${rendered_len}
   done
   for (( i=0; i<right_count; i++ )); do
     IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+    right_rendered_label="$(ui_menu_option_text "${right_key}" "${right_label}")"
+    rendered_len="$(ui_text_length "${right_rendered_label}")"
     (( ${#right_key} > right_num_width )) && right_num_width=${#right_key}
-    (( ${#right_label} > right_label_width )) && right_label_width=${#right_label}
+    (( rendered_len > right_label_width )) && right_label_width=${rendered_len}
   done
 
   local min_width=$(( 2 + left_num_width + 2 + left_label_width + 4 ))
@@ -2210,12 +2365,15 @@ ui_menu_render_two_columns() {
     IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
     if (( i < right_count )); then
       IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+      left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
+      right_rendered_label="$(ui_menu_option_text "${right_key}" "${right_label}")"
       printf "  %b%*s)%b %-*s  %b%*s)%b %s\n" \
-        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label_width}" "${left_label}" \
-        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_label}"
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label_width}" "${left_rendered_label}" \
+        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_rendered_label}"
     else
+      left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
       printf "  %b%*s)%b %s\n" \
-        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label}"
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_rendered_label}"
     fi
   done
 }
@@ -2226,7 +2384,7 @@ ui_menu_render_two_columns_fixed() {
   local split total left_count right_count
   local left_num_width=0 right_num_width=0 left_label_width=0 right_label_width=0
   local shared_label_width=0
-  local i left_key left_label right_key right_label
+  local i left_key left_label right_key right_label left_rendered_label right_rendered_label rendered_len
   total="${#menu_items[@]}"
   split=$(( (total + 1) / 2 ))
   left_count="${split}"
@@ -2234,13 +2392,17 @@ ui_menu_render_two_columns_fixed() {
 
   for (( i=0; i<left_count; i++ )); do
     IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
+    left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
+    rendered_len="$(ui_text_length "${left_rendered_label}")"
     (( ${#left_key} > left_num_width )) && left_num_width=${#left_key}
-    (( ${#left_label} > left_label_width )) && left_label_width=${#left_label}
+    (( rendered_len > left_label_width )) && left_label_width=${rendered_len}
   done
   for (( i=0; i<right_count; i++ )); do
     IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+    right_rendered_label="$(ui_menu_option_text "${right_key}" "${right_label}")"
+    rendered_len="$(ui_text_length "${right_rendered_label}")"
     (( ${#right_key} > right_num_width )) && right_num_width=${#right_key}
-    (( ${#right_label} > right_label_width )) && right_label_width=${#right_label}
+    (( rendered_len > right_label_width )) && right_label_width=${rendered_len}
   done
 
   shared_label_width="${left_label_width}"
@@ -2251,12 +2413,15 @@ ui_menu_render_two_columns_fixed() {
     IFS='|' read -r left_key left_label <<<"${menu_items[$i]}"
     if (( i < right_count )); then
       IFS='|' read -r right_key right_label <<<"${menu_items[$((split + i))]}"
+      left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
+      right_rendered_label="$(ui_menu_option_text "${right_key}" "${right_label}")"
       printf "  %b%*s)%b %-*s  %b%*s)%b %s\n" \
-        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${shared_label_width}" "${left_label}" \
-        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_label}"
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${shared_label_width}" "${left_rendered_label}" \
+        "${UI_ACCENT}" "${right_num_width}" "${right_key}" "${UI_RESET}" "${right_rendered_label}"
     else
+      left_rendered_label="$(ui_menu_option_text "${left_key}" "${left_label}")"
       printf "  %b%*s)%b %s\n" \
-        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_label}"
+        "${UI_ACCENT}" "${left_num_width}" "${left_key}" "${UI_RESET}" "${left_rendered_label}"
     fi
   done
 }
@@ -2333,8 +2498,8 @@ title() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear || true
   fi
-  echo -e "${UI_BOLD}${UI_ACCENT}Control Panel${UI_RESET}"
-  echo -e "${UI_MUTED}Host: $(hostname) | Script: ${0##*/}${UI_RESET}"
+  echo -e "${UI_BOLD}${UI_ACCENT}${UI_ICON_PANEL} Control Panel${UI_RESET}"
+  echo -e "${UI_MUTED}${UI_ICON_HOST} Host: $(hostname) | Script: ${0##*/}${UI_RESET}"
   hr
 }
 
@@ -2555,29 +2720,29 @@ svc_exists() {
 service_status_icon() {
   local svc="${1:-}"
   if [[ -z "${svc}" ]]; then
-    printf '⛔\n'
+    printf '%s\n' "${UI_ICON_FAIL}"
     return 0
   fi
   if svc_exists "${svc}" && svc_is_active "${svc}"; then
-    printf '✅\n'
+    printf '%s\n' "${UI_ICON_OK}"
   else
-    printf '⛔\n'
+    printf '%s\n' "${UI_ICON_FAIL}"
   fi
 }
 
 service_group_status_icon() {
   local svc
   if (( $# == 0 )); then
-    printf '⛔\n'
+    printf '%s\n' "${UI_ICON_FAIL}"
     return 0
   fi
   for svc in "$@"; do
     if ! svc_exists "${svc}" || ! svc_is_active "${svc}"; then
-      printf '⛔\n'
+      printf '%s\n' "${UI_ICON_FAIL}"
       return 0
     fi
   done
-  printf '✅\n'
+  printf '%s\n' "${UI_ICON_OK}"
 }
 
 main_menu_edge_service_name() {
