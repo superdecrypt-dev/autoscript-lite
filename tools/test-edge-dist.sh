@@ -22,6 +22,16 @@ assert_binary_strings() {
   fi
 }
 
+assert_binary_contains() {
+  local file="$1"
+  shift
+  local pattern="$1"
+  if ! strings "${file}" | rg -n "${pattern}" >/dev/null; then
+    printf '[test-edge-dist] FAIL: expected marker missing in %s: %s\n' "${file}" "${pattern}" >&2
+    return 1
+  fi
+}
+
 assert_binary_present() {
   local file="$1"
   [[ -s "${file}" ]] || {
@@ -48,6 +58,11 @@ main() {
 
   for file in "${targets[@]}"; do
     assert_binary_present "${file}"
+    assert_binary_contains "${file}" 'EDGE_XRAY_VMESS_RAW_BACKEND'
+    assert_binary_contains "${file}" 'default@vmess-tcp'
+    assert_binary_contains "${file}" 'vmess-tcp'
+    assert_binary_contains "${file}" 'vmess_fallback_timeout'
+    assert_binary_contains "${file}" 'vmess_fallback_unknown'
     assert_binary_strings "${file}" 'ssh-direct-(unknown|timeout)'
     assert_binary_strings "${file}" '__sync-ssh-network-session-targets'
     assert_binary_strings "${file}" 'tls-port:ssh-direct-timeout'
