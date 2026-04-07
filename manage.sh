@@ -182,6 +182,7 @@ if [[ -t 1 ]]; then
   UI_RESET='\033[0m'
   UI_BOLD='\033[1m'
   UI_ACCENT='\033[0;36m'
+  UI_OK='\033[0;32m'
   UI_MUTED='\033[0;37m'
   UI_WARN='\033[1;33m'
   UI_ERR='\033[0;31m'
@@ -189,6 +190,7 @@ else
   UI_RESET=''
   UI_BOLD=''
   UI_ACCENT=''
+  UI_OK=''
   UI_MUTED=''
   UI_WARN=''
   UI_ERR=''
@@ -211,6 +213,12 @@ if (( UI_USE_ICONS == 1 )); then
   UI_ICON_MENU='☰'
   UI_ICON_ACCOUNTS='◉'
   UI_ICON_SERVICES='⚙'
+  UI_ICON_SYSTEM='🖥'
+  UI_ICON_RAM='◫'
+  UI_ICON_UPTIME='⏱'
+  UI_ICON_IP='⌁'
+  UI_ICON_ISP='⌘'
+  UI_ICON_COUNTRY='⌖'
   UI_ICON_USERS='👥'
   UI_ICON_QAC='◍'
   UI_ICON_NETWORK='⇄'
@@ -220,6 +228,9 @@ if (( UI_USE_ICONS == 1 )); then
   UI_ICON_MAINTENANCE='🧰'
   UI_ICON_TRAFFIC='▣'
   UI_ICON_TOOLS='🧩'
+  UI_ICON_TLS='🔒'
+  UI_ICON_WARP_STATUS='☁'
+  UI_ICON_LICENSE_STATUS='🔐'
   UI_ICON_TELEGRAM='✈'
   UI_ICON_WARP='☁'
   UI_ICON_LICENSE='🔐'
@@ -241,6 +252,12 @@ else
   UI_ICON_MENU='[menu]'
   UI_ICON_ACCOUNTS='[acct]'
   UI_ICON_SERVICES='[svc]'
+  UI_ICON_SYSTEM='[sys]'
+  UI_ICON_RAM='[ram]'
+  UI_ICON_UPTIME='[up]'
+  UI_ICON_IP='[ip]'
+  UI_ICON_ISP='[isp]'
+  UI_ICON_COUNTRY='[cc]'
   UI_ICON_USERS='[usr]'
   UI_ICON_QAC='[qac]'
   UI_ICON_NETWORK='[net]'
@@ -250,6 +267,9 @@ else
   UI_ICON_MAINTENANCE='[mnt]'
   UI_ICON_TRAFFIC='[trf]'
   UI_ICON_TOOLS='[tool]'
+  UI_ICON_TLS='[tls]'
+  UI_ICON_WARP_STATUS='[warp]'
+  UI_ICON_LICENSE_STATUS='[lic]'
   UI_ICON_TELEGRAM='[tg]'
   UI_ICON_WARP='[warp]'
   UI_ICON_LICENSE='[lic]'
@@ -1944,7 +1964,6 @@ main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp license_status license_days
   local vless_count vmess_count trojan_count
   local edge_icon nginx_icon xray_icon
-  local info_label_width=20
 
   main_info_cache_refresh
 
@@ -1966,17 +1985,17 @@ main_menu_info_header_print() {
   nginx_icon="$(service_status_icon "nginx")"
   xray_icon="$(service_status_icon "xray")"
 
-  printf "%-*s : %s\n" "${info_label_width}" "System OS" "${os}"
-  printf "%-*s : %s\n" "${info_label_width}" "RAM" "${ram}"
-  printf "%-*s : %s\n" "${info_label_width}" "Uptime" "${up}"
-  printf "%-*s : %s\n" "${info_label_width}" "IP VPS" "${ip}"
-  printf "%-*s : %s\n" "${info_label_width}" "ISP" "${isp}"
-  printf "%-*s : %s\n" "${info_label_width}" "Country" "${country}"
-  printf "%-*s : %s\n" "${info_label_width}" "Domain" "${domain}"
-  printf "%-*s : %s\n" "${info_label_width}" "Status Lisensi" "${license_status}"
-  printf "%-*s : %s\n" "${info_label_width}" "Masa Aktif Lisensi" "${license_days}"
-  printf "%-*s : %s\n" "${info_label_width}" "TLS Expired" "${tls}"
-  printf "%-*s : %s\n" "${info_label_width}" "WARP Status" "${warp}"
+  ui_info_print_line "${UI_ICON_SYSTEM}" "System OS" "${os}"
+  ui_info_print_line "${UI_ICON_RAM}" "RAM" "${ram}"
+  ui_info_print_line "${UI_ICON_UPTIME}" "Uptime" "${up}"
+  ui_info_print_line "${UI_ICON_IP}" "IP VPS" "${ip}"
+  ui_info_print_line "${UI_ICON_ISP}" "ISP" "${isp}"
+  ui_info_print_line "${UI_ICON_COUNTRY}" "Country" "${country}"
+  ui_info_print_line "${UI_ICON_DOMAIN}" "Domain" "${domain}"
+  ui_info_print_line "${UI_ICON_LICENSE_STATUS}" "Status Lisensi" "${license_status}" "license"
+  ui_info_print_line "${UI_ICON_LICENSE}" "Masa Lisensi" "${license_days}"
+  ui_info_print_line "${UI_ICON_TLS}" "TLS Expired" "${tls}" "tls"
+  ui_info_print_line "${UI_ICON_WARP_STATUS}" "WARP Status" "${warp}" "warp"
   hr
   main_menu_center_line "$(ui_decorated_section_title "ACCOUNTS")"
   main_menu_center_segments \
@@ -2285,6 +2304,122 @@ ui_decorated_section_title() {
     "SERVICES") printf '%s %s' "${UI_ICON_SERVICES}" "${text}" ;;
     *) printf '%s' "${text}" ;;
   esac
+}
+
+ui_style_value_ok() {
+  printf '%b%s%b' "${UI_OK}" "$1" "${UI_RESET}"
+}
+
+ui_style_value_warn() {
+  printf '%b%s%b' "${UI_WARN}" "$1" "${UI_RESET}"
+}
+
+ui_style_value_err() {
+  printf '%b%s%b' "${UI_ERR}" "$1" "${UI_RESET}"
+}
+
+ui_style_value_muted() {
+  printf '%b%s%b' "${UI_MUTED}" "$1" "${UI_RESET}"
+}
+
+ui_info_value_license() {
+  local value="${1:--}"
+  case "${value,,}" in
+    aktif|allowed|cache-allow)
+      ui_style_value_ok "AKTIF"
+      ;;
+    nonaktif|denied|blocked|expired|revoked)
+      ui_style_value_err "${value^^}"
+      ;;
+    -|"")
+      ui_style_value_muted "-"
+      ;;
+    *)
+      ui_style_value_warn "${value}"
+      ;;
+  esac
+}
+
+ui_info_value_tls() {
+  local value="${1:--}"
+  local days=""
+  if [[ "${value}" =~ ^([0-9]+)[[:space:]]+days?$ ]]; then
+    days="${BASH_REMATCH[1]}"
+    if (( days <= 7 )); then
+      ui_style_value_err "${value}"
+    elif (( days <= 30 )); then
+      ui_style_value_warn "${value}"
+    else
+      ui_style_value_ok "${value}"
+    fi
+    return 0
+  fi
+  case "${value,,}" in
+    expired)
+      ui_style_value_err "${value}"
+      ;;
+    -|"")
+      ui_style_value_muted "-"
+      ;;
+    *)
+      ui_style_value_warn "${value}"
+      ;;
+  esac
+}
+
+ui_info_value_warp() {
+  local value="${1:--}"
+  case "${value,,}" in
+    active*|*ready*)
+      ui_style_value_ok "${value}"
+      ;;
+    inactive*|not\ installed|*missing*)
+      ui_style_value_err "${value}"
+      ;;
+    -|"")
+      ui_style_value_muted "-"
+      ;;
+    *)
+      ui_style_value_warn "${value}"
+      ;;
+  esac
+}
+
+ui_info_value_plain() {
+  local value="${1:--}"
+  if [[ -z "${value}" || "${value}" == "-" ]]; then
+    ui_style_value_muted "-"
+  else
+    printf '%s' "${value}"
+  fi
+}
+
+ui_info_print_line() {
+  local icon="$1"
+  local label="$2"
+  local value="$3"
+  local mode="${4:-plain}"
+  local formatted=""
+  local info_label_width=18
+
+  case "${mode}" in
+    license)
+      formatted="$(ui_info_value_license "${value}")"
+      ;;
+    tls)
+      formatted="$(ui_info_value_tls "${value}")"
+      ;;
+    warp)
+      formatted="$(ui_info_value_warp "${value}")"
+      ;;
+    *)
+      formatted="$(ui_info_value_plain "${value}")"
+      ;;
+  esac
+
+  printf "%b%s%b %-*s : %s\n" \
+    "${UI_ACCENT}" "${icon}" "${UI_RESET}" \
+    "${info_label_width}" "${label}" "${formatted}"
 }
 
 ui_screen_title_text() {
