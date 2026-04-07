@@ -144,9 +144,11 @@ func monitorBackendState(ctx context.Context, logger *log.Logger, live *runtime.
 			live.Set(refreshed)
 			if logger != nil {
 				logger.Printf(
-					"edge-mux backend discovery updated vless_raw_backend=%s source=%s trojan_raw_backend=%s source=%s",
+					"edge-mux backend discovery updated vless_raw_backend=%s source=%s vmess_raw_backend=%s source=%s trojan_raw_backend=%s source=%s",
 					refreshed.VLESSRawBackendAddr(),
 					refreshed.VLESSRawSource,
+					refreshed.VMessRawBackendAddr(),
+					refreshed.VMessRawSource,
 					refreshed.TrojanRawBackendAddr(),
 					refreshed.TrojanRawSource,
 				)
@@ -168,6 +170,8 @@ func backendHealthKey(cfg runtime.Config, target string) string {
 		return "xray-ws"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
+	case cfg.VMessRawBackendAddr():
+		return "vmess"
 	case cfg.TrojanRawBackendAddr():
 		return "trojan"
 	default:

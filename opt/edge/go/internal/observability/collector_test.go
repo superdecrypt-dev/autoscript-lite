@@ -144,6 +144,7 @@ func TestSnapshotIncludesConfiguredRouteTable(t *testing.T) {
 		XrayTLSBackend:    "127.0.0.1:22443",
 		XrayWSBackend:     "127.0.0.1:10015",
 		VLESSRawBackend:   "127.0.0.1:33175",
+		VMessRawBackend:   "127.0.0.1:38990",
 		TrojanRawBackend:  "127.0.0.1:48778",
 		SNIRoutes: map[string]string{
 			"alpha.example.com": "vless_tcp",

@@ -26,7 +26,7 @@ write_xray_config() {
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   TROJAN_PASS="$(rand_str 24)"
 
-  local P_VLESS_TCP P_TROJAN_TCP
+  local P_VLESS_TCP P_VMESS_TCP P_TROJAN_TCP
   local P_VLESS_WS P_VMESS_WS P_TROJAN_WS
   local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
   local P_VLESS_XHTTP P_VMESS_XHTTP P_TROJAN_XHTTP
@@ -34,6 +34,7 @@ write_xray_config() {
   local P_API P_XRAY_WARP_REDIR P_XRAY_WARP_REDIR6
 
   P_VLESS_TCP="$(pick_port)"
+  P_VMESS_TCP="$(pick_port)"
   P_TROJAN_TCP="$(pick_port)"
   P_VLESS_WS="$(pick_port)"
   P_VMESS_WS="$(pick_port)"
@@ -320,6 +321,36 @@ write_xray_config() {
           }
         ],
         "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${P_VMESS_TCP},
+      "protocol": "vmess",
+      "tag": "default@vmess-tcp",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "alterId": 0,
+            "email": "default@vmess-tcp"
+          }
+        ]
       },
       "streamSettings": {
         "network": "raw",
@@ -785,6 +816,7 @@ EOF
   declare -gx XR_API_PORT="$P_API"
 
   declare -gx P_VLESS_TCP="$P_VLESS_TCP"
+  declare -gx P_VMESS_TCP="$P_VMESS_TCP"
   declare -gx P_TROJAN_TCP="$P_TROJAN_TCP"
   declare -gx P_VLESS_WS="$P_VLESS_WS"
   declare -gx P_VMESS_WS="$P_VMESS_WS"

@@ -23,6 +23,7 @@ const (
 	defaultXrayTLSBackend      = "127.0.0.1:18443"
 	defaultXrayWSBackend       = "127.0.0.1:18080"
 	defaultVLESSRawBackend     = "127.0.0.1:28080"
+	defaultVMessRawBackend     = "127.0.0.1:28082"
 	defaultTrojanRawBackend    = "127.0.0.1:28081"
 	defaultTLSCertFile         = "/opt/cert/fullchain.pem"
 	defaultTLSKeyFile          = "/opt/cert/privkey.pem"
@@ -49,6 +50,7 @@ var validSNIRouteAliases = map[string]struct{}{
 	"xray_tls":    {},
 	"xray_ws":     {},
 	"vless_tcp":   {},
+	"vmess_tcp":   {},
 	"trojan_tcp":  {},
 }
 
@@ -65,9 +67,11 @@ type Config struct {
 	XrayTLSBackend      string
 	XrayWSBackend       string
 	VLESSRawBackend     string
+	VMessRawBackend     string
 	TrojanRawBackend    string
 	XrayInboundsFile    string
 	VLESSRawSource      string
+	VMessRawSource      string
 	TrojanRawSource     string
 	TLSCertFile         string
 	TLSKeyFile          string
@@ -182,9 +186,11 @@ func LoadConfig() (Config, error) {
 		XrayTLSBackend:      normalizeAddr(envString(source, "EDGE_XRAY_TLS_BACKEND", defaultXrayTLSBackend), "127.0.0.1"),
 		XrayWSBackend:       normalizeAddr(envString(source, "EDGE_XRAY_WS_BACKEND", defaultXrayWSBackend), "127.0.0.1"),
 		VLESSRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VLESS_RAW_BACKEND", defaultVLESSRawBackend), "127.0.0.1"),
+		VMessRawBackend:     normalizeAddr(envString(source, "EDGE_XRAY_VMESS_RAW_BACKEND", defaultVMessRawBackend), "127.0.0.1"),
 		TrojanRawBackend:    normalizeAddr(envString(source, "EDGE_XRAY_TROJAN_RAW_BACKEND", defaultTrojanRawBackend), "127.0.0.1"),
 		XrayInboundsFile:    strings.TrimSpace(envString(source, "EDGE_XRAY_INBOUNDS_FILE", defaultXrayInboundsFile)),
 		VLESSRawSource:      "env:EDGE_XRAY_VLESS_RAW_BACKEND",
+		VMessRawSource:      "env:EDGE_XRAY_VMESS_RAW_BACKEND",
 		TrojanRawSource:     "env:EDGE_XRAY_TROJAN_RAW_BACKEND",
 		TLSCertFile:         envString(source, "EDGE_TLS_CERT_FILE", defaultTLSCertFile),
 		TLSKeyFile:          envString(source, "EDGE_TLS_KEY_FILE", defaultTLSKeyFile),
@@ -272,7 +278,7 @@ func (c Config) Validate() error {
 			return errors.New("EDGE_METRICS_LISTEN must stay local-only (loopback)")
 		}
 	}
-	if c.HTTPBackend == "" || c.XrayDirectBackend == "" || c.XrayTLSBackend == "" || c.XrayWSBackend == "" || c.VLESSRawBackend == "" || c.TrojanRawBackend == "" {
+	if c.HTTPBackend == "" || c.XrayDirectBackend == "" || c.XrayTLSBackend == "" || c.XrayWSBackend == "" || c.VLESSRawBackend == "" || c.VMessRawBackend == "" || c.TrojanRawBackend == "" {
 		return errors.New("backend addresses must not be empty")
 	}
 	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
@@ -382,6 +388,7 @@ func (c Config) XrayDirectBackendAddr() string { return c.XrayDirectBackend }
 func (c Config) XrayTLSBackendAddr() string    { return c.XrayTLSBackend }
 func (c Config) XrayWSBackendAddr() string     { return c.XrayWSBackend }
 func (c Config) VLESSRawBackendAddr() string   { return c.VLESSRawBackend }
+func (c Config) VMessRawBackendAddr() string   { return c.VMessRawBackend }
 func (c Config) TrojanRawBackendAddr() string  { return c.TrojanRawBackend }
 
 func (c Config) Clone() Config {

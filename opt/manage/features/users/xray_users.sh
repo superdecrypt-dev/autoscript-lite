@@ -1611,7 +1611,7 @@ write_account_artifacts() {
   [[ -n "${account_output_override}" ]] && acc_file="${account_output_override}"
   [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_primary_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
 acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up, primary_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:24]
 quota_bytes=int(quota_bytes)
@@ -1786,7 +1786,7 @@ PUBLIC_PATHS = {
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
 }
-TCP_TLS_PROTOCOLS = {"vless", "trojan"}
+TCP_TLS_PROTOCOLS = {"vless", "vmess", "trojan"}
 tcp_tls_host = domain
 
 
@@ -1814,13 +1814,13 @@ def vmess_link(net, val):
   obj={
     "v":"2",
     "ps":username + "@" + proto,
-    "add":domain,
+    "add":tcp_tls_host if net == "tcp" else domain,
     "port":"443",
     "id":cred,
     "aid":"0",
     "net":net,
     "type":"none",
-    "host":domain,
+    "host":"" if net == "tcp" else domain,
     "tls":"tls",
     "sni":domain
   }
@@ -2016,7 +2016,7 @@ account_info_refresh_for_user() {
   [[ -n "${isp}" ]] || isp="-"
   [[ -n "${country}" ]] || country="-"
   set +e
-  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}" "$(xray_edge_runtime_primary_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
+  python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred_override}" "${output_file_override}" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
 import base64
 import ipaddress
 import json
@@ -2407,7 +2407,7 @@ PUBLIC_PATHS = {
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
 }
-TCP_TLS_PROTOCOLS = {"vless", "trojan"}
+TCP_TLS_PROTOCOLS = {"vless", "vmess", "trojan"}
 tcp_tls_host = domain
 
 
@@ -2435,13 +2435,13 @@ def vmess_link(net, val):
   obj = {
     "v": "2",
     "ps": username + "@" + proto,
-    "add": domain,
+    "add": tcp_tls_host if net == "tcp" else domain,
     "port": "443",
     "id": cred,
     "aid": "0",
     "net": net,
     "type": "none",
-    "host": domain,
+    "host": "" if net == "tcp" else domain,
     "tls": "tls",
     "sni": domain,
   }

@@ -131,6 +131,8 @@ type StatusSnapshot struct {
 	XrayWSBackend             string                           `json:"xray_ws_backend"`
 	VLESSRawBackend           string                           `json:"vless_raw_backend"`
 	VLESSRawBackendSource     string                           `json:"vless_raw_backend_source,omitempty"`
+	VMessRawBackend           string                           `json:"vmess_raw_backend"`
+	VMessRawBackendSource     string                           `json:"vmess_raw_backend_source,omitempty"`
 	TrojanRawBackend          string                           `json:"trojan_raw_backend"`
 	TrojanRawBackendSource    string                           `json:"trojan_raw_backend_source,omitempty"`
 	MetricsEnabled            bool                             `json:"metrics_enabled"`
@@ -470,6 +472,8 @@ func (c *Collector) Snapshot(cfg runtime.Config, listeners ListenerSnapshot, bac
 		XrayWSBackend:             cfg.XrayWSBackendAddr(),
 		VLESSRawBackend:           cfg.VLESSRawBackendAddr(),
 		VLESSRawBackendSource:     cfg.VLESSRawSource,
+		VMessRawBackend:           cfg.VMessRawBackendAddr(),
+		VMessRawBackendSource:     cfg.VMessRawSource,
 		TrojanRawBackend:          cfg.TrojanRawBackendAddr(),
 		TrojanRawBackendSource:    cfg.TrojanRawSource,
 		MetricsEnabled:            cfg.MetricsEnabled,
@@ -576,6 +580,8 @@ func configuredSNIRouteTarget(cfg runtime.Config, alias string) (backend, addr, 
 		return "xray-ws", cfg.XrayWSBackendAddr(), "xray-ws", true
 	case "vless_tcp":
 		return "vless", cfg.VLESSRawBackendAddr(), "vless", true
+	case "vmess_tcp":
+		return "vmess", cfg.VMessRawBackendAddr(), "vmess", true
 	case "trojan_tcp":
 		return "trojan", cfg.TrojanRawBackendAddr(), "trojan", true
 	default:

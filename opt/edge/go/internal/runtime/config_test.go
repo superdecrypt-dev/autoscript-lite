@@ -80,6 +80,7 @@ func TestValidateRejectsInvalidSNIRouteAlias(t *testing.T) {
 		XrayTLSBackend:      "127.0.0.1:22443",
 		XrayWSBackend:       "127.0.0.1:10015",
 		VLESSRawBackend:     "127.0.0.1:33175",
+		VMessRawBackend:     "127.0.0.1:38990",
 		TrojanRawBackend:    "127.0.0.1:48778",
 		TLSCertFile:         "/opt/cert/fullchain.pem",
 		TLSKeyFile:          "/opt/cert/privkey.pem",
@@ -108,6 +109,7 @@ func TestValidateRejectsOverlappingSNIHost(t *testing.T) {
 		XrayTLSBackend:      "127.0.0.1:22443",
 		XrayWSBackend:       "127.0.0.1:10015",
 		VLESSRawBackend:     "127.0.0.1:33175",
+		VMessRawBackend:     "127.0.0.1:38990",
 		TrojanRawBackend:    "127.0.0.1:48778",
 		TLSCertFile:         "/opt/cert/fullchain.pem",
 		TLSKeyFile:          "/opt/cert/privkey.pem",
@@ -139,6 +141,7 @@ func TestValidateRejectsPassthroughLoopToPublicTLSListener(t *testing.T) {
 		XrayTLSBackend:      "127.0.0.1:22443",
 		XrayWSBackend:       "127.0.0.1:10015",
 		VLESSRawBackend:     "127.0.0.1:33175",
+		VMessRawBackend:     "127.0.0.1:38990",
 		TrojanRawBackend:    "127.0.0.1:48778",
 		TLSCertFile:         "/opt/cert/fullchain.pem",
 		TLSKeyFile:          "/opt/cert/privkey.pem",
@@ -167,6 +170,7 @@ func TestValidateRejectsPassthroughLoopToPublicHTTPListener(t *testing.T) {
 		XrayTLSBackend:      "127.0.0.1:22443",
 		XrayWSBackend:       "127.0.0.1:10015",
 		VLESSRawBackend:     "127.0.0.1:33175",
+		VMessRawBackend:     "127.0.0.1:38990",
 		TrojanRawBackend:    "127.0.0.1:48778",
 		TLSCertFile:         "/opt/cert/fullchain.pem",
 		TLSKeyFile:          "/opt/cert/privkey.pem",
@@ -323,6 +327,7 @@ func TestLoadConfigKeepsExplicitRawBackendsWithoutDiscoveryFile(t *testing.T) {
 	writeConfigTestFile(t, envFile, strings.Join([]string{
 		"EDGE_XRAY_INBOUNDS_FILE=/tmp/does-not-exist-raw-inbounds.json",
 		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
+		"EDGE_XRAY_VMESS_RAW_BACKEND=10.10.10.7:443",
 		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
 	}, "\n")+"\n")
 	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)
@@ -333,6 +338,9 @@ func TestLoadConfigKeepsExplicitRawBackendsWithoutDiscoveryFile(t *testing.T) {
 	}
 	if cfg.VLESSRawBackend != "10.10.10.5:443" {
 		t.Fatalf("VLESSRawBackend = %q, want 10.10.10.5:443", cfg.VLESSRawBackend)
+	}
+	if cfg.VMessRawBackend != "10.10.10.7:443" {
+		t.Fatalf("VMessRawBackend = %q, want 10.10.10.7:443", cfg.VMessRawBackend)
 	}
 	if cfg.TrojanRawBackend != "10.10.10.6:443" {
 		t.Fatalf("TrojanRawBackend = %q, want 10.10.10.6:443", cfg.TrojanRawBackend)
@@ -345,6 +353,7 @@ func TestLoadConfigGoProviderDefaultsTLSAndFallbackToHTTPBackend(t *testing.T) {
 		"EDGE_PROVIDER=go",
 		"EDGE_NGINX_HTTP_BACKEND=127.0.0.1:19080",
 		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
+		"EDGE_XRAY_VMESS_RAW_BACKEND=10.10.10.7:443",
 		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
 	}, "\n")+"\n")
 	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)
@@ -368,6 +377,7 @@ func TestLoadConfigGoProviderNormalizesLegacyTLSBackendPattern(t *testing.T) {
 		"EDGE_XRAY_WS_BACKEND=127.0.0.1:18080",
 		"EDGE_XRAY_TLS_BACKEND=127.0.0.1:18443",
 		"EDGE_XRAY_VLESS_RAW_BACKEND=10.10.10.5:443",
+		"EDGE_XRAY_VMESS_RAW_BACKEND=10.10.10.7:443",
 		"EDGE_XRAY_TROJAN_RAW_BACKEND=10.10.10.6:443",
 	}, "\n")+"\n")
 	t.Setenv("EDGE_RUNTIME_ENV_FILE", envFile)

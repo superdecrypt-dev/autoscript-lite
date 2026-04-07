@@ -66,7 +66,7 @@ func main() {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	logger.Printf(
-		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s xray_tls_backend=%s xray_ws_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
+		"edge-mux starting provider=%s http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s xray_tls_backend=%s xray_ws_backend=%s vless_raw_backend=%s vless_source=%s vmess_raw_backend=%s vmess_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t max_conns=%d max_conns_per_ip=%d accept_rate_per_ip=%d/%s cooldown=%d/%s/%s accept_proxy_protocol=%t",
 		cfg.Provider,
 		formatListenAddrs(cfg.HTTPListenAddrs()),
 		formatListenAddrs(cfg.TLSListenAddrs()),
@@ -78,6 +78,8 @@ func main() {
 		cfg.XrayWSBackendAddr(),
 		cfg.VLESSRawBackendAddr(),
 		cfg.VLESSRawSource,
+		cfg.VMessRawBackendAddr(),
+		cfg.VMessRawSource,
 		cfg.TrojanRawBackendAddr(),
 		cfg.TrojanRawSource,
 		formatSNIRoutes(cfg.SNIRoutes),
@@ -726,7 +728,7 @@ func handleReloads(
 		}
 		collector.ObserveReloadSuccess()
 		logger.Printf(
-			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s vless_raw_backend=%s vless_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
+			"edge-mux reloaded http=%s tls=%s metrics=%s metrics_enabled=%t http_backend=%s xray_direct_backend=%s vless_raw_backend=%s vless_source=%s vmess_raw_backend=%s vmess_source=%s trojan_raw_backend=%s trojan_source=%s sni_routes=%s sni_passthrough=%s timeout=%s tls_handshake_timeout=%s classic_tls_on_80=%t",
 			formatListenAddrs(newCfg.HTTPListenAddrs()),
 			formatListenAddrs(newCfg.TLSListenAddrs()),
 			newCfg.MetricsAddr(),
@@ -735,6 +737,8 @@ func handleReloads(
 			newCfg.XrayDirectBackendAddr(),
 			newCfg.VLESSRawBackendAddr(),
 			newCfg.VLESSRawSource,
+			newCfg.VMessRawBackendAddr(),
+			newCfg.VMessRawSource,
 			newCfg.TrojanRawBackendAddr(),
 			newCfg.TrojanRawSource,
 			formatSNIRoutes(newCfg.SNIRoutes),
@@ -855,7 +859,7 @@ func backendIngressPrefix(cfg runtime.Config, target string, left net.Conn, payl
 
 func shouldSendProxyHeader(cfg runtime.Config, target string) bool {
 	switch target {
-	case cfg.HTTPBackendAddr(), cfg.VLESSRawBackendAddr(), cfg.TrojanRawBackendAddr():
+	case cfg.HTTPBackendAddr(), cfg.VLESSRawBackendAddr(), cfg.VMessRawBackendAddr(), cfg.TrojanRawBackendAddr():
 		return true
 	default:
 		return false
@@ -1164,6 +1168,13 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.status = 408
 		decision.reason = "Request Timeout"
 	case detect.ClassTimeout:
+		if strings.HasPrefix(surface, "tls-") {
+			decision.target = cfg.VMessRawBackendAddr()
+			decision.route = "vmess-tcp"
+			decision.contextLabel = routeContextLabel(surface, "vmess-tcp")
+			decision.reason = "vmess_fallback_timeout"
+			break
+		}
 		decision.target = ""
 		decision.route = "reject-timeout"
 		decision.contextLabel = routeContextLabel(surface, "reject-timeout")
@@ -1178,6 +1189,13 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.route = "trojan-tcp"
 		decision.contextLabel = routeContextLabel(surface, "trojan-tcp")
 	default:
+		if strings.HasPrefix(surface, "tls-") {
+			decision.target = cfg.VMessRawBackendAddr()
+			decision.route = "vmess-tcp"
+			decision.contextLabel = routeContextLabel(surface, "vmess-tcp")
+			decision.reason = "vmess_fallback_unknown"
+			break
+		}
 		decision.target = ""
 		decision.route = "reject-unknown"
 		decision.contextLabel = routeContextLabel(surface, "reject-unknown")
@@ -1213,6 +1231,8 @@ func resolveSNIRouteDecision(cfg runtime.Config, sni, surface string) (tlsRouteD
 		decision.sendHTTP502 = true
 	case "vless_tcp":
 		decision.target = cfg.VLESSRawBackendAddr()
+	case "vmess_tcp":
+		decision.target = cfg.VMessRawBackendAddr()
 	case "trojan_tcp":
 		decision.target = cfg.TrojanRawBackendAddr()
 	default:
@@ -1275,6 +1295,8 @@ func backendLabel(cfg runtime.Config, target string) string {
 		return "xray-ws"
 	case cfg.VLESSRawBackendAddr():
 		return "vless"
+	case cfg.VMessRawBackendAddr():
+		return "vmess"
 	case cfg.TrojanRawBackendAddr():
 		return "trojan"
 	default:
@@ -1582,6 +1604,7 @@ func backendHealthSnapshot(cfg runtime.Config) map[string]observability.BackendH
 	addCheck("xray-tls", cfg.XrayTLSBackendAddr(), true)
 	addCheck("xray-ws", cfg.XrayWSBackendAddr(), true)
 	addCheck("vless", cfg.VLESSRawBackendAddr(), true)
+	addCheck("vmess", cfg.VMessRawBackendAddr(), true)
 	addCheck("trojan", cfg.TrojanRawBackendAddr(), true)
 	for _, target := range uniquePassthroughTargets(cfg) {
 		addCheck(passthroughBackendHealthKey(target), target, true)
