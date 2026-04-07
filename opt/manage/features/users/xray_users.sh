@@ -1909,7 +1909,7 @@ lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label
 lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", primary_ports_disp, running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
@@ -2529,7 +2529,7 @@ lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label
 lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
-  lines.append(section_line(f"{proto_disp} TCP+TLS Port", primary_ports_disp, running_label_width))
+  lines.append(section_line(f"{proto_disp} TCP+TLS Port", tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port SSL/TLS", alt_tls_ports_disp, running_label_width))
 lines.append(section_line("Alt Port HTTP", alt_http_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} Path WS", ws_path, running_label_width))
