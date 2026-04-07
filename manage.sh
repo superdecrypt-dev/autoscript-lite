@@ -740,15 +740,15 @@ speed_policy_resync_after_warp_change() {
 # Util
 # -------------------------
 log() {
-  echo -e "${UI_ACCENT}[manage]${UI_RESET} $*"
+  echo -e "${UI_OK}${UI_BOLD}[manage][OK]${UI_RESET} $*"
 }
 
 warn() {
-  echo -e "${UI_WARN}[manage][WARN]${UI_RESET} $*" >&2
+  echo -e "${UI_WARN}${UI_BOLD}[manage][WARN]${UI_RESET} $*" >&2
 }
 
 die() {
-  echo -e "${UI_ERR}[manage][ERROR]${UI_RESET} $*" >&2
+  echo -e "${UI_ERR}${UI_BOLD}[manage][ERROR]${UI_RESET} $*" >&2
   exit 1
 }
 
@@ -1961,7 +1961,7 @@ main_info_cache_refresh() {
 main_menu_info_header_print() {
   local os ram up ip isp country domain tls warp license_status license_days
   local vless_count vmess_count trojan_count
-  local edge_icon nginx_icon xray_icon
+  local edge_segment nginx_segment xray_segment
 
   main_info_cache_refresh
 
@@ -1979,9 +1979,9 @@ main_menu_info_header_print() {
   vless_count="$(account_count_by_proto "vless")"
   vmess_count="$(account_count_by_proto "vmess")"
   trojan_count="$(account_count_by_proto "trojan")"
-  edge_icon="$(service_status_icon "$(main_menu_edge_service_name)")"
-  nginx_icon="$(service_status_icon "nginx")"
-  xray_icon="$(service_status_icon "xray")"
+  edge_segment="$(service_status_segment "Edge Mux" "$(main_menu_edge_service_name)")"
+  nginx_segment="$(service_status_segment "Nginx" "nginx")"
+  xray_segment="$(service_status_segment "Xray" "xray")"
 
   ui_info_print_line "${UI_ICON_SYSTEM}" "System OS" "${os}"
   ui_info_print_line "${UI_ICON_RAM}" "RAM" "${ram}"
@@ -2003,9 +2003,9 @@ main_menu_info_header_print() {
   echo
   main_menu_center_line "$(ui_decorated_section_title "SERVICES")"
   main_menu_center_segments \
-    "$(printf '%bEdge Mux%b %s' "${UI_ACCENT}" "${UI_RESET}" "${edge_icon}")" \
-    "$(printf '%bNginx%b %s' "${UI_ACCENT}" "${UI_RESET}" "${nginx_icon}")" \
-    "$(printf '%bXray%b %s' "${UI_ACCENT}" "${UI_RESET}" "${xray_icon}")"
+    "${edge_segment}" \
+    "${nginx_segment}" \
+    "${xray_segment}"
   hr
 }
 
@@ -2816,6 +2816,22 @@ service_status_icon() {
     printf '%s\n' "${UI_ICON_OK}"
   else
     printf '%s\n' "${UI_ICON_FAIL}"
+  fi
+}
+
+service_status_segment() {
+  local label="${1:-}"
+  local svc="${2:-}"
+  local icon=""
+  if [[ -z "${svc}" ]]; then
+    printf '%b%s%b %s' "${UI_ERR}" "${label}" "${UI_RESET}" "${UI_ICON_FAIL}"
+    return 0
+  fi
+  icon="$(service_status_icon "${svc}")"
+  if svc_exists "${svc}" && svc_is_active "${svc}"; then
+    printf '%b%s%b %s' "${UI_OK}" "${label}" "${UI_RESET}" "${icon}"
+  else
+    printf '%b%s%b %s' "${UI_ERR}" "${label}" "${UI_RESET}" "${icon}"
   fi
 }
 

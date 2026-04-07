@@ -79,7 +79,7 @@ main_menu() {
       fi
       exit 1
     fi
-    main_menu_center_line "Main Menu"
+    main_menu_center_line "$(ui_decorated_section_title "Main Menu")"
     hr
     main_menu_render_options
     hr
