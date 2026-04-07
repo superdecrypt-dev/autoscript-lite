@@ -161,6 +161,55 @@ domain_menu_v2() {
   log "Mode sertifikat: wildcard dns_cf untuk ${DOMAIN} (meliputi *.$DOMAIN)"
 }
 
+domain_control_review_selected_domain() {
+  local source_label cert_label proxy_label zone_label root_label account_label
+  ui_menu_screen_begin "4) Domain Control > Set Domain > Review"
+  source_label="Manual"
+  cert_label="Standalone"
+  proxy_label="Tidak dipakai"
+  zone_label="-"
+  root_label="-"
+  account_label="-"
+
+  if [[ -n "${ACME_ROOT_DOMAIN:-}" ]]; then
+    source_label="Provided Domain"
+    root_label="${ACME_ROOT_DOMAIN}"
+  fi
+  if [[ "${ACME_CERT_MODE:-}" == "dns_cf_wildcard" ]]; then
+    cert_label="Wildcard via dns_cf"
+  fi
+  if [[ -n "${CF_ZONE_ID:-}" ]]; then
+    zone_label="${CF_ZONE_ID}"
+  fi
+  if [[ -n "${CF_ACCOUNT_ID:-}" ]]; then
+    account_label="${CF_ACCOUNT_ID}"
+  fi
+  if [[ -n "${CF_PROXIED:-}" ]]; then
+    if [[ "${CF_PROXIED}" == "true" ]]; then
+      proxy_label="Aktif (orange cloud)"
+    else
+      proxy_label="Nonaktif (DNS only)"
+    fi
+  fi
+
+  echo "Review Set Domain:"
+  echo "  Domain Final      : ${DOMAIN:-<belum diisi>}"
+  echo "  Sumber Domain     : ${source_label}"
+  echo "  Mode Sertifikat   : ${cert_label}"
+  echo "  Root Domain       : ${root_label}"
+  echo "  Cloudflare Proxy  : ${proxy_label}"
+  echo "  Cloudflare Zone   : ${zone_label}"
+  echo "  Cloudflare Acct   : ${account_label}"
+  hr
+  echo "Yang akan dilakukan jika lanjut:"
+  echo "  1. Menyiapkan runtime domain aktif dan sertifikat TLS"
+  echo "  2. Memperbarui DNS/target yang dibutuhkan oleh flow domain"
+  echo "  3. Menjalankan refresh ACCOUNT INFO ke domain baru"
+  echo "  4. Menandai flow gagal bila sync lanjutan belum selesai penuh"
+  hr
+  confirm_menu_apply_now "Konfirmasi final: terapkan domain ${DOMAIN} sekarang?"
+}
+
 stop_conflicting_services() {
   DOMAIN_CTRL_STOPPED_SERVICES=()
   DOMAIN_CTRL_STOP_FAILURES=()
@@ -1005,6 +1054,10 @@ domain_control_set_domain_now() {
       return 0
     fi
     return "${domain_input_rc}"
+  fi
+  if ! domain_control_review_selected_domain; then
+    warn "Set Domain dibatalkan sebelum apply runtime."
+    return 0
   fi
   local spin_log=""
   local spinner_warn_lines=""
