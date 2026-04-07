@@ -1174,7 +1174,7 @@ account_info_probe_domain_from_any_account_file() {
   for proto in "${ACCOUNT_PROTO_DIRS[@]}"; do
     dir="${ACCOUNT_ROOT}/${proto}"
     [[ -d "${dir}" ]] || continue
-    f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print -quit 2>/dev/null || true)"
+    f="$(find "${dir}" -maxdepth 1 -type f -name '*.txt' ! -name '.*' -print -quit 2>/dev/null || true)"
     [[ -n "${f}" ]] || continue
     dom="$(grep -E '^[[:space:]]*Domain[[:space:]]*:' "${f}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*Domain[[:space:]]*:[[:space:]]*//' || true)"
     dom="$(echo "${dom}" | awk '{print $1}' | tr -d ';')"
@@ -1883,7 +1883,7 @@ account_count_by_proto() {
     username="${base%%@*}"
     [[ -n "${username}" ]] || continue
     seen["${username}"]=1
-  done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null)
+  done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' ! -name '.*' -print0 2>/dev/null)
 
   echo "${#seen[@]}"
 }
@@ -3116,7 +3116,7 @@ account_collect_files() {
 
       ACCOUNT_FILES+=("${f}")
       ACCOUNT_FILE_PROTOS+=("${proto}")
-    done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' ! -name '.*' -print0 2>/dev/null | sort -z)
   done
 
   # Tambahkan target dari quota metadata bila file account belum ada,

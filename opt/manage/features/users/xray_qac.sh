@@ -70,7 +70,7 @@ quota_collect_files() {
       has_at["${key}"]=1
       QUOTA_FILES+=("${QUOTA_ROOT}/${proto}/${u}@${proto}.json")
       QUOTA_FILE_PROTOS+=("${proto}")
-    done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null | sort -z)
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.txt' ! -name '.*' -print0 2>/dev/null | sort -z)
   done
 
   while IFS= read -r email; do
