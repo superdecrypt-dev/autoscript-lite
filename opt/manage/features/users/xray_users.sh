@@ -4633,8 +4633,12 @@ user_del_menu() {
     else
       confirm_rc=$?
       if (( confirm_rc == 2 )); then
+        warn "Penghapusan user dibatalkan (kembali)."
+        pause
         return 0
       fi
+      warn "Penghapusan user dibatalkan."
+      pause
       continue
     fi
   done
@@ -5031,8 +5035,12 @@ user_reset_credential_menu() {
     else
       confirm_rc=$?
       if (( confirm_rc == 2 )); then
+        warn "Reset UUID/password dibatalkan (kembali)."
+        pause
         return 0
       fi
+      warn "Reset UUID/password dibatalkan."
+      pause
       continue
     fi
   done
