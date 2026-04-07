@@ -1443,6 +1443,7 @@ quota_menu() {
     echo "  search) filter username"
     echo "  clear) hapus filter"
     echo "  next / previous"
+    echo "  kembali"
     hr
     if ! read -r -p "Pilih: " c; then
       echo
