@@ -84,6 +84,7 @@ ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
         "Vmess HUP",
         "Vmess XHTTP",
         "Vmess gRPC",
+        "Vmess TCP+TLS Port",
         "Alt Port SSL/TLS",
         "Alt Port HTTP",
         "Vmess Path WS",
