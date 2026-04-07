@@ -1168,7 +1168,7 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.status = 408
 		decision.reason = "Request Timeout"
 	case detect.ClassTimeout:
-		if strings.HasPrefix(surface, "tls-") {
+		if vmessFallbackSurface(surface) {
 			decision.target = cfg.VMessRawBackendAddr()
 			decision.route = "vmess-tcp"
 			decision.contextLabel = routeContextLabel(surface, "vmess-tcp")
@@ -1189,7 +1189,7 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.route = "trojan-tcp"
 		decision.contextLabel = routeContextLabel(surface, "trojan-tcp")
 	default:
-		if strings.HasPrefix(surface, "tls-") {
+		if vmessFallbackSurface(surface) {
 			decision.target = cfg.VMessRawBackendAddr()
 			decision.route = "vmess-tcp"
 			decision.contextLabel = routeContextLabel(surface, "vmess-tcp")
@@ -1203,6 +1203,15 @@ func decideTLSPayloadRoute(cfg runtime.Config, surface string, initial []byte, c
 		decision.status = 400
 	}
 	return decision
+}
+
+func vmessFallbackSurface(surface string) bool {
+	switch strings.TrimSpace(surface) {
+	case "tls-inner", "http-inner":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveSNIRouteDecision(cfg runtime.Config, sni, surface string) (tlsRouteDecision, bool) {

@@ -497,6 +497,31 @@ func TestDecideTLSPayloadRouteFallsBackToVMessOnTimedOutUnknownTLSPayload(t *tes
 	}
 }
 
+func TestDecideTLSPayloadRouteFallsBackToVMessOnTimedOutUnknownHTTPInnerPayload(t *testing.T) {
+	cfg := runtime.Config{
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		VMessRawBackend:   "127.0.0.1:38990",
+		TrojanRawBackend:  "127.0.0.1:48778",
+	}
+
+	decision := decideTLSPayloadRoute(cfg, "http-inner", nil, detect.ClassTimeout, "", "", false)
+
+	if decision.target != cfg.VMessRawBackendAddr() {
+		t.Fatalf("target = %q, want %q", decision.target, cfg.VMessRawBackendAddr())
+	}
+	if decision.route != "vmess-tcp" {
+		t.Fatalf("route = %q, want vmess-tcp", decision.route)
+	}
+	if decision.status != 0 {
+		t.Fatalf("status = %d, want 0", decision.status)
+	}
+	if decision.reason != "vmess_fallback_timeout" {
+		t.Fatalf("reason = %q, want vmess_fallback_timeout", decision.reason)
+	}
+}
+
 func TestDecideTLSPayloadRouteFallsBackToVMessOnUnknownTLSPayload(t *testing.T) {
 	cfg := runtime.Config{
 		HTTPBackend:       "127.0.0.1:18080",
@@ -507,6 +532,31 @@ func TestDecideTLSPayloadRouteFallsBackToVMessOnUnknownTLSPayload(t *testing.T) 
 	}
 
 	decision := decideTLSPayloadRoute(cfg, "tls-inner", []byte("noise"), detect.ClassUnknown, "", "", false)
+
+	if decision.target != cfg.VMessRawBackendAddr() {
+		t.Fatalf("target = %q, want %q", decision.target, cfg.VMessRawBackendAddr())
+	}
+	if decision.route != "vmess-tcp" {
+		t.Fatalf("route = %q, want vmess-tcp", decision.route)
+	}
+	if decision.status != 0 {
+		t.Fatalf("status = %d, want 0", decision.status)
+	}
+	if decision.reason != "vmess_fallback_unknown" {
+		t.Fatalf("reason = %q, want vmess_fallback_unknown", decision.reason)
+	}
+}
+
+func TestDecideTLSPayloadRouteFallsBackToVMessOnUnknownHTTPInnerPayload(t *testing.T) {
+	cfg := runtime.Config{
+		HTTPBackend:       "127.0.0.1:18080",
+		XrayDirectBackend: "127.0.0.1:22022",
+		VLESSRawBackend:   "127.0.0.1:33175",
+		VMessRawBackend:   "127.0.0.1:38990",
+		TrojanRawBackend:  "127.0.0.1:48778",
+	}
+
+	decision := decideTLSPayloadRoute(cfg, "http-inner", []byte("noise"), detect.ClassUnknown, "", "", false)
 
 	if decision.target != cfg.VMessRawBackendAddr() {
 		t.Fatalf("target = %q, want %q", decision.target, cfg.VMessRawBackendAddr())
