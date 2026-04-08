@@ -283,6 +283,12 @@ def systemctl_show_value(unit: str, key: str, default: str = "unknown") -> str:
     return value or default
 
 
+def dual_line(left: str, right: str = "", width: int = 44) -> str:
+    if not right:
+        return left
+    return f"{left:<{width}}{right}"
+
+
 def latest_visible_snapshot(data: dict, env: dict[str, str]) -> dict[str, str] | None:
     users = visible_users(data)
     if not users:
@@ -337,16 +343,21 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
         uri = snapshot["uri"]
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
         content = [
-            "=== HYSTERIA 2 ACCOUNT INFO ===",
-            f"Username            : {username}",
-            f"Password            : {password}",
-            f"Domain              : {domain}",
-            f"Port UDP            : {port}",
-            f"SNI                 : {domain}",
-            f"Masquerade          : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}",
-            f"Created At          : {display_created_at(created_at)}",
-            f"Valid Until         : {display_expired_at(expired_at)}",
-            f"URI                 : {uri}",
+            dual_line("=== HYSTERIA 2 ACCOUNT INFO ===", f"Domain      : {domain}"),
+            f"  Username    : {username}",
+            f"  Password    : {password}",
+            "  Protocol    : hysteria2",
+            "  Transport   : QUIC",
+            "  TLS         : enabled",
+            "  Auth Type   : userpass",
+            dual_line(f"  Port UDP    : {port}", f"SNI         : {domain}"),
+            f"  Masquerade  : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}",
+            f"  Valid Until : {display_expired_at(expired_at)}",
+            f"  Created     : {display_created_at(created_at)}",
+            "",
+            "=== ACCESS CONFIG ===",
+            "  Import Type : URI",
+            f"  URI         : {uri}",
             "",
         ]
         save_text_atomic(path, "\n".join(content), mode=0o600)
