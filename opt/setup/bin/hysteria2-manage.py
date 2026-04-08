@@ -63,7 +63,7 @@ def ensure_env_defaults() -> dict[str, str]:
     env = load_env()
     changed = False
     defaults = {
-        "HYSTERIA2_PORT": os.environ.get("HYSTERIA2_PORT", "8448"),
+        "HYSTERIA2_PORT": os.environ.get("HYSTERIA2_PORT", "443"),
         "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/"),
     }
     for key, value in defaults.items():
@@ -137,7 +137,7 @@ def yaml_quote(value: str) -> str:
 
 
 def render_config(env: dict[str, str], data: dict) -> None:
-    port = env.get("HYSTERIA2_PORT", "8448")
+    port = env.get("HYSTERIA2_PORT", "443")
     masquerade_url = env.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/")
     lines = [
         f"listen: :{port}",
@@ -171,7 +171,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
 def render_account_files(env: dict[str, str], data: dict) -> None:
     ACCOUNT_ROOT.mkdir(parents=True, exist_ok=True)
     domain = domain_value()
-    port = env.get("HYSTERIA2_PORT", "8448")
+    port = env.get("HYSTERIA2_PORT", "443")
     visible = visible_users(data)
     keep = set()
     for item in visible:
@@ -280,7 +280,7 @@ def list_users_cmd(_: argparse.Namespace) -> int:
 def status_cmd(_: argparse.Namespace) -> int:
     env, data = ensure_runtime()
     visible = visible_users(data)
-    print(f"PORT={env.get('HYSTERIA2_PORT', '8448')}")
+    print(f"PORT={env.get('HYSTERIA2_PORT', '443')}")
     print(f"DOMAIN={domain_value()}")
     print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}")
     print(f"USER_COUNT={len(visible)}")

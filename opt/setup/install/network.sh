@@ -256,7 +256,7 @@ hysteria2_udp_port_free() {
 }
 
 hysteria2_pick_udp_port() {
-  local requested="${HYSTERIA2_PORT:-8448}" candidate tries=0
+  local requested="${HYSTERIA2_PORT:-443}" candidate tries=0
   if [[ "${requested}" =~ ^[0-9]+$ ]] && hysteria2_udp_port_free "${requested}"; then
     printf '%s\n' "${requested}"
     return 0
