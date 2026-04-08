@@ -1526,7 +1526,6 @@ warp_per_user_menu() {
       hr
       echo "  1) direct"
       echo "  2) warp"
-      echo "  3) inherit (ikut global)"
       echo "  0) kembali"
       hr
       read -r -p "Pilih: " s
@@ -1569,25 +1568,6 @@ warp_per_user_menu() {
           if warp_user_set_effective_mode "${email}" warp "${routing_candidate}"; then
             pending_changes="true"
             log "Per-user di-stage WARP: ${email}"
-            pause
-            break
-          fi
-          pause
-          ;;
-        3)
-          if ! confirm_yn_or_back "Reset user ${email} ke INHERIT sekarang?"; then
-            warn "Reset WARP per-user dibatalkan."
-            pause
-            continue
-          fi
-          if ! xray_routing_candidate_prepare routing_candidate; then
-            warn "Gagal menyiapkan staging routing."
-            pause
-            continue
-          fi
-          if warp_user_set_effective_mode "${email}" inherit "${routing_candidate}"; then
-            pending_changes="true"
-            log "Per-user di-stage INHERIT: ${email}"
             pause
             break
           fi
