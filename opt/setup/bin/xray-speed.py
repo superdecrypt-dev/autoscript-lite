@@ -38,6 +38,10 @@ SPEED_RULE_MARKER_PREFIX = "dummy-speed-user-"
 HARD_BLOCK_MARKERS = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"}
 DEFAULT_XRAY_OUTBOUNDS_CONF = "/usr/local/etc/xray/conf.d/20-outbounds.json"
 DEFAULT_XRAY_ROUTING_CONF = "/usr/local/etc/xray/conf.d/30-routing.json"
+WARP_LOOP_IFACE = "lo"
+WARP_IFB_IFACE = "ifb2"
+WARP_PROXY_DEFAULT_HOST = "127.0.0.1"
+WARP_PROXY_DEFAULT_PORT = 40000
 
 
 def now_iso():
@@ -280,6 +284,86 @@ def is_hard_block_user_rule(rule):
   if not isinstance(users, list):
     return False
   return any(isinstance(user, str) and user in HARD_BLOCK_MARKERS for user in users)
+
+
+def load_speed_warp_marks(cfg):
+  rt_path = str(cfg.get("xray_routing_conf") or "").strip()
+  if not rt_path or not os.path.isfile(rt_path):
+    return set()
+  try:
+    rt_cfg = load_json_strict(rt_path)
+  except Exception:
+    return set()
+
+  routing = rt_cfg.get("routing") or {}
+  rules = routing.get("rules")
+  if not isinstance(rules, list):
+    return set()
+
+  marks = set()
+  for rule in rules:
+    if not isinstance(rule, dict):
+      continue
+    if rule.get("type") != "field":
+      continue
+    users = rule.get("user")
+    if not isinstance(users, list):
+      continue
+    for user in users:
+      if not isinstance(user, str):
+        continue
+      matched = re.fullmatch(rf"{re.escape(SPEED_RULE_MARKER_PREFIX)}(\d+)-warp", user.strip())
+      if not matched:
+        continue
+      try:
+        mark = int(matched.group(1))
+      except Exception:
+        continue
+      if MARK_MIN <= mark <= MARK_MAX:
+        marks.add(mark)
+  return marks
+
+
+def detect_warp_proxy_bind(cfg):
+  out_path = str(cfg.get("xray_outbounds_conf") or "").strip()
+  if not out_path or not os.path.isfile(out_path):
+    return WARP_PROXY_DEFAULT_HOST, WARP_PROXY_DEFAULT_PORT
+  try:
+    out_cfg = load_json_strict(out_path)
+  except Exception:
+    return WARP_PROXY_DEFAULT_HOST, WARP_PROXY_DEFAULT_PORT
+
+  outbounds = out_cfg.get("outbounds")
+  if not isinstance(outbounds, list):
+    return WARP_PROXY_DEFAULT_HOST, WARP_PROXY_DEFAULT_PORT
+
+  for outbound in outbounds:
+    if not isinstance(outbound, dict):
+      continue
+    if norm_tag(outbound.get("tag")) != "warp":
+      continue
+    if norm_tag(outbound.get("protocol")) != "socks":
+      continue
+    settings = outbound.get("settings") or {}
+    servers = settings.get("servers")
+    if not isinstance(servers, list) or not servers:
+      break
+    server = servers[0] or {}
+    host = str(server.get("address") or WARP_PROXY_DEFAULT_HOST).strip() or WARP_PROXY_DEFAULT_HOST
+    try:
+      port = int(server.get("port") or WARP_PROXY_DEFAULT_PORT)
+    except Exception:
+      port = WARP_PROXY_DEFAULT_PORT
+    if port < 1 or port > 65535:
+      port = WARP_PROXY_DEFAULT_PORT
+    return host, port
+
+  return WARP_PROXY_DEFAULT_HOST, WARP_PROXY_DEFAULT_PORT
+
+
+def is_loopback_host(host):
+  host_n = str(host or "").strip().lower()
+  return host_n in {"127.0.0.1", "localhost", "::1"}
 
 
 def build_synced_xray_configs(out_cfg, rt_cfg, policies):
@@ -634,6 +718,16 @@ def tc_is_speed_managed(iface, ifb_iface):
   )
 
 
+def tc_is_warp_loop_managed(loop_iface, ifb_iface):
+  out_loop = qdisc_show(loop_iface)
+  out_ifb = qdisc_show(ifb_iface)
+  return (
+    "qdisc htb 3:" in out_loop and
+    "qdisc ingress ffff:" in out_loop and
+    "qdisc htb 4:" in out_ifb
+  )
+
+
 def apply_tc(iface, ifb_iface, default_rate_mbit, policies):
   if not policies:
     flush_tc(iface, ifb_iface)
@@ -712,6 +806,87 @@ def apply_tc(iface, ifb_iface, default_rate_mbit, policies):
   return applied
 
 
+def flush_tc_warp_loop(loop_iface, ifb_iface):
+  run(["tc", "qdisc", "del", "dev", loop_iface, "root"], check=False)
+  run(["tc", "qdisc", "del", "dev", loop_iface, "ingress"], check=False)
+  run(["tc", "qdisc", "del", "dev", ifb_iface, "root"], check=False)
+
+
+def apply_tc_warp_loop(loop_iface, ifb_iface, proxy_host, proxy_port, default_rate_mbit, policies):
+  if not policies or not is_loopback_host(proxy_host) or int(proxy_port) < 1:
+    flush_tc_warp_loop(loop_iface, ifb_iface)
+    return []
+
+  ensure_ifb(ifb_iface)
+  flush_tc_warp_loop(loop_iface, ifb_iface)
+
+  default_rate = mbit_text(max(1000.0, float(default_rate_mbit)))
+  proxy_host = "127.0.0.1"
+  proxy_port = str(int(proxy_port))
+
+  run(["tc", "qdisc", "replace", "dev", loop_iface, "root", "handle", "3:", "htb", "default", "999"], check=True)
+  run(["tc", "class", "replace", "dev", loop_iface, "parent", "3:", "classid", "3:999", "htb", "rate", default_rate, "ceil", default_rate], check=True)
+  run(["tc", "qdisc", "replace", "dev", loop_iface, "parent", "3:999", "handle", "3999:", "fq_codel"], check=False)
+  run(["tc", "qdisc", "replace", "dev", loop_iface, "handle", "ffff:", "ingress"], check=True)
+
+  ingress = [
+    "tc", "filter", "replace", "dev", loop_iface, "parent", "ffff:", "protocol", "ip", "prio", "10",
+    "u32", "match", "ip", "src", f"{proxy_host}/32",
+    "match", "ip", "protocol", "6", "0xff",
+    "match", "ip", "sport", proxy_port, "0xffff",
+  ]
+  try:
+    run(ingress + ["action", "connmark", "action", "mirred", "egress", "redirect", "dev", ifb_iface], check=True)
+  except Exception:
+    run(ingress + ["action", "mirred", "egress", "redirect", "dev", ifb_iface], check=True)
+
+  run(["tc", "qdisc", "replace", "dev", ifb_iface, "root", "handle", "4:", "htb", "default", "999"], check=True)
+  run(["tc", "class", "replace", "dev", ifb_iface, "parent", "4:", "classid", "4:999", "htb", "rate", default_rate, "ceil", default_rate], check=True)
+  run(["tc", "qdisc", "replace", "dev", ifb_iface, "parent", "4:999", "handle", "4999:", "fq_codel"], check=False)
+
+  applied = []
+  minor = 100
+  for p in policies:
+    if minor > 4094:
+      break
+    up = mbit_text(p["up_mbit"])
+    down = mbit_text(p["down_mbit"])
+    class_up = f"3:{minor}"
+    class_down = f"4:{minor}"
+    qh_up = f"{minor + 3000}:"
+    qh_down = f"{minor + 4000}:"
+    mark_hex = hex(int(p["mark"]))
+
+    run(["tc", "class", "replace", "dev", loop_iface, "parent", "3:", "classid", class_up, "htb", "rate", up, "ceil", up], check=True)
+    run(["tc", "qdisc", "replace", "dev", loop_iface, "parent", class_up, "handle", qh_up, "fq_codel"], check=False)
+    run([
+      "tc", "filter", "replace", "dev", loop_iface, "parent", "3:", "protocol", "ip", "prio", "20",
+      "u32", "match", "ip", "dst", f"{proxy_host}/32",
+      "match", "ip", "protocol", "6", "0xff",
+      "match", "ip", "dport", proxy_port, "0xffff",
+      "match", "mark", mark_hex, "0xffffffff",
+      "flowid", class_up,
+    ], check=True)
+
+    run(["tc", "class", "replace", "dev", ifb_iface, "parent", "4:", "classid", class_down, "htb", "rate", down, "ceil", down], check=True)
+    run(["tc", "qdisc", "replace", "dev", ifb_iface, "parent", class_down, "handle", qh_down, "fq_codel"], check=False)
+    run(["tc", "filter", "replace", "dev", ifb_iface, "parent", "4:", "protocol", "ip", "handle", str(int(p["mark"])), "fw", "flowid", class_down], check=True)
+
+    applied.append({
+      "username": p["username"],
+      "proto": p["proto"],
+      "mark": p["mark"],
+      "class_minor": minor,
+      "up_mbit": p["up_mbit"],
+      "down_mbit": p["down_mbit"],
+      "path": "warp-loop",
+      "proxy": f"{proxy_host}:{proxy_port}",
+    })
+    minor += 1
+
+  return applied
+
+
 def write_state(state_file, data):
   payload = {
     "updated_at": now_iso(),
@@ -759,28 +934,63 @@ def apply_snapshot(cfg, snapshot, dry_run=False):
     xray_config_synced = sync_xray_speed_config(cfg, policies)
   else:
     xray_config_synced = sync_xray_speed_config(cfg, [])
+  warp_marks = load_speed_warp_marks(cfg) if policies else set()
+  direct_policies = [policy for policy in policies if int(policy.get("mark", 0)) not in warp_marks]
+  warp_policies = [policy for policy in policies if int(policy.get("mark", 0)) in warp_marks]
+  warp_proxy_host, warp_proxy_port = detect_warp_proxy_bind(cfg)
   tc_cleanup = "none"
+  warp_tc_cleanup = "none"
   if policies:
     apply_nft()
-    applied = apply_tc(iface, ifb_iface, default_rate_mbit, policies)
-    tc_cleanup = "managed_active"
+    if direct_policies:
+      applied = apply_tc(iface, ifb_iface, default_rate_mbit, direct_policies)
+      tc_cleanup = "managed_active"
+    else:
+      if tc_is_speed_managed(iface, ifb_iface):
+        flush_tc(iface, ifb_iface)
+        tc_cleanup = "flushed_managed"
+      else:
+        tc_cleanup = "skipped_foreign_tc"
+      applied = []
+
+    if warp_policies and is_loopback_host(warp_proxy_host):
+      warp_applied = apply_tc_warp_loop(WARP_LOOP_IFACE, WARP_IFB_IFACE, warp_proxy_host, warp_proxy_port, default_rate_mbit, warp_policies)
+      warp_tc_cleanup = "managed_active"
+    else:
+      if tc_is_warp_loop_managed(WARP_LOOP_IFACE, WARP_IFB_IFACE):
+        flush_tc_warp_loop(WARP_LOOP_IFACE, WARP_IFB_IFACE)
+        warp_tc_cleanup = "flushed_managed"
+      else:
+        warp_tc_cleanup = "none"
+      warp_applied = []
   else:
     if tc_is_speed_managed(iface, ifb_iface):
       flush_tc(iface, ifb_iface)
       tc_cleanup = "flushed_managed"
     else:
       tc_cleanup = "skipped_foreign_tc"
+    if tc_is_warp_loop_managed(WARP_LOOP_IFACE, WARP_IFB_IFACE):
+      flush_tc_warp_loop(WARP_LOOP_IFACE, WARP_IFB_IFACE)
+      warp_tc_cleanup = "flushed_managed"
+    else:
+      warp_tc_cleanup = "skipped_foreign_tc"
     flush_nft()
     applied = []
+    warp_applied = []
 
   write_state(cfg["state_file"], {
     "ok": True,
     "dry_run": False,
     "iface": iface,
     "ifb_iface": ifb_iface,
-    "policy_count": len(applied),
+    "policy_count": len(applied) + len(warp_applied),
     "applied": applied,
+    "warp_applied": warp_applied,
+    "warp_policy_count": len(warp_applied),
+    "warp_marks": sorted(warp_marks),
+    "warp_proxy": f"{warp_proxy_host}:{warp_proxy_port}" if warp_policies else "",
     "tc_cleanup": tc_cleanup,
+    "warp_tc_cleanup": warp_tc_cleanup,
     "xray_config_sync": "updated" if xray_config_synced else "unchanged",
   })
   return 0
@@ -833,12 +1043,15 @@ def do_flush(cfg_path):
     raise RuntimeError("Tidak bisa mendeteksi interface utama.")
   ensure_deps()
   flush_tc(iface, cfg["ifb_iface"])
+  flush_tc_warp_loop(WARP_LOOP_IFACE, WARP_IFB_IFACE)
   flush_nft()
   write_state(cfg["state_file"], {
     "ok": True,
     "flushed": True,
     "iface": iface,
     "ifb_iface": cfg["ifb_iface"],
+    "warp_loop_iface": WARP_LOOP_IFACE,
+    "warp_ifb_iface": WARP_IFB_IFACE,
   })
   return 0
 
