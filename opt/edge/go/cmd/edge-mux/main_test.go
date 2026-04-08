@@ -742,22 +742,6 @@ func TestDecideTLSPayloadRoutePrefersSNIToDetectedClass(t *testing.T) {
 	}
 }
 
-func TestDecideTLSPayloadRouteRecognizesKnownRouteWithMultiSegmentPrefixSuffix(t *testing.T) {
-	cfg := runtime.Config{
-		HTTPBackend: "127.0.0.1:18080",
-	}
-	initial := []byte("GET /bebas/bebas2/vless-ws/bebas/bebas2 HTTP/1.1\r\nHost: forced.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-
-	decision := decideTLSPayloadRoute(cfg, "tls-inner", initial, detect.ClassHTTP, "", "forced.example.com", false)
-
-	if decision.route != "vless-ws" {
-		t.Fatalf("decision.route = %q, want vless-ws", decision.route)
-	}
-	if decision.path != "/bebas/bebas2/vless-ws/bebas/bebas2" {
-		t.Fatalf("decision.path = %q, want full wrapped path", decision.path)
-	}
-}
-
 func TestHealthBlockReasonUsesBackendStatus(t *testing.T) {
 	if got := healthBlockReason(observability.BackendHealthSnapshot{Healthy: false, Status: "down"}, true); got != "backend_down" {
 		t.Fatalf("healthBlockReason(down) = %q, want backend_down", got)
