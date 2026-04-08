@@ -1,0 +1,14 @@
+[Unit]
+Description=Hysteria 2 expired cleaner
+After=network-online.target __HYSTERIA2_SERVICE_NAME__
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__HYSTERIA2_EXPIRED_BIN__ --manage-bin __HYSTERIA2_MANAGE_BIN__ --service __HYSTERIA2_SERVICE_NAME__ --interval __HYSTERIA2_EXPIRED_INTERVAL__
+Restart=always
+RestartSec=2
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

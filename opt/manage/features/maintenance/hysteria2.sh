@@ -49,12 +49,12 @@ hysteria2_service_label() {
 
 hysteria2_user_rows_print() {
   local raw="${1:-}" show_uri="${2:-1}"
-  local idx=0 username created_at account_file uri
-  while IFS=$'\t' read -r username created_at account_file uri; do
+  local idx=0 username created_at expired_at uri
+  while IFS=$'\t' read -r username created_at expired_at uri; do
     [[ -n "${username}" ]] || continue
     idx=$((idx + 1))
     printf '%2d) %-20s %s\n' "${idx}" "${username}" "${created_at:-unknown}"
-    printf '    account file : %s\n' "${account_file:-unknown}"
+    printf '    valid until  : %s\n' "${expired_at:-Unlimited}"
     if [[ "${show_uri}" == "1" && -n "${uri}" ]]; then
       printf '    uri          : %s\n' "${uri}"
     fi
@@ -63,12 +63,12 @@ hysteria2_user_rows_print() {
 }
 
 hysteria2_user_row_lookup() {
-  local raw="${1:-}" choice="${2:-}" idx=0 username created_at account_file uri
-  while IFS=$'\t' read -r username created_at account_file uri; do
+  local raw="${1:-}" choice="${2:-}" idx=0 username created_at expired_at uri
+  while IFS=$'\t' read -r username created_at expired_at uri; do
     [[ -n "${username}" ]] || continue
     idx=$((idx + 1))
     if [[ "${choice}" == "${idx}" || "${choice}" == "${username}" ]]; then
-      printf '%s\t%s\t%s\t%s\n' "${username}" "${created_at}" "${account_file}" "${uri}"
+      printf '%s\t%s\t%s\t%s\n' "${username}" "${created_at}" "${expired_at}" "${uri}"
       return 0
     fi
   done <<<"${raw}"
@@ -101,7 +101,7 @@ hysteria2_restart_service_if_present() {
 }
 
 hysteria2_status_menu() {
-  local bin="" status_blob="" service_label="" service_enabled="" port="" domain="" masquerade="" user_count="" latest_username="" latest_created_at="" latest_account_file="" config_file="" users_file="" account_root=""
+  local bin="" status_blob="" service_label="" service_enabled="" cleaner_state="" cleaner_enabled="" port="" domain="" masquerade="" user_count="" latest_username="" latest_created_at="" latest_expired_at="" config_file="" users_file="" account_root=""
   ui_menu_screen_begin "$(hysteria2_menu_title "Status")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   status_blob="$("${bin}" status 2>/dev/null || true)"
@@ -116,13 +116,17 @@ hysteria2_status_menu() {
     "$(hysteria2_status_field "${status_blob}" "SERVICE_STATE")" \
     "$(hysteria2_status_field "${status_blob}" "SERVICE_SUBSTATE")")"
   service_enabled="$(hysteria2_status_field "${status_blob}" "SERVICE_ENABLED")"
+  cleaner_state="$(hysteria2_service_label \
+    "$(hysteria2_status_field "${status_blob}" "EXPIRED_CLEANER_STATE")" \
+    "$(hysteria2_status_field "${status_blob}" "EXPIRED_CLEANER_SUBSTATE")")"
+  cleaner_enabled="$(hysteria2_status_field "${status_blob}" "EXPIRED_CLEANER_ENABLED")"
   port="$(hysteria2_status_field "${status_blob}" "PORT")"
   domain="$(hysteria2_status_field "${status_blob}" "DOMAIN")"
   masquerade="$(hysteria2_status_field "${status_blob}" "MASQUERADE_URL")"
   user_count="$(hysteria2_status_field "${status_blob}" "USER_COUNT")"
   latest_username="$(hysteria2_status_field "${status_blob}" "LATEST_USERNAME")"
   latest_created_at="$(hysteria2_status_field "${status_blob}" "LATEST_CREATED_AT")"
-  latest_account_file="$(hysteria2_status_field "${status_blob}" "LATEST_ACCOUNT_FILE")"
+  latest_expired_at="$(hysteria2_status_field "${status_blob}" "LATEST_EXPIRED_AT")"
   config_file="$(hysteria2_status_field "${status_blob}" "CONFIG_FILE")"
   users_file="$(hysteria2_status_field "${status_blob}" "USERS_FILE")"
   account_root="$(hysteria2_status_field "${status_blob}" "ACCOUNT_ROOT")"
@@ -131,6 +135,8 @@ hysteria2_status_menu() {
   hr
   hysteria2_print_kv "Service" "${service_label}"
   hysteria2_print_kv "Enabled" "${service_enabled}"
+  hysteria2_print_kv "Auto Expired" "${cleaner_state}"
+  hysteria2_print_kv "Cleaner Enabled" "${cleaner_enabled}"
   hysteria2_print_kv "Listen" "UDP :${port:-443}"
   hysteria2_print_kv "Domain" "${domain}"
   hysteria2_print_kv "Masquerade" "${masquerade}"
@@ -141,7 +147,7 @@ hysteria2_status_menu() {
   if [[ -n "${latest_username}" ]]; then
     hysteria2_print_kv "Username" "${latest_username}"
     hysteria2_print_kv "Created At" "${latest_created_at}"
-    hysteria2_print_kv "Account File" "${latest_account_file}"
+    hysteria2_print_kv "Valid Until" "${latest_expired_at}"
   else
     echo "Belum ada user Hysteria 2."
   fi
@@ -177,8 +183,8 @@ hysteria2_list_users_menu() {
 }
 
 hysteria2_add_user_menu() {
-  local bin="" status_blob="" username="" password="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
-  local domain="" port="" masquerade="" account_root="" account_file="" password_label=""
+  local bin="" status_blob="" existing_users="" username="" password="" days_input="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
+  local domain="" port="" masquerade="" account_root="" account_file="" password_label="" expiry_label="Unlimited" count=0
   ui_menu_screen_begin "$(hysteria2_menu_title "Add User")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
 
@@ -194,12 +200,42 @@ hysteria2_add_user_menu() {
   port="$(hysteria2_status_field "${status_blob}" "PORT")"
   masquerade="$(hysteria2_status_field "${status_blob}" "MASQUERADE_URL")"
   account_root="$(hysteria2_status_field "${status_blob}" "ACCOUNT_ROOT")"
+  existing_users="$("${bin}" list-users 2>/dev/null || true)"
+
+  echo "Current Accounts"
+  hr
+  if [[ -n "${existing_users}" ]]; then
+    count="$(awk -F'\t' 'NF && $1 != "" {c++} END {print c+0}' <<<"${existing_users}")"
+    printf 'Total user : %s\n' "${count}"
+    hr
+    hysteria2_user_rows_print "${existing_users}" 1
+  else
+    echo "Belum ada user Hysteria 2."
+  fi
+  hr
 
   read -r -p "Username baru (0 untuk kembali): " username || { echo; return 0; }
   case "${username}" in
     ""|0|kembali|k|back|b) return 0 ;;
   esac
   read -r -p "Password (kosong=auto): " password || { echo; return 0; }
+  while true; do
+    read -r -p "Masa aktif (hari, kosong=tanpa expiry): " days_input || { echo; return 0; }
+    if [[ -z "${days_input}" ]]; then
+      expiry_label="Unlimited"
+      break
+    fi
+    if [[ "${days_input}" =~ ^[0-9]+$ ]]; then
+      if [[ "${days_input}" == "0" ]]; then
+        expiry_label="Unlimited"
+      else
+        expiry_label="$(date -u -d "+${days_input} days" '+%Y-%m-%d' 2>/dev/null || true)"
+        [[ -n "${expiry_label}" ]] || expiry_label="After ${days_input} day(s)"
+      fi
+      break
+    fi
+    warn "Masa aktif harus angka bulat >= 0."
+  done
 
   account_file="${account_root:-/opt/account/hysteria2}/${username}@hy2.txt"
   password_label="${password:-auto-generated}"
@@ -209,13 +245,13 @@ hysteria2_add_user_menu() {
   echo "Domain         : ${domain}"
   echo "Port UDP       : ${port:-443}"
   echo "Masquerade     : ${masquerade}"
-  echo "Account File   : ${account_file}"
+  echo "Valid Until    : ${expiry_label}"
   hr
   if ! confirm_menu_apply_now "Buat user Hysteria 2 '${username}' sekarang?"; then
     pause
     return 0
   fi
-  if ! cmd_out="$("${bin}" add-user --username "${username}" --password "${password}" 2>&1)"; then
+  if ! cmd_out="$("${bin}" add-user --username "${username}" --password "${password}" --days "${days_input}" 2>&1)"; then
     warn "Gagal membuat user Hysteria 2."
     echo "${cmd_out}"
     hr
@@ -231,11 +267,9 @@ hysteria2_add_user_menu() {
   fi
   echo "[manage][OK] User Hysteria 2 berhasil dibuat."
   echo "${cmd_out}"
-  account_file="$(awk -F= '$1=="ACCOUNT_FILE"{print $2; exit}' <<<"${cmd_out}")"
   if [[ -n "${account_file}" ]]; then
     hr
-    echo "Account file:"
-    echo "  ${account_file}"
+    echo "Generated account info:"
     hr
     hysteria2_account_file_show "${account_file}"
   fi
@@ -245,7 +279,7 @@ hysteria2_add_user_menu() {
 }
 
 hysteria2_delete_user_menu() {
-  local bin="" raw="" choice="" selected="" username="" created_at="" account_file="" uri="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
+  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" uri="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   raw="$("${bin}" list-users 2>/dev/null || true)"
   if [[ -z "${raw}" ]]; then
@@ -271,11 +305,11 @@ hysteria2_delete_user_menu() {
     pause
     return 0
   }
-  IFS=$'\t' read -r username created_at account_file uri <<<"${selected}"
+  IFS=$'\t' read -r username created_at expired_at uri <<<"${selected}"
   ui_menu_screen_begin "$(hysteria2_menu_title "Delete User > Review")"
   echo "Username    : ${username}"
   echo "Created At  : ${created_at}"
-  echo "Account File: ${account_file}"
+  echo "Valid Until : ${expired_at}"
   echo "URI         : ${uri}"
   hr
   if ! confirm_menu_apply_now "Hapus user Hysteria 2 '${username}' sekarang?"; then

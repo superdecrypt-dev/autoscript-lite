@@ -648,6 +648,7 @@ EOF
   chmod 600 "${HYSTERIA2_ENV_FILE}" >/dev/null 2>&1 || true
 
   install_setup_bin_or_die "hysteria2-manage.py" "${HYSTERIA2_MANAGE_BIN}" 0755
+  install_setup_bin_or_die "hysteria2-expired.py" "${HYSTERIA2_EXPIRED_BIN}" 0755
   "${HYSTERIA2_MANAGE_BIN}" ensure-runtime || die "Gagal menyiapkan runtime Hysteria 2."
 
   render_setup_template_or_die \
@@ -656,9 +657,18 @@ EOF
     0644 \
     "HYSTERIA2_BIN=${HYSTERIA2_BIN}" \
     "HYSTERIA2_CONFIG_FILE=${HYSTERIA2_CONFIG_FILE}"
+  render_setup_template_or_die \
+    "systemd/hysteria2-expired.service" \
+    "/etc/systemd/system/${HYSTERIA2_EXPIRED_SERVICE}" \
+    0644 \
+    "HYSTERIA2_EXPIRED_BIN=${HYSTERIA2_EXPIRED_BIN}" \
+    "HYSTERIA2_MANAGE_BIN=${HYSTERIA2_MANAGE_BIN}" \
+    "HYSTERIA2_SERVICE_NAME=${HYSTERIA2_SERVICE}" \
+    "HYSTERIA2_EXPIRED_INTERVAL=${HYSTERIA2_EXPIRED_INTERVAL}"
 
   systemctl daemon-reload
   service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Hysteria 2 gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
+  service_enable_restart_checked "${HYSTERIA2_EXPIRED_SERVICE}" || die "Auto expired Hysteria 2 gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_EXPIRED_SERVICE} -n 100 --no-pager"
   ok "Hysteria 2 aktif di UDP port ${port}."
 }
 

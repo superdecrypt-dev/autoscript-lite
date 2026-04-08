@@ -19,6 +19,7 @@ Template aktif utama:
 - `systemd/autoscript-license-enforcer.service`
 - `systemd/autoscript-license-enforcer.timer`
 - `systemd/edge-mux.service`
+- `systemd/hysteria2-expired.service`
 - `systemd/wireproxy.service`
 - `systemd/xray-confdir.conf`
 - `systemd/xray-domain-guard.service`

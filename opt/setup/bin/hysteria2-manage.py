@@ -6,7 +6,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -20,10 +20,64 @@ CERT_FULLCHAIN = os.environ.get("CERT_FULLCHAIN", "/opt/cert/fullchain.pem")
 CERT_PRIVKEY = os.environ.get("CERT_PRIVKEY", "/opt/cert/privkey.pem")
 DOMAIN_FILE = Path(os.environ.get("XRAY_DOMAIN_FILE", "/etc/xray/domain"))
 BOOTSTRAP_USER = "__bootstrap__"
+EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-expired.service")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def display_created_at(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def utc_today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def parse_expired_at(value: str) -> date | None:
+    raw = str(value or "").strip()
+    if raw in {"", "-", "0"}:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def display_expired_at(value: str) -> str:
+    parsed = parse_expired_at(value)
+    if parsed is None:
+        return "Unlimited"
+    return parsed.isoformat()
+
+
+def resolve_expired_at(days_text: str, explicit_date: str) -> str:
+    if days_text and explicit_date:
+        raise SystemExit("gunakan salah satu: --days atau --expired-at")
+    if explicit_date:
+        parsed = parse_expired_at(explicit_date)
+        if parsed is None:
+            raise SystemExit("expired_at format wajib YYYY-MM-DD")
+        return parsed.isoformat()
+    if not days_text:
+        return "-"
+    try:
+        days = int(days_text)
+    except ValueError as exc:
+        raise SystemExit("days harus berupa angka bulat >= 0") from exc
+    if days < 0:
+        raise SystemExit("days harus >= 0")
+    if days == 0:
+        return "-"
+    return (utc_today() + timedelta(days=days)).isoformat()
 
 
 def load_env() -> dict[str, str]:
@@ -103,8 +157,47 @@ def visible_users(data: dict) -> list[dict]:
             continue
         if item.get("username", "").startswith("__"):
             continue
+        if user_is_expired(item):
+            continue
         result.append(item)
     return result
+
+
+def auth_users(data: dict) -> list[dict]:
+    result = []
+    for item in data.get("users", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("hidden") is True or item.get("username", "").startswith("__"):
+            result.append(item)
+            continue
+        if user_is_expired(item):
+            continue
+        result.append(item)
+    return result
+
+
+def user_is_expired(item: dict) -> bool:
+    if item.get("hidden") is True or str(item.get("username", "")).startswith("__"):
+        return False
+    expired_at = parse_expired_at(str(item.get("expired_at", "")).strip())
+    if expired_at is None:
+        return False
+    return utc_today() > expired_at
+
+
+def prune_expired_users(data: dict) -> tuple[dict, list[dict]]:
+    users = []
+    removed = []
+    for item in data.get("users", []):
+        if not isinstance(item, dict):
+            continue
+        if user_is_expired(item):
+            removed.append(item)
+            continue
+        users.append(item)
+    data["users"] = users
+    return data, removed
 
 
 def ensure_bootstrap_user(data: dict) -> dict:
@@ -118,6 +211,7 @@ def ensure_bootstrap_user(data: dict) -> dict:
             "username": BOOTSTRAP_USER,
             "password": secrets.token_urlsafe(24),
             "created_at": now_iso(),
+            "expired_at": "-",
             "hidden": True,
         }
     )
@@ -154,6 +248,7 @@ def user_snapshot(item: dict, env: dict[str, str]) -> dict[str, str]:
     username = str(item.get("username", "")).strip()
     password = str(item.get("password", "")).strip()
     created_at = str(item.get("created_at", "")).strip()
+    expired_at = str(item.get("expired_at", "")).strip()
     domain = domain_value()
     port = env_port(env)
     account_file = ACCOUNT_ROOT / f"{username}@hy2.txt"
@@ -161,6 +256,7 @@ def user_snapshot(item: dict, env: dict[str, str]) -> dict[str, str]:
         "username": username,
         "password": password,
         "created_at": created_at,
+        "expired_at": expired_at,
         "domain": domain,
         "port": port,
         "account_file": str(account_file),
@@ -206,7 +302,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
         "  type: userpass",
         "  userpass:",
     ]
-    for item in data.get("users", []):
+    for item in auth_users(data):
         if not isinstance(item, dict):
             continue
         username = str(item.get("username", "")).strip()
@@ -237,6 +333,7 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
         username = snapshot["username"]
         password = snapshot["password"]
         created_at = snapshot["created_at"]
+        expired_at = snapshot["expired_at"]
         uri = snapshot["uri"]
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
         content = [
@@ -247,7 +344,8 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             f"Port UDP            : {port}",
             f"SNI                 : {domain}",
             f"Masquerade          : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}",
-            f"Created At          : {created_at or '-'}",
+            f"Created At          : {display_created_at(created_at)}",
+            f"Valid Until         : {display_expired_at(expired_at)}",
             f"URI                 : {uri}",
             "",
         ]
@@ -281,6 +379,7 @@ def add_user(args: argparse.Namespace) -> int:
     env, data = ensure_runtime()
     username = validate_username(args.username.strip())
     password = (args.password or "").strip() or secrets.token_urlsafe(12)
+    expired_at = resolve_expired_at((args.days or "").strip(), (args.expired_at or "").strip())
     users = data["users"]
     if any(isinstance(item, dict) and item.get("username") == username for item in users):
         raise SystemExit(f"user sudah ada: {username}")
@@ -289,6 +388,7 @@ def add_user(args: argparse.Namespace) -> int:
             "username": username,
             "password": password,
             "created_at": now_iso(),
+            "expired_at": expired_at,
             "hidden": False,
         }
     )
@@ -298,7 +398,7 @@ def add_user(args: argparse.Namespace) -> int:
     render_account_files(env, data)
     print(f"USERNAME={username}")
     print(f"PASSWORD={password}")
-    print(f"ACCOUNT_FILE={ACCOUNT_ROOT / (username + '@hy2.txt')}")
+    print(f"EXPIRED_AT={display_expired_at(expired_at)}")
     return 0
 
 
@@ -329,9 +429,22 @@ def list_users_cmd(_: argparse.Namespace) -> int:
     for item in visible_users(data):
         snapshot = user_snapshot(item, env)
         print(
-            f"{snapshot['username']}\t{snapshot['created_at']}\t"
-            f"{snapshot['account_file']}\t{snapshot['uri']}"
+            f"{snapshot['username']}\t{display_created_at(snapshot['created_at'])}\t"
+            f"{display_expired_at(snapshot['expired_at'])}\t{snapshot['uri']}"
         )
+    return 0
+
+
+def prune_expired_cmd(_: argparse.Namespace) -> int:
+    env, data = ensure_runtime()
+    data, removed = prune_expired_users(data)
+    if removed:
+        save_json_atomic(USERS_FILE, data, mode=0o600)
+    render_config(env, data)
+    render_account_files(env, data)
+    removed_users = ",".join(str(item.get("username", "")).strip() for item in removed if item.get("username"))
+    print(f"REMOVED_COUNT={len(removed)}")
+    print(f"REMOVED_USERS={removed_users}")
     return 0
 
 
@@ -344,18 +457,22 @@ def status_cmd(_: argparse.Namespace) -> int:
     print(f"SERVICE_STATE={systemctl_show_value(service_unit, 'ActiveState')}")
     print(f"SERVICE_SUBSTATE={systemctl_show_value(service_unit, 'SubState')}")
     print(f"SERVICE_ENABLED={systemctl_show_value(service_unit, 'UnitFileState')}")
+    print(f"EXPIRED_CLEANER_UNIT={EXPIRED_CLEANER_UNIT}")
+    print(f"EXPIRED_CLEANER_STATE={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'ActiveState')}")
+    print(f"EXPIRED_CLEANER_SUBSTATE={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'SubState')}")
+    print(f"EXPIRED_CLEANER_ENABLED={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'UnitFileState')}")
     print(f"PORT={env_port(env)}")
     print(f"DOMAIN={domain_value()}")
     print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}")
     print(f"USER_COUNT={len(visible)}")
     if latest is not None:
-      print(f"LATEST_USERNAME={latest['username']}")
-      print(f"LATEST_CREATED_AT={latest['created_at']}")
-      print(f"LATEST_ACCOUNT_FILE={latest['account_file']}")
+        print(f"LATEST_USERNAME={latest['username']}")
+        print(f"LATEST_CREATED_AT={display_created_at(latest['created_at'])}")
+        print(f"LATEST_EXPIRED_AT={display_expired_at(latest['expired_at'])}")
     else:
-      print("LATEST_USERNAME=")
-      print("LATEST_CREATED_AT=")
-      print("LATEST_ACCOUNT_FILE=")
+        print("LATEST_USERNAME=")
+        print("LATEST_CREATED_AT=")
+        print("LATEST_EXPIRED_AT=")
     print(f"CONFIG_FILE={CONFIG_FILE}")
     print(f"USERS_FILE={USERS_FILE}")
     print(f"ACCOUNT_ROOT={ACCOUNT_ROOT}")
@@ -370,9 +487,12 @@ def build_parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add-user")
     add.add_argument("--username", required=True)
     add.add_argument("--password", default="")
+    add.add_argument("--days", default="")
+    add.add_argument("--expired-at", default="")
     delete = sub.add_parser("delete-user")
     delete.add_argument("--username", required=True)
     sub.add_parser("list-users")
+    sub.add_parser("prune-expired")
     sub.add_parser("status")
     return parser
 
@@ -389,6 +509,8 @@ def main() -> int:
         return delete_user(args)
     if args.command == "list-users":
         return list_users_cmd(args)
+    if args.command == "prune-expired":
+        return prune_expired_cmd(args)
     if args.command == "status":
         return status_cmd(args)
     parser.error("command tidak dikenal")

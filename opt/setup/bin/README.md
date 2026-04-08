@@ -9,6 +9,8 @@ Helper aktif utama:
 - `xray-warp-sync.py`
 - `autoscript-license-check`
 - `backup-manage.py`
+- `hysteria2-manage.py`
+- `hysteria2-expired.py`
 
 Komponen Go yang sekarang juga aktif:
 - `opt/edge/go/cmd/edge-mux`
