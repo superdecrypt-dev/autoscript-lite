@@ -1378,6 +1378,59 @@ if not effective_selector:
 if not effective_selector:
   raise SystemExit("Selector outbound dasar untuk speed policy kosong")
 
+def managed_user_override_set(marker, outbound):
+  result = set()
+  for r in rules:
+    if not isinstance(r, dict):
+      continue
+    if r.get("type") != "field":
+      continue
+    if norm_tag(r.get("outboundTag")) != outbound:
+      continue
+    users = r.get("user")
+    if not isinstance(users, list) or "inboundTag" in r:
+      continue
+    if marker not in users:
+      continue
+    for u in users:
+      if not isinstance(u, str):
+        continue
+      u = u.strip()
+      if not u or u == marker:
+        continue
+      result.add(u)
+  return result
+
+selector_candidates = []
+seen = set()
+for tag in list(effective_selector) + ["direct", "warp"]:
+  t = norm_tag(tag)
+  if not t:
+    continue
+  if t in ("api", "blocked"):
+    continue
+  if t.startswith(out_prefix):
+    continue
+  if t not in outbounds_by_tag:
+    continue
+  if t in seen:
+    continue
+  seen.add(t)
+  selector_candidates.append(t)
+if not selector_candidates:
+  raise SystemExit("Selector outbound kandidat speed policy kosong")
+
+direct_users = managed_user_override_set("dummy-direct-user", "direct")
+warp_users = managed_user_override_set("dummy-warp-user", "warp")
+
+def resolve_speed_base_tag(email):
+  if email in direct_users:
+    return "direct"
+  if email in warp_users:
+    return "warp"
+  first_base = effective_selector[0] if effective_selector else ""
+  return first_base if first_base else (selector_candidates[0] if selector_candidates else "")
+
 clean_outbounds = []
 for o in outbounds:
   if isinstance(o, dict):
@@ -1389,7 +1442,7 @@ for o in outbounds:
 mark_out_tags = {}
 for mark in sorted(mark_users.keys()):
   per_mark = {}
-  for base_tag in effective_selector:
+  for base_tag in selector_candidates:
     src = outbounds_by_tag.get(base_tag)
     if not isinstance(src, dict):
       continue
@@ -1431,17 +1484,25 @@ for r in rules:
 
 speed_rules = []
 for mark, users in sorted(mark_users.items()):
-  marker = f"{marker_prefix}{mark}"
-  rule = {
-    "type": "field",
-    "user": [marker] + users,
-  }
-  first_base = effective_selector[0]
-  ot = mark_out_tags.get(mark, {}).get(first_base, "")
-  if not ot:
-    continue
-  rule["outboundTag"] = ot
-  speed_rules.append(rule)
+  grouped = {}
+  for email in users:
+    base_tag = resolve_speed_base_tag(email)
+    if not base_tag:
+      continue
+    ot = mark_out_tags.get(mark, {}).get(base_tag, "")
+    if not ot:
+      continue
+    grouped.setdefault(base_tag, []).append(email)
+  for base_tag, group_users in sorted(grouped.items()):
+    marker = f"{marker_prefix}{mark}-{sanitize_tag(base_tag)}"
+    ot = mark_out_tags.get(mark, {}).get(base_tag, "")
+    if not ot:
+      continue
+    speed_rules.append({
+      "type": "field",
+      "user": [marker] + group_users,
+      "outboundTag": ot,
+    })
 
 prefix_rules = []
 hard_block_rules = []

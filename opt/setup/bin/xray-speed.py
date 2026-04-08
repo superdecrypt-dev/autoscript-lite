@@ -360,6 +360,60 @@ def build_synced_xray_configs(out_cfg, rt_cfg, policies):
   if not effective_selector:
     raise RuntimeError("Selector outbound dasar untuk speed policy kosong")
 
+  def managed_user_override_set(marker, outbound):
+    result = set()
+    for rule in rules:
+      if not isinstance(rule, dict):
+        continue
+      if rule.get("type") != "field":
+        continue
+      if norm_tag(rule.get("outboundTag")) != outbound:
+        continue
+      users = rule.get("user")
+      if not isinstance(users, list) or "inboundTag" in rule:
+        continue
+      if marker not in users:
+        continue
+      for user in users:
+        if not isinstance(user, str):
+          continue
+        user = user.strip()
+        if not user or user == marker:
+          continue
+        result.add(user)
+    return result
+
+  selector_candidates = []
+  seen = set()
+  for tag in list(effective_selector) + ["direct", "warp"]:
+    normed = norm_tag(tag)
+    if not normed:
+      continue
+    if normed in ("api", "blocked"):
+      continue
+    if normed.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+      continue
+    if normed not in outbounds_by_tag:
+      continue
+    if normed in seen:
+      continue
+    seen.add(normed)
+    selector_candidates.append(normed)
+
+  if not selector_candidates:
+    raise RuntimeError("Selector outbound kandidat speed policy kosong")
+
+  direct_users = managed_user_override_set("dummy-direct-user", "direct")
+  warp_users = managed_user_override_set("dummy-warp-user", "warp")
+
+  def resolve_speed_base_tag(user):
+    if user in direct_users:
+      return "direct"
+    if user in warp_users:
+      return "warp"
+    first_base = effective_selector[0] if effective_selector else ""
+    return first_base or (selector_candidates[0] if selector_candidates else "")
+
   clean_outbounds = []
   for outbound in outbounds:
     if isinstance(outbound, dict):
@@ -371,7 +425,7 @@ def build_synced_xray_configs(out_cfg, rt_cfg, policies):
   mark_out_tags = {}
   for mark in sorted(mark_users.keys()):
     per_mark = {}
-    for base_tag in effective_selector:
+    for base_tag in selector_candidates:
       src = outbounds_by_tag.get(base_tag)
       if not isinstance(src, dict):
         continue
@@ -410,16 +464,24 @@ def build_synced_xray_configs(out_cfg, rt_cfg, policies):
 
   speed_rules = []
   for mark, users in sorted(mark_users.items()):
-    marker = f"{SPEED_RULE_MARKER_PREFIX}{mark}"
-    first_base = effective_selector[0]
-    outbound_tag = mark_out_tags.get(mark, {}).get(first_base, "")
-    if not outbound_tag:
-      continue
-    speed_rules.append({
-      "type": "field",
-      "user": [marker] + users,
-      "outboundTag": outbound_tag,
-    })
+    grouped = {}
+    for user in users:
+      base_tag = resolve_speed_base_tag(user)
+      if not base_tag:
+        continue
+      outbound_tag = mark_out_tags.get(mark, {}).get(base_tag, "")
+      if not outbound_tag:
+        continue
+      grouped.setdefault(base_tag, []).append(user)
+    for base_tag, grouped_users in sorted(grouped.items()):
+      outbound_tag = mark_out_tags.get(mark, {}).get(base_tag, "")
+      if not outbound_tag:
+        continue
+      speed_rules.append({
+        "type": "field",
+        "user": [f"{SPEED_RULE_MARKER_PREFIX}{mark}-{sanitize_tag(base_tag)}"] + grouped_users,
+        "outboundTag": outbound_tag,
+      })
 
   prefix_rules = []
   hard_block_rules = []

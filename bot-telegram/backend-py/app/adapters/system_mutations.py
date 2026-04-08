@@ -3807,6 +3807,56 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
         if not effective_selector:
             return False, "Selector outbound dasar untuk speed policy kosong"
 
+        def managed_user_override_set(marker: str, outbound: str) -> set[str]:
+            result: set[str] = set()
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                if rule.get("type") != "field":
+                    continue
+                if str(rule.get("outboundTag") or "").strip() != outbound:
+                    continue
+                users = rule.get("user")
+                if not isinstance(users, list) or "inboundTag" in rule:
+                    continue
+                if marker not in users:
+                    continue
+                for user in users:
+                    if not isinstance(user, str):
+                        continue
+                    user = user.strip()
+                    if not user or user == marker:
+                        continue
+                    result.add(user)
+            return result
+
+        selector_candidates: list[str] = []
+        seen = set()
+        for tag in list(effective_selector) + ["direct", "warp"]:
+            t = str(tag).strip()
+            if not t or t in {"api", "blocked"} or t.startswith(SPEED_OUTBOUND_TAG_PREFIX):
+                continue
+            if t not in out_by_tag:
+                continue
+            if t in seen:
+                continue
+            seen.add(t)
+            selector_candidates.append(t)
+
+        if not selector_candidates:
+            return False, "Selector outbound kandidat speed policy kosong"
+
+        direct_users = managed_user_override_set("dummy-direct-user", "direct")
+        warp_users = managed_user_override_set("dummy-warp-user", "warp")
+
+        def resolve_speed_base_tag(user: str) -> str:
+            if user in direct_users:
+                return "direct"
+            if user in warp_users:
+                return "warp"
+            first_base = effective_selector[0] if effective_selector else ""
+            return first_base or (selector_candidates[0] if selector_candidates else "")
+
         clean_outbounds: list[Any] = []
         for out in outbounds:
             if isinstance(out, dict):
@@ -3818,7 +3868,7 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
         mark_out_tags: dict[int, dict[str, str]] = {}
         for mark in sorted(mark_users.keys()):
             per_mark: dict[str, str] = {}
-            for base_tag in effective_selector:
+            for base_tag in selector_candidates:
                 src = out_by_tag.get(base_tag)
                 if not isinstance(src, dict):
                     continue
@@ -3875,14 +3925,24 @@ def _speed_policy_sync_xray() -> tuple[bool, str]:
 
         speed_rules: list[dict[str, Any]] = []
         for mark, users in sorted(mark_users.items()):
-            marker = f"{SPEED_RULE_MARKER_PREFIX}{mark}"
-            rule: dict[str, Any] = {"type": "field", "user": [marker] + users}
-            first_base = effective_selector[0]
-            ot = mark_out_tags.get(mark, {}).get(first_base, "")
-            if not ot:
-                continue
-            rule["outboundTag"] = ot
-            speed_rules.append(rule)
+            grouped: dict[str, list[str]] = {}
+            for user in users:
+                base_tag = resolve_speed_base_tag(user)
+                if not base_tag:
+                    continue
+                ot = mark_out_tags.get(mark, {}).get(base_tag, "")
+                if not ot:
+                    continue
+                grouped.setdefault(base_tag, []).append(user)
+            for base_tag, grouped_users in sorted(grouped.items()):
+                ot = mark_out_tags.get(mark, {}).get(base_tag, "")
+                if not ot:
+                    continue
+                speed_rules.append({
+                    "type": "field",
+                    "user": [f"{SPEED_RULE_MARKER_PREFIX}{mark}-{re.sub(r'[^A-Za-z0-9_.-]', '-', base_tag)}"] + grouped_users,
+                    "outboundTag": ot,
+                })
 
         merged_rules = kept_rules[:insert_idx] + speed_rules + kept_rules[insert_idx:]
         routing["rules"] = merged_rules
