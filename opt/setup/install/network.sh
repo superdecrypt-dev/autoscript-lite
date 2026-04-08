@@ -873,6 +873,19 @@ setup_warp_zero_trust_backend() {
   chmod 600 "${WARP_ZEROTRUST_CONFIG_FILE}" >/dev/null 2>&1 || true
   [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && chmod 600 "${WARP_ZEROTRUST_MDM_FILE}" >/dev/null 2>&1 || true
 
+  install_setup_bin_or_die "warp-zt-socks-bridge.py" "${WARP_ZEROTRUST_BRIDGE_BIN}" 0755
+  render_setup_template_or_die \
+    "systemd/warp-zt-socks-bridge.service" \
+    "/etc/systemd/system/${WARP_ZEROTRUST_BRIDGE_SERVICE}" \
+    0644 \
+    "WARP_ZEROTRUST_BRIDGE_BIN=${WARP_ZEROTRUST_BRIDGE_BIN}" \
+    "WARP_ZEROTRUST_BRIDGE_PORT=${WARP_ZEROTRUST_BRIDGE_PORT}" \
+    "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}" \
+    "WARP_ZEROTRUST_SERVICE=${WARP_ZEROTRUST_SERVICE}"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  service_enable_restart_checked "${WARP_ZEROTRUST_BRIDGE_SERVICE}" \
+    || die "Zero Trust SOCKS bridge gagal diaktifkan. Cek: journalctl -u ${WARP_ZEROTRUST_BRIDGE_SERVICE} -n 100 --no-pager"
+
   if command -v warp-cli >/dev/null 2>&1; then
     ok "Backend Zero Trust siap. Isi credential di ${WARP_ZEROTRUST_CONFIG_FILE} lalu aktifkan lewat menu manage bila diperlukan."
   else

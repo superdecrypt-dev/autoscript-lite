@@ -1065,6 +1065,27 @@ def preserve_speed_outbounds(cfg):
     preserved.append(outbound)
   return preserved
 
+def preserve_warp_outbound(existing_cfg, fresh_outbounds):
+  existing_warp = None
+  for outbound in existing_cfg.get("outbounds") or []:
+    if not isinstance(outbound, dict):
+      continue
+    if str(outbound.get("tag") or "").strip() != "warp":
+      continue
+    if str(outbound.get("protocol") or "").strip() != "socks":
+      continue
+    existing_warp = copy.deepcopy(outbound)
+    break
+  if existing_warp is None:
+    return
+  for idx, outbound in enumerate(fresh_outbounds):
+    if not isinstance(outbound, dict):
+      continue
+    if str(outbound.get("tag") or "").strip() != "warp":
+      continue
+    fresh_outbounds[idx] = existing_warp
+    return
+
 with open(src, "r", encoding="utf-8") as f:
   cfg = json.load(f)
 
@@ -1083,6 +1104,7 @@ existing_routing = load_json_if_exists(os.path.join(outdir, "30-routing.json"), 
 merge_clients_into_inbounds(inbounds_fresh, preserve_clients_by_proto(existing_inbounds))
 marker_users, marker_inbounds, speed_rules = preserve_routing_state(existing_routing)
 merge_routing_state(routing, marker_users, marker_inbounds, speed_rules)
+preserve_warp_outbound(existing_outbounds, outbounds_fresh)
 outbounds_fresh.extend(preserve_speed_outbounds(existing_outbounds))
 
 parts = [

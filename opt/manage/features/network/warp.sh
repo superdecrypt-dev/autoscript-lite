@@ -289,8 +289,20 @@ PY
 
 warp_mode_state_get() {
   local raw=""
+  local live=""
   raw="$(network_state_get "${WARP_MODE_STATE_KEY}" 2>/dev/null || true)"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && svc_exists "${WARP_ZEROTRUST_SERVICE}" && svc_is_active "${WARP_ZEROTRUST_SERVICE}"; then
+    live="zerotrust"
+  elif svc_exists wireproxy && svc_is_active wireproxy; then
+    live="consumer"
+  fi
+  case "${live}" in
+    consumer|zerotrust)
+      printf '%s\n' "${live}"
+      return 0
+      ;;
+  esac
   case "${raw}" in
     consumer|zerotrust)
       printf '%s\n' "${raw}"
@@ -327,11 +339,62 @@ warp_backend_display_name_get() {
   esac
 }
 
+warp_zero_trust_bridge_port_get() {
+  if [[ "${WARP_ZEROTRUST_BRIDGE_PORT}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${WARP_ZEROTRUST_BRIDGE_PORT}"
+  else
+    printf '40001\n'
+  fi
+}
+
+warp_zero_trust_bridge_bind_address_get() {
+  printf '127.0.0.1:%s\n' "$(warp_zero_trust_bridge_port_get)"
+}
+
+warp_zero_trust_bridge_state_get() {
+  local svc_state="missing"
+  local port=""
+  local listen_state="not-listening"
+  port="$(warp_zero_trust_bridge_port_get)"
+  if svc_exists "${WARP_ZEROTRUST_BRIDGE_SERVICE}"; then
+    svc_state="$(svc_state "${WARP_ZEROTRUST_BRIDGE_SERVICE}")"
+  fi
+  if warp_port_is_listening "${port}"; then
+    listen_state="listening"
+  elif [[ "${svc_state}" == "active" ]]; then
+    listen_state="not-listening"
+  fi
+  printf '%s/%s\n' "${svc_state}" "${listen_state}"
+}
+
+warp_zero_trust_bridge_wait_ready() {
+  warp_port_wait_listening "$(warp_zero_trust_bridge_port_get)" "${1:-20}"
+}
+
+warp_zero_trust_bridge_restart_checked() {
+  if ! svc_exists "${WARP_ZEROTRUST_BRIDGE_SERVICE}"; then
+    warn "${WARP_ZEROTRUST_BRIDGE_SERVICE} tidak terdeteksi"
+    return 1
+  fi
+  systemctl enable "${WARP_ZEROTRUST_BRIDGE_SERVICE}" >/dev/null 2>&1 || true
+  if ! svc_restart_checked "${WARP_ZEROTRUST_BRIDGE_SERVICE}" 30 >/dev/null 2>&1; then
+    warn "Restart ${WARP_ZEROTRUST_BRIDGE_SERVICE} gagal."
+    return 1
+  fi
+  if ! warp_zero_trust_bridge_wait_ready 20; then
+    warn "${WARP_ZEROTRUST_BRIDGE_SERVICE} aktif, tetapi port bridge belum listening."
+    return 1
+  fi
+  return 0
+}
+
 warp_proxy_bind_address_get() {
   local mode bind_addr
   mode="$(warp_mode_state_get)"
   if [[ "${mode}" == "zerotrust" ]]; then
-    printf '127.0.0.1:%s\n' "$(warp_zero_trust_proxy_port_get)"
+    bind_addr="$(warp_zero_trust_bridge_bind_address_get 2>/dev/null || true)"
+    [[ -n "${bind_addr}" ]] || bind_addr="127.0.0.1:$(warp_zero_trust_proxy_port_get)"
+    printf '%s\n' "${bind_addr}"
     return 0
   fi
   bind_addr="$(awk -F'=' '
@@ -1034,6 +1097,9 @@ warp_zero_trust_post_restart_health_check() {
   if ! warp_zero_trust_proxy_wait_connected 30; then
     return 1
   fi
+  if ! warp_zero_trust_bridge_restart_checked; then
+    return 1
+  fi
   if have_cmd warp-cli; then
     cli_state="$(warp_zero_trust_cli_first_line status 2>/dev/null || true)"
     if [[ -n "${cli_state}" ]]; then
@@ -1097,10 +1163,38 @@ warp_runtime_snapshot_restore() {
 }
 
 warp_runtime_refresh_followup_after_profile_change() {
+  local warp_sync_rc=0
+  local need_speed_sync="false"
+
+  if declare -F speed_policy_has_entries >/dev/null 2>&1 && speed_policy_has_entries; then
+    need_speed_sync="true"
+  elif declare -F speed_policy_artifacts_present_in_xray >/dev/null 2>&1 && speed_policy_artifacts_present_in_xray; then
+    need_speed_sync="true"
+  fi
+
+  set +e
+  warp_xray_proxy_outbounds_sync
+  warp_sync_rc=$?
+  set -e
+  case "${warp_sync_rc}" in
+    0|2) ;;
+    *)
+      warn "Sinkronisasi outbound WARP Xray gagal sesudah profile berubah."
+      return 1
+      ;;
+  esac
+
   if declare -F speed_policy_resync_after_warp_change >/dev/null 2>&1 \
     && ! speed_policy_resync_after_warp_change; then
     warn "Runtime follow-up WARP gagal disegarkan sesudah profile berubah."
     return 1
+  fi
+
+  if [[ "${need_speed_sync}" != "true" && "${warp_sync_rc}" == "0" ]]; then
+    if ! xray_routing_restart_checked; then
+      warn "Restart Xray gagal sesudah backend WARP berubah."
+      return 1
+    fi
   fi
   return 0
 }
@@ -2720,6 +2814,99 @@ with open(dst, "w", encoding="utf-8") as fh:
   return 0
 }
 
+warp_xray_proxy_outbounds_sync() {
+  need_python3
+  [[ -f "${XRAY_OUTBOUNDS_CONF}" ]] || return 1
+  ensure_path_writable "${XRAY_OUTBOUNDS_CONF}"
+
+  local bind_addr="" backup_out="" tmp_out="" changed_file="" rc=0
+  bind_addr="$(warp_proxy_bind_address_get 2>/dev/null || true)"
+  [[ -n "${bind_addr}" ]] || return 1
+  backup_out="$(xray_backup_path_prepare "${XRAY_OUTBOUNDS_CONF}")"
+  tmp_out="${WORK_DIR}/20-outbounds-warp.json.tmp"
+  changed_file="${WORK_DIR}/20-outbounds-warp.changed"
+  rm -f "${changed_file}" >/dev/null 2>&1 || true
+
+  set +e
+  (
+    flock -x 200
+    cp -a "${XRAY_OUTBOUNDS_CONF}" "${backup_out}" || exit 1
+    python3 - <<'PY' "${XRAY_OUTBOUNDS_CONF}" "${tmp_out}" "${bind_addr}" "${SPEED_OUTBOUND_TAG_PREFIX}" "${changed_file}"
+import json
+import sys
+
+src, dst, bind_addr, speed_prefix, changed_file = sys.argv[1:6]
+host, port_raw = bind_addr.rsplit(":", 1)
+port = int(port_raw)
+
+with open(src, "r", encoding="utf-8") as fh:
+  payload = json.load(fh)
+
+outbounds = payload.get("outbounds")
+if not isinstance(outbounds, list):
+  raise SystemExit("Invalid outbounds config: outbounds bukan list")
+
+changed = False
+for outbound in outbounds:
+  if not isinstance(outbound, dict):
+    continue
+  tag = str(outbound.get("tag") or "").strip()
+  protocol = str(outbound.get("protocol") or "").strip()
+  if protocol != "socks":
+    continue
+  if tag != "warp" and not (tag.startswith(speed_prefix) and tag.endswith("-warp")):
+    continue
+  settings = outbound.get("settings")
+  if not isinstance(settings, dict):
+    continue
+  servers = settings.get("servers")
+  if not isinstance(servers, list) or not servers:
+    continue
+  server = servers[0]
+  if not isinstance(server, dict):
+    continue
+  current_host = str(server.get("address") or "").strip()
+  try:
+    current_port = int(server.get("port") or 0)
+  except Exception:
+    current_port = 0
+  if current_host != host or current_port != port:
+    server["address"] = host
+    server["port"] = port
+    changed = True
+
+with open(dst, "w", encoding="utf-8") as fh:
+  json.dump(payload, fh, ensure_ascii=False, indent=2)
+  fh.write("\n")
+
+if changed:
+  with open(changed_file, "w", encoding="utf-8") as fh:
+    fh.write("1\n")
+PY
+  ) 200>"${ROUTING_LOCK_FILE}"
+  rc=$?
+  set -e
+
+  if (( rc != 0 )); then
+    restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}" >/dev/null 2>&1 || true
+    rm -f "${tmp_out}" "${changed_file}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  if [[ ! -f "${changed_file}" ]]; then
+    rm -f "${tmp_out}" >/dev/null 2>&1 || true
+    return 2
+  fi
+
+  xray_write_file_atomic "${XRAY_OUTBOUNDS_CONF}" "${tmp_out}" || {
+    restore_file_if_exists "${backup_out}" "${XRAY_OUTBOUNDS_CONF}" >/dev/null 2>&1 || true
+    rm -f "${tmp_out}" "${changed_file}" >/dev/null 2>&1 || true
+    return 1
+  }
+  rm -f "${tmp_out}" "${changed_file}" >/dev/null 2>&1 || true
+  return 0
+}
+
 warp_tier_show_status() {
   local mode mode_display target live live_display svc_state license_raw license_masked socks_state="unknown"
   local last_verified="" last_verified_at="" last_verified_age=""
@@ -2860,8 +3047,8 @@ warp_tier_free_plus_show_status() {
 }
 
 warp_tier_zero_trust_show_status() {
-  local cfg team client_id client_secret proxy_port config_state="" active_mode="" active_mode_display=""
-  local svc_state="missing" mdm_state="missing" proxy_state="not-listening"
+  local cfg team client_id client_secret proxy_port bridge_port xray_bind config_state="" active_mode="" active_mode_display=""
+  local svc_state="missing" mdm_state="missing" proxy_state="not-listening" bridge_state="missing/not-listening"
   local cli_status="unknown" reg_status="unknown" runtime_guard="unknown"
   cfg="$(warp_zero_trust_config_get)"
   active_mode="$(warp_mode_state_get)"
@@ -2870,6 +3057,8 @@ warp_tier_zero_trust_show_status() {
   client_id="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_id=/{print substr($0,11); exit}')"
   client_secret="$(printf '%s\n' "${cfg}" | awk -F'=' '/^client_secret=/{print substr($0,15); exit}')"
   proxy_port="$(printf '%s\n' "${cfg}" | awk -F'=' '/^proxy_port=/{print $2; exit}')"
+  bridge_port="$(warp_zero_trust_bridge_port_get)"
+  xray_bind="$(warp_proxy_bind_address_get 2>/dev/null || true)"
   config_state="$(printf '%s\n' "${cfg}" | awk -F'=' '/^config_state=/{print $2; exit}')"
 
   if svc_exists "${WARP_ZEROTRUST_SERVICE}"; then
@@ -2877,6 +3066,7 @@ warp_tier_zero_trust_show_status() {
   fi
   [[ -f "${WARP_ZEROTRUST_MDM_FILE}" ]] && mdm_state="present"
   proxy_state="$(warp_zero_trust_proxy_state_get)"
+  bridge_state="$(warp_zero_trust_bridge_state_get 2>/dev/null || printf 'missing/not-listening\n')"
   if have_cmd warp-cli; then
     cli_status="$(warp_zero_trust_cli_status_line_get)"
     reg_status="$(warp_zero_trust_cli_registration_line_get)"
@@ -2893,24 +3083,29 @@ warp_tier_zero_trust_show_status() {
   printf "MDM Policy    : %s\n" "${mdm_state}"
   printf "Proxy Bind    : 127.0.0.1:%s\n" "${proxy_port:-${WARP_ZEROTRUST_PROXY_PORT}}"
   printf "Proxy State   : %s\n" "${proxy_state}"
+  printf "Bridge Bind   : 127.0.0.1:%s\n" "${bridge_port}"
+  printf "Bridge State  : %s\n" "${bridge_state}"
+  printf "Xray Bind     : %s\n" "${xray_bind:-127.0.0.1:${bridge_port}}"
   printf "CLI Status    : %s\n" "${cli_status}"
   printf "Registration  : %s\n" "${reg_status}"
   printf "Routing Guard : %s\n" "${runtime_guard}"
 }
 
 warp_tier_zero_trust_show_requirements() {
-  local proxy_port=""
+  local proxy_port="" bridge_port=""
   proxy_port="$(warp_zero_trust_proxy_port_get)"
+  bridge_port="$(warp_zero_trust_bridge_port_get)"
   printf "Requirement   : cloudflare-warp client dan warp-cli harus tersedia di host\n"
   printf "Requirement   : team name + service token client id/client secret harus terisi\n"
-  printf "Requirement   : backend ini memakai proxy lokal port %s untuk outbound Xray\n" "${proxy_port}"
+  printf "Requirement   : backend ini memakai proxy lokal port %s sebagai upstream Zero Trust\n" "${proxy_port}"
+  printf "Requirement   : outbound Xray memakai bridge lokal port %s agar DNS UDP tetap berjalan\n" "${bridge_port}"
   printf "Requirement   : bila ada effective WARP users di routing tambahan, runtime local proxy wajib applied sehat sebelum Zero Trust diaktifkan\n"
 }
 
 warp_tier_zero_trust_show_rollout_notes() {
   printf "Rollout Note  : Zero Trust di codebase ini diperlakukan sebagai mode backend baru\n"
   printf "Rollout Note  : Free/Plus tetap memakai wgcf + wireproxy\n"
-  printf "Rollout Note  : Zero Trust memakai proxy lokal host yang bisa dipakai Xray dan routing tambahan via Local Proxy\n"
+  printf "Rollout Note  : Zero Trust memakai upstream proxy lokal host + bridge lokal untuk outbound Xray\n"
   printf "Rollout Note  : Routing tambahan kompatibel bila backend WARP memakai local proxy bersama port lokal WARP\n"
   printf "Rollout Note  : Backend dedicated lama dipertahankan untuk mode Free/Plus, tetapi tidak kompatibel dengan Zero Trust\n"
 }
