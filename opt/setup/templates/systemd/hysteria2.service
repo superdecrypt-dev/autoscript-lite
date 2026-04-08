@@ -1,5 +1,5 @@
 [Unit]
-Description=Hysteria 2 Server (Spike)
+Description=Hysteria 2 Server
 After=network-online.target
 Wants=network-online.target
 

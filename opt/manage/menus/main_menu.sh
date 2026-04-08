@@ -20,11 +20,10 @@ tools_menu() {
     "2|WARP Tier"
     "3|License Guard"
     "4|Backup/Restore"
-    "5|Hysteria 2 (Spike)"
     "0|Back"
   )
   while true; do
-    ui_menu_screen_begin "9) Tools"
+    ui_menu_screen_begin "10) Tools"
     ui_menu_render_options items 76
     hr
     if ! read -r -p "Pilih: " c; then
@@ -36,7 +35,6 @@ tools_menu() {
       2) tools_warp_tier_menu ;;
       3|license|license-guard) run_action "License Guard" autoscript_license_status_menu ;;
       4|backup|restore|backup-restore) run_action "Backup/Restore" backup_restore_menu ;;
-      5|hysteria|hy2|hysteria2) run_action "Hysteria 2 (Spike)" hysteria2_tools_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
@@ -54,7 +52,8 @@ main_menu_render_options() {
     "6|Security"
     "7|Maintenance"
     "8|Traffic"
-    "9|Tools"
+    "9|Hysteria 2"
+    "10|Tools"
     "0|Keluar"
   )
   ui_menu_render_two_columns_fixed items
@@ -98,7 +97,8 @@ main_menu() {
       6|security) run_action "Security" fail2ban_menu ;;
       7|maintenance|maint) run_action "Maintenance" maintenance_menu ;;
       8|analytics|traffic) run_action "Traffic" traffic_analytics_menu ;;
-      9|tools) run_action "Tools" tools_menu ;;
+      9|hysteria|hy2|hysteria2) run_action "Hysteria 2" hysteria2_tools_menu ;;
+      10|tools) run_action "Tools" tools_menu ;;
       0|kembali|k|back|b) exit 0 ;;
       *) invalid_choice ;;
     esac

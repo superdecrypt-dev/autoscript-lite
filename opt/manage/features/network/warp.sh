@@ -19,7 +19,7 @@ xray_network_menu_title() {
 
 warp_tier_menu_title() {
   local suffix="${1:-}"
-  local base="9) Tools > WARP Tier"
+  local base="10) Tools > WARP Tier"
   if [[ "${WARP_TIER_MENU_CONTEXT:-}" == "xray" ]]; then
     base="3) Xray Network > WARP Controls > WARP Tier"
   fi
