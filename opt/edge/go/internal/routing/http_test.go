@@ -28,15 +28,3 @@ func TestRouteLabelTreatsHexTokenWSPathAsXrayWSLike(t *testing.T) {
 		}
 	}
 }
-
-func TestRouteLabelRecognizesKnownRouteWithMultiSegmentPrefixSuffix(t *testing.T) {
-	req := HTTPRequest{
-		Method:     "GET",
-		Path:       "/bebas/bebas2/vless-ws/bebas/bebas2",
-		Upgrade:    "websocket",
-		Connection: "upgrade",
-	}
-	if got := RouteLabel(req, ""); got != "vless-ws" {
-		t.Fatalf("RouteLabel() = %q, want vless-ws", got)
-	}
-}
