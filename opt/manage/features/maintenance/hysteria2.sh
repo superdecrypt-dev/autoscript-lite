@@ -111,7 +111,7 @@ hysteria2_add_user_menu() {
     pause
     return 0
   fi
-  ok "User Hysteria 2 berhasil dibuat."
+  echo "[manage][OK] User Hysteria 2 berhasil dibuat."
   echo "${cmd_out}"
   hr
   pause
@@ -146,7 +146,7 @@ hysteria2_delete_user_menu() {
     pause
     return 0
   fi
-  ok "User Hysteria 2 berhasil dihapus."
+  echo "[manage][OK] User Hysteria 2 berhasil dihapus."
   echo "${cmd_out}"
   hr
   pause
