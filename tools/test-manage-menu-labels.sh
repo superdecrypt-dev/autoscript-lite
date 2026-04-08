@@ -45,7 +45,9 @@ required_patterns=(
   'local base="9\) Tools > WARP Tier"'
   'base="3\) Xray Network > WARP Controls > WARP Tier"'
   '"3\|License Guard"'
+  '"5\|Hysteria 2 \(Spike\)"'
   'run_action "License Guard" autoscript_license_status_menu'
+  'run_action "Hysteria 2 \(Spike\)" hysteria2_tools_menu'
   'menu 6 kapan saja'
 )
 

@@ -4,6 +4,7 @@
 WGCF_RELEASE_TAG="${WGCF_RELEASE_TAG:-v2.2.30}"
 WGCF_RELEASE_VERSION="${WGCF_RELEASE_VERSION:-2.2.30}"
 WIREPROXY_RELEASE_TAG="${WIREPROXY_RELEASE_TAG:-v1.1.2}"
+HYSTERIA2_RELEASE_URL_BASE="${HYSTERIA2_RELEASE_URL_BASE:-https://github.com/apernet/hysteria/releases/latest/download}"
 CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
 CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
 CLOUDFLARE_WARP_KEYRING="${CLOUDFLARE_WARP_KEYRING:-/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg}"
@@ -231,6 +232,44 @@ wireproxy_asset_url() {
   local asset
   asset="$(wireproxy_asset_name)" || return 1
   printf 'https://github.com/windtf/wireproxy/releases/download/%s/%s\n' "${WIREPROXY_RELEASE_TAG}" "${asset}"
+}
+
+hysteria2_asset_name() {
+  case "$(get_arch)" in
+    amd64) printf '%s\n' "hysteria-linux-amd64" ;;
+    arm64) printf '%s\n' "hysteria-linux-arm64" ;;
+    armv7) printf '%s\n' "hysteria-linux-arm" ;;
+    *) return 1 ;;
+  esac
+}
+
+hysteria2_asset_url() {
+  local asset
+  asset="$(hysteria2_asset_name)" || return 1
+  printf '%s/%s\n' "${HYSTERIA2_RELEASE_URL_BASE}" "${asset}"
+}
+
+hysteria2_udp_port_free() {
+  local p="${1:-}"
+  [[ -n "${p}" ]] || return 1
+  ! ss -lun 2>/dev/null | awk '{print $5}' | grep -qE "[:.]${p}$"
+}
+
+hysteria2_pick_udp_port() {
+  local requested="${HYSTERIA2_PORT:-8448}" candidate tries=0
+  if [[ "${requested}" =~ ^[0-9]+$ ]] && hysteria2_udp_port_free "${requested}"; then
+    printf '%s\n' "${requested}"
+    return 0
+  fi
+  while (( tries < 2000 )); do
+    candidate="$(pick_port)"
+    if [[ "${candidate}" =~ ^[0-9]+$ ]] && hysteria2_udp_port_free "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+    tries=$((tries + 1))
+  done
+  die "Gagal mendapatkan port UDP kosong untuk Hysteria 2."
 }
 
 cloudflare_warp_repo_codename_get() {
@@ -567,6 +606,60 @@ install_wireproxy() {
 
   rm -rf "$tmpdir"
   ok "wireproxy terpasang."
+}
+
+install_hysteria2() {
+  if [[ -x "${HYSTERIA2_BIN}" ]]; then
+    ok "Hysteria 2 sudah ada."
+    return 0
+  fi
+
+  ok "Pasang Hysteria 2 (spike)..."
+  local url tmp
+  url="$(hysteria2_asset_url)" || die "Asset Hysteria 2 belum tersedia untuk arsitektur host ini."
+  tmp="$(mktemp)"
+  download_file_or_die "${url}" "${tmp}" "" "Hysteria 2 latest"
+  install -m 0755 "${tmp}" "${HYSTERIA2_BIN}"
+  rm -f "${tmp}" >/dev/null 2>&1 || true
+  ok "Hysteria 2 terpasang."
+}
+
+setup_hysteria2() {
+  local port="" existing_port=""
+
+  ok "Siapkan Hysteria 2 (spike)..."
+  [[ -x "${HYSTERIA2_BIN}" ]] || die "Binary Hysteria 2 tidak ditemukan: ${HYSTERIA2_BIN}"
+  [[ -s "${CERT_FULLCHAIN}" && -s "${CERT_PRIVKEY}" ]] || die "Sertifikat TLS belum siap untuk Hysteria 2."
+
+  if [[ -f "${HYSTERIA2_ENV_FILE}" ]]; then
+    existing_port="$(awk -F= '$1=="HYSTERIA2_PORT"{print $2; exit}' "${HYSTERIA2_ENV_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+  if [[ "${existing_port}" =~ ^[0-9]+$ ]]; then
+    port="${existing_port}"
+  else
+    port="$(hysteria2_pick_udp_port)"
+  fi
+
+  install -d -m 0700 "${HYSTERIA2_ROOT}" "${HYSTERIA2_ACCOUNT_ROOT}"
+  cat > "${HYSTERIA2_ENV_FILE}" <<EOF
+HYSTERIA2_PORT=${port}
+HYSTERIA2_MASQUERADE_URL=${HYSTERIA2_MASQUERADE_URL}
+EOF
+  chmod 600 "${HYSTERIA2_ENV_FILE}" >/dev/null 2>&1 || true
+
+  install_setup_bin_or_die "hysteria2-manage.py" "${HYSTERIA2_MANAGE_BIN}" 0755
+  "${HYSTERIA2_MANAGE_BIN}" ensure-runtime || die "Gagal menyiapkan runtime Hysteria 2."
+
+  render_setup_template_or_die \
+    "systemd/hysteria2.service" \
+    "/etc/systemd/system/${HYSTERIA2_SERVICE}" \
+    0644 \
+    "HYSTERIA2_BIN=${HYSTERIA2_BIN}" \
+    "HYSTERIA2_CONFIG_FILE=${HYSTERIA2_CONFIG_FILE}"
+
+  systemctl daemon-reload
+  service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Hysteria 2 gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
+  ok "Hysteria 2 aktif di UDP port ${port}."
 }
 
 setup_wgcf() {

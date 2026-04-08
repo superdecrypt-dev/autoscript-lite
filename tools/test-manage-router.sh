@@ -45,6 +45,7 @@ router_patterns=(
   'backup|restore|backup-restore)'
   'telegram-bot)'
   'license-guard)'
+  'hysteria2|hy2)'
   'warn "Action manage tidak dikenal: ${action}"'
 )
 

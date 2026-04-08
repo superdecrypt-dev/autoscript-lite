@@ -44,6 +44,9 @@ manage_router_dispatch() {
     license-guard)
       autoscript_license_status_menu "$@"
       ;;
+    hysteria2|hy2)
+      hysteria2_tools_menu "$@"
+      ;;
     *)
       warn "Action manage tidak dikenal: ${action}"
       return 1
