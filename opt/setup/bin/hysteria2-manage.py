@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import secrets
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -136,8 +137,65 @@ def yaml_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def env_port(env: dict[str, str]) -> str:
+    value = str(env.get("HYSTERIA2_PORT", "443")).strip()
+    return value or "443"
+
+
+def account_uri(username: str, password: str, domain: str, port: str) -> str:
+    return (
+        f"hysteria2://{quote(username, safe='')}:{quote(password, safe='')}@{domain}:{port}/"
+        f"?sni={quote(domain, safe='')}"
+        f"#{quote(username + '@hy2', safe='')}"
+    )
+
+
+def user_snapshot(item: dict, env: dict[str, str]) -> dict[str, str]:
+    username = str(item.get("username", "")).strip()
+    password = str(item.get("password", "")).strip()
+    created_at = str(item.get("created_at", "")).strip()
+    domain = domain_value()
+    port = env_port(env)
+    account_file = ACCOUNT_ROOT / f"{username}@hy2.txt"
+    return {
+        "username": username,
+        "password": password,
+        "created_at": created_at,
+        "domain": domain,
+        "port": port,
+        "account_file": str(account_file),
+        "uri": account_uri(username, password, domain, port),
+    }
+
+
+def systemctl_show_value(unit: str, key: str, default: str = "unknown") -> str:
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "-p", key, unit],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        return default
+    if result.returncode != 0:
+        return default
+    line = result.stdout.strip()
+    if "=" not in line:
+        return line or default
+    value = line.split("=", 1)[1].strip()
+    return value or default
+
+
+def latest_visible_snapshot(data: dict, env: dict[str, str]) -> dict[str, str] | None:
+    users = visible_users(data)
+    if not users:
+        return None
+    return user_snapshot(users[-1], env)
+
+
 def render_config(env: dict[str, str], data: dict) -> None:
-    port = env.get("HYSTERIA2_PORT", "443")
+    port = env_port(env)
     masquerade_url = env.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/")
     lines = [
         f"listen: :{port}",
@@ -171,18 +229,15 @@ def render_config(env: dict[str, str], data: dict) -> None:
 def render_account_files(env: dict[str, str], data: dict) -> None:
     ACCOUNT_ROOT.mkdir(parents=True, exist_ok=True)
     domain = domain_value()
-    port = env.get("HYSTERIA2_PORT", "443")
+    port = env_port(env)
     visible = visible_users(data)
     keep = set()
     for item in visible:
-        username = str(item.get("username", "")).strip()
-        password = str(item.get("password", "")).strip()
-        created_at = str(item.get("created_at", "")).strip()
-        uri = (
-            f"hysteria2://{quote(username, safe='')}:{quote(password, safe='')}@{domain}:{port}/"
-            f"?sni={quote(domain, safe='')}"
-            f"#{quote(username + '@hy2', safe='')}"
-        )
+        snapshot = user_snapshot(item, env)
+        username = snapshot["username"]
+        password = snapshot["password"]
+        created_at = snapshot["created_at"]
+        uri = snapshot["uri"]
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
         content = [
             "=== HYSTERIA 2 ACCOUNT INFO ===",
@@ -270,20 +325,37 @@ def delete_user(args: argparse.Namespace) -> int:
 
 
 def list_users_cmd(_: argparse.Namespace) -> int:
-    _, data = ensure_runtime()
-    users = visible_users(data)
-    for item in users:
-        print(f"{item.get('username','')}\t{item.get('created_at','')}")
+    env, data = ensure_runtime()
+    for item in visible_users(data):
+        snapshot = user_snapshot(item, env)
+        print(
+            f"{snapshot['username']}\t{snapshot['created_at']}\t"
+            f"{snapshot['account_file']}\t{snapshot['uri']}"
+        )
     return 0
 
 
 def status_cmd(_: argparse.Namespace) -> int:
     env, data = ensure_runtime()
     visible = visible_users(data)
-    print(f"PORT={env.get('HYSTERIA2_PORT', '443')}")
+    latest = latest_visible_snapshot(data, env)
+    service_unit = "hysteria2.service"
+    print(f"SERVICE_UNIT={service_unit}")
+    print(f"SERVICE_STATE={systemctl_show_value(service_unit, 'ActiveState')}")
+    print(f"SERVICE_SUBSTATE={systemctl_show_value(service_unit, 'SubState')}")
+    print(f"SERVICE_ENABLED={systemctl_show_value(service_unit, 'UnitFileState')}")
+    print(f"PORT={env_port(env)}")
     print(f"DOMAIN={domain_value()}")
     print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}")
     print(f"USER_COUNT={len(visible)}")
+    if latest is not None:
+      print(f"LATEST_USERNAME={latest['username']}")
+      print(f"LATEST_CREATED_AT={latest['created_at']}")
+      print(f"LATEST_ACCOUNT_FILE={latest['account_file']}")
+    else:
+      print("LATEST_USERNAME=")
+      print("LATEST_CREATED_AT=")
+      print("LATEST_ACCOUNT_FILE=")
     print(f"CONFIG_FILE={CONFIG_FILE}")
     print(f"USERS_FILE={USERS_FILE}")
     print(f"ACCOUNT_ROOT={ACCOUNT_ROOT}")

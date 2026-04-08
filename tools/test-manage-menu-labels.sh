@@ -30,7 +30,7 @@ for pattern in "${legacy_patterns[@]}"; do
 done
 
 required_patterns=(
-  'ui_menu_screen_begin "9\) Tools"'
+  'ui_menu_screen_begin "10\) Tools"'
   'ui_menu_screen_begin "8\) Traffic"'
   'ui_menu_screen_begin "7\) Maintenance"'
   'ui_menu_screen_begin "6\) Security"'
@@ -42,12 +42,12 @@ required_patterns=(
   'echo "4\) Domain Control >'
   'echo "7\) Maintenance >'
   'local base="3\) Xray Network"'
-  'local base="9\) Tools > WARP Tier"'
+  'local base="10\) Tools > WARP Tier"'
+  'local base="9\) Hysteria 2"'
   'base="3\) Xray Network > WARP Controls > WARP Tier"'
   '"3\|License Guard"'
-  '"5\|Hysteria 2 \(Spike\)"'
   'run_action "License Guard" autoscript_license_status_menu'
-  'run_action "Hysteria 2 \(Spike\)" hysteria2_tools_menu'
+  'run_action "Hysteria 2" hysteria2_tools_menu'
   'menu 6 kapan saja'
 )
 
