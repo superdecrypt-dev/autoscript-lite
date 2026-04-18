@@ -32,4 +32,4 @@ Catatan:
 - runtime Hysteria 2 native sekarang dirender langsung ke `Xray conf.d` oleh `hysteria2-manage`, bukan lewat service standalone.
 - `systemd/hysteria2-expired.service` masih dipakai sebagai cleaner untuk prune user expired lalu restart `xray.service`.
 
-Template legacy non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.
+Template non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.
