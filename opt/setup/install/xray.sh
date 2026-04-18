@@ -89,50 +89,25 @@ write_xray_config() {
     "loglevel": "info"
   },
   "dns": {
-    "queryStrategy": "UseIP",
-    "hosts": {
-      "localhost": "127.0.0.1",
-      "localhost.": "127.0.0.1"
-    },
+    "queryStrategy": "UseIPv4v6",
     "servers": [
-      {
-        "address": "https://1.1.1.1/dns-query",
-        "domains": [
-          "geosite:apple",
-          "geosite:meta",
-          "geosite:google",
-          "geosite:openai",
-          "geosite:spotify",
-          "geosite:netflix",
-          "geosite:reddit"
-        ],
-        "skipFallback": true
-      },
-      {
-        "address": "https://1.1.1.1/dns-query",
-        "domains": [
-          "geosite:telegram"
-        ],
-        "skipFallback": true
-      },
-      {
-        "address": "https://dns.google/dns-query",
-        "domains": [
-          "geosite:discord"
-        ],
-        "skipFallback": true
-      },
-      {
-        "address": "tls://1.0.0.1",
-        "domains": [
-          "geosite:microsoft"
-        ],
-        "skipFallback": true
-      },
+      "fakedns",
+      "https://1.1.1.1/dns-query",
       "https://dns.google/dns-query",
-      "tls://1.1.1.1"
+      "1.1.1.1",
+      "8.8.8.8"
     ]
   },
+  "fakedns": [
+    {
+      "ipPool": "198.18.0.0/15",
+      "poolSize": 65535
+    },
+    {
+      "ipPool": "fc00::/18",
+      "poolSize": 65535
+    }
+  ],
   "api": {
     "tag": "api",
     "services": [
@@ -169,6 +144,13 @@ write_xray_config() {
           "api"
         ],
         "outboundTag": "api"
+      },
+      {
+        "type": "field",
+        "protocol": [
+          "dns"
+        ],
+        "outboundTag": "dns-out"
       },
       {
         "type": "field",
@@ -1110,7 +1092,7 @@ outbounds_fresh.extend(preserve_speed_outbounds(existing_outbounds))
 parts = [
   ("00-log.json", {"log": cfg.get("log") or {}}),
   ("01-api.json", {"api": cfg.get("api") or {}}),
-  ("02-dns.json", {"dns": cfg.get("dns") or {}}),
+  ("02-dns.json", {"dns": cfg.get("dns") or {}, "fakedns": cfg.get("fakedns") or []}),
   ("10-inbounds.json", {"inbounds": inbounds_fresh}),
   ("20-outbounds.json", {"outbounds": outbounds_fresh}),
   ("30-routing.json", {"routing": routing}),

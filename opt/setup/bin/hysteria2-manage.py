@@ -26,7 +26,7 @@ DOMAIN_FILE = Path(os.environ.get("XRAY_DOMAIN_FILE", "/etc/xray/domain"))
 BOOTSTRAP_USER = "__bootstrap__"
 EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-expired.service")
 BACKEND_SERVICE = os.environ.get("HYSTERIA2_SERVICE", "xray.service")
-INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hysteria2-modular")
+INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hy2-in")
 PASSWORD_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
 
 
