@@ -609,7 +609,7 @@ install_wireproxy() {
 }
 
 install_hysteria2() {
-  ok "Inbound lama akan diganti dengan inbound native Xray."
+  ok "Bersihkan runtime lama."
   if systemctl list-unit-files hysteria2.service >/dev/null 2>&1; then
     systemctl disable --now hysteria2.service >/dev/null 2>&1 || systemctl stop hysteria2.service >/dev/null 2>&1 || true
     systemctl reset-failed hysteria2.service >/dev/null 2>&1 || true
@@ -618,14 +618,14 @@ install_hysteria2() {
   rm -f "${HYSTERIA2_ROOT}/config.yaml" >/dev/null 2>&1 || true
   rm -f /usr/local/bin/hysteria2 >/dev/null 2>&1 || true
   systemctl daemon-reload >/dev/null 2>&1 || true
-  ok "Inbound lama dibersihkan; backend native Xray siap dipasang."
+  ok "Runtime lama dibersihkan."
 }
 
 setup_hysteria2() {
   local port="" existing_port="" legacy_service="hysteria2.service"
 
-  ok "Siapkan inbound native Xray..."
-  [[ -s "${CERT_FULLCHAIN}" && -s "${CERT_PRIVKEY}" ]] || die "Sertifikat TLS belum siap untuk inbound native Xray."
+  ok "Siapkan runtime baru..."
+  [[ -s "${CERT_FULLCHAIN}" && -s "${CERT_PRIVKEY}" ]] || die "Sertifikat TLS belum siap."
 
   if [[ -f "${HYSTERIA2_ENV_FILE}" ]]; then
     existing_port="$(awk -F= '$1=="HYSTERIA2_PORT"{print $2; exit}' "${HYSTERIA2_ENV_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
@@ -656,7 +656,7 @@ EOF
   rm -f "${HYSTERIA2_ROOT}/config.yaml" >/dev/null 2>&1 || true
   rm -f /usr/local/bin/hysteria2 >/dev/null 2>&1 || true
 
-  "${HYSTERIA2_MANAGE_BIN}" ensure-runtime || die "Gagal menyiapkan runtime inbound native Xray."
+  "${HYSTERIA2_MANAGE_BIN}" ensure-runtime || die "Gagal menyiapkan runtime."
 
   render_setup_template_or_die \
     "systemd/hysteria2-expired.service" \
@@ -668,9 +668,9 @@ EOF
     "HYSTERIA2_EXPIRED_INTERVAL=${HYSTERIA2_EXPIRED_INTERVAL}"
 
   systemctl daemon-reload
-  service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Inbound native Xray gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
-  service_enable_restart_checked "${HYSTERIA2_EXPIRED_SERVICE}" || die "Auto expired inbound native Xray gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_EXPIRED_SERVICE} -n 100 --no-pager"
-  ok "Inbound native Xray aktif di UDP port ${port}."
+  service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Service gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
+  service_enable_restart_checked "${HYSTERIA2_EXPIRED_SERVICE}" || die "Auto expired gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_EXPIRED_SERVICE} -n 100 --no-pager"
+  ok "Runtime aktif di UDP port ${port}."
 }
 
 setup_wgcf() {
