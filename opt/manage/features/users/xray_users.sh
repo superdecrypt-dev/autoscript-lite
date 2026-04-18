@@ -2932,11 +2932,12 @@ delete_account_artifacts() {
   local proto="$1"
   local username="$2"
 
-  local acc_file acc_file_compatfmt quota_file quota_file_compatfmt
+  local acc_file acc_file_compatfmt quota_file quota_file_compatfmt portal_file
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   acc_file_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
   quota_file_compatfmt="${QUOTA_ROOT}/${proto}/${username}.json"
+  portal_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.portal.json"
 
   delete_one_file "${acc_file}"
   delete_one_file "${acc_file_compatfmt}"
@@ -2944,6 +2945,7 @@ delete_account_artifacts() {
   delete_one_file "${quota_file}.lock"
   delete_one_file "${quota_file_compatfmt}"
   delete_one_file "${quota_file_compatfmt}.lock"
+  delete_one_file "${portal_file}"
   speed_policy_remove_checked "${proto}" "${username}" >/dev/null 2>&1 || true
 }
 
@@ -2959,7 +2961,8 @@ delete_account_artifacts_checked() {
     "${QUOTA_ROOT}/${proto}/${username}@${proto}.json" \
     "${QUOTA_ROOT}/${proto}/${username}@${proto}.json.lock" \
     "${QUOTA_ROOT}/${proto}/${username}.json" \
-    "${QUOTA_ROOT}/${proto}/${username}.json.lock"; do
+    "${QUOTA_ROOT}/${proto}/${username}.json.lock" \
+    "${ACCOUNT_ROOT}/${proto}/${username}@${proto}.portal.json"; do
     if [[ ! -e "${p}" && ! -L "${p}" ]]; then
       continue
     fi
@@ -2986,6 +2989,7 @@ xray_delete_user_restore_from_snapshots() {
   # proto username previous_cred deleted_from_inbounds
   # canonical_account backup_account compat_account backup_account_compat
   # canonical_quota backup_quota compat_quota backup_quota_compat
+  # portal_file backup_portal
   # speed_policy_file backup_speed
   local proto="$1"
   local username="$2"
@@ -2999,8 +3003,10 @@ xray_delete_user_restore_from_snapshots() {
   local rollback_quota_backup="${10}"
   local compat_quota_file="${11}"
   local rollback_quota_compat_backup="${12}"
-  local speed_policy_file="${13}"
-  local rollback_speed_backup="${14}"
+  local portal_file="${13}"
+  local rollback_portal_backup="${14}"
+  local speed_policy_file="${15}"
+  local rollback_speed_backup="${16}"
   local -a notes=()
 
   if [[ "${deleted_from_inbounds}" == "true" ]]; then
@@ -3017,6 +3023,11 @@ xray_delete_user_restore_from_snapshots() {
   if [[ -n "${rollback_quota_compat_backup}" && -f "${rollback_quota_compat_backup}" ]]; then
     if ! quota_restore_file_locked "${rollback_quota_compat_backup}" "${compat_quota_file}" 2>/dev/null; then
       notes+=("restore quota compat gagal")
+    fi
+  fi
+  if [[ -n "${rollback_portal_backup}" && -f "${rollback_portal_backup}" ]]; then
+    if ! account_info_restore_file_locked "${rollback_portal_backup}" "${portal_file}" 2>/dev/null; then
+      notes+=("restore portal cache gagal")
     fi
   fi
   if [[ -n "${rollback_account_backup}" && -f "${rollback_account_backup}" ]]; then
@@ -3958,6 +3969,7 @@ user_del_apply_locked() {
   compat_account_file="${ACCOUNT_ROOT}/${proto}/${username}.txt"
   canonical_quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
   compat_quota_file="${QUOTA_ROOT}/${proto}/${username}.json"
+  portal_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.portal.json"
   rollback_tmpdir="$(mutation_txn_dir_new "xray-delete.${proto}.${username}" 2>/dev/null || true)"
   if [[ -n "${rollback_tmpdir}" && -d "${rollback_tmpdir}" ]]; then
     mutation_txn_field_write "${rollback_tmpdir}" proto "${proto}" >/dev/null 2>&1 || true
@@ -3969,10 +3981,12 @@ user_del_apply_locked() {
     rollback_speed_backup="${rollback_tmpdir}/speed.json"
     rollback_account_compat_backup="${rollback_tmpdir}/account.compat.txt"
     rollback_quota_compat_backup="${rollback_tmpdir}/quota.compat.json"
+    rollback_portal_backup="${rollback_tmpdir}/portal.json"
     [[ -f "${canonical_account_file}" ]] && cp -f "${canonical_account_file}" "${rollback_account_backup}" 2>/dev/null || true
     [[ -f "${compat_account_file}" ]] && cp -f "${compat_account_file}" "${rollback_account_compat_backup}" 2>/dev/null || true
     [[ -f "${canonical_quota_file}" ]] && cp -f "${canonical_quota_file}" "${rollback_quota_backup}" 2>/dev/null || true
     [[ -f "${compat_quota_file}" ]] && cp -f "${compat_quota_file}" "${rollback_quota_compat_backup}" 2>/dev/null || true
+    [[ -f "${portal_file}" ]] && cp -f "${portal_file}" "${rollback_portal_backup}" 2>/dev/null || true
     [[ -f "${speed_policy_file}" ]] && cp -f "${speed_policy_file}" "${rollback_speed_backup}" 2>/dev/null || true
   fi
   abort_restore_active="true"
@@ -4007,6 +4021,7 @@ user_del_apply_locked() {
       "${compat_account_file}" "${rollback_account_compat_backup}" \
       "${canonical_quota_file}" "${rollback_quota_backup}" \
       "${compat_quota_file}" "${rollback_quota_compat_backup}" \
+      "${portal_file}" "${rollback_portal_backup}" \
       "${speed_policy_file}" "${rollback_speed_backup}" 2>/dev/null)"; then
       rollback_restored="true"
       partial_failure="false"
