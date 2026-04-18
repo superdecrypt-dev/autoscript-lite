@@ -85,7 +85,7 @@ hysteria2_account_file_show() {
 }
 
 hysteria2_restart_service_if_present() {
-  local svc="${1:-hysteria2.service}"
+  local svc="${1:-xray.service}"
   if ! systemctl list-unit-files "${svc}" >/dev/null 2>&1; then
     warn "Service ${svc} belum terpasang."
     return 1
@@ -101,7 +101,7 @@ hysteria2_restart_service_if_present() {
 }
 
 hysteria2_status_menu() {
-  local bin="" status_blob="" service_label="" service_enabled="" cleaner_state="" cleaner_enabled="" port="" domain="" masquerade="" user_count="" latest_username="" latest_created_at="" latest_expired_at="" config_file="" users_file="" account_root=""
+  local bin="" status_blob="" service_label="" service_enabled="" backend_label="" cleaner_state="" cleaner_enabled="" port="" domain="" masquerade="" user_count="" latest_username="" latest_created_at="" latest_expired_at="" config_file="" users_file="" account_root=""
   ui_menu_screen_begin "$(hysteria2_menu_title "Status")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   status_blob="$("${bin}" status 2>/dev/null || true)"
@@ -116,6 +116,8 @@ hysteria2_status_menu() {
     "$(hysteria2_status_field "${status_blob}" "SERVICE_STATE")" \
     "$(hysteria2_status_field "${status_blob}" "SERVICE_SUBSTATE")")"
   service_enabled="$(hysteria2_status_field "${status_blob}" "SERVICE_ENABLED")"
+  backend_label="$(hysteria2_status_field "${status_blob}" "BACKEND")"
+  backend_label="${backend_label:-Xray native inbound}"
   cleaner_state="$(hysteria2_service_label \
     "$(hysteria2_status_field "${status_blob}" "EXPIRED_CLEANER_STATE")" \
     "$(hysteria2_status_field "${status_blob}" "EXPIRED_CLEANER_SUBSTATE")")"
@@ -135,6 +137,7 @@ hysteria2_status_menu() {
   hr
   hysteria2_print_kv "Service" "${service_label}"
   hysteria2_print_kv "Enabled" "${service_enabled}"
+  hysteria2_print_kv "Backend" "${backend_label}"
   hysteria2_print_kv "Auto Expired" "${cleaner_state}"
   hysteria2_print_kv "Cleaner Enabled" "${cleaner_enabled}"
   hysteria2_print_kv "Listen" "UDP :${port:-443}"
@@ -183,7 +186,7 @@ hysteria2_list_users_menu() {
 }
 
 hysteria2_add_user_menu() {
-  local bin="" status_blob="" existing_users="" username="" password="" days_input="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
+  local bin="" status_blob="" existing_users="" username="" password="" days_input="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
   local domain="" port="" masquerade="" account_root="" account_file="" password_label="" expiry_label="Unlimited" count=0
   ui_menu_screen_begin "$(hysteria2_menu_title "Add User")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
@@ -279,7 +282,7 @@ hysteria2_add_user_menu() {
 }
 
 hysteria2_delete_user_menu() {
-  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" uri="" cmd_out="" svc="${HYSTERIA2_SERVICE:-hysteria2.service}"
+  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" uri="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   raw="$("${bin}" list-users 2>/dev/null || true)"
   if [[ -z "${raw}" ]]; then

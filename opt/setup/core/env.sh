@@ -50,13 +50,13 @@ WARP_STATE_FILE="${WARP_STATE_FILE:-/var/lib/xray-manage/network_state.json}"
 CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
 CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
 
-# Hysteria 2 (spike)
+# Hysteria 2 (native Xray)
 HYSTERIA2_ROOT="${HYSTERIA2_ROOT:-/etc/autoscript/hysteria2}"
 HYSTERIA2_ENV_FILE="${HYSTERIA2_ENV_FILE:-${HYSTERIA2_ROOT}/config.env}"
 HYSTERIA2_USERS_FILE="${HYSTERIA2_USERS_FILE:-${HYSTERIA2_ROOT}/users.json}"
-HYSTERIA2_CONFIG_FILE="${HYSTERIA2_CONFIG_FILE:-${HYSTERIA2_ROOT}/config.yaml}"
-HYSTERIA2_SERVICE="${HYSTERIA2_SERVICE:-hysteria2.service}"
-HYSTERIA2_BIN="${HYSTERIA2_BIN:-/usr/local/bin/hysteria2}"
+HYSTERIA2_XRAY_FRAGMENT="${HYSTERIA2_XRAY_FRAGMENT:-/usr/local/etc/xray/conf.d/15-hysteria2.json}"
+HYSTERIA2_CONFIG_FILE="${HYSTERIA2_CONFIG_FILE:-${HYSTERIA2_XRAY_FRAGMENT}}"
+HYSTERIA2_SERVICE="${HYSTERIA2_SERVICE:-xray.service}"
 HYSTERIA2_MANAGE_BIN="${HYSTERIA2_MANAGE_BIN:-/usr/local/bin/hysteria2-manage}"
 HYSTERIA2_EXPIRED_BIN="${HYSTERIA2_EXPIRED_BIN:-/usr/local/bin/hysteria2-expired}"
 HYSTERIA2_EXPIRED_SERVICE="${HYSTERIA2_EXPIRED_SERVICE:-hysteria2-expired.service}"

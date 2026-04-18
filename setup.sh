@@ -194,8 +194,8 @@ setup_post_domain_main() {
   else
     warn "Gagal menulis domain state file: ${XRAY_DOMAIN_FILE}"
   fi
-  setup_run_step "Install Hysteria 2" install_hysteria2
-  setup_run_step "Siapkan Hysteria 2" setup_hysteria2
+  setup_run_step "Bersihkan Hysteria 2 standalone" install_hysteria2
+  setup_run_step "Siapkan Hysteria 2 native Xray" setup_hysteria2
   setup_run_step "Install management scripts" install_management_scripts
   setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime

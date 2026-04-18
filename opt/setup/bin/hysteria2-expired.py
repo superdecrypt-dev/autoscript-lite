@@ -68,7 +68,7 @@ def run_loop(manage_bin: str, service: str, interval: int) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manage-bin", default="/usr/local/bin/hysteria2-manage")
-    parser.add_argument("--service", default="hysteria2.service")
+    parser.add_argument("--service", default="xray.service")
     parser.add_argument("--interval", type=int, default=60)
     return parser
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import grp
 import json
 import os
 import secrets
@@ -14,13 +15,17 @@ from urllib.parse import quote
 ROOT = Path(os.environ.get("HYSTERIA2_ROOT", "/etc/autoscript/hysteria2"))
 ENV_FILE = Path(os.environ.get("HYSTERIA2_ENV_FILE", str(ROOT / "config.env")))
 USERS_FILE = Path(os.environ.get("HYSTERIA2_USERS_FILE", str(ROOT / "users.json")))
-CONFIG_FILE = Path(os.environ.get("HYSTERIA2_CONFIG_FILE", str(ROOT / "config.yaml")))
+XRAY_CONFDIR = Path(os.environ.get("XRAY_CONFDIR", "/usr/local/etc/xray/conf.d"))
+XRAY_HYSTERIA_FRAGMENT = Path(os.environ.get("HYSTERIA2_XRAY_FRAGMENT", str(XRAY_CONFDIR / "15-hysteria2.json")))
+CONFIG_FILE = Path(os.environ.get("HYSTERIA2_CONFIG_FILE", str(XRAY_HYSTERIA_FRAGMENT)))
 ACCOUNT_ROOT = Path(os.environ.get("HYSTERIA2_ACCOUNT_ROOT", "/opt/account/hysteria2"))
 CERT_FULLCHAIN = os.environ.get("CERT_FULLCHAIN", "/opt/cert/fullchain.pem")
 CERT_PRIVKEY = os.environ.get("CERT_PRIVKEY", "/opt/cert/privkey.pem")
 DOMAIN_FILE = Path(os.environ.get("XRAY_DOMAIN_FILE", "/etc/xray/domain"))
 BOOTSTRAP_USER = "__bootstrap__"
 EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-expired.service")
+BACKEND_SERVICE = os.environ.get("HYSTERIA2_SERVICE", "xray.service")
+INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hysteria2")
 
 
 def now_iso() -> str:
@@ -120,11 +125,21 @@ def ensure_env_defaults() -> dict[str, str]:
     defaults = {
         "HYSTERIA2_PORT": os.environ.get("HYSTERIA2_PORT", "443"),
         "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/"),
+        "HYSTERIA2_CONFIG_FILE": os.environ.get("HYSTERIA2_CONFIG_FILE", str(XRAY_HYSTERIA_FRAGMENT)),
+        "HYSTERIA2_SERVICE": os.environ.get("HYSTERIA2_SERVICE", "xray.service"),
     }
     for key, value in defaults.items():
-        if not env.get(key):
+        current = str(env.get(key, "")).strip()
+        if not current:
             env[key] = value
             changed = True
+    legacy_config = str(ROOT / "config.yaml")
+    if str(env.get("HYSTERIA2_CONFIG_FILE", "")).strip() == legacy_config:
+        env["HYSTERIA2_CONFIG_FILE"] = str(XRAY_HYSTERIA_FRAGMENT)
+        changed = True
+    if str(env.get("HYSTERIA2_SERVICE", "")).strip() in {"", "hysteria2.service"}:
+        env["HYSTERIA2_SERVICE"] = "xray.service"
+        changed = True
     if changed or not ENV_FILE.exists():
         content = "".join(f"{key}={env[key]}\n" for key in sorted(env))
         save_text_atomic(ENV_FILE, content, mode=0o600)
@@ -231,6 +246,19 @@ def yaml_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def ensure_xray_fragment_permissions(path: Path) -> None:
+    try:
+        gid = grp.getgrnam("xray").gr_gid
+    except KeyError:
+        gid = None
+    try:
+        if gid is not None:
+            os.chown(path, 0, gid)
+        os.chmod(path, 0o640)
+    except OSError:
+        pass
+
+
 def env_port(env: dict[str, str]) -> str:
     value = str(env.get("HYSTERIA2_PORT", "443")).strip()
     return value or "443"
@@ -238,7 +266,7 @@ def env_port(env: dict[str, str]) -> str:
 
 def account_uri(username: str, password: str, domain: str, port: str) -> str:
     return (
-        f"hysteria2://{quote(username, safe='')}:{quote(password, safe='')}@{domain}:{port}/"
+        f"hysteria2://{quote(password, safe='')}@{domain}:{port}/"
         f"?sni={quote(domain, safe='')}"
         f"#{quote(username + '@hy2', safe='')}"
     )
@@ -297,17 +325,13 @@ def latest_visible_snapshot(data: dict, env: dict[str, str]) -> dict[str, str] |
 
 
 def render_config(env: dict[str, str], data: dict) -> None:
-    port = env_port(env)
+    port_text = env_port(env)
+    try:
+        port = int(port_text or "443")
+    except ValueError:
+        port = 443
     masquerade_url = env.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/")
-    lines = [
-        f"listen: :{port}",
-        "tls:",
-        f"  cert: {yaml_quote(CERT_FULLCHAIN)}",
-        f"  key: {yaml_quote(CERT_PRIVKEY)}",
-        "auth:",
-        "  type: userpass",
-        "  userpass:",
-    ]
+    clients = []
     for item in auth_users(data):
         if not isinstance(item, dict):
             continue
@@ -315,17 +339,62 @@ def render_config(env: dict[str, str], data: dict) -> None:
         password = str(item.get("password", "")).strip()
         if not username or not password:
             continue
-        lines.append(f"    {yaml_quote(username)}: {yaml_quote(password)}")
-    lines.extend(
-        [
-            "masquerade:",
-            "  type: proxy",
-            "  proxy:",
-            f"    url: {yaml_quote(masquerade_url)}",
-            "    rewriteHost: true",
-        ]
+        clients.append(
+            {
+                "auth": password,
+                "level": 0,
+                "email": f"{username}@hy2",
+            }
+        )
+
+    bootstrap = next(
+        (
+            item
+            for item in data.get("users", [])
+            if isinstance(item, dict) and item.get("username") == BOOTSTRAP_USER
+        ),
+        None,
     )
-    save_text_atomic(CONFIG_FILE, "\n".join(lines) + "\n", mode=0o600)
+    bootstrap_auth = str((bootstrap or {}).get("password", "")).strip()
+    if not bootstrap_auth:
+        bootstrap_auth = secrets.token_urlsafe(24)
+
+    inbound = {
+        "port": port,
+        "protocol": "hysteria",
+        "tag": INBOUND_TAG,
+        "settings": {
+            "version": 2,
+            "clients": clients,
+        },
+        "streamSettings": {
+            "network": "hysteria",
+            "security": "tls",
+            "tlsSettings": {
+                "alpn": ["h3"],
+                "certificates": [
+                    {
+                        "certificateFile": CERT_FULLCHAIN,
+                        "keyFile": CERT_PRIVKEY,
+                    }
+                ]
+            },
+            "hysteriaSettings": {
+                "version": 2,
+                "auth": bootstrap_auth,
+                "udpIdleTimeout": 60,
+                "masquerade": {
+                    "type": "proxy",
+                    "url": masquerade_url,
+                    "rewriteHost": True,
+                    "insecure": False,
+                },
+            },
+        },
+    }
+
+    save_json_atomic(CONFIG_FILE, {"inbounds": [inbound]}, mode=0o600)
+    ensure_xray_fragment_permissions(CONFIG_FILE)
 
 
 def render_account_files(env: dict[str, str], data: dict) -> None:
@@ -349,7 +418,7 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             "  Protocol    : hysteria2",
             "  Transport   : QUIC",
             "  TLS         : enabled",
-            "  Auth Type   : userpass",
+            "  Auth Type   : password",
             dual_line(f"  Port UDP    : {port}", f"SNI         : {domain}"),
             f"  Masquerade  : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}",
             f"  Valid Until : {display_expired_at(expired_at)}",
@@ -463,11 +532,12 @@ def status_cmd(_: argparse.Namespace) -> int:
     env, data = ensure_runtime()
     visible = visible_users(data)
     latest = latest_visible_snapshot(data, env)
-    service_unit = "hysteria2.service"
+    service_unit = BACKEND_SERVICE
     print(f"SERVICE_UNIT={service_unit}")
     print(f"SERVICE_STATE={systemctl_show_value(service_unit, 'ActiveState')}")
     print(f"SERVICE_SUBSTATE={systemctl_show_value(service_unit, 'SubState')}")
     print(f"SERVICE_ENABLED={systemctl_show_value(service_unit, 'UnitFileState')}")
+    print("BACKEND=Xray native inbound")
     print(f"EXPIRED_CLEANER_UNIT={EXPIRED_CLEANER_UNIT}")
     print(f"EXPIRED_CLEANER_STATE={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'ActiveState')}")
     print(f"EXPIRED_CLEANER_SUBSTATE={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'SubState')}")
@@ -487,6 +557,8 @@ def status_cmd(_: argparse.Namespace) -> int:
     print(f"CONFIG_FILE={CONFIG_FILE}")
     print(f"USERS_FILE={USERS_FILE}")
     print(f"ACCOUNT_ROOT={ACCOUNT_ROOT}")
+    print(f"XRAY_FRAGMENT_FILE={CONFIG_FILE}")
+    print(f"INBOUND_TAG={INBOUND_TAG}")
     return 0
 
 

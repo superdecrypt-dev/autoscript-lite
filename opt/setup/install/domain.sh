@@ -853,7 +853,9 @@ install_acme_and_issue_cert() {
   acme_restart_active_tls_consumers
   acme_restore_conflicting_services_after_success
 
-  chmod 600 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
+  chown root:xray "${CERT_DIR}" "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}" >/dev/null 2>&1 || true
+  chmod 750 "${CERT_DIR}" >/dev/null 2>&1 || true
+  chmod 640 "${CERT_PRIVKEY}" "${CERT_FULLCHAIN}"
   if [[ "${ACME_CERT_MODE}" == "dns_cf_wildcard" ]]; then
     setup_cf_dns_rollback_mark_committed
   fi

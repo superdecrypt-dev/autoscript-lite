@@ -609,26 +609,22 @@ install_wireproxy() {
 }
 
 install_hysteria2() {
-  if [[ -x "${HYSTERIA2_BIN}" ]]; then
-    ok "Hysteria 2 sudah ada."
-    return 0
+  ok "Hysteria 2 akan memakai inbound native Xray."
+  if systemctl list-unit-files hysteria2.service >/dev/null 2>&1; then
+    systemctl disable --now hysteria2.service >/dev/null 2>&1 || systemctl stop hysteria2.service >/dev/null 2>&1 || true
+    systemctl reset-failed hysteria2.service >/dev/null 2>&1 || true
   fi
-
-  ok "Pasang Hysteria 2 (spike)..."
-  local url tmp
-  url="$(hysteria2_asset_url)" || die "Asset Hysteria 2 belum tersedia untuk arsitektur host ini."
-  tmp="$(mktemp)"
-  download_file_or_die "${url}" "${tmp}" "" "Hysteria 2 latest"
-  install -m 0755 "${tmp}" "${HYSTERIA2_BIN}"
-  rm -f "${tmp}" >/dev/null 2>&1 || true
-  ok "Hysteria 2 terpasang."
+  rm -f /etc/systemd/system/hysteria2.service /etc/systemd/system/hysteria2.service.d/*.conf >/dev/null 2>&1 || true
+  rm -f "${HYSTERIA2_ROOT}/config.yaml" >/dev/null 2>&1 || true
+  rm -f /usr/local/bin/hysteria2 >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  ok "Standalone Hysteria 2 dibersihkan; backend native Xray siap dipasang."
 }
 
 setup_hysteria2() {
-  local port="" existing_port=""
+  local port="" existing_port="" legacy_service="hysteria2.service"
 
-  ok "Siapkan Hysteria 2 (spike)..."
-  [[ -x "${HYSTERIA2_BIN}" ]] || die "Binary Hysteria 2 tidak ditemukan: ${HYSTERIA2_BIN}"
+  ok "Siapkan Hysteria 2 native Xray..."
   [[ -s "${CERT_FULLCHAIN}" && -s "${CERT_PRIVKEY}" ]] || die "Sertifikat TLS belum siap untuk Hysteria 2."
 
   if [[ -f "${HYSTERIA2_ENV_FILE}" ]]; then
@@ -644,19 +640,24 @@ setup_hysteria2() {
   cat > "${HYSTERIA2_ENV_FILE}" <<EOF
 HYSTERIA2_PORT=${port}
 HYSTERIA2_MASQUERADE_URL=${HYSTERIA2_MASQUERADE_URL}
+HYSTERIA2_CONFIG_FILE=${HYSTERIA2_CONFIG_FILE}
+HYSTERIA2_SERVICE=${HYSTERIA2_SERVICE}
 EOF
   chmod 600 "${HYSTERIA2_ENV_FILE}" >/dev/null 2>&1 || true
 
   install_setup_bin_or_die "hysteria2-manage.py" "${HYSTERIA2_MANAGE_BIN}" 0755
   install_setup_bin_or_die "hysteria2-expired.py" "${HYSTERIA2_EXPIRED_BIN}" 0755
+
+  if systemctl list-unit-files "${legacy_service}" >/dev/null 2>&1; then
+    systemctl disable --now "${legacy_service}" >/dev/null 2>&1 || systemctl stop "${legacy_service}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${legacy_service}" >/dev/null 2>&1 || true
+  fi
+  rm -f /etc/systemd/system/${legacy_service} /etc/systemd/system/${legacy_service}.d/*.conf >/dev/null 2>&1 || true
+  rm -f "${HYSTERIA2_ROOT}/config.yaml" >/dev/null 2>&1 || true
+  rm -f /usr/local/bin/hysteria2 >/dev/null 2>&1 || true
+
   "${HYSTERIA2_MANAGE_BIN}" ensure-runtime || die "Gagal menyiapkan runtime Hysteria 2."
 
-  render_setup_template_or_die \
-    "systemd/hysteria2.service" \
-    "/etc/systemd/system/${HYSTERIA2_SERVICE}" \
-    0644 \
-    "HYSTERIA2_BIN=${HYSTERIA2_BIN}" \
-    "HYSTERIA2_CONFIG_FILE=${HYSTERIA2_CONFIG_FILE}"
   render_setup_template_or_die \
     "systemd/hysteria2-expired.service" \
     "/etc/systemd/system/${HYSTERIA2_EXPIRED_SERVICE}" \
@@ -669,7 +670,7 @@ EOF
   systemctl daemon-reload
   service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Hysteria 2 gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
   service_enable_restart_checked "${HYSTERIA2_EXPIRED_SERVICE}" || die "Auto expired Hysteria 2 gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_EXPIRED_SERVICE} -n 100 --no-pager"
-  ok "Hysteria 2 aktif di UDP port ${port}."
+  ok "Hysteria 2 native Xray aktif di UDP port ${port}."
 }
 
 setup_wgcf() {

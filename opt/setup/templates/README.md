@@ -19,7 +19,6 @@ Template aktif utama:
 - `systemd/autoscript-license-enforcer.service`
 - `systemd/autoscript-license-enforcer.timer`
 - `systemd/edge-mux.service`
-- `systemd/hysteria2-expired.service`
 - `systemd/wireproxy.service`
 - `systemd/xray-confdir.conf`
 - `systemd/xray-domain-guard.service`
@@ -28,5 +27,9 @@ Template aktif utama:
 - `systemd/xray-limit-ip.service`
 - `systemd/xray-quota.service`
 - `systemd/xray-speed.service`
+
+Catatan:
+- runtime Hysteria 2 native sekarang dirender langsung ke `Xray conf.d` oleh `hysteria2-manage`, bukan lewat service standalone.
+- `systemd/hysteria2-expired.service` masih dipakai sebagai cleaner untuk prune user expired lalu restart `xray.service`.
 
 Template legacy non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.
