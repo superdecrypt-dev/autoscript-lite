@@ -17,6 +17,7 @@ quota_collect_files() {
     [[ -d "${dir}" ]] || continue
     while IFS= read -r -d '' f; do
       base="$(basename "${f}")"
+      [[ "${base}" == .* ]] && continue
       base="${base%.json}"
       if [[ "${base}" == *"@"* ]]; then
         u="${base%%@*}"
@@ -53,6 +54,7 @@ quota_collect_files() {
     [[ -d "${dir}" ]] || continue
     while IFS= read -r -d '' f; do
       base="$(basename "${f}")"
+      [[ "${base}" == .* ]] && continue
       base="${base%.txt}"
       if [[ "${base}" == *"@"* ]]; then
         u="${base%%@*}"
