@@ -189,6 +189,25 @@ def ensure_env_defaults() -> dict[str, str]:
     if not str(env.get("HYSTERIA2_MASQUERADE_DIR", "")).strip():
         env["HYSTERIA2_MASQUERADE_DIR"] = "/var/www/html"
         changed = True
+    if not str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "")).strip():
+        env["HYSTERIA2_MASQUERADE_REWRITE_HOST"] = "true"
+        changed = True
+    if not str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "")).strip():
+        env["HYSTERIA2_MASQUERADE_STATUS_CODE"] = "200"
+        changed = True
+    if not str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "")).strip():
+        env["HYSTERIA2_MASQUERADE_HEADERS"] = json.dumps(
+            {
+                "Server": "nginx",
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "X-Frame-Options": "DENY",
+                "X-Content-Type-Options": "nosniff",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        changed = True
     if not str(env.get("HYSTERIA2_CURVE_PREFERENCES", "")).strip():
         env["HYSTERIA2_CURVE_PREFERENCES"] = "X25519MLKEM768,X25519"
         changed = True
@@ -399,6 +418,17 @@ def render_config(env: dict[str, str], data: dict) -> None:
     server_name = env_domain(env)
     tls_server_name = str(env.get("HYSTERIA2_TLS_SERVER_NAME", server_name)).strip() or server_name
     masquerade_dir = str(env.get("HYSTERIA2_MASQUERADE_DIR", "/var/www/html")).strip() or "/var/www/html"
+    masquerade_rewrite_host = str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "true")).strip().lower() == "true"
+    try:
+        masquerade_status_code = int(str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "200")).strip() or "200")
+    except ValueError:
+        masquerade_status_code = 200
+    try:
+        masquerade_headers = json.loads(str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "{}")).strip() or "{}")
+        if not isinstance(masquerade_headers, dict):
+            masquerade_headers = {}
+    except json.JSONDecodeError:
+        masquerade_headers = {}
     ech_server_keys = str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip()
     curve_preferences = [
         item.strip()
@@ -451,6 +481,9 @@ def render_config(env: dict[str, str], data: dict) -> None:
                 "masquerade": {
                     "type": "file",
                     "dir": masquerade_dir,
+                    "rewriteHost": masquerade_rewrite_host,
+                    "headers": masquerade_headers,
+                    "statusCode": masquerade_status_code,
                 },
             },
             "security": "tls",
@@ -500,6 +533,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
                             "password": str(env.get("HYSTERIA2_SUDOKU_PASSWORD", "")).strip(),
                             "paddingMin": 16,
                             "paddingMax": 64,
+                            "mode": "random",
                         },
                     },
                 ],

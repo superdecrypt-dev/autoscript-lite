@@ -738,8 +738,17 @@ write_xray_config() {
   ],
   "outbounds": [
     {
+      "tag": "direct",
       "protocol": "freedom",
-      "tag": "direct"
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpCongestion": "bbr"
+        }
+      }
     },
     {
       "protocol": "blackhole",
@@ -755,6 +764,14 @@ write_xray_config() {
             "port": 40000
           }
         ]
+      }
+    },
+    {
+      "tag": "dns-out",
+      "protocol": "dns",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53
       }
     }
   ]
