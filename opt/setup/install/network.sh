@@ -269,7 +269,7 @@ hysteria2_pick_udp_port() {
     fi
     tries=$((tries + 1))
   done
-  die "Gagal mendapatkan port UDP kosong untuk Hysteria 2."
+  die "Gagal mendapatkan port UDP kosong."
 }
 
 cloudflare_warp_repo_codename_get() {
