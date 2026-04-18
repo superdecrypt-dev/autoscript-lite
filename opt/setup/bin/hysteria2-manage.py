@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import grp
 import json
 import os
@@ -25,7 +26,8 @@ DOMAIN_FILE = Path(os.environ.get("XRAY_DOMAIN_FILE", "/etc/xray/domain"))
 BOOTSTRAP_USER = "__bootstrap__"
 EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-expired.service")
 BACKEND_SERVICE = os.environ.get("HYSTERIA2_SERVICE", "xray.service")
-INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hysteria2")
+INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hysteria2-modular")
+PASSWORD_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
 
 
 def now_iso() -> str:
@@ -119,6 +121,51 @@ def save_json_atomic(path: Path, data: object, mode: int = 0o600) -> None:
     save_text_atomic(path, json.dumps(data, indent=2) + "\n", mode=mode)
 
 
+def generate_password(length: int) -> str:
+    return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(length))
+
+
+def save_env(env: dict[str, str]) -> None:
+    content = "".join(f"{key}={env[key]}\n" for key in sorted(env))
+    save_text_atomic(ENV_FILE, content, mode=0o600)
+
+
+def env_domain(env: dict[str, str]) -> str:
+    value = str(env.get("HYSTERIA2_SERVER_NAME", "")).strip()
+    if value:
+        return value
+    return domain_value()
+
+
+def ensure_ech_server_keys(server_name: str) -> str:
+    try:
+        result = subprocess.run(
+            ["xray", "tls", "ech", "--serverName", server_name],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit("xray binary tidak ditemukan untuk generate ECH server keys") from exc
+    if result.returncode != 0:
+        raise SystemExit(f"gagal generate ECH server keys untuk {server_name}")
+    lines = result.stdout.splitlines()
+    for idx, line in enumerate(lines):
+        if line.strip() == "ECH server keys:" and idx + 1 < len(lines):
+            value = lines[idx + 1].strip()
+            if value:
+                return value
+    raise SystemExit(f"output xray tls ech tidak memuat ECH server keys untuk {server_name}")
+
+
+def ensure_secret(env: dict[str, str], key: str, length: int) -> bool:
+    current = str(env.get(key, "")).strip()
+    if current:
+        return False
+    env[key] = generate_password(length)
+    return True
+
+
 def ensure_env_defaults() -> dict[str, str]:
     env = load_env()
     changed = False
@@ -133,6 +180,23 @@ def ensure_env_defaults() -> dict[str, str]:
         if not current:
             env[key] = value
             changed = True
+    if not str(env.get("HYSTERIA2_SERVER_NAME", "")).strip():
+        env["HYSTERIA2_SERVER_NAME"] = domain_value()
+        changed = True
+    if not str(env.get("HYSTERIA2_TLS_SERVER_NAME", "")).strip():
+        env["HYSTERIA2_TLS_SERVER_NAME"] = env["HYSTERIA2_SERVER_NAME"]
+        changed = True
+    if not str(env.get("HYSTERIA2_MASQUERADE_DIR", "")).strip():
+        env["HYSTERIA2_MASQUERADE_DIR"] = "/var/www/html"
+        changed = True
+    if not str(env.get("HYSTERIA2_CURVE_PREFERENCES", "")).strip():
+        env["HYSTERIA2_CURVE_PREFERENCES"] = "X25519MLKEM768,X25519"
+        changed = True
+    if not str(env.get("HYSTERIA2_ECH_FORCE_QUERY", "")).strip():
+        env["HYSTERIA2_ECH_FORCE_QUERY"] = "full"
+        changed = True
+    changed = ensure_secret(env, "HYSTERIA2_SALAMANDER_PASSWORD", 14) or changed
+    changed = ensure_secret(env, "HYSTERIA2_SUDOKU_PASSWORD", 14) or changed
     legacy_config = str(ROOT / "config.yaml")
     if str(env.get("HYSTERIA2_CONFIG_FILE", "")).strip() == legacy_config:
         env["HYSTERIA2_CONFIG_FILE"] = str(XRAY_HYSTERIA_FRAGMENT)
@@ -140,9 +204,11 @@ def ensure_env_defaults() -> dict[str, str]:
     if str(env.get("HYSTERIA2_SERVICE", "")).strip() in {"", "hysteria2.service"}:
         env["HYSTERIA2_SERVICE"] = "xray.service"
         changed = True
+    if not str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip():
+        env["HYSTERIA2_ECH_SERVER_KEYS"] = ensure_ech_server_keys(env["HYSTERIA2_TLS_SERVER_NAME"])
+        changed = True
     if changed or not ENV_FILE.exists():
-        content = "".join(f"{key}={env[key]}\n" for key in sorted(env))
-        save_text_atomic(ENV_FILE, content, mode=0o600)
+        save_env(env)
     return env
 
 
@@ -224,7 +290,7 @@ def ensure_bootstrap_user(data: dict) -> dict:
     users.append(
         {
             "username": BOOTSTRAP_USER,
-            "password": secrets.token_urlsafe(24),
+            "password": generate_password(28),
             "created_at": now_iso(),
             "expired_at": "-",
             "hidden": True,
@@ -330,7 +396,15 @@ def render_config(env: dict[str, str], data: dict) -> None:
         port = int(port_text or "443")
     except ValueError:
         port = 443
-    masquerade_url = env.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/")
+    server_name = env_domain(env)
+    tls_server_name = str(env.get("HYSTERIA2_TLS_SERVER_NAME", server_name)).strip() or server_name
+    masquerade_dir = str(env.get("HYSTERIA2_MASQUERADE_DIR", "/var/www/html")).strip() or "/var/www/html"
+    ech_server_keys = str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip()
+    curve_preferences = [
+        item.strip()
+        for item in str(env.get("HYSTERIA2_CURVE_PREFERENCES", "X25519MLKEM768,X25519")).split(",")
+        if item.strip()
+    ]
     clients = []
     for item in auth_users(data):
         if not isinstance(item, dict):
@@ -357,39 +431,102 @@ def render_config(env: dict[str, str], data: dict) -> None:
     )
     bootstrap_auth = str((bootstrap or {}).get("password", "")).strip()
     if not bootstrap_auth:
-        bootstrap_auth = secrets.token_urlsafe(24)
+        bootstrap_auth = generate_password(28)
 
     inbound = {
+        "tag": INBOUND_TAG,
+        "listen": "::",
         "port": port,
         "protocol": "hysteria",
-        "tag": INBOUND_TAG,
         "settings": {
             "version": 2,
             "clients": clients,
         },
         "streamSettings": {
             "network": "hysteria",
-            "security": "tls",
-            "tlsSettings": {
-                "alpn": ["h3"],
-                "certificates": [
-                    {
-                        "certificateFile": CERT_FULLCHAIN,
-                        "keyFile": CERT_PRIVKEY,
-                    }
-                ]
-            },
             "hysteriaSettings": {
                 "version": 2,
                 "auth": bootstrap_auth,
                 "udpIdleTimeout": 60,
                 "masquerade": {
-                    "type": "proxy",
-                    "url": masquerade_url,
-                    "rewriteHost": True,
-                    "insecure": False,
+                    "type": "file",
+                    "dir": masquerade_dir,
                 },
             },
+            "security": "tls",
+            "tlsSettings": {
+                "serverName": tls_server_name,
+                "alpn": ["h3"],
+                "certificates": [
+                    {
+                        "certificateFile": CERT_FULLCHAIN,
+                        "keyFile": CERT_PRIVKEY,
+                        "ocspStapling": 3600,
+                    }
+                ],
+                "echServerKeys": ech_server_keys,
+                "echForceQuery": str(env.get("HYSTERIA2_ECH_FORCE_QUERY", "full")).strip() or "full",
+                "curvePreferences": curve_preferences,
+            },
+            "finalmask": {
+                "udp": [
+                    {
+                        "type": "salamander",
+                        "settings": {
+                            "password": str(env.get("HYSTERIA2_SALAMANDER_PASSWORD", "")).strip(),
+                        },
+                    },
+                    {
+                        "type": "header-custom",
+                        "settings": {
+                            "client": [
+                                {
+                                    "type": "str",
+                                    "packet": "GET / HTTP/1.1\r\nHost: cdn.cloudflare.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\nAccept: text/html,application/xhtml+xml\r\n\r\n",
+                                    "randRange": "0-4",
+                                }
+                            ],
+                            "server": [
+                                {
+                                    "type": "str",
+                                    "packet": "HTTP/1.1 200 OK\r\nServer: cloudflare\r\nContent-Type: text/html\r\n\r\n",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "type": "sudoku",
+                        "settings": {
+                            "password": str(env.get("HYSTERIA2_SUDOKU_PASSWORD", "")).strip(),
+                            "paddingMin": 16,
+                            "paddingMax": 64,
+                        },
+                    },
+                ],
+                "quicParams": {
+                    "congestion": "bbr",
+                    "brutalUp": "50 mbps",
+                    "brutalDown": "100 mbps",
+                    "maxIdleTimeout": 20,
+                    "keepAlivePeriod": 8,
+                    "initStreamReceiveWindow": 4194304,
+                    "maxStreamReceiveWindow": 4194304,
+                    "disablePathMTUDiscovery": False,
+                },
+            },
+            "sockopt": {
+                "tcpCongestion": "bbr",
+                "tcpFastOpen": True,
+                "tcpKeepAliveIdle": 120,
+                "tcpKeepAliveInterval": 30,
+                "mark": 255,
+            },
+        },
+        "sniffing": {
+            "enabled": True,
+            "destOverride": ["http", "tls", "quic", "fakedns"],
+            "routeOnly": False,
+            "metadataOnly": False,
         },
     }
 
@@ -458,7 +595,7 @@ def validate_username(value: str) -> str:
 def add_user(args: argparse.Namespace) -> int:
     env, data = ensure_runtime()
     username = validate_username(args.username.strip())
-    password = (args.password or "").strip() or secrets.token_urlsafe(12)
+    password = (args.password or "").strip() or generate_password(28)
     expired_at = resolve_expired_at((args.days or "").strip(), (args.expired_at or "").strip())
     users = data["users"]
     if any(isinstance(item, dict) and item.get("username") == username for item in users):
