@@ -79,6 +79,15 @@ write_xray_config() {
   I_VLESS_GRPC="$(rand_str 12)"
   I_VMESS_GRPC="$(rand_str 12)"
   I_TROJAN_GRPC="$(rand_str 12)"
+  local XHTTP3_SALAMANDER XHTTP3_ECH_OUTPUT XHTTP3_ECH_CONFIG XHTTP3_ECH_SERVER_KEYS
+  XHTTP3_SALAMANDER="${XRAY_XHTTP3_SALAMANDER_PASSWORD:-}"
+  if [[ -z "${XHTTP3_SALAMANDER}" ]]; then
+    XHTTP3_SALAMANDER="$(rand_str 16)"
+  fi
+  XHTTP3_ECH_OUTPUT="$(xray tls ech --serverName "${DOMAIN}" 2>/dev/null || true)"
+  XHTTP3_ECH_CONFIG="$(printf '%s\n' "${XHTTP3_ECH_OUTPUT}" | awk 'found && NF {print; exit} /^ECH config list:/ {found=1}')"
+  XHTTP3_ECH_SERVER_KEYS="$(printf '%s\n' "${XHTTP3_ECH_OUTPUT}" | awk 'found && NF {print; exit} /^ECH server keys:/ {found=1}')"
+  [[ -n "${XHTTP3_ECH_CONFIG}" && -n "${XHTTP3_ECH_SERVER_KEYS}" ]] || die "Gagal generate ECH config untuk XHTTP/3."
 
   mkdir -p "$(dirname "$XRAY_CONFIG")"
 
@@ -145,6 +154,13 @@ write_xray_config() {
           "api"
         ],
         "outboundTag": "api"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dns-in"
+        ],
+        "outboundTag": "dns-out"
       },
       {
         "type": "field",
@@ -263,6 +279,17 @@ write_xray_config() {
     },
     {
       "listen": "127.0.0.1",
+      "port": 1053,
+      "protocol": "dokodemo-door",
+      "tag": "dns-in",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53,
+        "network": "tcp,udp"
+      }
+    },
+    {
+      "listen": "127.0.0.1",
       "port": ${P_XRAY_WARP_REDIR},
       "protocol": "dokodemo-door",
       "tag": "xray-warp-redir-v4",
@@ -317,7 +344,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -347,7 +375,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -376,7 +405,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -406,7 +436,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -436,7 +467,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -465,7 +497,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -495,7 +528,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -525,7 +559,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -555,7 +590,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -581,6 +617,8 @@ write_xray_config() {
           "alpn": [
             "h3"
           ],
+          "echServerKeys": "${XHTTP3_ECH_SERVER_KEYS}",
+          "echForceQuery": "full",
           "certificates": [
             {
               "certificateFile": "${CERT_FULLCHAIN}",
@@ -589,7 +627,30 @@ write_xray_config() {
           ]
         },
         "xhttpSettings": {
-          "path": "${I_VLESS_XHTTP3}"
+          "path": "${I_VLESS_XHTTP3}",
+          "headers": {
+            "User-Agent": "${XRAY_XHTTP3_USER_AGENT}"
+          }
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "salamander",
+              "settings": {
+                "password": "${XHTTP3_SALAMANDER}"
+              }
+            }
+          ],
+          "quicParams": {
+            "congestion": "${XRAY_XHTTP3_CONGESTION}",
+            "udpHop": {
+              "ports": "${XRAY_XHTTP3_UDPHOP_PORTS}",
+              "interval": "${XRAY_XHTTP3_UDPHOP_INTERVAL}"
+            },
+            "maxIdleTimeout": ${XRAY_XHTTP3_MAX_IDLE_TIMEOUT},
+            "keepAlivePeriod": ${XRAY_XHTTP3_KEEPALIVE_PERIOD},
+            "disablePathMTUDiscovery": ${XRAY_XHTTP3_DISABLE_PMTUD}
+          }
         }
       },
       "sniffing": {
@@ -597,7 +658,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -627,7 +689,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -656,7 +719,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -685,7 +749,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -715,7 +780,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -745,7 +811,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     },
@@ -774,7 +841,8 @@ write_xray_config() {
         "destOverride": [
           "http",
           "tls",
-          "quic"
+          "quic",
+          "fakedns"
         ]
       }
     }
@@ -1160,12 +1228,49 @@ parts = [
   ("50-stats.json", {"stats": cfg.get("stats") or {}}),
 ]
 
+comments = {
+  "00-log.json": [
+    "// Xray log fragment.",
+    "// Controls access/error logs and log level.",
+  ],
+  "01-api.json": [
+    "// Xray API fragment.",
+    "// HandlerService, LoggerService, and StatsService are exposed here.",
+  ],
+  "02-dns.json": [
+    "// Xray DNS fragment.",
+    "// FakeDNS is enabled and local DNS queries should be sent to dns-in at 127.0.0.1:1053 if you want to use it.",
+  ],
+  "10-inbounds.json": [
+    "// Xray inbound fragment.",
+    "// Public VLESS XHTTP/3 lives on UDP 443; internal transports stay on 127.0.0.1 high ports.",
+  ],
+  "20-outbounds.json": [
+    "// Xray outbound fragment.",
+    "// direct is default, blocked is sinkhole, warp is local socks upstream, dns-out is built-in DNS outbound.",
+  ],
+  "30-routing.json": [
+    "// Xray routing fragment.",
+    "// dns-in is forced to dns-out; user marker rules handle block/quota/limit state.",
+  ],
+  "40-policy.json": [
+    "// Xray policy fragment.",
+    "// Per-user and system traffic statistics are enabled here.",
+  ],
+  "50-stats.json": [
+    "// Xray stats fragment.",
+    "// Kept separate so stats can be toggled without touching other fragments.",
+  ],
+}
+
 os.makedirs(outdir, exist_ok=True)
 
 for name, obj in parts:
   path = os.path.join(outdir, name)
   tmp = f"{path}.tmp"
   with open(tmp, "w", encoding="utf-8") as wf:
+    for line in comments.get(name, []):
+      wf.write(f"{line}\n")
     json.dump(obj, wf, ensure_ascii=False, indent=2)
     wf.write("\n")
   os.replace(tmp, path)
@@ -1206,6 +1311,31 @@ wait_for_xray_service_stable() {
   done
 
   return 0
+}
+
+setup_xray_xhttp3_udphop_runtime() {
+  local iface helper_src
+  iface="$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+  [[ -n "${iface}" ]] || return 0
+
+  helper_src="${SETUP_BIN_SRC_DIR:-${SCRIPT_DIR}/opt/setup/bin}/xray-xhttp3-udphop-rules.py"
+  [[ -f "${helper_src}" ]] || die "Helper UDPHop XHTTP3 tidak ditemukan: ${helper_src}"
+  install -m 0755 "${helper_src}" "${XRAY_XHTTP3_UDPHOP_BIN}"
+
+  cat > "${XRAY_XHTTP3_UDPHOP_ENV_FILE}" <<EOF
+XRAY_XHTTP3_UDPHOP_IFACE=${iface}
+XRAY_XHTTP3_UDPHOP_LISTEN_PORT=443
+XRAY_XHTTP3_UDPHOP_PORTS=${XRAY_XHTTP3_UDPHOP_PORTS}
+EOF
+  chmod 0644 "${XRAY_XHTTP3_UDPHOP_ENV_FILE}" >/dev/null 2>&1 || true
+
+  render_setup_template_or_die \
+    "systemd/xray-xhttp3-udphop.service" \
+    "/etc/systemd/system/${XRAY_XHTTP3_UDPHOP_SERVICE}" \
+    0644
+  systemctl daemon-reload
+  systemctl enable "${XRAY_XHTTP3_UDPHOP_SERVICE}" >/dev/null 2>&1 || true
+  systemctl restart "${XRAY_XHTTP3_UDPHOP_SERVICE}" >/dev/null 2>&1 || true
 }
 
 configure_xray_service_confdir() {
@@ -1263,6 +1393,7 @@ configure_xray_service_confdir() {
     journalctl -u xray -n 200 --no-pager >&2 || true
     die "xray gagal stabil setelah restart."
   fi
+  setup_xray_xhttp3_udphop_runtime
   ok "xray.service aktif."
 
   # Setelah Xray berjalan menggunakan conf.d, config.json tidak diperlukan lagi.

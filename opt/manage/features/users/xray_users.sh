@@ -1673,7 +1673,7 @@ write_account_artifacts() {
   [[ -n "${quota_output_override}" ]] && quota_file="${quota_output_override}"
 
   python3 - <<'PY' "${acc_file}" "${quota_file}" "${XRAY_INBOUNDS_CONF}" "${domain}" "${ip}" "${isp}" "${country}" "${username}" "${proto}" "${cred}" "${quota_bytes}" "${created}" "${expired}" "${days}" "${ip_enabled}" "${ip_limit}" "${speed_enabled}" "${speed_down}" "${speed_up}" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_public_tls_ports_label)" "$(xray_edge_runtime_alt_tls_ports_label)" "$(xray_edge_runtime_alt_http_ports_label)"
-import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress
+import sys, json, base64, urllib.parse, datetime, os, tempfile, ipaddress, subprocess
 acc_file, quota_file, inbounds_file, domain, ip, isp, country, username, proto, cred, quota_bytes, created_at, expired_at, days, ip_enabled, ip_limit, speed_enabled, speed_down, speed_up, primary_ports_disp, tls_ports_disp, alt_tls_ports_disp, alt_http_ports_disp = sys.argv[1:24]
 quota_bytes=int(quota_bytes)
 days=int(float(days)) if str(days).strip() else 0
@@ -1802,6 +1802,170 @@ def write_json_atomic(path, obj):
     except Exception:
       pass
 
+def ech_config_from_server_keys(server_keys):
+  raw = str(server_keys or "").strip()
+  if not raw:
+    return ""
+  try:
+    out = subprocess.check_output(
+      ["xray", "tls", "ech", "-i", raw],
+      text=True,
+      stderr=subprocess.DEVNULL,
+      timeout=10,
+    )
+  except Exception:
+    return ""
+  lines = [line.strip() for line in out.splitlines() if line.strip()]
+  for idx, line in enumerate(lines):
+    if line.lower().startswith("ech config list") and idx + 1 < len(lines):
+      return lines[idx + 1]
+  return ""
+
+def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto):
+  if not os.path.isfile(inbounds_path):
+    return None
+  try:
+    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+  except Exception:
+    return None
+
+  inbound = None
+  for item in cfg.get("inbounds") or []:
+    if isinstance(item, dict) and str(item.get("tag") or "").strip() == "default@vless-xhttp3":
+      inbound = item
+      break
+  if not isinstance(inbound, dict):
+    return None
+
+  stream = inbound.get("streamSettings") or {}
+  tls = stream.get("tlsSettings") or {}
+  xhttp = stream.get("xhttpSettings") or {}
+  finalmask = stream.get("finalmask") or {}
+  udp_masks = finalmask.get("udp") or []
+  quic_params = finalmask.get("quicParams") or {}
+
+  out_stream = {
+    "network": "xhttp",
+    "security": "tls",
+    "tlsSettings": {
+      "serverName": str(tls.get("serverName") or domain),
+      "alpn": list(tls.get("alpn") or ["h3"]),
+    },
+    "xhttpSettings": {
+      "path": str(xhttp.get("path") or "/vless-xhttp3"),
+    },
+  }
+  user_agent = str((xhttp.get("headers") or {}).get("User-Agent") or "").strip()
+  if user_agent:
+    out_stream["xhttpSettings"]["headers"] = {"User-Agent": user_agent}
+
+  ech_config = ech_config_from_server_keys(tls.get("echServerKeys"))
+  if ech_config:
+    out_stream["tlsSettings"]["echConfigList"] = ech_config
+
+  udp_out = []
+  for mask in udp_masks:
+    if not isinstance(mask, dict):
+      continue
+    if str(mask.get("type") or "").strip() != "salamander":
+      continue
+    password = str(((mask.get("settings") or {}).get("password")) or "").strip()
+    if not password:
+      continue
+    udp_out.append({"type": "salamander", "settings": {"password": password}})
+  if udp_out or (isinstance(quic_params, dict) and quic_params):
+    out_stream["finalmask"] = {}
+    if udp_out:
+      out_stream["finalmask"]["udp"] = udp_out
+    if isinstance(quic_params, dict) and quic_params:
+      out_stream["finalmask"]["quicParams"] = quic_params
+
+  email = f"{username}@{proto}"
+  remark = f"VLESS XHTTP/3 Full - {email}"
+  return {
+    "remark": remark,
+    "remarks": remark,
+    "log": {"loglevel": "warning"},
+    "inbounds": [
+      {
+        "tag": "socks-in",
+        "listen": "127.0.0.1",
+        "port": 10808,
+        "protocol": "socks",
+        "settings": {"udp": True},
+      }
+    ],
+    "outbounds": [
+      {
+        "tag": "vless-xhttp3-out",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": domain,
+              "port": 443,
+              "users": [{"id": cred, "encryption": "none"}],
+            }
+          ]
+        },
+        "streamSettings": out_stream,
+      }
+    ],
+    "routing": {
+      "rules": [
+        {
+          "type": "field",
+          "inboundTag": ["socks-in"],
+          "outboundTag": "vless-xhttp3-out",
+        }
+      ]
+    },
+  }
+
+def build_vless_xhttp3_link(inbounds_path, domain, cred, username, proto):
+  if not os.path.isfile(inbounds_path):
+    return ""
+  try:
+    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+  except Exception:
+    return ""
+
+  inbound = None
+  for item in cfg.get("inbounds") or []:
+    if isinstance(item, dict) and str(item.get("tag") or "").strip() == "default@vless-xhttp3":
+      inbound = item
+      break
+  if not isinstance(inbound, dict):
+    return ""
+
+  stream = inbound.get("streamSettings") or {}
+  tls = stream.get("tlsSettings") or {}
+  xhttp = stream.get("xhttpSettings") or {}
+  finalmask = stream.get("finalmask") or {}
+  headers = xhttp.get("headers") or {}
+  user_agent = str(headers.get("User-Agent") or "").strip()
+  ech_config = ech_config_from_server_keys(tls.get("echServerKeys"))
+
+  q = {
+    "alpn": "h3",
+    "fp": user_agent or "firefox",
+    "type": "xhttp",
+    "sni": str(tls.get("serverName") or domain),
+    "mode": str(xhttp.get("mode") or "auto"),
+    "path": str(xhttp.get("path") or "/vless-xhttp3"),
+    "security": "tls",
+    "encryption": "none",
+    "insecure": "0",
+    "allowInsecure": "0",
+  }
+  if ech_config:
+    q["ech"] = ech_config
+  if isinstance(finalmask, dict) and finalmask:
+    q["fm"] = json.dumps(finalmask, ensure_ascii=False, separators=(",", ":"))
+  if headers:
+    q["extra"] = json.dumps({"headers": headers}, ensure_ascii=False, separators=(",", ":"))
+  return f"vless://{cred}@{domain}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
+
 def pick_portal_token(quota_file_path, current_token=""):
   import secrets
   import re
@@ -1852,6 +2016,10 @@ tcp_tls_host = domain
 
 
 def vless_link(net, val):
+  if net == "xhttp3":
+    full = build_vless_xhttp3_link(inbounds_file, domain, cred, username, proto)
+    if full:
+      return full
   q={"encryption":"none","security":"tls","type":net,"sni":domain}
   if net in ("ws","httpupgrade","xhttp","xhttp3"):
     q["path"]=val or "/"
@@ -2019,6 +2187,12 @@ lines.append("")
 
 write_text_atomic(acc_file, "\n".join(lines))
 
+xray_json_file = os.path.splitext(acc_file)[0] + ".xray.json"
+if proto == "vless":
+  xray_client_cfg = build_vless_xhttp3_client_config(inbounds_file, domain, cred, username, proto)
+  if xray_client_cfg:
+    write_json_atomic(xray_json_file, xray_client_cfg)
+
 # Write quota json metadata
 meta={
   "username": username + "@" + proto,
@@ -2104,6 +2278,7 @@ import ipaddress
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -2264,6 +2439,172 @@ def write_json_atomic(path, obj):
         os.remove(tmp)
     except Exception:
       pass
+
+
+def ech_config_from_server_keys(server_keys):
+  raw = str(server_keys or "").strip()
+  if not raw:
+    return ""
+  try:
+    out = subprocess.check_output(
+      ["xray", "tls", "ech", "-i", raw],
+      text=True,
+      stderr=subprocess.DEVNULL,
+      timeout=10,
+    )
+  except Exception:
+    return ""
+  lines = [line.strip() for line in out.splitlines() if line.strip()]
+  for idx, line in enumerate(lines):
+    if line.lower().startswith("ech config list") and idx + 1 < len(lines):
+      return lines[idx + 1]
+  return ""
+
+
+def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto):
+  if not os.path.isfile(inbounds_path):
+    return None
+  try:
+    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+  except Exception:
+    return None
+
+  inbound = None
+  for item in cfg.get("inbounds") or []:
+    if isinstance(item, dict) and str(item.get("tag") or "").strip() == "default@vless-xhttp3":
+      inbound = item
+      break
+  if not isinstance(inbound, dict):
+    return None
+
+  stream = inbound.get("streamSettings") or {}
+  tls = stream.get("tlsSettings") or {}
+  xhttp = stream.get("xhttpSettings") or {}
+  finalmask = stream.get("finalmask") or {}
+  udp_masks = finalmask.get("udp") or []
+  quic_params = finalmask.get("quicParams") or {}
+
+  out_stream = {
+    "network": "xhttp",
+    "security": "tls",
+    "tlsSettings": {
+      "serverName": str(tls.get("serverName") or domain),
+      "alpn": list(tls.get("alpn") or ["h3"]),
+    },
+    "xhttpSettings": {
+      "path": str(xhttp.get("path") or "/vless-xhttp3"),
+    },
+  }
+  user_agent = str((xhttp.get("headers") or {}).get("User-Agent") or "").strip()
+  if user_agent:
+    out_stream["xhttpSettings"]["headers"] = {"User-Agent": user_agent}
+
+  ech_config = ech_config_from_server_keys(tls.get("echServerKeys"))
+  if ech_config:
+    out_stream["tlsSettings"]["echConfigList"] = ech_config
+
+  udp_out = []
+  for mask in udp_masks:
+    if not isinstance(mask, dict):
+      continue
+    if str(mask.get("type") or "").strip() != "salamander":
+      continue
+    password = str(((mask.get("settings") or {}).get("password")) or "").strip()
+    if not password:
+      continue
+    udp_out.append({"type": "salamander", "settings": {"password": password}})
+  if udp_out or (isinstance(quic_params, dict) and quic_params):
+    out_stream["finalmask"] = {}
+    if udp_out:
+      out_stream["finalmask"]["udp"] = udp_out
+    if isinstance(quic_params, dict) and quic_params:
+      out_stream["finalmask"]["quicParams"] = quic_params
+
+  email = f"{username}@{proto}"
+  remark = f"VLESS XHTTP/3 Full - {email}"
+  return {
+    "remark": remark,
+    "remarks": remark,
+    "log": {"loglevel": "warning"},
+    "inbounds": [
+      {
+        "tag": "socks-in",
+        "listen": "127.0.0.1",
+        "port": 10808,
+        "protocol": "socks",
+        "settings": {"udp": True},
+      }
+    ],
+    "outbounds": [
+      {
+        "tag": "vless-xhttp3-out",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": domain,
+              "port": 443,
+              "users": [{"id": cred, "encryption": "none"}],
+            }
+          ]
+        },
+        "streamSettings": out_stream,
+      }
+    ],
+    "routing": {
+      "rules": [
+        {
+          "type": "field",
+          "inboundTag": ["socks-in"],
+          "outboundTag": "vless-xhttp3-out",
+        }
+      ]
+    },
+  }
+
+def build_vless_xhttp3_link(inbounds_path, domain, cred, username, proto):
+  if not os.path.isfile(inbounds_path):
+    return ""
+  try:
+    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+  except Exception:
+    return ""
+
+  inbound = None
+  for item in cfg.get("inbounds") or []:
+    if isinstance(item, dict) and str(item.get("tag") or "").strip() == "default@vless-xhttp3":
+      inbound = item
+      break
+  if not isinstance(inbound, dict):
+    return ""
+
+  stream = inbound.get("streamSettings") or {}
+  tls = stream.get("tlsSettings") or {}
+  xhttp = stream.get("xhttpSettings") or {}
+  finalmask = stream.get("finalmask") or {}
+  headers = xhttp.get("headers") or {}
+  user_agent = str(headers.get("User-Agent") or "").strip()
+  ech_config = ech_config_from_server_keys(tls.get("echServerKeys"))
+
+  q = {
+    "alpn": "h3",
+    "fp": user_agent or "firefox",
+    "type": "xhttp",
+    "sni": str(tls.get("serverName") or domain),
+    "mode": str(xhttp.get("mode") or "auto"),
+    "path": str(xhttp.get("path") or "/vless-xhttp3"),
+    "security": "tls",
+    "encryption": "none",
+    "insecure": "0",
+    "allowInsecure": "0",
+  }
+  if ech_config:
+    q["ech"] = ech_config
+  if isinstance(finalmask, dict) and finalmask:
+    q["fm"] = json.dumps(finalmask, ensure_ascii=False, separators=(",", ":"))
+  if headers:
+    q["extra"] = json.dumps({"headers": headers}, ensure_ascii=False, separators=(",", ":"))
+  return f"vless://{cred}@{domain}:443?{urllib.parse.urlencode(q)}#{urllib.parse.quote(username + '@' + proto)}"
 
 
 def pick_portal_token(quota_file_path, current_token=""):
@@ -2494,6 +2835,10 @@ tcp_tls_host = domain
 
 
 def vless_link(net, val):
+  if net == "xhttp3":
+    full = build_vless_xhttp3_link(inbounds_file, domain, cred, username, proto)
+    if full:
+      return full
   q = {"encryption": "none", "security": "tls", "type": net, "sni": domain}
   if net in ("ws", "httpupgrade", "xhttp", "xhttp3"):
     q["path"] = val or "/"
@@ -2674,6 +3019,12 @@ finally:
     pass
 if meta_dirty and quota_file:
   write_json_atomic(quota_file, meta)
+
+xray_json_file = os.path.splitext(acc_file)[0] + ".xray.json"
+if proto == "vless":
+  xray_client_cfg = build_vless_xhttp3_client_config(inbounds_file, domain, cred, username, proto)
+  if xray_client_cfg:
+    write_json_atomic(xray_json_file, xray_client_cfg)
 PY
   rc=$?
   set -e
@@ -2964,15 +3315,17 @@ delete_account_artifacts() {
   local proto="$1"
   local username="$2"
 
-  local acc_file acc_file_compatfmt quota_file quota_file_compatfmt portal_file
+  local acc_file acc_file_compatfmt quota_file quota_file_compatfmt portal_file xray_json_file
   acc_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt"
   acc_file_compatfmt="${ACCOUNT_ROOT}/${proto}/${username}.txt"
   quota_file="${QUOTA_ROOT}/${proto}/${username}@${proto}.json"
   quota_file_compatfmt="${QUOTA_ROOT}/${proto}/${username}.json"
   portal_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.portal.json"
+  xray_json_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.xray.json"
 
   delete_one_file "${acc_file}"
   delete_one_file "${acc_file_compatfmt}"
+  delete_one_file "${xray_json_file}"
   delete_one_file "${quota_file}"
   delete_one_file "${quota_file}.lock"
   delete_one_file "${quota_file_compatfmt}"
@@ -2990,6 +3343,7 @@ delete_account_artifacts_checked() {
   for p in \
     "${ACCOUNT_ROOT}/${proto}/${username}@${proto}.txt" \
     "${ACCOUNT_ROOT}/${proto}/${username}.txt" \
+    "${ACCOUNT_ROOT}/${proto}/${username}@${proto}.xray.json" \
     "${QUOTA_ROOT}/${proto}/${username}@${proto}.json" \
     "${QUOTA_ROOT}/${proto}/${username}@${proto}.json.lock" \
     "${QUOTA_ROOT}/${proto}/${username}.json" \
