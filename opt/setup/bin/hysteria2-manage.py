@@ -415,6 +415,8 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
     domain = snapshot["domain"]
     port = int(snapshot["port"])
     password = snapshot["password"]
+    username = snapshot["username"]
+    remark = f"Hysteria2 - {username}@hy2"
     ech_config_list = str(env.get("HYSTERIA2_ECH_CONFIG_LIST", "")).strip()
     finalmask_udp = finalmask_udp_config(env)
     tls_settings = {
@@ -448,6 +450,8 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
     if finalmask_udp:
         outbound["streamSettings"]["finalmask"]["udp"] = finalmask_udp
     return {
+        "remark": remark,
+        "remarks": remark,
         "log": {
             "loglevel": "warning",
         },
