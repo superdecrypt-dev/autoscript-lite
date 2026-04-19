@@ -58,14 +58,18 @@ hysteria2_service_label() {
 
 hysteria2_user_rows_print() {
   local raw="${1:-}" show_config="${2:-1}"
-  local idx=0 username created_at expired_at xray_config
+  local idx=0 username created_at expired_at xray_config xray_json_url
   while IFS=$'\t' read -r username created_at expired_at xray_config; do
     [[ -n "${username}" ]] || continue
     idx=$((idx + 1))
+    xray_json_url="$(hysteria2_xray_json_url "${HYSTERIA2_CURRENT_DOMAIN:-}" "${username}")"
     printf '%2d) %-20s %s\n' "${idx}" "${username}" "${created_at:-unknown}"
     printf '    valid until  : %s\n' "${expired_at:-Unlimited}"
     if [[ "${show_config}" == "1" && -n "${xray_config}" ]]; then
       printf '    xray config  : %s\n' "${xray_config}"
+    fi
+    if [[ -n "${xray_json_url}" && "${xray_json_url}" != "-" ]]; then
+      printf '    xray json    : %s\n' "${xray_json_url}"
     fi
     echo
   done <<<"${raw}"
@@ -175,9 +179,12 @@ hysteria2_status_menu() {
 }
 
 hysteria2_list_users_menu() {
-  local bin="" out="" count=0
+  local bin="" out="" count=0 status_blob="" domain=""
   ui_menu_screen_begin "$(hysteria2_menu_title "List Users")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
+  status_blob="$("${bin}" status 2>/dev/null || true)"
+  domain="$(hysteria2_status_field "${status_blob}" "DOMAIN")"
+  HYSTERIA2_CURRENT_DOMAIN="${domain}"
   out="$("${bin}" list-users 2>/dev/null || true)"
   if [[ -z "${out}" ]]; then
     echo "Belum ada user Hysteria 2."
