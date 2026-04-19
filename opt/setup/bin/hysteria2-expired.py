@@ -28,6 +28,15 @@ def parse_systemctl_show(blob: str) -> dict[str, str]:
     return data
 
 
+def parse_csv(blob: str) -> list[str]:
+    result: list[str] = []
+    for item in (blob or "").split(","):
+        value = item.strip()
+        if value:
+            result.append(value)
+    return result
+
+
 def run_manage_prune(manage_bin: str) -> tuple[int, dict[str, str], str]:
     result = subprocess.run(
         [manage_bin, "prune-expired"],
@@ -92,6 +101,20 @@ def restart_service(service: str) -> None:
         raise RuntimeError(f"restart {service} gagal: {detail}")
 
 
+def remove_users_via_api(api_server: str, inbound_tag: str, emails: list[str]) -> None:
+    if not emails:
+        return
+    result = subprocess.run(
+        ["xray", "api", "rmu", f"--server={api_server}", f"-tag={inbound_tag}", *emails],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or f"rc={result.returncode}").strip()
+        raise RuntimeError(f"hapus user via xray api gagal: {detail}")
+
+
 def request_restart(service: str, confdir: str, cooldown: int, state_file: Path) -> bool:
     state = load_state(state_file)
     now = int(time.time())
@@ -110,7 +133,16 @@ def request_restart(service: str, confdir: str, cooldown: int, state_file: Path)
     return True
 
 
-def run_loop(manage_bin: str, service: str, interval: int, confdir: str, restart_cooldown: int, state_file: Path) -> int:
+def run_loop(
+    manage_bin: str,
+    service: str,
+    interval: int,
+    confdir: str,
+    restart_cooldown: int,
+    state_file: Path,
+    api_server: str,
+    inbound_tag: str,
+) -> int:
     while True:
         state = load_state(state_file)
         if state.get("pending_restart"):
@@ -128,18 +160,31 @@ def run_loop(manage_bin: str, service: str, interval: int, confdir: str, restart
 
         removed_count = int(data.get("REMOVED_COUNT", "0") or "0")
         removed_users = data.get("REMOVED_USERS", "")
+        removed_emails = parse_csv(data.get("REMOVED_EMAILS", ""))
         if removed_count > 0:
             print(
                 f"[hysteria2-expired] removed={removed_count} users={removed_users or '-'}",
                 flush=True,
             )
             try:
-                did_restart = request_restart(service, confdir, restart_cooldown, state_file)
-                if not did_restart:
-                    print(
-                        f"[hysteria2-expired] restart ditunda cooldown={restart_cooldown}s",
-                        flush=True,
-                    )
+                api_synced = False
+                if removed_emails:
+                    try:
+                        remove_users_via_api(api_server, inbound_tag, removed_emails)
+                        api_synced = True
+                        print(
+                            f"[hysteria2-expired] runtime synced via xray api tag={inbound_tag}",
+                            flush=True,
+                        )
+                    except RuntimeError as exc:
+                        print(f"[hysteria2-expired] {exc}", file=sys.stderr, flush=True)
+                if not api_synced:
+                    did_restart = request_restart(service, confdir, restart_cooldown, state_file)
+                    if not did_restart:
+                        print(
+                            f"[hysteria2-expired] restart ditunda cooldown={restart_cooldown}s",
+                            flush=True,
+                        )
             except RuntimeError as exc:
                 print(f"[hysteria2-expired] {exc}", file=sys.stderr, flush=True)
                 return 1
@@ -155,6 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confdir", default="/usr/local/etc/xray/conf.d")
     parser.add_argument("--restart-cooldown", type=int, default=300)
     parser.add_argument("--state-file", default="/var/lib/autoscript/hysteria2-expired/state.json")
+    parser.add_argument("--api-server", default="127.0.0.1:10080")
+    parser.add_argument("--inbound-tag", default="hy2-in")
     return parser
 
 
@@ -164,7 +211,16 @@ def main() -> int:
         raise SystemExit("--interval minimal 1 detik")
     if args.restart_cooldown < 0:
         raise SystemExit("--restart-cooldown minimal 0 detik")
-    return run_loop(args.manage_bin, args.service, args.interval, args.confdir, args.restart_cooldown, Path(args.state_file))
+    return run_loop(
+        args.manage_bin,
+        args.service,
+        args.interval,
+        args.confdir,
+        args.restart_cooldown,
+        Path(args.state_file),
+        args.api_server,
+        args.inbound_tag,
+    )
 
 
 if __name__ == "__main__":

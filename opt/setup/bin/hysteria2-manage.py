@@ -500,7 +500,6 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
                     },
                     "sockopt": {
                         "mark": 255,
-                        "tcpCongestion": "bbr",
                     },
                 },
             },
@@ -674,10 +673,6 @@ def render_config(env: dict[str, str], data: dict) -> None:
                 "quicParams": quic_params_config(env),
             },
             "sockopt": {
-                "tcpCongestion": "bbr",
-                "tcpFastOpen": True,
-                "tcpKeepAliveIdle": 120,
-                "tcpKeepAliveInterval": 30,
                 "mark": 255,
             },
         },
@@ -825,8 +820,14 @@ def prune_expired_cmd(_: argparse.Namespace) -> int:
     render_config(env, data)
     render_account_files(env, data)
     removed_users = ",".join(str(item.get("username", "")).strip() for item in removed if item.get("username"))
+    removed_emails = ",".join(
+        f"{str(item.get('username', '')).strip()}@hy2"
+        for item in removed
+        if str(item.get("username", "")).strip()
+    )
     print(f"REMOVED_COUNT={len(removed)}")
     print(f"REMOVED_USERS={removed_users}")
+    print(f"REMOVED_EMAILS={removed_emails}")
     return 0
 
 
