@@ -201,6 +201,8 @@ def ensure_env_defaults() -> dict[str, str]:
         "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.microsoft.com/"),
         "HYSTERIA2_CONFIG_FILE": os.environ.get("HYSTERIA2_CONFIG_FILE", str(XRAY_HYSTERIA_FRAGMENT)),
         "HYSTERIA2_SERVICE": os.environ.get("HYSTERIA2_SERVICE", "xray.service"),
+        "HYSTERIA2_BRUTAL_UP": os.environ.get("HYSTERIA2_BRUTAL_UP", "20 mbps"),
+        "HYSTERIA2_BRUTAL_DOWN": os.environ.get("HYSTERIA2_BRUTAL_DOWN", "50 mbps"),
         "HYSTERIA2_UDPHOP_PORTS": os.environ.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000"),
         "HYSTERIA2_UDPHOP_INTERVAL": os.environ.get("HYSTERIA2_UDPHOP_INTERVAL", "5"),
     }
@@ -391,12 +393,14 @@ def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
 
 
 def quic_params_config(env: dict[str, str]) -> dict:
+    brutal_up = str(env.get("HYSTERIA2_BRUTAL_UP", "20 mbps")).strip() or "20 mbps"
+    brutal_down = str(env.get("HYSTERIA2_BRUTAL_DOWN", "50 mbps")).strip() or "50 mbps"
     hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
     hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
     return {
         "congestion": "bbr",
-        "brutalUp": "20 mbps",
-        "brutalDown": "50 mbps",
+        "brutalUp": brutal_up,
+        "brutalDown": brutal_down,
         "udpHop": {
             "ports": hop_ports,
             "interval": hop_interval,
@@ -637,6 +641,10 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
     visible = visible_users(data)
     keep_txt = set()
     keep_json = set()
+    brutal_up = str(env.get("HYSTERIA2_BRUTAL_UP", "20 mbps")).strip() or "20 mbps"
+    brutal_down = str(env.get("HYSTERIA2_BRUTAL_DOWN", "50 mbps")).strip() or "50 mbps"
+    udp_hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    udp_hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
     for item in visible:
         snapshot = user_snapshot(item, env)
         username = snapshot["username"]
@@ -657,6 +665,8 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             "  Auth Type   : password",
             dual_line(f"  Port UDP    : {port}", f"SNI         : {domain}"),
             f"  Masquerade  : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.microsoft.com/')}",
+            f"  udpHop      : {udp_hop_ports} @ {udp_hop_interval}s",
+            f"  QUIC        : bbr | up {brutal_up} | down {brutal_down}",
             f"  Valid Until : {display_expired_at(expired_at)}",
             f"  Created     : {display_created_at(created_at)}",
             "",
@@ -780,6 +790,10 @@ def status_cmd(_: argparse.Namespace) -> int:
     visible = visible_users(data)
     latest = latest_visible_snapshot(data, env)
     service_unit = BACKEND_SERVICE
+    brutal_up = str(env.get("HYSTERIA2_BRUTAL_UP", "20 mbps")).strip() or "20 mbps"
+    brutal_down = str(env.get("HYSTERIA2_BRUTAL_DOWN", "50 mbps")).strip() or "50 mbps"
+    udp_hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    udp_hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
     print(f"SERVICE_UNIT={service_unit}")
     print(f"SERVICE_STATE={systemctl_show_value(service_unit, 'ActiveState')}")
     print(f"SERVICE_SUBSTATE={systemctl_show_value(service_unit, 'SubState')}")
@@ -792,6 +806,11 @@ def status_cmd(_: argparse.Namespace) -> int:
     print(f"PORT={env_port(env)}")
     print(f"DOMAIN={domain_value()}")
     print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.microsoft.com/')}")
+    print("QUIC_CONGESTION=bbr")
+    print(f"QUIC_BRUTAL_UP={brutal_up}")
+    print(f"QUIC_BRUTAL_DOWN={brutal_down}")
+    print(f"UDPHOP_PORTS={udp_hop_ports}")
+    print(f"UDPHOP_INTERVAL={udp_hop_interval}")
     print(f"USER_COUNT={len(visible)}")
     if latest is not None:
         print(f"LATEST_USERNAME={latest['username']}")
