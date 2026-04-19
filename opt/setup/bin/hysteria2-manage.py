@@ -27,8 +27,6 @@ EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-ex
 BACKEND_SERVICE = os.environ.get("HYSTERIA2_SERVICE", "xray.service")
 INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hy2-in")
 PASSWORD_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-HEADER_CUSTOM_CLIENT_PACKET = "HELLO"
-HEADER_CUSTOM_SERVER_PACKET = "WORLD"
 
 
 def now_iso() -> str:
@@ -200,7 +198,7 @@ def ensure_env_defaults() -> dict[str, str]:
     changed = False
     defaults = {
         "HYSTERIA2_PORT": os.environ.get("HYSTERIA2_PORT", "443"),
-        "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/"),
+        "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.microsoft.com/"),
         "HYSTERIA2_CONFIG_FILE": os.environ.get("HYSTERIA2_CONFIG_FILE", str(XRAY_HYSTERIA_FRAGMENT)),
         "HYSTERIA2_SERVICE": os.environ.get("HYSTERIA2_SERVICE", "xray.service"),
         "HYSTERIA2_UDPHOP_PORTS": os.environ.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000"),
@@ -216,28 +214,6 @@ def ensure_env_defaults() -> dict[str, str]:
         changed = True
     if not str(env.get("HYSTERIA2_TLS_SERVER_NAME", "")).strip():
         env["HYSTERIA2_TLS_SERVER_NAME"] = env["HYSTERIA2_SERVER_NAME"]
-        changed = True
-    if not str(env.get("HYSTERIA2_MASQUERADE_DIR", "")).strip():
-        env["HYSTERIA2_MASQUERADE_DIR"] = "/var/www/html"
-        changed = True
-    if not str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "")).strip():
-        env["HYSTERIA2_MASQUERADE_REWRITE_HOST"] = "true"
-        changed = True
-    if not str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "")).strip():
-        env["HYSTERIA2_MASQUERADE_STATUS_CODE"] = "200"
-        changed = True
-    if not str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "")).strip():
-        env["HYSTERIA2_MASQUERADE_HEADERS"] = json.dumps(
-            {
-                "Server": "nginx",
-                "Content-Type": "text/html; charset=utf-8",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "X-Frame-Options": "DENY",
-                "X-Content-Type-Options": "nosniff",
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
         changed = True
     if not str(env.get("HYSTERIA2_CURVE_PREFERENCES", "")).strip():
         env["HYSTERIA2_CURVE_PREFERENCES"] = "X25519MLKEM768,X25519"
@@ -402,43 +378,20 @@ def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
                 },
             }
         )
-    items.append(
-        {
-            "type": "header-custom",
-            "settings": {
-                "client": [
-                    {
-                        "type": "str",
-                        "packet": HEADER_CUSTOM_CLIENT_PACKET,
-                    }
-                ],
-                "server": [
-                    {
-                        "type": "str",
-                        "packet": HEADER_CUSTOM_SERVER_PACKET,
-                    }
-                ],
-            },
-        }
-    )
     return items
 
 
-def quic_params_config(env: dict[str, str]) -> dict:
-    udp_hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
-    udp_hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
+def quic_params_config() -> dict:
     return {
         "congestion": "bbr",
-        "brutalUp": "50 mbps",
-        "brutalDown": "100 mbps",
+        "brutalUp": "20 mbps",
+        "brutalDown": "50 mbps",
         "udpHop": {
-            "ports": udp_hop_ports,
-            "interval": udp_hop_interval,
+            "ports": "20000-40000",
+            "interval": "5",
         },
         "maxIdleTimeout": 20,
         "keepAlivePeriod": 8,
-        "initStreamReceiveWindow": 4194304,
-        "maxStreamReceiveWindow": 4194304,
         "disablePathMTUDiscovery": False,
     }
 
@@ -448,12 +401,37 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
     port = int(snapshot["port"])
     password = snapshot["password"]
     ech_config_list = str(env.get("HYSTERIA2_ECH_CONFIG_LIST", "")).strip()
+    finalmask_udp = finalmask_udp_config(env)
     tls_settings = {
         "serverName": domain,
         "alpn": ["h3"],
     }
     if ech_config_list:
         tls_settings["echConfigList"] = ech_config_list
+    outbound = {
+        "tag": "hy2-out",
+        "protocol": "hysteria",
+        "settings": {
+            "version": 2,
+            "address": domain,
+            "port": port,
+        },
+        "streamSettings": {
+            "network": "hysteria",
+            "security": "tls",
+            "tlsSettings": tls_settings,
+            "hysteriaSettings": {
+                "version": 2,
+                "auth": password,
+                "udpIdleTimeout": 60,
+            },
+        },
+    }
+    outbound["streamSettings"]["finalmask"] = {
+        "quicParams": quic_params_config(),
+    }
+    if finalmask_udp:
+        outbound["streamSettings"]["finalmask"]["udp"] = finalmask_udp
     return {
         "log": {
             "loglevel": "warning",
@@ -470,39 +448,7 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
             }
         ],
         "outbounds": [
-            {
-                "tag": "hy2-out",
-                "protocol": "hysteria",
-                "settings": {
-                    "version": 2,
-                    "address": domain,
-                    "port": port,
-                },
-                "streamSettings": {
-                    "network": "hysteria",
-                    "security": "tls",
-                    "tlsSettings": tls_settings,
-                    "hysteriaSettings": {
-                        "version": 2,
-                        "auth": password,
-                        "udpIdleTimeout": 60,
-                        "masquerade": {
-                            "type": "file",
-                            "dir": str(env.get("HYSTERIA2_MASQUERADE_DIR", "/var/www/html")).strip() or "/var/www/html",
-                            "rewriteHost": str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "true")).strip().lower() == "true",
-                            "headers": json.loads(str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "{}")).strip() or "{}"),
-                            "statusCode": int(str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "200")).strip() or "200"),
-                        },
-                    },
-                    "finalmask": {
-                        "udp": finalmask_udp_config(env),
-                        "quicParams": quic_params_config(env),
-                    },
-                    "sockopt": {
-                        "mark": 255,
-                    },
-                },
-            },
+            outbound,
             {
                 "tag": "direct",
                 "protocol": "freedom",
@@ -580,18 +526,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
         port = 443
     server_name = env_domain(env)
     tls_server_name = str(env.get("HYSTERIA2_TLS_SERVER_NAME", server_name)).strip() or server_name
-    masquerade_dir = str(env.get("HYSTERIA2_MASQUERADE_DIR", "/var/www/html")).strip() or "/var/www/html"
-    masquerade_rewrite_host = str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "true")).strip().lower() == "true"
-    try:
-        masquerade_status_code = int(str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "200")).strip() or "200")
-    except ValueError:
-        masquerade_status_code = 200
-    try:
-        masquerade_headers = json.loads(str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "{}")).strip() or "{}")
-        if not isinstance(masquerade_headers, dict):
-            masquerade_headers = {}
-    except json.JSONDecodeError:
-        masquerade_headers = {}
+    masquerade_url = str(env.get("HYSTERIA2_MASQUERADE_URL", "https://www.microsoft.com/")).strip() or "https://www.microsoft.com/"
     ech_server_keys = str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip()
     curve_preferences = [
         item.strip()
@@ -641,18 +576,6 @@ def render_config(env: dict[str, str], data: dict) -> None:
         },
         "streamSettings": {
             "network": "hysteria",
-            "hysteriaSettings": {
-                "version": 2,
-                "auth": bootstrap_auth,
-                "udpIdleTimeout": 60,
-                "masquerade": {
-                    "type": "file",
-                    "dir": masquerade_dir,
-                    "rewriteHost": masquerade_rewrite_host,
-                    "headers": masquerade_headers,
-                    "statusCode": masquerade_status_code,
-                },
-            },
             "security": "tls",
             "tlsSettings": {
                 "serverName": tls_server_name,
@@ -668,21 +591,29 @@ def render_config(env: dict[str, str], data: dict) -> None:
                 "echForceQuery": str(env.get("HYSTERIA2_ECH_FORCE_QUERY", "full")).strip() or "full",
                 "curvePreferences": curve_preferences,
             },
-            "finalmask": {
-                "udp": finalmask_udp_config(env),
-                "quicParams": quic_params_config(env),
-            },
-            "sockopt": {
-                "mark": 255,
+            "hysteriaSettings": {
+                "version": 2,
+                "auth": bootstrap_auth,
+                "udpIdleTimeout": 60,
+                "masquerade": {
+                    "type": "proxy",
+                    "url": masquerade_url,
+                    "rewriteHost": True,
+                    "insecure": False,
+                },
             },
         },
         "sniffing": {
             "enabled": True,
-            "destOverride": ["http", "tls", "quic", "fakedns"],
-            "routeOnly": False,
-            "metadataOnly": False,
+            "destOverride": ["http", "tls", "quic"],
         },
     }
+    finalmask_udp = finalmask_udp_config(env)
+    inbound["streamSettings"]["finalmask"] = {
+        "quicParams": quic_params_config(),
+    }
+    if finalmask_udp:
+        inbound["streamSettings"]["finalmask"]["udp"] = finalmask_udp
 
     save_json_atomic(CONFIG_FILE, {"inbounds": [inbound]}, mode=0o600)
     ensure_xray_fragment_permissions(CONFIG_FILE)
@@ -710,9 +641,11 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             "  Protocol    : hysteria2",
             "  Transport   : QUIC",
             "  TLS         : enabled",
+            "  ECH         : enabled",
+            "  Obfs        : salamander",
             "  Auth Type   : password",
             dual_line(f"  Port UDP    : {port}", f"SNI         : {domain}"),
-            f"  Masquerade  : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}",
+            f"  Masquerade  : {env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.microsoft.com/')}",
             f"  Valid Until : {display_expired_at(expired_at)}",
             f"  Created     : {display_created_at(created_at)}",
             "",
@@ -847,7 +780,7 @@ def status_cmd(_: argparse.Namespace) -> int:
     print(f"EXPIRED_CLEANER_ENABLED={systemctl_show_value(EXPIRED_CLEANER_UNIT, 'UnitFileState')}")
     print(f"PORT={env_port(env)}")
     print(f"DOMAIN={domain_value()}")
-    print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.cloudflare.com/')}")
+    print(f"MASQUERADE_URL={env.get('HYSTERIA2_MASQUERADE_URL', 'https://www.microsoft.com/')}")
     print(f"USER_COUNT={len(visible)}")
     if latest is not None:
         print(f"LATEST_USERNAME={latest['username']}")
