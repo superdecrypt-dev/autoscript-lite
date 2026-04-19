@@ -1938,7 +1938,7 @@ running_labels = [
   f"{proto_disp} WS",
   f"{proto_disp} HUP",
   f"{proto_disp} XHTTP",
-  f"{proto_disp} XHTTP3",
+  f"{proto_disp} XHTTP/3 (UDP/QUIC)",
   f"{proto_disp} gRPC",
   f"{proto_disp} Path WS",
   f"{proto_disp} Path WS Alt",
@@ -1946,8 +1946,8 @@ running_labels = [
   f"{proto_disp} Path HUP Alt",
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
-  f"{proto_disp} Path XHTTP3",
-  f"{proto_disp} Path XHTTP3 Alt",
+  f"{proto_disp} Path XHTTP/3",
+  f"{proto_disp} Path XHTTP/3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -1995,8 +1995,8 @@ lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_la
 lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
 if proto == "vless":
-  lines.append(section_line(f"{proto_disp} Path XHTTP3", xhttp3_path, running_label_width))
-  lines.append(section_line(f"{proto_disp} Path XHTTP3 Alt", xhttp3_path_alt, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP/3", xhttp3_path, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP/3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
@@ -2012,7 +2012,7 @@ if "xhttp" in links:
   append_link_block(lines, "XHTTP", links.get('xhttp','-'))
   lines.append("")
 if "xhttp3" in links:
-  append_link_block(lines, "XHTTP3", links.get('xhttp3','-'))
+  append_link_block(lines, "VLESS XHTTP/3 (UDP/QUIC)", links.get('xhttp3','-'))
   lines.append("")
 append_link_block(lines, "gRPC", links.get('grpc','-'))
 lines.append("")
@@ -2566,7 +2566,7 @@ running_labels = [
   f"{proto_disp} WS",
   f"{proto_disp} HUP",
   f"{proto_disp} XHTTP",
-  f"{proto_disp} XHTTP3",
+  f"{proto_disp} XHTTP/3 (UDP/QUIC)",
   f"{proto_disp} gRPC",
   f"{proto_disp} Path WS",
   f"{proto_disp} Path WS Alt",
@@ -2574,8 +2574,8 @@ running_labels = [
   f"{proto_disp} Path HUP Alt",
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
-  f"{proto_disp} Path XHTTP3",
-  f"{proto_disp} Path XHTTP3 Alt",
+  f"{proto_disp} Path XHTTP/3",
+  f"{proto_disp} Path XHTTP/3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -2636,8 +2636,8 @@ lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_la
 lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
 if proto == "vless":
-  lines.append(section_line(f"{proto_disp} Path XHTTP3", xhttp3_path, running_label_width))
-  lines.append(section_line(f"{proto_disp} Path XHTTP3 Alt", xhttp3_path_alt, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP/3", xhttp3_path, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP/3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
@@ -2653,7 +2653,7 @@ if "xhttp" in links:
   append_link_block(lines, "XHTTP", links.get('xhttp', '-'))
   lines.append("")
 if "xhttp3" in links:
-  append_link_block(lines, "XHTTP3", links.get('xhttp3', '-'))
+  append_link_block(lines, "VLESS XHTTP/3 (UDP/QUIC)", links.get('xhttp3', '-'))
   lines.append("")
 append_link_block(lines, "gRPC", links.get('grpc', '-'))
 lines.append("")

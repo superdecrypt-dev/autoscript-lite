@@ -4,7 +4,6 @@
 WGCF_RELEASE_TAG="${WGCF_RELEASE_TAG:-v2.2.30}"
 WGCF_RELEASE_VERSION="${WGCF_RELEASE_VERSION:-2.2.30}"
 WIREPROXY_RELEASE_TAG="${WIREPROXY_RELEASE_TAG:-v1.1.2}"
-HYSTERIA2_RELEASE_URL_BASE="${HYSTERIA2_RELEASE_URL_BASE:-https://github.com/apernet/hysteria/releases/latest/download}"
 CLOUDFLARE_WARP_KEY_URL="${CLOUDFLARE_WARP_KEY_URL:-https://pkg.cloudflareclient.com/pubkey.gpg}"
 CLOUDFLARE_WARP_REPO_URL="${CLOUDFLARE_WARP_REPO_URL:-https://pkg.cloudflareclient.com/}"
 CLOUDFLARE_WARP_KEYRING="${CLOUDFLARE_WARP_KEYRING:-/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg}"

@@ -55,7 +55,7 @@ opt/manage/
 - `opt/manage/features/domain.sh`: aggregator live untuk `4) Domain Control`
 - `opt/manage/features/domain/cloudflare.sh`: helper Cloudflare/DNS domain
 - `opt/manage/features/domain/control.sh`: source of truth `Domain Control`
-- `opt/manage/features/maintenance.sh`: aggregator live untuk `6) Security`, `7) Maintenance`, `9) Hysteria 2`, dan utilitas `10) Tools`
+- `opt/manage/features/maintenance.sh`: aggregator live untuk `6) Security`, `7) Maintenance`, dan utilitas `9) Tools`
 - `opt/manage/features/maintenance/services.sh`: WARP status/restart, Edge, daemon status
 - `opt/manage/features/maintenance/logs.sh`: helper log/tail maintenance
 - `opt/manage/features/maintenance/security.sh`: source of truth `6) Security`
@@ -93,8 +93,7 @@ tepat, bukan kembali menumpuk di aggregator atau `manage.sh`.
   Restart/status service, log, dan status daemon.
 - `8) Traffic`
   Analytics dan ringkasan traffic runtime.
-- `9) Hysteria 2`
-- `10) Tools`
+- `9) Tools`
   Telegram Bot, WARP Tier, License Guard, dan Backup/Restore.
   `WARP Tier` sekarang dibagi ke status utama berbasis `mode`, submenu `Free/Plus`, dan submenu `Zero Trust`.
   `Zero Trust` memakai backend `cloudflare-warp` untuk proxy lokal Xray; backend WARP lokal tetap kompatibel untuk redirect runtime Xray.
