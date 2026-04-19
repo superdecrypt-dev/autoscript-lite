@@ -75,8 +75,11 @@ def apply_rules() -> None:
     env = load_env()
     port = str(env.get("HYSTERIA2_PORT", "443")).strip() or "443"
     hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    public_iface = str(env.get("HYSTERIA2_PUBLIC_IFACE", "")).strip()
     remove_rules()
     args = rule_args(port, hop_ports)
+    if public_iface:
+        args = ["-i", public_iface, *args]
     check_args = ["iptables", "-t", "nat", "-C", "PREROUTING", *args]
     if run(check_args, check=False).returncode == 0:
         return
@@ -87,11 +90,15 @@ def status() -> None:
     env = load_env()
     port = str(env.get("HYSTERIA2_PORT", "443")).strip() or "443"
     hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    public_iface = str(env.get("HYSTERIA2_PUBLIC_IFACE", "")).strip()
     args = rule_args(port, hop_ports)
+    if public_iface:
+        args = ["-i", public_iface, *args]
     active = run(["iptables", "-t", "nat", "-C", "PREROUTING", *args], check=False).returncode == 0
     print(f"ACTIVE={'yes' if active else 'no'}")
     print(f"PORT={port}")
     print(f"UDPHOP_PORTS={hop_ports}")
+    print(f"PUBLIC_IFACE={public_iface or '-'}")
 
 
 def main() -> int:

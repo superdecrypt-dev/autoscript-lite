@@ -48,27 +48,27 @@ hysteria2_service_label() {
 }
 
 hysteria2_user_rows_print() {
-  local raw="${1:-}" show_uri="${2:-1}"
-  local idx=0 username created_at expired_at uri
-  while IFS=$'\t' read -r username created_at expired_at uri; do
+  local raw="${1:-}" show_config="${2:-1}"
+  local idx=0 username created_at expired_at xray_config
+  while IFS=$'\t' read -r username created_at expired_at xray_config; do
     [[ -n "${username}" ]] || continue
     idx=$((idx + 1))
     printf '%2d) %-20s %s\n' "${idx}" "${username}" "${created_at:-unknown}"
     printf '    valid until  : %s\n' "${expired_at:-Unlimited}"
-    if [[ "${show_uri}" == "1" && -n "${uri}" ]]; then
-      printf '    uri          : %s\n' "${uri}"
+    if [[ "${show_config}" == "1" && -n "${xray_config}" ]]; then
+      printf '    xray config  : %s\n' "${xray_config}"
     fi
     echo
   done <<<"${raw}"
 }
 
 hysteria2_user_row_lookup() {
-  local raw="${1:-}" choice="${2:-}" idx=0 username created_at expired_at uri
-  while IFS=$'\t' read -r username created_at expired_at uri; do
+  local raw="${1:-}" choice="${2:-}" idx=0 username created_at expired_at xray_config
+  while IFS=$'\t' read -r username created_at expired_at xray_config; do
     [[ -n "${username}" ]] || continue
     idx=$((idx + 1))
     if [[ "${choice}" == "${idx}" || "${choice}" == "${username}" ]]; then
-      printf '%s\t%s\t%s\t%s\n' "${username}" "${created_at}" "${expired_at}" "${uri}"
+      printf '%s\t%s\t%s\t%s\n' "${username}" "${created_at}" "${expired_at}" "${xray_config}"
       return 0
     fi
   done <<<"${raw}"
@@ -282,7 +282,7 @@ hysteria2_add_user_menu() {
 }
 
 hysteria2_delete_user_menu() {
-  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" uri="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
+  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" xray_config="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   raw="$("${bin}" list-users 2>/dev/null || true)"
   if [[ -z "${raw}" ]]; then
@@ -308,12 +308,12 @@ hysteria2_delete_user_menu() {
     pause
     return 0
   }
-  IFS=$'\t' read -r username created_at expired_at uri <<<"${selected}"
+  IFS=$'\t' read -r username created_at expired_at xray_config <<<"${selected}"
   ui_menu_screen_begin "$(hysteria2_menu_title "Delete User > Review")"
   echo "Username    : ${username}"
   echo "Created At  : ${created_at}"
   echo "Valid Until : ${expired_at}"
-  echo "URI         : ${uri}"
+  echo "Xray Config : ${xray_config}"
   hr
   if ! confirm_menu_apply_now "Hapus user Hysteria 2 '${username}' sekarang?"; then
     pause

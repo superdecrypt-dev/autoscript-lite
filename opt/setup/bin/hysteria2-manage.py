@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import base64
 import grp
 import json
 import os
@@ -10,7 +9,6 @@ import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
 
 
 ROOT = Path(os.environ.get("HYSTERIA2_ROOT", "/etc/autoscript/hysteria2"))
@@ -140,7 +138,7 @@ def env_domain(env: dict[str, str]) -> str:
     return domain_value()
 
 
-def ensure_ech_server_keys(server_name: str) -> str:
+def ensure_ech_material(server_name: str) -> tuple[str, str]:
     try:
         result = subprocess.run(
             ["xray", "tls", "ech", "--serverName", server_name],
@@ -151,14 +149,42 @@ def ensure_ech_server_keys(server_name: str) -> str:
     except FileNotFoundError as exc:
         raise SystemExit("xray binary tidak ditemukan untuk generate ECH server keys") from exc
     if result.returncode != 0:
-        raise SystemExit(f"gagal generate ECH server keys untuk {server_name}")
+        raise SystemExit(f"gagal generate ECH material untuk {server_name}")
     lines = result.stdout.splitlines()
+    ech_config_list = ""
+    ech_server_keys = ""
     for idx, line in enumerate(lines):
+        if line.strip() == "ECH config list:" and idx + 1 < len(lines):
+            value = lines[idx + 1].strip()
+            if value:
+                ech_config_list = value
         if line.strip() == "ECH server keys:" and idx + 1 < len(lines):
             value = lines[idx + 1].strip()
             if value:
-                return value
-    raise SystemExit(f"output xray tls ech tidak memuat ECH server keys untuk {server_name}")
+                ech_server_keys = value
+    if not ech_server_keys:
+        raise SystemExit(f"output xray tls ech tidak memuat ECH server keys untuk {server_name}")
+    return ech_config_list, ech_server_keys
+
+
+def detect_public_iface() -> str:
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "route", "show", "default"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    for line in result.stdout.splitlines():
+        parts = line.strip().split()
+        for idx, part in enumerate(parts):
+            if part == "dev" and idx + 1 < len(parts):
+                return parts[idx + 1].strip()
+    return ""
 
 
 def ensure_secret(env: dict[str, str], key: str, length: int) -> bool:
@@ -219,6 +245,11 @@ def ensure_env_defaults() -> dict[str, str]:
     if not str(env.get("HYSTERIA2_ECH_FORCE_QUERY", "")).strip():
         env["HYSTERIA2_ECH_FORCE_QUERY"] = "full"
         changed = True
+    if not str(env.get("HYSTERIA2_PUBLIC_IFACE", "")).strip():
+        public_iface = detect_public_iface()
+        if public_iface:
+            env["HYSTERIA2_PUBLIC_IFACE"] = public_iface
+            changed = True
     changed = ensure_secret(env, "HYSTERIA2_SALAMANDER_PASSWORD", 14) or changed
     legacy_config = str(ROOT / "config.yaml")
     if str(env.get("HYSTERIA2_CONFIG_FILE", "")).strip() == legacy_config:
@@ -227,8 +258,11 @@ def ensure_env_defaults() -> dict[str, str]:
     if str(env.get("HYSTERIA2_SERVICE", "")).strip() in {"", "hysteria2.service"}:
         env["HYSTERIA2_SERVICE"] = "xray.service"
         changed = True
-    if not str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip():
-        env["HYSTERIA2_ECH_SERVER_KEYS"] = ensure_ech_server_keys(env["HYSTERIA2_TLS_SERVER_NAME"])
+    if not str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip() or not str(env.get("HYSTERIA2_ECH_CONFIG_LIST", "")).strip():
+        ech_config_list, ech_server_keys = ensure_ech_material(env["HYSTERIA2_TLS_SERVER_NAME"])
+        if ech_config_list:
+            env["HYSTERIA2_ECH_CONFIG_LIST"] = ech_config_list
+        env["HYSTERIA2_ECH_SERVER_KEYS"] = ech_server_keys
         changed = True
     if "HYSTERIA2_SUDOKU_PASSWORD" in env:
         env.pop("HYSTERIA2_SUDOKU_PASSWORD", None)
@@ -356,14 +390,6 @@ def env_port(env: dict[str, str]) -> str:
     return value or "443"
 
 
-def account_uri(username: str, password: str, domain: str, port: str) -> str:
-    return (
-        f"hysteria2://{quote(password, safe='')}@{domain}:{port}/"
-        f"?sni={quote(domain, safe='')}"
-        f"#{quote(username + '@hy2', safe='')}"
-    )
-
-
 def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
     salamander_password = str(env.get("HYSTERIA2_SALAMANDER_PASSWORD", "")).strip()
     items: list[dict] = []
@@ -421,6 +447,13 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
     domain = snapshot["domain"]
     port = int(snapshot["port"])
     password = snapshot["password"]
+    ech_config_list = str(env.get("HYSTERIA2_ECH_CONFIG_LIST", "")).strip()
+    tls_settings = {
+        "serverName": domain,
+        "alpn": ["h3"],
+    }
+    if ech_config_list:
+        tls_settings["echConfigList"] = ech_config_list
     return {
         "log": {
             "loglevel": "warning",
@@ -448,10 +481,7 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
                 "streamSettings": {
                     "network": "hysteria",
                     "security": "tls",
-                    "tlsSettings": {
-                        "serverName": domain,
-                        "alpn": ["h3"],
-                    },
+                    "tlsSettings": tls_settings,
                     "hysteriaSettings": {
                         "version": 2,
                         "auth": password,
@@ -507,7 +537,7 @@ def user_snapshot(item: dict, env: dict[str, str]) -> dict[str, str]:
         "domain": domain,
         "port": port,
         "account_file": str(account_file),
-        "uri": account_uri(username, password, domain, port),
+        "xray_config_file": str(ACCOUNT_ROOT / f"{username}@hy2.xray.json"),
     }
 
 
@@ -676,7 +706,6 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
         password = snapshot["password"]
         created_at = snapshot["created_at"]
         expired_at = snapshot["expired_at"]
-        uri = snapshot["uri"]
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
         xray_path = ACCOUNT_ROOT / f"{username}@hy2.xray.json"
         content = [
@@ -783,7 +812,7 @@ def list_users_cmd(_: argparse.Namespace) -> int:
         snapshot = user_snapshot(item, env)
         print(
             f"{snapshot['username']}\t{display_created_at(snapshot['created_at'])}\t"
-            f"{display_expired_at(snapshot['expired_at'])}\t{snapshot['uri']}"
+            f"{display_expired_at(snapshot['expired_at'])}\t{snapshot['xray_config_file']}"
         )
     return 0
 
