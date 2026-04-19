@@ -399,6 +399,10 @@ def quic_params_config() -> dict:
         "congestion": "bbr",
         "brutalUp": "50 mbps",
         "brutalDown": "100 mbps",
+        "udpHop": {
+            "ports": "20000-40000",
+            "interval": "5",
+        },
         "maxIdleTimeout": 20,
         "keepAlivePeriod": 8,
         "initStreamReceiveWindow": 4194304,
