@@ -104,6 +104,9 @@ def restart_service(service: str) -> None:
 def remove_users_via_api(api_server: str, inbound_tag: str, emails: list[str]) -> None:
     if not emails:
         return
+    # Untuk inbound hysteria native, jalur HandlerService yang sudah terbukti
+    # stabil di runtime saat ini adalah remove user. Add/list via API belum andal,
+    # jadi cleaner hanya memakai rmu untuk menurunkan blast radius prune expired.
     result = subprocess.run(
         ["xray", "api", "rmu", f"--server={api_server}", f"-tag={inbound_tag}", *emails],
         capture_output=True,
@@ -170,6 +173,9 @@ def run_loop(
                 api_synced = False
                 if removed_emails:
                     try:
+                        # Source of truth tetap users.json. Di sini kita hanya
+                        # menyinkronkan runtime Xray agar tidak perlu restart penuh
+                        # setiap kali ada user expired yang dipruning.
                         remove_users_via_api(api_server, inbound_tag, removed_emails)
                         api_synced = True
                         print(
