@@ -243,6 +243,15 @@ def ensure_env_defaults() -> dict[str, str]:
     if "HYSTERIA2_SUDOKU_PASSWORD" in env:
         env.pop("HYSTERIA2_SUDOKU_PASSWORD", None)
         changed = True
+    for legacy_key in (
+        "HYSTERIA2_MASQUERADE_DIR",
+        "HYSTERIA2_MASQUERADE_HEADERS",
+        "HYSTERIA2_MASQUERADE_REWRITE_HOST",
+        "HYSTERIA2_MASQUERADE_STATUS_CODE",
+    ):
+        if legacy_key in env:
+            env.pop(legacy_key, None)
+            changed = True
     if changed or not ENV_FILE.exists():
         save_env(env)
     return env
@@ -381,14 +390,16 @@ def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
     return items
 
 
-def quic_params_config() -> dict:
+def quic_params_config(env: dict[str, str]) -> dict:
+    hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
     return {
         "congestion": "bbr",
         "brutalUp": "20 mbps",
         "brutalDown": "50 mbps",
         "udpHop": {
-            "ports": "20000-40000",
-            "interval": "5",
+            "ports": hop_ports,
+            "interval": hop_interval,
         },
         "maxIdleTimeout": 20,
         "keepAlivePeriod": 8,
@@ -428,7 +439,7 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
         },
     }
     outbound["streamSettings"]["finalmask"] = {
-        "quicParams": quic_params_config(),
+        "quicParams": quic_params_config(env),
     }
     if finalmask_udp:
         outbound["streamSettings"]["finalmask"]["udp"] = finalmask_udp
@@ -610,7 +621,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
     }
     finalmask_udp = finalmask_udp_config(env)
     inbound["streamSettings"]["finalmask"] = {
-        "quicParams": quic_params_config(),
+        "quicParams": quic_params_config(env),
     }
     if finalmask_udp:
         inbound["streamSettings"]["finalmask"]["udp"] = finalmask_udp
