@@ -526,6 +526,14 @@ def dual_line(left: str, right: str = "", width: int = 44) -> str:
     return f"{left:<{width}}{right}"
 
 
+def hysteria2_xray_json_url(domain: str, username: str) -> str:
+    domain_n = str(domain or "").strip()
+    username_n = str(username or "").strip()
+    if not domain_n or not username_n:
+        return "-"
+    return f"https://{domain_n}/account/hysteria2/{username_n}/xray.json"
+
+
 def latest_visible_snapshot(data: dict, env: dict[str, str]) -> dict[str, str] | None:
     users = visible_users(data)
     if not users:
@@ -651,6 +659,7 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
         password = snapshot["password"]
         created_at = snapshot["created_at"]
         expired_at = snapshot["expired_at"]
+        xray_json_url = hysteria2_xray_json_url(domain, username)
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
         xray_path = ACCOUNT_ROOT / f"{username}@hy2.xray.json"
         content = [
@@ -673,6 +682,10 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             "=== ACCESS CONFIG ===",
             "  Import Type : Xray JSON",
             f"  Xray Config : {xray_path}",
+            "",
+            "=== LINKS IMPORT ===",
+            "  v2rayNG JSON :",
+            xray_json_url,
             "",
         ]
         save_text_atomic(path, "\n".join(content), mode=0o600)

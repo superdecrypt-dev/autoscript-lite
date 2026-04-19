@@ -38,6 +38,15 @@ hysteria2_print_kv() {
   printf '%-18s : %s\n' "${label}" "${value:--}"
 }
 
+hysteria2_xray_json_url() {
+  local domain="${1:-}" username="${2:-}"
+  if [[ -z "${domain}" || -z "${username}" ]]; then
+    echo "-"
+    return 0
+  fi
+  printf 'https://%s/account/hysteria2/%s/xray.json\n' "${domain}" "${username}"
+}
+
 hysteria2_service_label() {
   local state="${1:-unknown}" substate="${2:-unknown}"
   if [[ -n "${state}" && "${state}" != "unknown" && -n "${substate}" && "${substate}" != "unknown" ]]; then
@@ -242,12 +251,14 @@ hysteria2_add_user_menu() {
 
   account_file="${account_root:-/opt/account/hysteria2}/${username}@hy2.txt"
   password_label="${password:-auto-generated}"
+  xray_json_url="$(hysteria2_xray_json_url "${domain}" "${username}")"
   ui_menu_screen_begin "$(hysteria2_menu_title "Add User > Review")"
   echo "Username       : ${username}"
   echo "Password       : ${password_label}"
   echo "Domain         : ${domain}"
   echo "Port UDP       : ${port:-443}"
   echo "Masquerade     : ${masquerade}"
+  echo "Xray JSON URL  : ${xray_json_url}"
   echo "Valid Until    : ${expiry_label}"
   hr
   if ! confirm_menu_apply_now "Buat user Hysteria 2 '${username}' sekarang?"; then
