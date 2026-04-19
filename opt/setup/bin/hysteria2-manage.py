@@ -24,10 +24,13 @@ CERT_FULLCHAIN = os.environ.get("CERT_FULLCHAIN", "/opt/cert/fullchain.pem")
 CERT_PRIVKEY = os.environ.get("CERT_PRIVKEY", "/opt/cert/privkey.pem")
 DOMAIN_FILE = Path(os.environ.get("XRAY_DOMAIN_FILE", "/etc/xray/domain"))
 BOOTSTRAP_USER = "__bootstrap__"
+BOOTSTRAP_EMAIL = "default@hy2"
 EXPIRED_CLEANER_UNIT = os.environ.get("HYSTERIA2_EXPIRED_SERVICE", "hysteria2-expired.service")
 BACKEND_SERVICE = os.environ.get("HYSTERIA2_SERVICE", "xray.service")
 INBOUND_TAG = os.environ.get("HYSTERIA2_INBOUND_TAG", "hy2-in")
 PASSWORD_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+HEADER_CUSTOM_CLIENT_PACKET = "HELLO"
+HEADER_CUSTOM_SERVER_PACKET = "WORLD"
 
 
 def now_iso() -> str:
@@ -357,6 +360,127 @@ def account_uri(username: str, password: str, domain: str, port: str) -> str:
     )
 
 
+def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
+    salamander_password = str(env.get("HYSTERIA2_SALAMANDER_PASSWORD", "")).strip()
+    items: list[dict] = []
+    if salamander_password:
+        items.append(
+            {
+                "type": "salamander",
+                "settings": {
+                    "password": salamander_password,
+                },
+            }
+        )
+    items.append(
+        {
+            "type": "header-custom",
+            "settings": {
+                "client": [
+                    {
+                        "type": "str",
+                        "packet": HEADER_CUSTOM_CLIENT_PACKET,
+                    }
+                ],
+                "server": [
+                    {
+                        "type": "str",
+                        "packet": HEADER_CUSTOM_SERVER_PACKET,
+                    }
+                ],
+            },
+        }
+    )
+    return items
+
+
+def quic_params_config() -> dict:
+    return {
+        "congestion": "bbr",
+        "brutalUp": "50 mbps",
+        "brutalDown": "100 mbps",
+        "maxIdleTimeout": 20,
+        "keepAlivePeriod": 8,
+        "initStreamReceiveWindow": 4194304,
+        "maxStreamReceiveWindow": 4194304,
+        "disablePathMTUDiscovery": False,
+    }
+
+
+def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) -> dict:
+    domain = snapshot["domain"]
+    port = int(snapshot["port"])
+    password = snapshot["password"]
+    return {
+        "log": {
+            "loglevel": "warning",
+        },
+        "inbounds": [
+            {
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "port": 10808,
+                "protocol": "socks",
+                "settings": {
+                    "udp": True,
+                },
+            }
+        ],
+        "outbounds": [
+            {
+                "tag": "hy2-out",
+                "protocol": "hysteria",
+                "settings": {
+                    "version": 2,
+                    "address": domain,
+                    "port": port,
+                },
+                "streamSettings": {
+                    "network": "hysteria",
+                    "security": "tls",
+                    "tlsSettings": {
+                        "serverName": domain,
+                        "alpn": ["h3"],
+                    },
+                    "hysteriaSettings": {
+                        "version": 2,
+                        "auth": password,
+                        "udpIdleTimeout": 60,
+                        "masquerade": {
+                            "type": "file",
+                            "dir": str(env.get("HYSTERIA2_MASQUERADE_DIR", "/var/www/html")).strip() or "/var/www/html",
+                            "rewriteHost": str(env.get("HYSTERIA2_MASQUERADE_REWRITE_HOST", "true")).strip().lower() == "true",
+                            "headers": json.loads(str(env.get("HYSTERIA2_MASQUERADE_HEADERS", "{}")).strip() or "{}"),
+                            "statusCode": int(str(env.get("HYSTERIA2_MASQUERADE_STATUS_CODE", "200")).strip() or "200"),
+                        },
+                    },
+                    "finalmask": {
+                        "udp": finalmask_udp_config(env),
+                        "quicParams": quic_params_config(),
+                    },
+                    "sockopt": {
+                        "mark": 255,
+                        "tcpCongestion": "bbr",
+                    },
+                },
+            },
+            {
+                "tag": "direct",
+                "protocol": "freedom",
+            },
+        ],
+        "routing": {
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["socks-in"],
+                    "outboundTag": "hy2-out",
+                }
+            ],
+        },
+    }
+
+
 def user_snapshot(item: dict, env: dict[str, str]) -> dict[str, str]:
     username = str(item.get("username", "")).strip()
     password = str(item.get("password", "")).strip()
@@ -443,11 +567,15 @@ def render_config(env: dict[str, str], data: dict) -> None:
         password = str(item.get("password", "")).strip()
         if not username or not password:
             continue
+        if item.get("hidden") is True or username.startswith("__"):
+            email = BOOTSTRAP_EMAIL
+        else:
+            email = f"{username}@hy2"
         clients.append(
             {
                 "auth": password,
                 "level": 0,
-                "email": f"{username}@hy2",
+                "email": email,
             }
         )
 
@@ -502,51 +630,8 @@ def render_config(env: dict[str, str], data: dict) -> None:
                 "curvePreferences": curve_preferences,
             },
             "finalmask": {
-                "udp": [
-                    {
-                        "type": "salamander",
-                        "settings": {
-                            "password": str(env.get("HYSTERIA2_SALAMANDER_PASSWORD", "")).strip(),
-                        },
-                    },
-                    {
-                        "type": "header-custom",
-                        "settings": {
-                            "client": [
-                                {
-                                    "type": "str",
-                                    "packet": "GET / HTTP/1.1\r\nHost: cdn.cloudflare.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\nAccept: text/html,application/xhtml+xml\r\n\r\n",
-                                    "randRange": "0-4",
-                                }
-                            ],
-                            "server": [
-                                {
-                                    "type": "str",
-                                    "packet": "HTTP/1.1 200 OK\r\nServer: cloudflare\r\nContent-Type: text/html\r\n\r\n",
-                                }
-                            ],
-                        },
-                    },
-                    {
-                        "type": "sudoku",
-                        "settings": {
-                            "password": str(env.get("HYSTERIA2_SUDOKU_PASSWORD", "")).strip(),
-                            "paddingMin": 16,
-                            "paddingMax": 64,
-                            "mode": "random",
-                        },
-                    },
-                ],
-                "quicParams": {
-                    "congestion": "bbr",
-                    "brutalUp": "50 mbps",
-                    "brutalDown": "100 mbps",
-                    "maxIdleTimeout": 20,
-                    "keepAlivePeriod": 8,
-                    "initStreamReceiveWindow": 4194304,
-                    "maxStreamReceiveWindow": 4194304,
-                    "disablePathMTUDiscovery": False,
-                },
+                "udp": finalmask_udp_config(env),
+                "quicParams": quic_params_config(),
             },
             "sockopt": {
                 "tcpCongestion": "bbr",
@@ -573,7 +658,8 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
     domain = domain_value()
     port = env_port(env)
     visible = visible_users(data)
-    keep = set()
+    keep_txt = set()
+    keep_json = set()
     for item in visible:
         snapshot = user_snapshot(item, env)
         username = snapshot["username"]
@@ -582,6 +668,7 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
         expired_at = snapshot["expired_at"]
         uri = snapshot["uri"]
         path = ACCOUNT_ROOT / f"{username}@hy2.txt"
+        xray_path = ACCOUNT_ROOT / f"{username}@hy2.xray.json"
         content = [
             dual_line("=== HYSTERIA 2 ACCOUNT INFO ===", f"Domain      : {domain}"),
             f"  Username    : {username}",
@@ -598,12 +685,18 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             "=== ACCESS CONFIG ===",
             "  Import Type : URI",
             f"  URI         : {uri}",
+            f"  Xray Config : {xray_path}",
             "",
         ]
         save_text_atomic(path, "\n".join(content), mode=0o600)
-        keep.add(path.name)
+        save_json_atomic(xray_path, xray_client_default_config(snapshot, env), mode=0o600)
+        keep_txt.add(path.name)
+        keep_json.add(xray_path.name)
     for existing in ACCOUNT_ROOT.glob("*.txt"):
-        if existing.name not in keep:
+        if existing.name not in keep_txt:
+            existing.unlink(missing_ok=True)
+    for existing in ACCOUNT_ROOT.glob("*.xray.json"):
+        if existing.name not in keep_json:
             existing.unlink(missing_ok=True)
 
 
