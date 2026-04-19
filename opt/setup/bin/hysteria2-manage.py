@@ -177,6 +177,8 @@ def ensure_env_defaults() -> dict[str, str]:
         "HYSTERIA2_MASQUERADE_URL": os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.cloudflare.com/"),
         "HYSTERIA2_CONFIG_FILE": os.environ.get("HYSTERIA2_CONFIG_FILE", str(XRAY_HYSTERIA_FRAGMENT)),
         "HYSTERIA2_SERVICE": os.environ.get("HYSTERIA2_SERVICE", "xray.service"),
+        "HYSTERIA2_UDPHOP_PORTS": os.environ.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000"),
+        "HYSTERIA2_UDPHOP_INTERVAL": os.environ.get("HYSTERIA2_UDPHOP_INTERVAL", "5"),
     }
     for key, value in defaults.items():
         current = str(env.get(key, "")).strip()
@@ -218,7 +220,6 @@ def ensure_env_defaults() -> dict[str, str]:
         env["HYSTERIA2_ECH_FORCE_QUERY"] = "full"
         changed = True
     changed = ensure_secret(env, "HYSTERIA2_SALAMANDER_PASSWORD", 14) or changed
-    changed = ensure_secret(env, "HYSTERIA2_SUDOKU_PASSWORD", 14) or changed
     legacy_config = str(ROOT / "config.yaml")
     if str(env.get("HYSTERIA2_CONFIG_FILE", "")).strip() == legacy_config:
         env["HYSTERIA2_CONFIG_FILE"] = str(XRAY_HYSTERIA_FRAGMENT)
@@ -228,6 +229,9 @@ def ensure_env_defaults() -> dict[str, str]:
         changed = True
     if not str(env.get("HYSTERIA2_ECH_SERVER_KEYS", "")).strip():
         env["HYSTERIA2_ECH_SERVER_KEYS"] = ensure_ech_server_keys(env["HYSTERIA2_TLS_SERVER_NAME"])
+        changed = True
+    if "HYSTERIA2_SUDOKU_PASSWORD" in env:
+        env.pop("HYSTERIA2_SUDOKU_PASSWORD", None)
         changed = True
     if changed or not ENV_FILE.exists():
         save_env(env)
@@ -394,14 +398,16 @@ def finalmask_udp_config(env: dict[str, str]) -> list[dict]:
     return items
 
 
-def quic_params_config() -> dict:
+def quic_params_config(env: dict[str, str]) -> dict:
+    udp_hop_ports = str(env.get("HYSTERIA2_UDPHOP_PORTS", "20000-40000")).strip() or "20000-40000"
+    udp_hop_interval = str(env.get("HYSTERIA2_UDPHOP_INTERVAL", "5")).strip() or "5"
     return {
         "congestion": "bbr",
         "brutalUp": "50 mbps",
         "brutalDown": "100 mbps",
         "udpHop": {
-            "ports": "20000-40000",
-            "interval": "5",
+            "ports": udp_hop_ports,
+            "interval": udp_hop_interval,
         },
         "maxIdleTimeout": 20,
         "keepAlivePeriod": 8,
@@ -460,7 +466,7 @@ def xray_client_default_config(snapshot: dict[str, str], env: dict[str, str]) ->
                     },
                     "finalmask": {
                         "udp": finalmask_udp_config(env),
-                        "quicParams": quic_params_config(),
+                        "quicParams": quic_params_config(env),
                     },
                     "sockopt": {
                         "mark": 255,
@@ -635,7 +641,7 @@ def render_config(env: dict[str, str], data: dict) -> None:
             },
             "finalmask": {
                 "udp": finalmask_udp_config(env),
-                "quicParams": quic_params_config(),
+                "quicParams": quic_params_config(env),
             },
             "sockopt": {
                 "tcpCongestion": "bbr",
@@ -687,8 +693,7 @@ def render_account_files(env: dict[str, str], data: dict) -> None:
             f"  Created     : {display_created_at(created_at)}",
             "",
             "=== ACCESS CONFIG ===",
-            "  Import Type : URI",
-            f"  URI         : {uri}",
+            "  Import Type : Xray JSON",
             f"  Xray Config : {xray_path}",
             "",
         ]

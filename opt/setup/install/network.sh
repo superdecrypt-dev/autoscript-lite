@@ -272,6 +272,16 @@ hysteria2_pick_udp_port() {
   die "Gagal mendapatkan port UDP kosong."
 }
 
+hysteria2_remove_manual_udphop_prerouting_rule() {
+  if ! command -v iptables >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    iptables -t nat ${line/-A /-D } >/dev/null 2>&1 || true
+  done < <(iptables -t nat -S PREROUTING 2>/dev/null | grep -F -- "-p udp -m udp --dport 20000:40000 -j REDIRECT --to-ports 443" || true)
+}
+
 cloudflare_warp_repo_codename_get() {
   local codename=""
   if command -v lsb_release >/dev/null 2>&1; then
@@ -614,7 +624,12 @@ install_hysteria2() {
     systemctl disable --now hysteria2.service >/dev/null 2>&1 || systemctl stop hysteria2.service >/dev/null 2>&1 || true
     systemctl reset-failed hysteria2.service >/dev/null 2>&1 || true
   fi
+  if systemctl list-unit-files "${HYSTERIA2_UDPHOP_SERVICE}" >/dev/null 2>&1; then
+    systemctl disable --now "${HYSTERIA2_UDPHOP_SERVICE}" >/dev/null 2>&1 || systemctl stop "${HYSTERIA2_UDPHOP_SERVICE}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${HYSTERIA2_UDPHOP_SERVICE}" >/dev/null 2>&1 || true
+  fi
   rm -f /etc/systemd/system/hysteria2.service /etc/systemd/system/hysteria2.service.d/*.conf >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/${HYSTERIA2_UDPHOP_SERVICE} >/dev/null 2>&1 || true
   rm -f "${HYSTERIA2_ROOT}/config.yaml" >/dev/null 2>&1 || true
   rm -f /usr/local/bin/hysteria2 >/dev/null 2>&1 || true
   systemctl daemon-reload >/dev/null 2>&1 || true
@@ -642,11 +657,14 @@ HYSTERIA2_PORT=${port}
 HYSTERIA2_MASQUERADE_URL=${HYSTERIA2_MASQUERADE_URL}
 HYSTERIA2_CONFIG_FILE=${HYSTERIA2_CONFIG_FILE}
 HYSTERIA2_SERVICE=${HYSTERIA2_SERVICE}
+HYSTERIA2_UDPHOP_PORTS=${HYSTERIA2_UDPHOP_PORTS}
+HYSTERIA2_UDPHOP_INTERVAL=${HYSTERIA2_UDPHOP_INTERVAL}
 EOF
   chmod 600 "${HYSTERIA2_ENV_FILE}" >/dev/null 2>&1 || true
 
   install_setup_bin_or_die "hysteria2-manage.py" "${HYSTERIA2_MANAGE_BIN}" 0755
   install_setup_bin_or_die "hysteria2-expired.py" "${HYSTERIA2_EXPIRED_BIN}" 0755
+  install_setup_bin_or_die "hysteria2-udphop-rules.py" "${HYSTERIA2_UDPHOP_RULES_BIN}" 0755
 
   if systemctl list-unit-files "${legacy_service}" >/dev/null 2>&1; then
     systemctl disable --now "${legacy_service}" >/dev/null 2>&1 || systemctl stop "${legacy_service}" >/dev/null 2>&1 || true
@@ -666,8 +684,16 @@ EOF
     "HYSTERIA2_MANAGE_BIN=${HYSTERIA2_MANAGE_BIN}" \
     "HYSTERIA2_SERVICE_NAME=${HYSTERIA2_SERVICE}" \
     "HYSTERIA2_EXPIRED_INTERVAL=${HYSTERIA2_EXPIRED_INTERVAL}"
+  render_setup_template_or_die \
+    "systemd/hysteria2-udphop.service" \
+    "/etc/systemd/system/${HYSTERIA2_UDPHOP_SERVICE}" \
+    0644 \
+    "HYSTERIA2_UDPHOP_RULES_BIN=${HYSTERIA2_UDPHOP_RULES_BIN}" \
+    "HYSTERIA2_SERVICE_NAME=${HYSTERIA2_SERVICE}"
 
   systemctl daemon-reload
+  hysteria2_remove_manual_udphop_prerouting_rule
+  service_enable_restart_checked "${HYSTERIA2_UDPHOP_SERVICE}" || die "NAT udpHop gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_UDPHOP_SERVICE} -n 100 --no-pager"
   service_enable_restart_checked "${HYSTERIA2_SERVICE}" || die "Service gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_SERVICE} -n 100 --no-pager"
   service_enable_restart_checked "${HYSTERIA2_EXPIRED_SERVICE}" || die "Auto expired gagal diaktifkan. Cek: journalctl -u ${HYSTERIA2_EXPIRED_SERVICE} -n 100 --no-pager"
   ok "Runtime aktif di UDP port ${port}."
