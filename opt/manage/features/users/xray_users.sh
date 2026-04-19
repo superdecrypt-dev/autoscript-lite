@@ -1843,7 +1843,7 @@ def pick_portal_token(quota_file_path, current_token=""):
 
 # Public endpoint harus selaras dengan nginx public path (setup.sh).
 PUBLIC_PATHS = {
-  "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
+  "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "xhttp3": "/vless-xhttp3", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
 }
@@ -1853,8 +1853,11 @@ tcp_tls_host = domain
 
 def vless_link(net, val):
   q={"encryption":"none","security":"tls","type":net,"sni":domain}
-  if net in ("ws","httpupgrade","xhttp"):
+  if net in ("ws","httpupgrade","xhttp","xhttp3"):
     q["path"]=val or "/"
+  if net == "xhttp3":
+    q["type"]="xhttp"
+    q["alpn"]="h3"
   elif net=="grpc":
     if val:
       q["serviceName"]=val
@@ -1899,6 +1902,8 @@ nets = ["ws", "httpupgrade", "grpc"]
 if proto in TCP_TLS_PROTOCOLS:
   nets = ["tcp"] + nets
 nets = [net for net in nets if net != "grpc"] + ["xhttp", "grpc"]
+if proto == "vless":
+  nets = [net for net in nets if net != "grpc"] + ["xhttp3", "grpc"]
 for net in nets:
   val = public_proto.get(net, "")
   if proto=="vless":
@@ -1919,6 +1924,8 @@ hup_path = public_proto.get("httpupgrade", "") or "/"
 hup_path_alt = path_alt_placeholder(hup_path)
 xhttp_path = public_proto.get("xhttp", "") or "/"
 xhttp_path_alt = path_alt_placeholder(xhttp_path)
+xhttp3_path = public_proto.get("xhttp3", "") or "-"
+xhttp3_path_alt = path_alt_placeholder(xhttp3_path) if xhttp3_path != "-" else "-"
 grpc_service = public_proto.get("grpc", "") or "-"
 grpc_service_alt = service_alt_placeholder(grpc_service)
 if proto in ("vless", "vmess", "trojan"):
@@ -1931,6 +1938,7 @@ running_labels = [
   f"{proto_disp} WS",
   f"{proto_disp} HUP",
   f"{proto_disp} XHTTP",
+  f"{proto_disp} XHTTP3",
   f"{proto_disp} gRPC",
   f"{proto_disp} Path WS",
   f"{proto_disp} Path WS Alt",
@@ -1938,6 +1946,8 @@ running_labels = [
   f"{proto_disp} Path HUP Alt",
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
+  f"{proto_disp} Path XHTTP3",
+  f"{proto_disp} Path XHTTP3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -1984,6 +1994,9 @@ lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_widt
 lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
+if proto == "vless":
+  lines.append(section_line(f"{proto_disp} Path XHTTP3", xhttp3_path, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
@@ -1997,6 +2010,9 @@ append_link_block(lines, "HTTPUpgrade", links.get('httpupgrade','-'))
 lines.append("")
 if "xhttp" in links:
   append_link_block(lines, "XHTTP", links.get('xhttp','-'))
+  lines.append("")
+if "xhttp3" in links:
+  append_link_block(lines, "XHTTP3", links.get('xhttp3','-'))
   lines.append("")
 append_link_block(lines, "gRPC", links.get('grpc','-'))
 lines.append("")
@@ -2469,7 +2485,7 @@ if not cred:
   raise SystemExit(20)
 
 PUBLIC_PATHS = {
-  "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
+  "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "xhttp3": "/vless-xhttp3", "grpc": "vless-grpc"},
   "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
   "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
 }
@@ -2479,8 +2495,11 @@ tcp_tls_host = domain
 
 def vless_link(net, val):
   q = {"encryption": "none", "security": "tls", "type": net, "sni": domain}
-  if net in ("ws", "httpupgrade", "xhttp"):
+  if net in ("ws", "httpupgrade", "xhttp", "xhttp3"):
     q["path"] = val or "/"
+  if net == "xhttp3":
+    q["type"] = "xhttp"
+    q["alpn"] = "h3"
   elif net == "grpc" and val:
     q["serviceName"] = val
   host = tcp_tls_host if net == "tcp" else domain
@@ -2533,6 +2552,8 @@ hup_path = public_proto.get("httpupgrade", "") or "/"
 hup_path_alt = path_alt_placeholder(hup_path)
 xhttp_path = public_proto.get("xhttp", "") or "/"
 xhttp_path_alt = path_alt_placeholder(xhttp_path)
+xhttp3_path = public_proto.get("xhttp3", "") or "-"
+xhttp3_path_alt = path_alt_placeholder(xhttp3_path) if xhttp3_path != "-" else "-"
 grpc_service = public_proto.get("grpc", "") or "-"
 grpc_service_alt = service_alt_placeholder(grpc_service)
 if proto in ("vless", "vmess", "trojan"):
@@ -2545,6 +2566,7 @@ running_labels = [
   f"{proto_disp} WS",
   f"{proto_disp} HUP",
   f"{proto_disp} XHTTP",
+  f"{proto_disp} XHTTP3",
   f"{proto_disp} gRPC",
   f"{proto_disp} Path WS",
   f"{proto_disp} Path WS Alt",
@@ -2552,6 +2574,8 @@ running_labels = [
   f"{proto_disp} Path HUP Alt",
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
+  f"{proto_disp} Path XHTTP3",
+  f"{proto_disp} Path XHTTP3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -2562,6 +2586,8 @@ nets = ["ws", "httpupgrade", "grpc"]
 if proto in TCP_TLS_PROTOCOLS:
   nets = ["tcp"] + nets
 nets = [net for net in nets if net != "grpc"] + ["xhttp", "grpc"]
+if proto == "vless":
+  nets = [net for net in nets if net != "grpc"] + ["xhttp3", "grpc"]
 for net in nets:
   val = public_proto.get(net, "")
   if proto == "vless":
@@ -2609,6 +2635,9 @@ lines.append(section_line(f"{proto_disp} Path HUP", hup_path, running_label_widt
 lines.append(section_line(f"{proto_disp} Path HUP Alt", hup_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_width))
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
+if proto == "vless":
+  lines.append(section_line(f"{proto_disp} Path XHTTP3", xhttp3_path, running_label_width))
+  lines.append(section_line(f"{proto_disp} Path XHTTP3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
@@ -2622,6 +2651,9 @@ append_link_block(lines, "HTTPUpgrade", links.get('httpupgrade', '-'))
 lines.append("")
 if "xhttp" in links:
   append_link_block(lines, "XHTTP", links.get('xhttp', '-'))
+  lines.append("")
+if "xhttp3" in links:
+  append_link_block(lines, "XHTTP3", links.get('xhttp3', '-'))
   lines.append("")
 append_link_block(lines, "gRPC", links.get('grpc', '-'))
 lines.append("")

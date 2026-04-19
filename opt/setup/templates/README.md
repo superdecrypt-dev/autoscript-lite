@@ -28,10 +28,4 @@ Template aktif utama:
 - `systemd/xray-quota.service`
 - `systemd/xray-speed.service`
 
-Catatan:
-- runtime native sekarang dirender langsung ke `Xray conf.d` oleh `hysteria2-manage`, bukan lewat service standalone.
-- `systemd/hysteria2-expired.service` masih dipakai sebagai cleaner untuk prune user expired.
-- pada runtime sekarang, cleaner akan mencoba `xray api rmu` ke inbound `hy2-in` dulu; restart penuh `xray.service` hanya fallback bila sinkron runtime gagal.
-- add/list/count user Hysteria tetap mengacu ke source `users.json`, bukan ke introspeksi `xray api`.
-
 Template non-Xray yang tidak lagi wired ke installer `lite` sudah dibersihkan dari folder ini.

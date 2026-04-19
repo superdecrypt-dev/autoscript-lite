@@ -43,11 +43,9 @@ required_patterns=(
   'echo "7\) Maintenance >'
   'local base="3\) Xray Network"'
   'local base="10\) Tools > WARP Tier"'
-  'local base="9\) Hysteria 2"'
   'base="3\) Xray Network > WARP Controls > WARP Tier"'
   '"3\|License Guard"'
   'run_action "License Guard" autoscript_license_status_menu'
-  'run_action "Hysteria 2" hysteria2_tools_menu'
   'menu 6 kapan saja'
 )
 

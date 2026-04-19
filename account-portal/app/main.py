@@ -21,8 +21,6 @@ PORTAL_HEADERS = {
     "Cache-Control": "private, no-store",
     "X-Robots-Tag": "noindex, nofollow, noarchive",
 }
-HYSTERIA2_ACCOUNT_ROOT = Path("/opt/account/hysteria2")
-HYSTERIA2_XRAY_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 TRAFFIC_WINDOW_SECONDS = 300
 TRAFFIC_MAX_WINDOW_SECONDS = 900
 TRAFFIC_SAMPLE_INTERVAL_SECONDS = 1
@@ -456,22 +454,6 @@ def get_account_traffic(token: str) -> JSONResponse:
     if traffic_context is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Portal akun tidak ditemukan.")
     return JSONResponse(_traffic_snapshot(token, traffic_context), headers=PORTAL_HEADERS)
-
-
-@app.get("/account/hysteria2/{username}/xray.json")
-def download_hysteria_xray_json(username: str) -> FileResponse:
-    username_n = str(username or "").strip()
-    if not HYSTERIA2_XRAY_USERNAME_RE.fullmatch(username_n) or username_n.startswith("__"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File JSON Hysteria tidak ditemukan.")
-    xray_file = HYSTERIA2_ACCOUNT_ROOT / f"{username_n}@hy2.xray.json"
-    if not xray_file.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File JSON Hysteria tidak ditemukan.")
-    return FileResponse(
-        xray_file,
-        media_type="application/json",
-        filename=xray_file.name,
-        headers=PORTAL_HEADERS,
-    )
 
 
 @app.get("/account/{token}", response_class=HTMLResponse)

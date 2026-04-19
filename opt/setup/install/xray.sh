@@ -63,7 +63,7 @@ write_xray_config() {
 
   local I_VLESS_WS I_VMESS_WS I_TROJAN_WS
   local I_VLESS_HUP I_VMESS_HUP I_TROJAN_HUP
-  local I_VLESS_XHTTP I_VMESS_XHTTP I_TROJAN_XHTTP
+  local I_VLESS_XHTTP I_VLESS_XHTTP3 I_VMESS_XHTTP I_TROJAN_XHTTP
   local I_VLESS_GRPC I_VMESS_GRPC I_TROJAN_GRPC
 
   I_VLESS_WS="/$(rand_str 14)"
@@ -73,6 +73,7 @@ write_xray_config() {
   I_VMESS_HUP="/$(rand_str 14)"
   I_TROJAN_HUP="/$(rand_str 14)"
   I_VLESS_XHTTP="/vless-xhttp"
+  I_VLESS_XHTTP3="/vless-xhttp3"
   I_VMESS_XHTTP="/vmess-xhttp"
   I_TROJAN_XHTTP="/trojan-xhttp"
   I_VLESS_GRPC="$(rand_str 12)"
@@ -547,6 +548,48 @@ write_xray_config() {
         "security": "none",
         "xhttpSettings": {
           "path": "${I_VLESS_XHTTP}"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    },
+    {
+      "listen": "::",
+      "port": 443,
+      "protocol": "vless",
+      "tag": "default@vless-xhttp3",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "email": "default@vless-xhttp3"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${DOMAIN}",
+          "alpn": [
+            "h3"
+          ],
+          "certificates": [
+            {
+              "certificateFile": "${CERT_FULLCHAIN}",
+              "keyFile": "${CERT_PRIVKEY}"
+            }
+          ]
+        },
+        "xhttpSettings": {
+          "path": "${I_VLESS_XHTTP3}"
         }
       },
       "sniffing": {

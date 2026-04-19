@@ -765,6 +765,8 @@ def _parse_xray_import_links_from_lines(lines: list[str]) -> list[dict[str, str]
                     label = "WebSocket"
                 elif "type=httpupgrade" in link:
                     label = "HTTPUpgrade"
+                elif "type=xhttp" in link and "alpn=h3" in link:
+                    label = "XHTTP3"
                 elif "type=xhttp" in link:
                     label = "XHTTP"
                 elif "type=grpc" in link:

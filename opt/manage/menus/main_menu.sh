@@ -52,8 +52,7 @@ main_menu_render_options() {
     "6|Security"
     "7|Maintenance"
     "8|Traffic"
-    "9|Hysteria 2"
-    "10|Tools"
+    "9|Tools"
     "0|Keluar"
   )
   ui_menu_render_two_columns_fixed items
@@ -97,8 +96,7 @@ main_menu() {
       6|security) run_action "Security" fail2ban_menu ;;
       7|maintenance|maint) run_action "Maintenance" maintenance_menu ;;
       8|analytics|traffic) run_action "Traffic" traffic_analytics_menu ;;
-      9|hysteria|hy2|hysteria2) run_action "Hysteria 2" hysteria2_tools_menu ;;
-      10|tools) run_action "Tools" tools_menu ;;
+      9|tools) run_action "Tools" tools_menu ;;
       0|kembali|k|back|b) exit 0 ;;
       *) invalid_choice ;;
     esac
