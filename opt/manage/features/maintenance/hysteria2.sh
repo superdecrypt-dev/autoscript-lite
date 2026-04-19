@@ -195,7 +195,7 @@ hysteria2_list_users_menu() {
 }
 
 hysteria2_add_user_menu() {
-  local bin="" status_blob="" existing_users="" username="" password="" days_input="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
+  local bin="" status_blob="" existing_users="" username="" password="" days_input="" cmd_out="" svc="xray.service"
   local domain="" port="" masquerade="" account_root="" account_file="" password_label="" expiry_label="Unlimited" count=0
   ui_menu_screen_begin "$(hysteria2_menu_title "Add User")"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
@@ -293,7 +293,7 @@ hysteria2_add_user_menu() {
 }
 
 hysteria2_delete_user_menu() {
-  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" xray_config="" cmd_out="" svc="${HYSTERIA2_SERVICE:-xray.service}"
+  local bin="" raw="" choice="" selected="" username="" created_at="" expired_at="" xray_config="" cmd_out="" svc="xray.service"
   bin="$(hysteria2_manage_bin_resolve)" || { hr; pause; return 0; }
   raw="$("${bin}" list-users 2>/dev/null || true)"
   if [[ -z "${raw}" ]]; then
