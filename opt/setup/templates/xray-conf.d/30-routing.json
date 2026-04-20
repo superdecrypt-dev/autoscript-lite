@@ -87,12 +87,18 @@
         "type": "field",
         "domain": [
           "geosite:openai",
-          "geosite:meta",
+          "geosite:meta"
+        ],
+        "outboundTag": "direct-app"
+      },
+      {
+        "type": "field",
+        "domain": [
           "geosite:spotify",
           "geosite:netflix",
           "geosite:reddit"
         ],
-        "outboundTag": "direct-app"
+        "outboundTag": "warp-social"
       },
       {
         "type": "field",

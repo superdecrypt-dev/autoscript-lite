@@ -41,6 +41,18 @@
       }
     },
     {
+      "protocol": "socks",
+      "tag": "warp-social",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": __WARP_PROXY_PORT__
+          }
+        ]
+      }
+    },
+    {
       "protocol": "blackhole",
       "tag": "blocked"
     },

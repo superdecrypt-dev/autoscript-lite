@@ -8,6 +8,8 @@
     "disableFallback": false,
     "disableFallbackIfMatch": false,
     "hosts": {
+      "localhost": "127.0.0.1",
+      "ip6-localhost": "::1",
       "pzcbz.vyxara1.web.id": "52.74.68.102"
     },
     "servers": [
