@@ -42,6 +42,8 @@ WARP_LOOP_IFACE = "lo"
 WARP_IFB_IFACE = "ifb2"
 WARP_PROXY_DEFAULT_HOST = "127.0.0.1"
 WARP_PROXY_DEFAULT_PORT = 40000
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.M | re.S)
+XRAY_TEMPLATE_RELATIVE_DIR = ("opt", "setup", "templates", "xray-conf.d")
 
 
 def now_iso():
@@ -131,7 +133,59 @@ def sanitize_tag(v):
 
 def load_json_strict(path):
   with open(path, "r", encoding="utf-8") as f:
-    return json.load(f)
+    raw = f.read()
+  return json.loads(COMMENT_RE.sub("", raw))
+
+
+def load_leading_comment_lines(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      lines = f.read().splitlines()
+  except Exception:
+    return []
+  comments = []
+  for line in lines:
+    stripped = line.lstrip()
+    if not stripped:
+      if comments:
+        break
+      continue
+    if not stripped.startswith("//"):
+      break
+    comments.append(line)
+  return comments
+
+
+def template_comment_fallback(path):
+  name = Path(path).name
+  candidates = []
+  env_root = os.environ.get("AUTOSCRIPT_SETUP_LIB", "").strip()
+  if env_root:
+    candidates.append(Path(env_root).resolve().parent / "templates" / "xray-conf.d" / name)
+  candidates.append(Path("/usr/local/lib/autoscript-setup").joinpath(*XRAY_TEMPLATE_RELATIVE_DIR, name))
+  candidates.append(Path("/opt/setup").joinpath("templates", "xray-conf.d", name))
+  candidates.append(Path(__file__).resolve().parents[1].joinpath("templates", "xray-conf.d", name))
+  for candidate in candidates:
+    if candidate.is_file():
+      comments = load_leading_comment_lines(str(candidate))
+      if comments:
+        return comments
+  return []
+
+
+def dump_json_atomic_with_comments(path, obj):
+  comments = load_leading_comment_lines(path)
+  if not comments:
+    comments = template_comment_fallback(path)
+  tmp = f"{path}.tmp"
+  with open(tmp, "w", encoding="utf-8") as f:
+    for line in comments:
+      f.write(f"{line}\n")
+    json.dump(obj, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+    f.flush()
+    os.fsync(f.fileno())
+  os.replace(tmp, path)
 
 
 def dump_json_atomic(path, obj):
@@ -605,8 +659,8 @@ def sync_xray_speed_config(cfg, policies):
   if current_sig == next_sig:
     return False
 
-  dump_json_atomic(out_path, next_out_cfg)
-  dump_json_atomic(rt_path, next_rt_cfg)
+  dump_json_atomic_with_comments(out_path, next_out_cfg)
+  dump_json_atomic_with_comments(rt_path, next_rt_cfg)
   run(["systemctl", "restart", "xray"], check=True)
   return True
 
