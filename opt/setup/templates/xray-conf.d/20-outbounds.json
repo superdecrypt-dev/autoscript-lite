@@ -41,6 +41,19 @@
       }
     },
     {
+      "tag": "direct-user-nenen",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 37736,
+          "tcpCongestion": "bbr"
+        }
+      }
+    },
+    {
       "protocol": "socks",
       "tag": "warp-social",
       "settings": {

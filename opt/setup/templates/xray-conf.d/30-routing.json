@@ -93,6 +93,14 @@
       },
       {
         "type": "field",
+        "user": [
+          "dummy-speed-user-37736-direct",
+          "nenenlembut@vmess"
+        ],
+        "outboundTag": "direct-user-nenen"
+      },
+      {
+        "type": "field",
         "domain": [
           "geosite:spotify",
           "geosite:netflix",
