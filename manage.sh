@@ -3150,7 +3150,7 @@ account_collect_files() {
       has_at["${key}"]=1
       ACCOUNT_FILES+=("${ACCOUNT_ROOT}/${proto}/${u}@${proto}.txt")
       ACCOUNT_FILE_PROTOS+=("${proto}")
-    done < <(find "${dir}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.json' ! -name '.*' -print0 2>/dev/null | sort -z)
   done
 
   # Tambahkan target dari runtime inbounds agar akun live tanpa file/quota
