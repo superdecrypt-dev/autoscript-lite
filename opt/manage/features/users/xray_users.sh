@@ -396,8 +396,50 @@ import sys
 
 src, dst, proto, email, cred = sys.argv[1:6]
 
-with open(src, "r", encoding="utf-8") as f:
-  cfg = json.load(f)
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as handle:
+    return json.loads(strip_json_comments(handle.read()))
+
+cfg = load_jsonc(src)
 
 inbounds = cfg.get("inbounds", [])
 if not isinstance(inbounds, list):
@@ -529,10 +571,51 @@ import sys
 
 inb_src, rt_src, inb_dst, rt_dst, proto, email = sys.argv[1:7]
 
-with open(inb_src, "r", encoding="utf-8") as f:
-  inb_cfg = json.load(f)
-with open(rt_src, "r", encoding="utf-8") as f:
-  rt_cfg = json.load(f)
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as handle:
+    return json.loads(strip_json_comments(handle.read()))
+
+inb_cfg = load_jsonc(inb_src)
+rt_cfg = load_jsonc(rt_src)
 
 inbounds = inb_cfg.get("inbounds", [])
 if not isinstance(inbounds, list):
@@ -675,8 +758,50 @@ import sys
 
 src, dst, proto, email, cred = sys.argv[1:6]
 
-with open(src, "r", encoding="utf-8") as f:
-  cfg = json.load(f)
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as handle:
+    return json.loads(strip_json_comments(handle.read()))
+
+cfg = load_jsonc(src)
 
 inbounds = cfg.get("inbounds", [])
 if not isinstance(inbounds, list):
@@ -2894,6 +3019,12 @@ account_refresh_xray_batch_apply() {
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       return 1
     fi
+    if ! account_info_refresh_snapshot_file "${target_file%.txt}.xray.json" "${snap_dir}" "${manifest_file}"; then
+      warn "Gagal membuat snapshot batch Xray JSON: ${target_file%.txt}.xray.json"
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
   done
 
   for (( i=start_idx; i<end_idx; i++ )); do
@@ -3651,6 +3782,15 @@ PY
     return 1
   fi
   USER_ADD_ABORT_INBOUNDS_CREATED="1"
+  local staged_xray_file=""
+  local live_xray_file=""
+  staged_xray_file="${stage_dir}/account.xray.json"
+  live_xray_file="${live_account_file%.txt}.xray.json"
+  if [[ -f "${staged_xray_file}" ]]; then
+    if ! account_info_restore_file_locked "${staged_xray_file}" "${live_xray_file}" >/dev/null 2>&1; then
+      warn "Akun ${username}@${proto} dibuat, tetapi penyalinan Xray JSON gagal: ${live_xray_file}"
+    fi
+  fi
   mutation_txn_field_write "${add_txn_dir}" runtime_created "1" >/dev/null 2>&1 || true
   rm -rf "${stage_dir}" >/dev/null 2>&1 || true
 
