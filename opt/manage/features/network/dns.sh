@@ -46,10 +46,54 @@ xray_dns_status_get() {
   python3 - <<'PY' "${src_file}" 2>/dev/null || true
 import json, sys
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as f:
+    return json.loads(strip_json_comments(f.read()))
+
 src=sys.argv[1]
 try:
-  with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+  cfg=load_jsonc(src)
 except Exception:
   print('parse_state=invalid')
   print('error=JSON DNS invalid atau tidak bisa dibaca')
@@ -99,17 +143,66 @@ xray_dns_candidate_prepare() {
   if [[ -n "${_out_ref}" && -f "${_out_ref}" ]]; then
     return 0
   fi
-  if ! xray_json_file_require_valid "${XRAY_DNS_CONF}" "Xray DNS config" "1"; then
-    return 1
-  fi
   _out_ref="$(mktemp "${WORK_DIR}/dns-stage.XXXXXX.json" 2>/dev/null || true)"
   [[ -n "${_out_ref}" ]] || return 1
   if [[ -f "${XRAY_DNS_CONF}" ]]; then
-    cp -a "${XRAY_DNS_CONF}" "${_out_ref}" || {
+    need_python3
+    if ! python3 - <<'PY' "${XRAY_DNS_CONF}" "${_out_ref}"
+import json, sys
+
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
+src, dst = sys.argv[1:3]
+with open(src, "r", encoding="utf-8") as f:
+  cfg = json.loads(strip_json_comments(f.read()))
+with open(dst, "w", encoding="utf-8") as f:
+  json.dump(cfg, f, ensure_ascii=False, indent=2)
+  f.write("\n")
+PY
+    then
       rm -f -- "${_out_ref}" >/dev/null 2>&1 || true
       _out_ref=""
       return 1
-    }
+    fi
   else
     printf '{\n  "dns": {}\n}\n' > "${_out_ref}" || {
       rm -f -- "${_out_ref}" >/dev/null 2>&1 || true
@@ -139,6 +232,47 @@ import os
 import sys
 import tempfile
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
 path, action, value = sys.argv[1:4]
 action = str(action or "").strip()
 value = str(value or "").strip()
@@ -146,7 +280,7 @@ value = str(value or "").strip()
 if os.path.isfile(path):
   try:
     with open(path, "r", encoding="utf-8") as f:
-      cfg = json.load(f)
+      cfg = json.loads(strip_json_comments(f.read()))
   except Exception as exc:
     raise SystemExit(f"Config DNS tidak valid: {exc}")
 else:
@@ -278,14 +412,55 @@ xray_dns_set_primary() {
     python3 - <<'PY' "${XRAY_DNS_CONF}" "${tmp}" "${val}"
 import json, sys
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
 src, dst, val = sys.argv[1:4]
 val=str(val).strip()
 
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception as exc:
-    raise SystemExit(f"Config DNS tidak valid: {exc}")
+try:
+  with open(src,'r',encoding='utf-8') as f:
+    cfg=json.loads(strip_json_comments(f.read()))
+except Exception as exc:
+  raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
   raise SystemExit("Config DNS tidak valid: root JSON bukan object")
@@ -355,14 +530,55 @@ xray_dns_set_secondary() {
     python3 - <<'PY' "${XRAY_DNS_CONF}" "${tmp}" "${val}"
 import json, sys
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
 src, dst, val = sys.argv[1:4]
 val=str(val).strip()
 
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception as exc:
-    raise SystemExit(f"Config DNS tidak valid: {exc}")
+try:
+  with open(src,'r',encoding='utf-8') as f:
+    cfg=json.loads(strip_json_comments(f.read()))
+except Exception as exc:
+  raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
   raise SystemExit("Config DNS tidak valid: root JSON bukan object")
@@ -444,14 +660,55 @@ xray_dns_set_query_strategy() {
     python3 - <<'PY' "${XRAY_DNS_CONF}" "${tmp}" "${val}"
 import json, sys
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
 src, dst, val = sys.argv[1:4]
 val=str(val).strip()
 
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception as exc:
-    raise SystemExit(f"Config DNS tidak valid: {exc}")
+try:
+  with open(src,'r',encoding='utf-8') as f:
+    cfg=json.loads(strip_json_comments(f.read()))
+except Exception as exc:
+  raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
   raise SystemExit("Config DNS tidak valid: root JSON bukan object")
@@ -507,12 +764,53 @@ xray_dns_toggle_cache() {
     python3 - <<'PY' "${XRAY_DNS_CONF}" "${tmp}"
 import json, sys
 
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
+
 src, dst = sys.argv[1:3]
-with open(src,'r',encoding='utf-8') as f:
-  try:
-    cfg=json.load(f)
-  except Exception as exc:
-    raise SystemExit(f"Config DNS tidak valid: {exc}")
+try:
+  with open(src,'r',encoding='utf-8') as f:
+    cfg=json.loads(strip_json_comments(f.read()))
+except Exception as exc:
+  raise SystemExit(f"Config DNS tidak valid: {exc}")
 
 if not isinstance(cfg, dict):
   raise SystemExit("Config DNS tidak valid: root JSON bukan object")
@@ -1110,5 +1408,4 @@ dns_addons_edit_with_nano() {
   fi
   return 0
 }
-
 

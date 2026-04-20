@@ -173,9 +173,10 @@ maintenance_menu() {
     "7|WARP Status"
     "8|Restart WARP"
     "9|Xray Daemons"
-    "10|Edge Status"
-    "11|Restart Edge"
-    "12|Edge Info"
+    "10|Xray Status"
+    "11|Edge Status"
+    "12|Restart Edge"
+    "13|Edge Info"
     "0|Back"
   )
   while true; do
@@ -217,9 +218,10 @@ maintenance_menu() {
       7) menu_run_isolated_report "Wireproxy Status" wireproxy_status_menu ;;
       8) menu_run_isolated_report "Wireproxy Restart" wireproxy_restart_menu ;;
       9) menu_run_isolated_report "Daemon Status" daemon_status_menu ;;
-      10) menu_run_isolated_report "Edge Runtime Status" edge_runtime_status_menu ;;
-      11) menu_run_isolated_report "Edge Runtime Restart" edge_runtime_restart_menu ;;
-      12) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;
+      10) menu_run_isolated_report "Xray Runtime Status" xray_runtime_status_menu ;;
+      11) menu_run_isolated_report "Edge Runtime Status" edge_runtime_status_menu ;;
+      12) menu_run_isolated_report "Edge Runtime Restart" edge_runtime_restart_menu ;;
+      13) menu_run_isolated_report "Edge Runtime Info" edge_runtime_info_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac

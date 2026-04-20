@@ -113,6 +113,153 @@ wireproxy_restart_menu() {
   [[ "${restart_failed}" != "true" ]]
 }
 
+xray_runtime_status_menu() {
+  title
+  echo "7) Maintenance > Xray Runtime Status"
+  hr
+
+  local xray_dns_conf metrics_url access_log error_log
+  xray_dns_conf="${XRAY_DNS_CONF:-/usr/local/etc/xray/conf.d/02-dns.json}"
+  metrics_url="http://127.0.0.1:11111"
+  access_log="/var/log/xray/access.log"
+  error_log="/var/log/xray/error.log"
+
+  if svc_exists xray; then
+    svc_status_line xray
+  else
+    warn "xray tidak terpasang"
+    hr
+    pause
+    return 0
+  fi
+
+  local pid uptime_str
+  pid="$(systemctl show -p MainPID --value xray 2>/dev/null || true)"
+  if [[ -n "${pid}" && "${pid}" != "0" ]]; then
+    echo "PID         : ${pid}"
+    uptime_str="$(process_uptime_pretty "${pid}" || true)"
+    [[ -n "${uptime_str}" ]] && echo "Uptime      : ${uptime_str}"
+  fi
+
+  hr
+  if have_cmd ss; then
+    if ss -ltn 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:10080([[:space:]]|$)'; then
+      log "API 127.0.0.1:10080      : LISTENING ✅"
+    else
+      warn "API 127.0.0.1:10080      : NOT listening ❌"
+    fi
+    if ss -ltn 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:1053([[:space:]]|$)'; then
+      log "DNS TCP 127.0.0.1:1053   : LISTENING ✅"
+    else
+      warn "DNS TCP 127.0.0.1:1053   : NOT listening ❌"
+    fi
+    if ss -lun 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:1053([[:space:]]|$)'; then
+      log "DNS UDP 127.0.0.1:1053   : LISTENING ✅"
+    else
+      warn "DNS UDP 127.0.0.1:1053   : NOT listening ❌"
+    fi
+    if ss -lun 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:443([[:space:]]|$)'; then
+      log "XHTTP/3 UDP *:443        : LISTENING ✅"
+    else
+      warn "XHTTP/3 UDP *:443        : NOT listening ❌"
+    fi
+    if ss -ltn 2>/dev/null | grep -Eq '(^|[[:space:]])127\.0\.0\.1:11111([[:space:]]|$)'; then
+      log "Metrics 127.0.0.1:11111  : LISTENING ✅"
+    else
+      warn "Metrics 127.0.0.1:11111  : NOT listening ❌"
+    fi
+  else
+    warn "ss tidak tersedia, skip cek listener Xray"
+  fi
+
+  hr
+  if have_cmd curl; then
+    if curl -fsS --max-time 2 "${metrics_url}/debug/vars" >/dev/null 2>&1; then
+      log "Metrics /debug/vars      : OK ✅"
+    else
+      warn "Metrics /debug/vars      : FAIL ❌"
+    fi
+    if curl -fsS --max-time 2 "${metrics_url}/debug/pprof/" >/dev/null 2>&1; then
+      log "Metrics /debug/pprof     : OK ✅"
+    else
+      warn "Metrics /debug/pprof     : FAIL ❌"
+    fi
+  else
+    warn "curl tidak tersedia, skip cek metrics Xray"
+  fi
+
+  hr
+  if declare -F xray_dns_status_get >/dev/null 2>&1; then
+    local status_blob parse_state primary secondary strategy cache
+    status_blob="$(xray_dns_status_get "${xray_dns_conf}")"
+    parse_state="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^parse_state=/{print $2; exit}' 2>/dev/null || true)"
+    primary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^primary=/{print $2; exit}' 2>/dev/null || true)"
+    secondary="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^secondary=/{print $2; exit}' 2>/dev/null || true)"
+    strategy="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^strategy=/{print $2; exit}' 2>/dev/null || true)"
+    cache="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^cache=/{print $2; exit}' 2>/dev/null || true)"
+    [[ -n "${primary}" ]] || primary="-"
+    [[ -n "${secondary}" ]] || secondary="-"
+    [[ -n "${strategy}" ]] || strategy="-"
+    [[ -n "${cache}" ]] || cache="on"
+    echo "DNS Parser  : ${parse_state:-unknown}"
+    echo "DNS Primary : ${primary}"
+    echo "DNS Second  : ${secondary}"
+    echo "DNS Strategy: ${strategy}"
+    echo "DNS Cache   : $( [[ "${cache}" == "on" ]] && echo ON || echo OFF )"
+  else
+    warn "xray_dns_status_get tidak tersedia, skip ringkasan DNS"
+  fi
+
+  if have_cmd dig; then
+    local fake_a fake_aaaa
+    fake_a="$(dig +short @127.0.0.1 -p 1053 www.google.com A 2>/dev/null | head -n1 || true)"
+    fake_aaaa="$(dig +short @127.0.0.1 -p 1053 www.google.com AAAA 2>/dev/null | head -n1 || true)"
+    [[ -n "${fake_a}" ]] && echo "FakeDNS A   : ${fake_a}" || warn "FakeDNS A   : gagal"
+    [[ -n "${fake_aaaa}" ]] && echo "FakeDNS AAAA: ${fake_aaaa}" || warn "FakeDNS AAAA: gagal"
+  else
+    warn "dig tidak tersedia, skip cek FakeDNS"
+  fi
+
+  hr
+  if [[ -f "${access_log}" ]]; then
+    echo "Access log  : ${access_log} ($(stat -c '%s bytes' "${access_log}" 2>/dev/null || echo '?'))"
+  else
+    warn "Access log  : ${access_log} tidak ada"
+  fi
+  if [[ -f "${error_log}" ]]; then
+    echo "Error log   : ${error_log} ($(stat -c '%s bytes' "${error_log}" 2>/dev/null || echo '?'))"
+  else
+    warn "Error log   : ${error_log} tidak ada"
+  fi
+
+  echo
+  echo "  1) Xray Logs (80 baris)"
+  echo "  2) Error Log (40 baris)"
+  echo "  0) Back"
+  hr
+  if ! read -r -p "Pilih: " c; then
+    echo
+    return 0
+  fi
+  case "${c}" in
+    1) title ; tail_logs xray 80 ; hr ; pause ;;
+    2)
+      title
+      echo "7) Maintenance > Xray Error Log"
+      hr
+      if [[ -f "${error_log}" ]]; then
+        tail -n 40 "${error_log}" 2>/dev/null || true
+      else
+        warn "File error log tidak ditemukan."
+      fi
+      hr
+      pause
+      ;;
+    0|kembali|k|back|b) : ;;
+    *) warn "Pilihan tidak valid" ; sleep 1 ;;
+  esac
+}
+
 edge_runtime_env_file() {
   printf '%s\n' "/etc/default/edge-runtime"
 }
