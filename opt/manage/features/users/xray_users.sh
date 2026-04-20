@@ -1840,9 +1840,20 @@ def write_json_atomic(path, obj):
       pass
 
 spec = importlib.util.spec_from_file_location("xray_users_xhttp3", helper_path)
-helper = importlib.util.module_from_spec(spec) if spec and spec.loader else None
-if helper is not None:
+helper = None
+helper_error = ""
+try:
+  if not spec or not spec.loader:
+    raise RuntimeError(f"invalid helper spec: {helper_path}")
+  helper = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(helper)
+except Exception as exc:
+  helper = None
+  helper_error = str(exc)
+
+if proto == "vless" and helper is None:
+  print(f"xhttp3 helper unavailable: {helper_error or helper_path}", file=sys.stderr)
+  raise SystemExit(1)
 
 def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto):
   return helper.build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto) if helper is not None else None
@@ -1999,7 +2010,6 @@ running_labels = [
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
   f"{proto_disp} Path XHTTP/3",
-  f"{proto_disp} Path XHTTP/3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -2048,7 +2058,6 @@ lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
 if proto == "vless":
   lines.append(section_line(f"{proto_disp} Path XHTTP/3", xhttp3_path, running_label_width))
-  lines.append(section_line(f"{proto_disp} Path XHTTP/3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
@@ -2327,9 +2336,20 @@ def write_json_atomic(path, obj):
 
 
 spec = importlib.util.spec_from_file_location("xray_users_xhttp3", helper_path)
-helper = importlib.util.module_from_spec(spec) if spec and spec.loader else None
-if helper is not None:
+helper = None
+helper_error = ""
+try:
+  if not spec or not spec.loader:
+    raise RuntimeError(f"invalid helper spec: {helper_path}")
+  helper = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(helper)
+except Exception as exc:
+  helper = None
+  helper_error = str(exc)
+
+if proto == "vless" and helper is None:
+  print(f"xhttp3 helper unavailable: {helper_error or helper_path}", file=sys.stderr)
+  raise SystemExit(1)
 
 def load_jsonc(path):
   if helper is not None:
@@ -2657,7 +2677,6 @@ running_labels = [
   f"{proto_disp} Path XHTTP",
   f"{proto_disp} Path XHTTP Alt",
   f"{proto_disp} Path XHTTP/3",
-  f"{proto_disp} Path XHTTP/3 Alt",
   f"{proto_disp} Path Service",
   f"{proto_disp} Path Service Alt",
 ]
@@ -2719,7 +2738,6 @@ lines.append(section_line(f"{proto_disp} Path XHTTP", xhttp_path, running_label_
 lines.append(section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt, running_label_width))
 if proto == "vless":
   lines.append(section_line(f"{proto_disp} Path XHTTP/3", xhttp3_path, running_label_width))
-  lines.append(section_line(f"{proto_disp} Path XHTTP/3 Alt", xhttp3_path_alt, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service", grpc_service, running_label_width))
 lines.append(section_line(f"{proto_disp} Path Service Alt", grpc_service_alt, running_label_width))
 lines.append("")
