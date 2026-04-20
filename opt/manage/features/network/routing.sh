@@ -835,11 +835,42 @@ xray_inbounds_all_tags_get() {
   need_python3
   [[ -f "${XRAY_INBOUNDS_CONF}" ]] || return 0
   python3 - <<'PY' "${XRAY_INBOUNDS_CONF}" 2>/dev/null || true
-import json, sys
+import json, re, sys
 src=sys.argv[1]
+def strip_json_comments(text):
+  text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+  lines = []
+  for line in text.splitlines():
+    out = []
+    i = 0
+    in_str = False
+    esc = False
+    while i < len(line):
+      ch = line[i]
+      if in_str:
+        out.append(ch)
+        if esc:
+          esc = False
+        elif ch == '\\':
+          esc = True
+        elif ch == '"':
+          in_str = False
+        i += 1
+        continue
+      if ch == '"':
+        in_str = True
+        out.append(ch)
+        i += 1
+        continue
+      if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+        break
+      out.append(ch)
+      i += 1
+    lines.append(''.join(out))
+  return '\n'.join(lines)
 try:
   with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+    cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   raise SystemExit(0)
 tags=set()
@@ -1536,11 +1567,42 @@ xray_inbounds_all_client_emails_get() {
   need_python3
   [[ -f "${XRAY_INBOUNDS_CONF}" ]] || return 0
   python3 - <<'PY' "${XRAY_INBOUNDS_CONF}" 2>/dev/null || true
-import json, sys
+import json, re, sys
 src=sys.argv[1]
+def strip_json_comments(text):
+  text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+  lines = []
+  for line in text.splitlines():
+    out = []
+    i = 0
+    in_str = False
+    esc = False
+    while i < len(line):
+      ch = line[i]
+      if in_str:
+        out.append(ch)
+        if esc:
+          esc = False
+        elif ch == '\\':
+          esc = True
+        elif ch == '"':
+          in_str = False
+        i += 1
+        continue
+      if ch == '"':
+        in_str = True
+        out.append(ch)
+        i += 1
+        continue
+      if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+        break
+      out.append(ch)
+      i += 1
+    lines.append(''.join(out))
+  return '\n'.join(lines)
 try:
   with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+    cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   raise SystemExit(0)
 emails=set()

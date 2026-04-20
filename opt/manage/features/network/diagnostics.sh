@@ -8,7 +8,7 @@ network_diagnostics_menu() {
     xray_network_menu_title "Diagnostics"
     hr
     echo "  1) Show summary (routing)"
-    echo "  2) Validate conf.d JSON (jq)"
+    echo "  2) Validate conf.d JSON"
     echo "  3) xray run -test -confdir (syntax check)"
     echo "  4) Show core service status"
     echo "  0) Back"

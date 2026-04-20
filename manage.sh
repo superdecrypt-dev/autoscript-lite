@@ -3584,8 +3584,8 @@ check_nginx_config() {
 }
 
 check_xray_config_json() {
-  if ! have_cmd jq; then
-    warn "jq tidak tersedia, lewati validasi JSON"
+  if ! have_cmd python3; then
+    warn "python3 tidak tersedia, lewati validasi JSON"
     return 0
   fi
 
@@ -3604,7 +3604,48 @@ check_xray_config_json() {
       ok=0
       continue
     fi
-    if ! jq -e . "${f}" >/dev/null; then
+    if ! python3 - <<'PY' "${f}" >/dev/null 2>&1; then
+import json
+import re
+import sys
+
+path = sys.argv[1]
+
+def strip_json_comments(text: str) -> str:
+  text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+  lines = []
+  for line in text.splitlines():
+    out = []
+    i = 0
+    in_str = False
+    esc = False
+    while i < len(line):
+      ch = line[i]
+      if in_str:
+        out.append(ch)
+        if esc:
+          esc = False
+        elif ch == '\\':
+          esc = True
+        elif ch == '"':
+          in_str = False
+        i += 1
+        continue
+      if ch == '"':
+        in_str = True
+        out.append(ch)
+        i += 1
+        continue
+      if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+        break
+      out.append(ch)
+      i += 1
+    lines.append(''.join(out))
+  return '\n'.join(lines)
+
+with open(path, 'r', encoding='utf-8') as f:
+  json.loads(strip_json_comments(f.read()))
+PY
       warn "JSON tidak valid: ${f}"
       ok=0
     fi

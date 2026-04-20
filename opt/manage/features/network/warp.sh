@@ -779,6 +779,7 @@ xray_json_file_probe() {
   need_python3
   python3 - <<'PY' "${file}"
 import json
+import re
 import sys
 
 path = sys.argv[1]
@@ -787,9 +788,41 @@ if not path:
   print("error=path kosong")
   raise SystemExit(3)
 
+def strip_json_comments(text: str) -> str:
+  text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+  lines = []
+  for line in text.splitlines():
+    out = []
+    i = 0
+    in_str = False
+    esc = False
+    while i < len(line):
+      ch = line[i]
+      if in_str:
+        out.append(ch)
+        if esc:
+          esc = False
+        elif ch == '\\':
+          esc = True
+        elif ch == '"':
+          in_str = False
+        i += 1
+        continue
+      if ch == '"':
+        in_str = True
+        out.append(ch)
+        i += 1
+        continue
+      if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+        break
+      out.append(ch)
+      i += 1
+    lines.append(''.join(out))
+  return '\n'.join(lines)
+
 try:
   with open(path, 'r', encoding='utf-8') as f:
-    json.load(f)
+    json.loads(strip_json_comments(f.read()))
 except FileNotFoundError:
   print("state=missing")
   print("error=file tidak ditemukan")

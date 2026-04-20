@@ -46,6 +46,8 @@ for proto in protos:
 
   grouped = {}
   for name in os.listdir(pdir):
+    if name.startswith("."):
+      continue
     if not name.endswith(".json"):
       continue
     stem = name[:-5]
