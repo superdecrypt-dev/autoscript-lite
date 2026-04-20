@@ -6,6 +6,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.parse
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -857,6 +858,22 @@ def _derive_access_from_import_links(import_links: list[dict[str, str]]) -> dict
     }
 
 
+def _is_vless_xhttp3_import_link(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    url = str(item.get("url") or "").strip()
+    if not url.startswith("vless://") or "?" not in url:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    except Exception:
+        return False
+    transport = str((query.get("type") or [""])[0]).strip().lower()
+    alpn = str((query.get("alpn") or [""])[0]).strip().lower()
+    return transport == "xhttp" and "h3" in alpn
+
+
 def _parse_xray_import_links(proto: str, username: str) -> list[dict[str, str]]:
     if proto not in XRAY_PROTOCOLS:
         return []
@@ -939,11 +956,7 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
     access_details = _access_detail_items(proto, username, account_fields)
     credentials = _portal_credentials(proto, username, account_fields)
     xray_client_config = _xray_client_config_path(proto, username)
-    has_vless_xhttp3 = proto == "vless" and any(
-        "xhttp/3" in str(item.get("label") or "").lower() and "udp/quic" in str(item.get("label") or "").lower()
-        for item in import_links
-        if isinstance(item, dict)
-    )
+    has_vless_xhttp3 = proto == "vless" and any(_is_vless_xhttp3_import_link(item) for item in import_links)
     xray_json_available = xray_client_config.exists() and has_vless_xhttp3
 
     return {

@@ -1857,11 +1857,54 @@ def ech_config_from_server_keys(server_keys):
       return lines[idx + 1]
   return ""
 
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as handle:
+    return json.loads(strip_json_comments(handle.read()))
+
 def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto):
   if not os.path.isfile(inbounds_path):
     return None
   try:
-    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+    cfg = load_jsonc(inbounds_path)
   except Exception:
     return None
 
@@ -1963,7 +2006,7 @@ def build_vless_xhttp3_link(inbounds_path, domain, cred, username, proto):
   if not os.path.isfile(inbounds_path):
     return ""
   try:
-    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+    cfg = load_jsonc(inbounds_path)
   except Exception:
     return ""
 
@@ -2498,11 +2541,56 @@ def ech_config_from_server_keys(server_keys):
   return ""
 
 
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+
+def load_jsonc(path):
+  with open(path, "r", encoding="utf-8") as handle:
+    return json.loads(strip_json_comments(handle.read()))
+
+
 def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, proto):
   if not os.path.isfile(inbounds_path):
     return None
   try:
-    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+    cfg = load_jsonc(inbounds_path)
   except Exception:
     return None
 
@@ -2604,7 +2692,7 @@ def build_vless_xhttp3_link(inbounds_path, domain, cred, username, proto):
   if not os.path.isfile(inbounds_path):
     return ""
   try:
-    cfg = json.load(open(inbounds_path, "r", encoding="utf-8"))
+    cfg = load_jsonc(inbounds_path)
   except Exception:
     return ""
 
@@ -2821,7 +2909,7 @@ if not speed_enabled or speed_down_mbit <= 0 or speed_up_mbit <= 0:
 cred = forced_cred
 if not cred and os.path.isfile(inbounds_file):
   try:
-    cfg = json.load(open(inbounds_file, "r", encoding="utf-8"))
+    cfg = load_jsonc(inbounds_file)
     def inbound_matches_proto(ib, p):
       if not isinstance(ib, dict):
         return False
@@ -3526,8 +3614,47 @@ import sys
 
 src, proto, username = sys.argv[1:4]
 email = f"{username}@{proto}"
+def strip_json_comments(text):
+    result = []
+    i = 0
+    in_string = False
+    escape = False
+    length = len(text)
+    while i < length:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < length else ""
+        if in_string:
+            result.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            result.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            i += 2
+            while i < length and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i = min(i + 2, length)
+            continue
+        result.append(ch)
+        i += 1
+    return "".join(result)
 try:
-    cfg = json.load(open(src, "r", encoding="utf-8"))
+    with open(src, "r", encoding="utf-8") as handle:
+        cfg = json.loads(strip_json_comments(handle.read()))
 except Exception:
     raise SystemExit(0)
 

@@ -9,9 +9,9 @@ validate_email_user() {
 
 is_default_xray_email_or_tag() {
   # Default/bawaan Xray (disembunyikan dari menu WARP per-user):
-  # default@(vless|vmess|trojan)-(tcp|ws|hup|xhttp|grpc)
+  # default@(vless|vmess|trojan)-(tcp|ws|hup|xhttp|xhttp3|grpc)
   local s="${1:-}"
-  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(tcp|ws|hup|grpc|xhttp)$ ]]
+  [[ "${s}" =~ ^default@(vless|vmess|trojan)-(tcp|ws|hup|grpc|xhttp|xhttp3)$ ]]
 }
 
 is_readonly_geosite_domain() {
