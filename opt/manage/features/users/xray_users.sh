@@ -1885,6 +1885,7 @@ def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, prot
   return {
     "remark": remark,
     "remarks": remark,
+    "version": {"min": "26.3.27"},
     "log": {"loglevel": "warning"},
     "inbounds": [
       {
@@ -2525,6 +2526,7 @@ def build_vless_xhttp3_client_config(inbounds_path, domain, cred, username, prot
   return {
     "remark": remark,
     "remarks": remark,
+    "version": {"min": "26.3.27"},
     "log": {"loglevel": "warning"},
     "inbounds": [
       {

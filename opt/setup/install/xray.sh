@@ -126,6 +126,9 @@ write_xray_config() {
       "StatsService"
     ]
   },
+  "metrics": {
+    "listen": "127.0.0.1:11111"
+  },
   "stats": {},
   "policy": {
     "levels": {
@@ -1226,6 +1229,7 @@ parts = [
   ("30-routing.json", {"routing": routing}),
   ("40-policy.json", {"policy": cfg.get("policy") or {}}),
   ("50-stats.json", {"stats": cfg.get("stats") or {}}),
+  ("60-metrics.json", {"metrics": cfg.get("metrics") or {}}),
 ]
 
 comments = {
@@ -1260,6 +1264,10 @@ comments = {
   "50-stats.json": [
     "// Xray stats fragment.",
     "// Kept separate so stats can be toggled without touching other fragments.",
+  ],
+  "60-metrics.json": [
+    "// Xray metrics fragment.",
+    "// Local expvar and pprof endpoint for runtime inspection. Keep this bound to localhost only.",
   ],
 }
 
