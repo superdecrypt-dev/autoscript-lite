@@ -45,15 +45,68 @@ routing_custom_domain_entry_valid() {
   return 1
 }
 
+routing_load_jsonc() {
+  local path="${1:-}"
+  python3 - <<'PY' "${path}" 2>/dev/null
+import json
+import sys
+
+path = sys.argv[1]
+
+def strip_json_comments(text):
+  result = []
+  i = 0
+  in_string = False
+  escape = False
+  length = len(text)
+  while i < length:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < length else ""
+    if in_string:
+      result.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == '"':
+        in_string = False
+      i += 1
+      continue
+    if ch == '"':
+      in_string = True
+      result.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < length and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i = min(i + 2, length)
+      continue
+    result.append(ch)
+    i += 1
+  return "".join(result)
+
+with open(path, "r", encoding="utf-8") as handle:
+  data = json.loads(strip_json_comments(handle.read()))
+print(json.dumps(data, ensure_ascii=False))
+PY
+}
+
 xray_routing_readonly_geosite_rule_print() {
   # Menampilkan rule geosite template (readonly) dari 30-routing.json
   # Rule ini dibuat oleh setup_modular.sh dan TIDAK boleh diedit dari menu.
   need_python3
   [[ -f "${XRAY_ROUTING_CONF}" ]] || return 0
-  python3 - <<'PY' "${XRAY_ROUTING_CONF}" 2>/dev/null || true
+  python3 - <<'PY' "$(routing_load_jsonc "${XRAY_ROUTING_CONF}")" 2>/dev/null || true
 import json, sys
 
-src=sys.argv[1]
+src=json.loads(sys.argv[1])
 targets=[
   "geosite:apple",
   "geosite:meta",
@@ -65,11 +118,7 @@ targets=[
 ]
 tset=set(targets)
 
-try:
-  with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
-except Exception:
-  raise SystemExit(0)
+cfg=src
 
 rules=((cfg.get("routing") or {}).get("rules") or [])
 found=None
@@ -110,11 +159,9 @@ xray_routing_default_rule_get() {
     return 0
   fi
   need_python3
-  python3 - <<'PY' "${src_file}"
+  python3 - <<'PY' "$(routing_load_jsonc "${src_file}")"
 import json, sys
-src=sys.argv[1]
-with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
+cfg=json.loads(sys.argv[1])
 routing=(cfg.get('routing') or {})
 rules=routing.get('rules') or []
 mode='unknown'
