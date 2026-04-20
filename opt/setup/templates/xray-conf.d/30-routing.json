@@ -1,0 +1,126 @@
+// Xray routing fragment template.
+{
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "domainMatcher": "hybrid",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "api"
+        ],
+        "outboundTag": "api"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dns-in"
+        ],
+        "outboundTag": "dns-out"
+      },
+      {
+        "type": "field",
+        "protocol": [
+          "dns"
+        ],
+        "outboundTag": "dns-out"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "xray-warp-redir-v4",
+          "xray-warp-redir-v6"
+        ],
+        "outboundTag": "warp"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:private"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-block-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-quota-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-limit-user"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:apple",
+          "geosite:meta",
+          "geosite:google",
+          "geosite:openai",
+          "geosite:spotify",
+          "geosite:netflix",
+          "geosite:reddit"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dummy-warp-inbounds"
+        ],
+        "outboundTag": "warp"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dummy-direct-inbounds"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-warp-user"
+        ],
+        "outboundTag": "warp"
+      },
+      {
+        "type": "field",
+        "user": [
+          "dummy-direct-user"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "port": "1-65535",
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}

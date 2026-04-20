@@ -1294,8 +1294,23 @@ def is_protected_rule(r):
     return False
   if r.get("type") != "field":
     return False
-  ot = r.get("outboundTag")
-  return isinstance(ot, str) and ot in ("api", "blocked")
+  ot = norm_tag(r.get("outboundTag"))
+  if ot == "api":
+    inbound_tags = r.get("inboundTag")
+    return isinstance(inbound_tags, list) and "api" in inbound_tags
+  if ot == "dns-out":
+    inbound_tags = r.get("inboundTag")
+    if isinstance(inbound_tags, list) and "dns-in" in inbound_tags:
+      return True
+    protocols = r.get("protocol")
+    return isinstance(protocols, list) and "dns" in protocols
+  if ot == "warp":
+    inbound_tags = r.get("inboundTag")
+    if not isinstance(inbound_tags, list):
+      return False
+    needed = {"xray-warp-redir-v4", "xray-warp-redir-v6"}
+    return needed.issubset(set(x for x in inbound_tags if isinstance(x, str)))
+  return ot == "blocked"
 
 def is_hard_block_user_rule(r):
   if not isinstance(r, dict):

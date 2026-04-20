@@ -76,6 +76,7 @@ Urutan aktual `setup.sh` saat ini tetap menjadi sumber kebenaran.
 8. `install_xray`, `write_xray_config`, `write_xray_modular_configs`,
    `configure_xray_service_confdir`, `setup_xray_geodata_updater`
    - target modul: `install/xray.sh`
+   - template modular: `templates/xray-conf.d/*.json`
 9. `install_xray_speed_limiter_foundation`
     - target modul: `install/xray.sh`
 10. `setup_logrotate`, `install_domain_cert_guard`

@@ -1,0 +1,583 @@
+// Xray inbound fragment template.
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": __P_API__,
+      "protocol": "dokodemo-door",
+      "tag": "api",
+      "settings": {
+        "address": "127.0.0.1"
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": 1053,
+      "protocol": "dokodemo-door",
+      "tag": "dns-in",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53,
+        "network": "tcp,udp"
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_XRAY_WARP_REDIR__,
+      "protocol": "dokodemo-door",
+      "tag": "xray-warp-redir-v4",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "redirect"
+        }
+      }
+    },
+    {
+      "listen": "::1",
+      "port": __P_XRAY_WARP_REDIR6__,
+      "protocol": "dokodemo-door",
+      "tag": "xray-warp-redir-v6",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "redirect"
+        }
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VLESS_TCP__,
+      "protocol": "vless",
+      "tag": "default@vless-tcp",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-tcp"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VMESS_TCP__,
+      "protocol": "vmess",
+      "tag": "default@vmess-tcp",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0,
+            "email": "default@vmess-tcp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_TROJAN_TCP__,
+      "protocol": "trojan",
+      "tag": "default@trojan-tcp",
+      "settings": {
+        "clients": [
+          {
+            "password": "__TROJAN_PASS__",
+            "email": "default@trojan-tcp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none",
+        "sockopt": {
+          "acceptProxyProtocol": true
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VLESS_WS__,
+      "protocol": "vless",
+      "tag": "default@vless-ws",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-ws"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "__I_VLESS_WS__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VMESS_WS__,
+      "protocol": "vmess",
+      "tag": "default@vmess-ws",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0,
+            "email": "default@vmess-ws"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "__I_VMESS_WS__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_TROJAN_WS__,
+      "protocol": "trojan",
+      "tag": "default@trojan-ws",
+      "settings": {
+        "clients": [
+          {
+            "password": "__TROJAN_PASS__",
+            "email": "default@trojan-ws"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "__I_TROJAN_WS__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VLESS_HUP__,
+      "protocol": "vless",
+      "tag": "default@vless-hup",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-hup"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "__I_VLESS_HUP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VMESS_HUP__,
+      "protocol": "vmess",
+      "tag": "default@vmess-hup",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0,
+            "email": "default@vmess-hup"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "__I_VMESS_HUP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VLESS_XHTTP__,
+      "protocol": "vless",
+      "tag": "default@vless-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-xhttp"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "__I_VLESS_XHTTP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "::",
+      "port": 443,
+      "protocol": "vless",
+      "tag": "default@vless-xhttp3",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-xhttp3"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "__DOMAIN__",
+          "alpn": [
+            "h3"
+          ],
+          "echServerKeys": "__XHTTP3_ECH_SERVER_KEYS__",
+          "echForceQuery": "full",
+          "certificates": [
+            {
+              "certificateFile": "__CERT_FULLCHAIN__",
+              "keyFile": "__CERT_PRIVKEY__"
+            }
+          ]
+        },
+        "xhttpSettings": {
+          "path": "__I_VLESS_XHTTP3__",
+          "headers": {
+            "User-Agent": "__XRAY_XHTTP3_USER_AGENT__"
+          }
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "salamander",
+              "settings": {
+                "password": "__XHTTP3_SALAMANDER__"
+              }
+            }
+          ],
+          "quicParams": {
+            "congestion": "__XRAY_XHTTP3_CONGESTION__",
+            "udpHop": {
+              "ports": "__XRAY_XHTTP3_UDPHOP_PORTS__",
+              "interval": "__XRAY_XHTTP3_UDPHOP_INTERVAL__"
+            },
+            "maxIdleTimeout": __XRAY_XHTTP3_MAX_IDLE_TIMEOUT__,
+            "keepAlivePeriod": __XRAY_XHTTP3_KEEPALIVE_PERIOD__,
+            "disablePathMTUDiscovery": __XRAY_XHTTP3_DISABLE_PMTUD__
+          }
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VMESS_XHTTP__,
+      "protocol": "vmess",
+      "tag": "default@vmess-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0,
+            "email": "default@vmess-xhttp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "__I_VMESS_XHTTP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_TROJAN_XHTTP__,
+      "protocol": "trojan",
+      "tag": "default@trojan-xhttp",
+      "settings": {
+        "clients": [
+          {
+            "password": "__TROJAN_PASS__",
+            "email": "default@trojan-xhttp"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "__I_TROJAN_XHTTP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_TROJAN_HUP__,
+      "protocol": "trojan",
+      "tag": "default@trojan-hup",
+      "settings": {
+        "clients": [
+          {
+            "password": "__TROJAN_PASS__",
+            "email": "default@trojan-hup"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "__I_TROJAN_HUP__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VLESS_GRPC__,
+      "protocol": "vless",
+      "tag": "default@vless-grpc",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "email": "default@vless-grpc"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "__I_VLESS_GRPC__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_VMESS_GRPC__,
+      "protocol": "vmess",
+      "tag": "default@vmess-grpc",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0,
+            "email": "default@vmess-grpc"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "__I_VMESS_GRPC__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": __P_TROJAN_GRPC__,
+      "protocol": "trojan",
+      "tag": "default@trojan-grpc",
+      "settings": {
+        "clients": [
+          {
+            "password": "__TROJAN_PASS__",
+            "email": "default@trojan-grpc"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "__I_TROJAN_GRPC__"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic",
+          "fakedns"
+        ]
+      }
+    }
+  ]
+}

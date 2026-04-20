@@ -1,0 +1,23 @@
+// Xray DNS fragment template.
+{
+  "dns": {
+    "queryStrategy": "UseIPv4v6",
+    "servers": [
+      "fakedns",
+      "https+local://1.1.1.1/dns-query",
+      "https+local://dns.google/dns-query",
+      "1.1.1.1",
+      "8.8.8.8"
+    ]
+  },
+  "fakedns": [
+    {
+      "ipPool": "198.18.0.0/15",
+      "poolSize": 65535
+    },
+    {
+      "ipPool": "fc00::/18",
+      "poolSize": 65535
+    }
+  ]
+}

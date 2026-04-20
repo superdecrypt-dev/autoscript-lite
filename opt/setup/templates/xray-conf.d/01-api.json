@@ -1,0 +1,11 @@
+// Xray API fragment template.
+{
+  "api": {
+    "tag": "api",
+    "services": [
+      "HandlerService",
+      "LoggerService",
+      "StatsService"
+    ]
+  }
+}

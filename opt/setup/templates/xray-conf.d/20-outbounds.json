@@ -1,0 +1,42 @@
+// Xray outbound fragment template.
+{
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpCongestion": "bbr"
+        }
+      }
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "blocked"
+    },
+    {
+      "protocol": "socks",
+      "tag": "warp",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": __WARP_ZEROTRUST_PROXY_PORT__
+          }
+        ]
+      }
+    },
+    {
+      "tag": "dns-out",
+      "protocol": "dns",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53
+      }
+    }
+  ]
+}

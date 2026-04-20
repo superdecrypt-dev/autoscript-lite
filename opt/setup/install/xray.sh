@@ -89,809 +89,6 @@ write_xray_config() {
   XHTTP3_ECH_SERVER_KEYS="$(printf '%s\n' "${XHTTP3_ECH_OUTPUT}" | awk 'found && NF {print; exit} /^ECH server keys:/ {found=1}')"
   [[ -n "${XHTTP3_ECH_CONFIG}" && -n "${XHTTP3_ECH_SERVER_KEYS}" ]] || die "Gagal generate ECH config untuk XHTTP/3."
 
-  mkdir -p "$(dirname "$XRAY_CONFIG")"
-
-  cat > "$XRAY_CONFIG" <<EOF
-{
-  "log": {
-    "access": "/var/log/xray/access.log",
-    "error": "/var/log/xray/error.log",
-    "loglevel": "info"
-  },
-  "dns": {
-    "queryStrategy": "UseIPv4v6",
-    "servers": [
-      "fakedns",
-      "https+local://1.1.1.1/dns-query",
-      "https+local://dns.google/dns-query",
-      "1.1.1.1",
-      "8.8.8.8"
-    ]
-  },
-  "fakedns": [
-    {
-      "ipPool": "198.18.0.0/15",
-      "poolSize": 65535
-    },
-    {
-      "ipPool": "fc00::/18",
-      "poolSize": 65535
-    }
-  ],
-  "api": {
-    "tag": "api",
-    "services": [
-      "HandlerService",
-      "LoggerService",
-      "StatsService"
-    ]
-  },
-  "metrics": {
-    "listen": "127.0.0.1:11111"
-  },
-  "stats": {},
-  "policy": {
-    "levels": {
-      "0": {
-        "handshake": 4,
-        "connIdle": 300,
-        "uplinkOnly": 2,
-        "downlinkOnly": 5,
-        "bufferSize": 32,
-        "statsUserUplink": true,
-        "statsUserDownlink": true
-      }
-    },
-    "system": {
-      "statsInboundUplink": true,
-      "statsInboundDownlink": true
-    }
-  },
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "domainMatcher": "hybrid",
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": [
-          "api"
-        ],
-        "outboundTag": "api"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "dns-in"
-        ],
-        "outboundTag": "dns-out"
-      },
-      {
-        "type": "field",
-        "protocol": [
-          "dns"
-        ],
-        "outboundTag": "dns-out"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xray-warp-redir-v4",
-          "xray-warp-redir-v6"
-        ],
-        "outboundTag": "warp"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "geosite:private"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "ip": [
-          "geoip:private"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "protocol": [
-          "bittorrent"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-block-user"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-quota-user"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-limit-user"
-        ],
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "geosite:apple",
-          "geosite:meta",
-          "geosite:google",
-          "geosite:openai",
-          "geosite:spotify",
-          "geosite:netflix",
-          "geosite:reddit"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "dummy-warp-inbounds"
-        ],
-        "outboundTag": "warp"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "dummy-direct-inbounds"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-warp-user"
-        ],
-        "outboundTag": "warp"
-      },
-      {
-        "type": "field",
-        "user": [
-          "dummy-direct-user"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "port": "1-65535",
-        "outboundTag": "direct"
-      }
-    ]
-  },
-  "inbounds": [
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_API},
-      "protocol": "dokodemo-door",
-      "tag": "api",
-      "settings": {
-        "address": "127.0.0.1"
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": 1053,
-      "protocol": "dokodemo-door",
-      "tag": "dns-in",
-      "settings": {
-        "address": "1.1.1.1",
-        "port": 53,
-        "network": "tcp,udp"
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_XRAY_WARP_REDIR},
-      "protocol": "dokodemo-door",
-      "tag": "xray-warp-redir-v4",
-      "settings": {
-        "network": "tcp",
-        "followRedirect": true
-      },
-      "streamSettings": {
-        "sockopt": {
-          "tproxy": "redirect"
-        }
-      }
-    },
-    {
-      "listen": "::1",
-      "port": ${P_XRAY_WARP_REDIR6},
-      "protocol": "dokodemo-door",
-      "tag": "xray-warp-redir-v6",
-      "settings": {
-        "network": "tcp",
-        "followRedirect": true
-      },
-      "streamSettings": {
-        "sockopt": {
-          "tproxy": "redirect"
-        }
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VLESS_TCP},
-      "protocol": "vless",
-      "tag": "default@vless-tcp",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-tcp"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "none",
-        "sockopt": {
-          "acceptProxyProtocol": true
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VMESS_TCP},
-      "protocol": "vmess",
-      "tag": "default@vmess-tcp",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "alterId": 0,
-            "email": "default@vmess-tcp"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "none",
-        "sockopt": {
-          "acceptProxyProtocol": true
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_TROJAN_TCP},
-      "protocol": "trojan",
-      "tag": "default@trojan-tcp",
-      "settings": {
-        "clients": [
-          {
-            "password": "${TROJAN_PASS}",
-            "email": "default@trojan-tcp"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "none",
-        "sockopt": {
-          "acceptProxyProtocol": true
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VLESS_WS},
-      "protocol": "vless",
-      "tag": "default@vless-ws",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-ws"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "${I_VLESS_WS}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VMESS_WS},
-      "protocol": "vmess",
-      "tag": "default@vmess-ws",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "alterId": 0,
-            "email": "default@vmess-ws"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "${I_VMESS_WS}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_TROJAN_WS},
-      "protocol": "trojan",
-      "tag": "default@trojan-ws",
-      "settings": {
-        "clients": [
-          {
-            "password": "${TROJAN_PASS}",
-            "email": "default@trojan-ws"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "${I_TROJAN_WS}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VLESS_HUP},
-      "protocol": "vless",
-      "tag": "default@vless-hup",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-hup"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "httpupgrade",
-        "security": "none",
-        "httpupgradeSettings": {
-          "path": "${I_VLESS_HUP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VMESS_HUP},
-      "protocol": "vmess",
-      "tag": "default@vmess-hup",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "alterId": 0,
-            "email": "default@vmess-hup"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "httpupgrade",
-        "security": "none",
-        "httpupgradeSettings": {
-          "path": "${I_VMESS_HUP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VLESS_XHTTP},
-      "protocol": "vless",
-      "tag": "default@vless-xhttp",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-xhttp"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-        "xhttpSettings": {
-          "path": "${I_VLESS_XHTTP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "::",
-      "port": 443,
-      "protocol": "vless",
-      "tag": "default@vless-xhttp3",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-xhttp3"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "tls",
-        "tlsSettings": {
-          "serverName": "${DOMAIN}",
-          "alpn": [
-            "h3"
-          ],
-          "echServerKeys": "${XHTTP3_ECH_SERVER_KEYS}",
-          "echForceQuery": "full",
-          "certificates": [
-            {
-              "certificateFile": "${CERT_FULLCHAIN}",
-              "keyFile": "${CERT_PRIVKEY}"
-            }
-          ]
-        },
-        "xhttpSettings": {
-          "path": "${I_VLESS_XHTTP3}",
-          "headers": {
-            "User-Agent": "${XRAY_XHTTP3_USER_AGENT}"
-          }
-        },
-        "finalmask": {
-          "udp": [
-            {
-              "type": "salamander",
-              "settings": {
-                "password": "${XHTTP3_SALAMANDER}"
-              }
-            }
-          ],
-          "quicParams": {
-            "congestion": "${XRAY_XHTTP3_CONGESTION}",
-            "udpHop": {
-              "ports": "${XRAY_XHTTP3_UDPHOP_PORTS}",
-              "interval": "${XRAY_XHTTP3_UDPHOP_INTERVAL}"
-            },
-            "maxIdleTimeout": ${XRAY_XHTTP3_MAX_IDLE_TIMEOUT},
-            "keepAlivePeriod": ${XRAY_XHTTP3_KEEPALIVE_PERIOD},
-            "disablePathMTUDiscovery": ${XRAY_XHTTP3_DISABLE_PMTUD}
-          }
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VMESS_XHTTP},
-      "protocol": "vmess",
-      "tag": "default@vmess-xhttp",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "alterId": 0,
-            "email": "default@vmess-xhttp"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-        "xhttpSettings": {
-          "path": "${I_VMESS_XHTTP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_TROJAN_XHTTP},
-      "protocol": "trojan",
-      "tag": "default@trojan-xhttp",
-      "settings": {
-        "clients": [
-          {
-            "password": "${TROJAN_PASS}",
-            "email": "default@trojan-xhttp"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-        "xhttpSettings": {
-          "path": "${I_TROJAN_XHTTP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_TROJAN_HUP},
-      "protocol": "trojan",
-      "tag": "default@trojan-hup",
-      "settings": {
-        "clients": [
-          {
-            "password": "${TROJAN_PASS}",
-            "email": "default@trojan-hup"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "httpupgrade",
-        "security": "none",
-        "httpupgradeSettings": {
-          "path": "${I_TROJAN_HUP}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VLESS_GRPC},
-      "protocol": "vless",
-      "tag": "default@vless-grpc",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "email": "default@vless-grpc"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "${I_VLESS_GRPC}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_VMESS_GRPC},
-      "protocol": "vmess",
-      "tag": "default@vmess-grpc",
-      "settings": {
-        "clients": [
-          {
-            "id": "${UUID}",
-            "alterId": 0,
-            "email": "default@vmess-grpc"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "${I_VMESS_GRPC}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": ${P_TROJAN_GRPC},
-      "protocol": "trojan",
-      "tag": "default@trojan-grpc",
-      "settings": {
-        "clients": [
-          {
-            "password": "${TROJAN_PASS}",
-            "email": "default@trojan-grpc"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "${I_TROJAN_GRPC}"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic",
-          "fakedns"
-        ]
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "direct",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIP"
-      },
-      "streamSettings": {
-        "sockopt": {
-          "mark": 255,
-          "tcpCongestion": "bbr"
-        }
-      }
-    },
-    {
-      "protocol": "blackhole",
-      "tag": "blocked"
-    },
-    {
-      "protocol": "socks",
-      "tag": "warp",
-      "settings": {
-        "servers": [
-          {
-            "address": "127.0.0.1",
-            "port": 40000
-          }
-        ]
-      }
-    },
-    {
-      "tag": "dns-out",
-      "protocol": "dns",
-      "settings": {
-        "address": "1.1.1.1",
-        "port": 53
-      }
-    }
-  ]
-}
-EOF
-
   mkdir -p /var/log/xray
   touch /var/log/xray/access.log /var/log/xray/error.log
 
@@ -902,31 +99,22 @@ EOF
   fi
   xr_group="$(id -gn "$xr_user" 2>/dev/null || echo "$xr_user")"
 
-  chown "$xr_user:$xr_group" "$XRAY_CONFIG" >/dev/null 2>&1 || true
   chown "$xr_user:$xr_group" /var/log/xray >/dev/null 2>&1 || true
   chown "$xr_user:$xr_group" /var/log/xray/access.log /var/log/xray/error.log >/dev/null 2>&1 || true
 
-  chmod 640 "$XRAY_CONFIG"
   chmod 750 /var/log/xray
   chmod 640 /var/log/xray/access.log /var/log/xray/error.log
-
-
-  # Validasi config sebelum dipakai (hindari exit "diam-diam").
-  local test_log
-  test_log="$(mktemp "/tmp/xray-config-test.XXXXXX.log")"
-  if ! xray run -test -config "$XRAY_CONFIG" >"$test_log" 2>&1; then
-    tail -n 200 "$test_log" >&2 || true
-    die "Xray config test gagal. Lihat: $test_log"
-  fi
-  rm -f "$test_log" >/dev/null 2>&1 || true
 
   # Tidak perlu enable/restart xray di sini.
   # configure_xray_service_confdir (dipanggil setelah write_xray_modular_configs)
   # akan meng-install unit file yang benar (-confdir) dan merestart xray satu kali.
-  ok "Config Xray dasar siap."
+  ok "Bootstrap nilai dinamis Xray siap."
   declare -gx XR_UUID="$UUID"
   declare -gx XR_TROJAN_PASS="$TROJAN_PASS"
   declare -gx XR_API_PORT="$P_API"
+  declare -gx XRAY_XHTTP3_SALAMANDER_PASSWORD="$XHTTP3_SALAMANDER"
+  declare -gx XRAY_XHTTP3_ECH_CONFIG="$XHTTP3_ECH_CONFIG"
+  declare -gx XRAY_XHTTP3_ECH_SERVER_KEYS="$XHTTP3_ECH_SERVER_KEYS"
 
   declare -gx P_VLESS_TCP="$P_VLESS_TCP"
   declare -gx P_VMESS_TCP="$P_VMESS_TCP"
@@ -960,15 +148,83 @@ EOF
 
 write_xray_modular_configs() {
   ok "Buat config Xray modular..."
+  local template_dir rendered_dir
   mkdir -p "${XRAY_CONFDIR}"
   need_python3
+  template_dir="${SETUP_TEMPLATE_SRC_DIR:-${SCRIPT_DIR}/opt/setup/templates}/xray-conf.d"
+  [[ -d "${template_dir}" ]] || die "Template modular Xray tidak ditemukan: ${template_dir}"
+  rendered_dir="$(mktemp -d)"
 
-  python3 - <<'PY' "${XRAY_CONFIG}" "${XRAY_CONFDIR}"
+  render_setup_template_or_die "xray-conf.d/00-log.json" "${rendered_dir}/00-log.json" 0644
+  render_setup_template_or_die "xray-conf.d/01-api.json" "${rendered_dir}/01-api.json" 0644
+  render_setup_template_or_die "xray-conf.d/02-dns.json" "${rendered_dir}/02-dns.json" 0644
+  render_setup_template_or_die \
+    "xray-conf.d/10-inbounds.json" \
+    "${rendered_dir}/10-inbounds.json" \
+    0644 \
+    "UUID=${XR_UUID}" \
+    "TROJAN_PASS=${XR_TROJAN_PASS}" \
+    "P_API=${XR_API_PORT}" \
+    "P_XRAY_WARP_REDIR=${XRAY_WARP_REDIR_PORT}" \
+    "P_XRAY_WARP_REDIR6=${XRAY_WARP_REDIR_PORT_V6}" \
+    "P_VLESS_TCP=${P_VLESS_TCP}" \
+    "P_VMESS_TCP=${P_VMESS_TCP}" \
+    "P_TROJAN_TCP=${P_TROJAN_TCP}" \
+    "P_VLESS_WS=${P_VLESS_WS}" \
+    "P_VMESS_WS=${P_VMESS_WS}" \
+    "P_TROJAN_WS=${P_TROJAN_WS}" \
+    "P_VLESS_HUP=${P_VLESS_HUP}" \
+    "P_VMESS_HUP=${P_VMESS_HUP}" \
+    "P_TROJAN_HUP=${P_TROJAN_HUP}" \
+    "P_VLESS_XHTTP=${P_VLESS_XHTTP}" \
+    "P_VMESS_XHTTP=${P_VMESS_XHTTP}" \
+    "P_TROJAN_XHTTP=${P_TROJAN_XHTTP}" \
+    "P_VLESS_GRPC=${P_VLESS_GRPC}" \
+    "P_VMESS_GRPC=${P_VMESS_GRPC}" \
+    "P_TROJAN_GRPC=${P_TROJAN_GRPC}" \
+    "I_VLESS_WS=${I_VLESS_WS}" \
+    "I_VMESS_WS=${I_VMESS_WS}" \
+    "I_TROJAN_WS=${I_TROJAN_WS}" \
+    "I_VLESS_HUP=${I_VLESS_HUP}" \
+    "I_VMESS_HUP=${I_VMESS_HUP}" \
+    "I_TROJAN_HUP=${I_TROJAN_HUP}" \
+    "I_VLESS_XHTTP=${I_VLESS_XHTTP}" \
+    "I_VLESS_XHTTP3=${I_VLESS_XHTTP3}" \
+    "I_VMESS_XHTTP=${I_VMESS_XHTTP}" \
+    "I_TROJAN_XHTTP=${I_TROJAN_XHTTP}" \
+    "I_VLESS_GRPC=${I_VLESS_GRPC}" \
+    "I_VMESS_GRPC=${I_VMESS_GRPC}" \
+    "I_TROJAN_GRPC=${I_TROJAN_GRPC}" \
+    "DOMAIN=${DOMAIN}" \
+    "XHTTP3_ECH_SERVER_KEYS=${XRAY_XHTTP3_ECH_SERVER_KEYS}" \
+    "XHTTP3_SALAMANDER=${XRAY_XHTTP3_SALAMANDER_PASSWORD}" \
+    "CERT_FULLCHAIN=${CERT_FULLCHAIN}" \
+    "CERT_PRIVKEY=${CERT_PRIVKEY}" \
+    "XRAY_XHTTP3_USER_AGENT=${XRAY_XHTTP3_USER_AGENT}" \
+    "XRAY_XHTTP3_CONGESTION=${XRAY_XHTTP3_CONGESTION}" \
+    "XRAY_XHTTP3_UDPHOP_PORTS=${XRAY_XHTTP3_UDPHOP_PORTS}" \
+    "XRAY_XHTTP3_UDPHOP_INTERVAL=${XRAY_XHTTP3_UDPHOP_INTERVAL}" \
+    "XRAY_XHTTP3_MAX_IDLE_TIMEOUT=${XRAY_XHTTP3_MAX_IDLE_TIMEOUT}" \
+    "XRAY_XHTTP3_KEEPALIVE_PERIOD=${XRAY_XHTTP3_KEEPALIVE_PERIOD}" \
+    "XRAY_XHTTP3_DISABLE_PMTUD=${XRAY_XHTTP3_DISABLE_PMTUD}"
+  render_setup_template_or_die \
+    "xray-conf.d/20-outbounds.json" \
+    "${rendered_dir}/20-outbounds.json" \
+    0644 \
+    "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
+  render_setup_template_or_die "xray-conf.d/30-routing.json" "${rendered_dir}/30-routing.json" 0644
+  render_setup_template_or_die "xray-conf.d/40-policy.json" "${rendered_dir}/40-policy.json" 0644
+  render_setup_template_or_die "xray-conf.d/50-stats.json" "${rendered_dir}/50-stats.json" 0644
+  render_setup_template_or_die "xray-conf.d/60-metrics.json" "${rendered_dir}/60-metrics.json" 0644
+
+  python3 - <<'PY' "${rendered_dir}" "${XRAY_CONFDIR}"
 import json
 import os
+import re
 import sys
+import copy
 
-src, outdir = sys.argv[1:3]
+srcdir, outdir = sys.argv[1:3]
 speed_outbound_prefix = "speed-mark-"
 speed_rule_marker_prefix = "dummy-speed-user-"
 managed_routing_markers = {
@@ -983,10 +239,13 @@ managed_routing_inbound_markers = {
   "dummy-direct-inbounds",
 }
 
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.M | re.S)
+
 def load_json_if_exists(path, fallback):
   try:
     with open(path, "r", encoding="utf-8") as f:
-      return json.load(f)
+      raw = f.read()
+    return json.loads(COMMENT_RE.sub("", raw))
   except Exception:
     return fallback
 
@@ -1199,14 +458,21 @@ def preserve_warp_outbound(existing_cfg, fresh_outbounds):
     fresh_outbounds[idx] = existing_warp
     return
 
-with open(src, "r", encoding="utf-8") as f:
-  cfg = json.load(f)
+log_cfg = load_json_if_exists(os.path.join(srcdir, "00-log.json"), {})
+api_cfg = load_json_if_exists(os.path.join(srcdir, "01-api.json"), {})
+dns_cfg = load_json_if_exists(os.path.join(srcdir, "02-dns.json"), {})
+inbounds_cfg = load_json_if_exists(os.path.join(srcdir, "10-inbounds.json"), {})
+outbounds_cfg = load_json_if_exists(os.path.join(srcdir, "20-outbounds.json"), {})
+routing_cfg = load_json_if_exists(os.path.join(srcdir, "30-routing.json"), {})
+policy_cfg = load_json_if_exists(os.path.join(srcdir, "40-policy.json"), {})
+stats_cfg = load_json_if_exists(os.path.join(srcdir, "50-stats.json"), {})
+metrics_cfg = load_json_if_exists(os.path.join(srcdir, "60-metrics.json"), {})
 
-routing = cfg.get("routing") or {}
-inbounds_fresh = cfg.get("inbounds") or []
+routing = routing_cfg.get("routing") or {}
+inbounds_fresh = inbounds_cfg.get("inbounds") or []
 if not isinstance(inbounds_fresh, list):
   inbounds_fresh = []
-outbounds_fresh = cfg.get("outbounds") or []
+outbounds_fresh = outbounds_cfg.get("outbounds") or []
 if not isinstance(outbounds_fresh, list):
   outbounds_fresh = []
 
@@ -1221,15 +487,15 @@ preserve_warp_outbound(existing_outbounds, outbounds_fresh)
 outbounds_fresh.extend(preserve_speed_outbounds(existing_outbounds))
 
 parts = [
-  ("00-log.json", {"log": cfg.get("log") or {}}),
-  ("01-api.json", {"api": cfg.get("api") or {}}),
-  ("02-dns.json", {"dns": cfg.get("dns") or {}, "fakedns": cfg.get("fakedns") or []}),
+  ("00-log.json", {"log": log_cfg.get("log") or {}}),
+  ("01-api.json", {"api": api_cfg.get("api") or {}}),
+  ("02-dns.json", {"dns": dns_cfg.get("dns") or {}, "fakedns": dns_cfg.get("fakedns") or []}),
   ("10-inbounds.json", {"inbounds": inbounds_fresh}),
   ("20-outbounds.json", {"outbounds": outbounds_fresh}),
   ("30-routing.json", {"routing": routing}),
-  ("40-policy.json", {"policy": cfg.get("policy") or {}}),
-  ("50-stats.json", {"stats": cfg.get("stats") or {}}),
-  ("60-metrics.json", {"metrics": cfg.get("metrics") or {}}),
+  ("40-policy.json", {"policy": policy_cfg.get("policy") or {}}),
+  ("50-stats.json", {"stats": stats_cfg.get("stats") or {}}),
+  ("60-metrics.json", {"metrics": metrics_cfg.get("metrics") or {}}),
 ]
 
 comments = {
@@ -1283,6 +549,7 @@ for name, obj in parts:
     wf.write("\n")
   os.replace(tmp, path)
 PY
+  rm -rf "${rendered_dir}" >/dev/null 2>&1 || true
 
   chmod 640 "${XRAY_CONFDIR}"/*.json 2>/dev/null || true
   ok "Config modular siap:"
