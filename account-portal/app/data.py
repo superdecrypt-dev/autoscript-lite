@@ -619,6 +619,11 @@ def _account_info_path(proto: str, username: str) -> Path:
     return account_dir / f"{username}@{proto}.txt"
 
 
+def _xray_client_config_path(proto: str, username: str) -> Path:
+    account_dir = ACCOUNT_INFO_ROOT / proto
+    return account_dir / f"{username}@{proto}.xray.json"
+
+
 def _account_info_cache_path(proto: str, username: str) -> Path:
     account_dir = ACCOUNT_INFO_ROOT / proto
     return account_dir / f"{username}@{proto}.portal.json"
@@ -933,6 +938,13 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
     access_info = _access_summary(proto, username, account_fields, import_links)
     access_details = _access_detail_items(proto, username, account_fields)
     credentials = _portal_credentials(proto, username, account_fields)
+    xray_client_config = _xray_client_config_path(proto, username)
+    has_vless_xhttp3 = proto == "vless" and any(
+        "xhttp/3" in str(item.get("label") or "").lower() and "udp/quic" in str(item.get("label") or "").lower()
+        for item in import_links
+        if isinstance(item, dict)
+    )
+    xray_json_available = xray_client_config.exists() and has_vless_xhttp3
 
     return {
         "ok": True,
@@ -967,6 +979,8 @@ def build_public_account_summary(token: str) -> dict[str, Any] | None:
         "credentials_username": credentials.get("username", ""),
         "credentials_password": credentials.get("password", ""),
         "portal_url": account_portal_url(token),
+        "xray_json_available": xray_json_available,
+        "xray_json_url": f"/account/{token}/xray.json" if xray_json_available else "",
         "token": str(token or "").strip(),
         "import_links": import_links,
         "last_updated": _local_now().strftime("%Y-%m-%d %H:%M:%S"),

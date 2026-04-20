@@ -113,6 +113,293 @@ wireproxy_restart_menu() {
   [[ "${restart_failed}" != "true" ]]
 }
 
+xray_runtime_stats_summary_print() {
+  if ! have_cmd xray; then
+    warn "xray binary tidak tersedia, skip stats summary"
+    return 0
+  fi
+  if ! have_cmd python3; then
+    warn "python3 tidak tersedia, skip stats summary"
+    return 0
+  fi
+
+  local stats_tmp
+  stats_tmp="$(mktemp)"
+  if ! xray api statsquery --server=127.0.0.1:10080 >"${stats_tmp}" 2>/dev/null; then
+    rm -f "${stats_tmp}"
+    warn "Stats query via API gagal"
+    return 0
+  fi
+
+  python3 - <<'PY' "${stats_tmp}"
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+  data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+  print("[manage][WARN] Stats query mengembalikan JSON tidak valid")
+  raise SystemExit(0)
+
+stats = data.get("stat")
+if not isinstance(stats, list):
+  print("[manage][WARN] Stats query tidak memuat field stat")
+  raise SystemExit(0)
+
+user_totals = {}
+inbound_totals = {}
+
+for row in stats:
+  if not isinstance(row, dict):
+    continue
+  name = str(row.get("name") or "").strip()
+  value = int(row.get("value") or 0)
+  if not name:
+    continue
+  parts = name.split(">>>")
+  if len(parts) != 4:
+    continue
+  scope, ident, traffic_tag, direction = parts
+  if traffic_tag != "traffic" or direction not in ("uplink", "downlink"):
+    continue
+  target = None
+  if scope == "user":
+    target = user_totals.setdefault(ident, {"uplink": 0, "downlink": 0})
+  elif scope == "inbound":
+    target = inbound_totals.setdefault(ident, {"uplink": 0, "downlink": 0})
+  if target is not None:
+    target[direction] += value
+
+def human(n):
+  units = ["B", "KB", "MB", "GB", "TB"]
+  v = float(max(0, int(n)))
+  idx = 0
+  while v >= 1024 and idx < len(units) - 1:
+    v /= 1024.0
+    idx += 1
+  if idx == 0:
+    return f"{int(v)} {units[idx]}"
+  return f"{v:.2f} {units[idx]}"
+
+def top_rows(mapping, limit=3):
+  rows = []
+  for ident, vals in mapping.items():
+    up = int(vals.get("uplink") or 0)
+    down = int(vals.get("downlink") or 0)
+    total = up + down
+    if total <= 0:
+      continue
+    rows.append((total, ident, up, down))
+  rows.sort(reverse=True)
+  return rows[:limit]
+
+user_rows = top_rows(user_totals, 3)
+inbound_rows = top_rows(inbound_totals, 4)
+
+if user_rows:
+  print("Top Users:")
+  for total, ident, up, down in user_rows:
+    print(f"  {ident:<24} up={human(up):>10} down={human(down):>10} total={human(total):>10}")
+else:
+  print("Top Users: -")
+
+if inbound_rows:
+  print("Inbound Traffic:")
+  for total, ident, up, down in inbound_rows:
+    print(f"  {ident:<24} up={human(up):>10} down={human(down):>10} total={human(total):>10}")
+else:
+  print("Inbound Traffic: -")
+PY
+  rm -f "${stats_tmp}"
+}
+
+xray_runtime_log_summary_print() {
+  if ! have_cmd python3; then
+    warn "python3 tidak tersedia, skip ringkasan log Xray"
+    return 0
+  fi
+
+  python3 - <<'PY' "/var/log/xray/error.log" "/var/log/xray/access.log"
+import pathlib
+import sys
+
+error_log = pathlib.Path(sys.argv[1])
+access_log = pathlib.Path(sys.argv[2])
+
+def read_tail(path, max_lines=200):
+    if not path.exists():
+        return []
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
+    except Exception:
+        return []
+
+def compact(line, limit=140):
+    line = " ".join(str(line or "").split())
+    if len(line) <= limit:
+        return line
+    return line[: limit - 3] + "..."
+
+err_lines = read_tail(error_log, 200)
+acc_lines = read_tail(access_log, 200)
+
+warn_count = sum(1 for line in err_lines if "[Warning]" in line)
+error_count = sum(1 for line in err_lines if "[Error]" in line)
+depr_count = sum(1 for line in err_lines if "deprecated" in line.lower())
+
+last_warn = next((line for line in reversed(err_lines) if "[Warning]" in line), "")
+last_err = next((line for line in reversed(err_lines) if "[Error]" in line), "")
+last_access = acc_lines[-1] if acc_lines else ""
+
+print(f"Error Log    : warn={warn_count} error={error_count} deprecated={depr_count}")
+print(f"Access Tail  : {len(acc_lines)} line sample")
+if last_warn:
+    print(f"Last Warning : {compact(last_warn)}")
+if last_err:
+    print(f"Last Error   : {compact(last_err)}")
+if last_access:
+    print(f"Last Access  : {compact(last_access)}")
+PY
+}
+
+xray_runtime_snapshot_export() {
+  if ! have_cmd python3; then
+    warn "python3 tidak tersedia, tidak bisa export snapshot"
+    return 1
+  fi
+
+  local report_dir out stats_tmp dns_blob metrics_vars metrics_pprof fake_a fake_aaaa
+  report_dir="${REPORT_DIR:-/root/report}"
+  mkdir -p "${report_dir}" >/dev/null 2>&1 || {
+    warn "Gagal membuat report dir: ${report_dir}"
+    return 1
+  }
+  out="${report_dir}/xray-runtime-$(date +%Y%m%d-%H%M%S).json"
+  stats_tmp="$(mktemp)"
+  xray api statsquery --server=127.0.0.1:10080 >"${stats_tmp}" 2>/dev/null || printf '{"stat":[]}\n' >"${stats_tmp}"
+
+  dns_blob=""
+  if declare -F xray_dns_status_get >/dev/null 2>&1; then
+    dns_blob="$(xray_dns_status_get "${XRAY_DNS_CONF:-/usr/local/etc/xray/conf.d/02-dns.json}")"
+  fi
+
+  metrics_vars="false"
+  metrics_pprof="false"
+  if have_cmd curl; then
+    curl -fsS --max-time 2 "http://127.0.0.1:11111/debug/vars" >/dev/null 2>&1 && metrics_vars="true"
+    curl -fsS --max-time 2 "http://127.0.0.1:11111/debug/pprof/" >/dev/null 2>&1 && metrics_pprof="true"
+  fi
+
+  fake_a=""
+  fake_aaaa=""
+  if have_cmd dig; then
+    fake_a="$(dig +short @127.0.0.1 -p 1053 www.google.com A 2>/dev/null | head -n1 || true)"
+    fake_aaaa="$(dig +short @127.0.0.1 -p 1053 www.google.com AAAA 2>/dev/null | head -n1 || true)"
+  fi
+
+  python3 - <<'PY' "${out}" "${stats_tmp}" "${dns_blob}" "${metrics_vars}" "${metrics_pprof}" "${fake_a}" "${fake_aaaa}"
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import time
+
+out_path = pathlib.Path(sys.argv[1])
+stats_path = pathlib.Path(sys.argv[2])
+dns_blob = sys.argv[3]
+metrics_vars = sys.argv[4].lower() == "true"
+metrics_pprof = sys.argv[5].lower() == "true"
+fake_a = sys.argv[6]
+fake_aaaa = sys.argv[7]
+
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        return ""
+
+def service_active(name):
+    return run(["systemctl", "is-active", name]) == "active"
+
+def listen_tcp(port):
+    out = run(["ss", "-ltn"])
+    return bool(re.search(rf'(^|\\s)127\\.0\\.0\\.1:{port}(\\s|$)', out, re.M))
+
+def listen_tcp_any(port):
+    out = run(["ss", "-ltn"])
+    return bool(re.search(rf'(^|\\s)[^\\s]*:{port}(\\s|$)', out, re.M))
+
+def listen_udp_local(port):
+    out = run(["ss", "-lun"])
+    return bool(re.search(rf'(^|\\s)127\\.0\\.0\\.1:{port}(\\s|$)', out, re.M))
+
+def listen_udp_any(port):
+    out = run(["ss", "-lun"])
+    return bool(re.search(rf'(^|\\s)[^\\s]*:{port}(\\s|$)', out, re.M))
+
+pid = run(["systemctl", "show", "-p", "MainPID", "--value", "xray"])
+started = run(["ps", "-o", "etimes=", "-p", pid]) if pid and pid != "0" else ""
+uptime_seconds = int(started) if started.isdigit() else 0
+
+dns_summary = {}
+for line in dns_blob.splitlines():
+    if "=" not in line:
+        continue
+    k, v = line.split("=", 1)
+    dns_summary[k.strip()] = v.strip()
+
+try:
+    stats_payload = json.loads(stats_path.read_text(encoding="utf-8"))
+except Exception:
+    stats_payload = {"stat": []}
+
+snapshot = {
+    "generated_at_unix": int(time.time()),
+    "service": {
+        "xray_active": service_active("xray"),
+        "pid": pid,
+        "uptime_seconds": uptime_seconds,
+    },
+    "listeners": {
+        "api_10080_tcp": listen_tcp(10080),
+        "dns_1053_tcp": listen_tcp(1053),
+        "dns_1053_udp": listen_udp_local(1053),
+        "xhttp3_443_udp": listen_udp_any(443),
+        "metrics_11111_tcp": listen_tcp(11111),
+    },
+    "metrics": {
+        "debug_vars_ok": metrics_vars,
+        "debug_pprof_ok": metrics_pprof,
+    },
+    "dns": dns_summary,
+    "fakedns": {
+        "a": fake_a,
+        "aaaa": fake_aaaa,
+    },
+    "statsquery": stats_payload,
+    "logs": {
+        "access_log": "/var/log/xray/access.log",
+        "error_log": "/var/log/xray/error.log",
+    },
+}
+
+out_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+  rm -f "${stats_tmp}" >/dev/null 2>&1 || true
+
+  if [[ -f "${out}" ]]; then
+    chmod 600 "${out}" >/dev/null 2>&1 || true
+    log "Snapshot tersimpan: ${out}"
+    return 0
+  fi
+  warn "Gagal menulis snapshot runtime Xray."
+  return 1
+}
+
 xray_runtime_status_menu() {
   title
   echo "7) Maintenance > Xray Runtime Status"
@@ -221,6 +508,12 @@ xray_runtime_status_menu() {
   fi
 
   hr
+  xray_runtime_stats_summary_print
+
+  hr
+  xray_runtime_log_summary_print
+
+  hr
   if [[ -f "${access_log}" ]]; then
     echo "Access log  : ${access_log} ($(stat -c '%s bytes' "${access_log}" 2>/dev/null || echo '?'))"
   else
@@ -235,6 +528,7 @@ xray_runtime_status_menu() {
   echo
   echo "  1) Xray Logs (80 baris)"
   echo "  2) Error Log (40 baris)"
+  echo "  3) Export Runtime Snapshot"
   echo "  0) Back"
   hr
   if ! read -r -p "Pilih: " c; then
@@ -252,6 +546,11 @@ xray_runtime_status_menu() {
       else
         warn "File error log tidak ditemukan."
       fi
+      hr
+      pause
+      ;;
+    3)
+      xray_runtime_snapshot_export || true
       hr
       pause
       ;;

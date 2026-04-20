@@ -10,7 +10,12 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from .data import build_public_account_summary, build_public_account_traffic_context
+from .data import (
+    _xray_client_config_path,
+    _portal_account_lookup,
+    build_public_account_summary,
+    build_public_account_traffic_context,
+)
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 PORTAL_ROOT = Path(__file__).resolve().parents[1]
@@ -462,3 +467,23 @@ def account_portal_page(token: str) -> HTMLResponse:
     if summary is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Portal akun tidak ditemukan.")
     return _portal_web_index_response()
+
+
+@app.get("/account/{token}/xray.json")
+def account_portal_xray_config(token: str):
+    found = _portal_account_lookup(token)
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Portal akun tidak ditemukan.")
+
+    proto, username, _path, _payload = found
+    config_file = _xray_client_config_path(proto, username)
+    if not config_file.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File config Xray tidak ditemukan.")
+
+    filename = f"{username}@{proto}.xray.json"
+    return FileResponse(
+        config_file,
+        media_type="application/json",
+        filename=filename,
+        headers=PORTAL_HEADERS,
+    )

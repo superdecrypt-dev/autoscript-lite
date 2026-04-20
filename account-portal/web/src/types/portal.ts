@@ -36,6 +36,8 @@ export type AccountSummary = {
   credentials_available: boolean
   credentials_username: string
   credentials_password: string
+  xray_json_available: boolean
+  xray_json_url: string
   import_links: ImportLink[]
   portal_url: string
   last_updated: string

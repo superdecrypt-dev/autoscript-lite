@@ -1,0 +1,14 @@
+[Unit]
+Description=Xray VLESS XHTTP3 UDPHop NAT Rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/xray-xhttp3-udphop
+ExecStart=/usr/local/bin/xray-xhttp3-udphop-rules apply
+ExecStop=/usr/local/bin/xray-xhttp3-udphop-rules delete
+
+[Install]
+WantedBy=multi-user.target

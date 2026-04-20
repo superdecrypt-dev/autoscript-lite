@@ -1,4 +1,4 @@
-import { Copy, Link2 } from "lucide-react"
+import { Copy, Download, Link2 } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import type { AccountSummary } from "@/types/portal"
@@ -62,10 +62,26 @@ export function ImportLinksCard({ summary }: { summary: AccountSummary }) {
                     </p>
                     <h3 className="mt-2 text-xl font-black tracking-tight text-foreground sm:text-2xl">{item.label}</h3>
                   </div>
-                  <Button className="h-9 w-full text-xs transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(214,107,34,0.2)] sm:h-10 sm:w-auto sm:text-sm" onClick={() => copy(item.url)}>
-                    <Copy className="size-4" />
-                    Copy Link
-                  </Button>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    {summary.protocol === "vless" &&
+                    summary.xray_json_available &&
+                    item.label === "VLESS XHTTP/3 (UDP/QUIC)" ? (
+                      <Button
+                        asChild
+                        variant="outline"
+                        className="h-9 w-full text-xs transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(214,107,34,0.14)] sm:h-10 sm:w-auto sm:text-sm"
+                      >
+                        <a href={summary.xray_json_url} download>
+                          <Download className="size-4" />
+                          Unduh Xray JSON
+                        </a>
+                      </Button>
+                    ) : null}
+                    <Button className="h-9 w-full text-xs transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(214,107,34,0.2)] sm:h-10 sm:w-auto sm:text-sm" onClick={() => copy(item.url)}>
+                      <Copy className="size-4" />
+                      Copy Link
+                    </Button>
+                  </div>
                 </div>
                 <p className="mt-4 max-w-full overflow-hidden rounded-[1.1rem] border border-border bg-card/80 p-3 font-mono text-[11px] leading-6 text-foreground [overflow-wrap:anywhere] sm:rounded-3xl sm:p-4 sm:text-sm">
                   {item.url}
