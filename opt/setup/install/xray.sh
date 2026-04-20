@@ -249,6 +249,24 @@ def load_json_if_exists(path, fallback):
   except Exception:
     return fallback
 
+def load_leading_comment_lines(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      lines = f.read().splitlines()
+  except Exception:
+    return []
+  comments = []
+  for line in lines:
+    stripped = line.lstrip()
+    if not stripped:
+      if comments:
+        break
+      continue
+    if not stripped.startswith("//"):
+      break
+    comments.append(line)
+  return comments
+
 def client_email(client):
   if not isinstance(client, dict):
     return ""
@@ -498,52 +516,13 @@ parts = [
   ("60-metrics.json", {"metrics": metrics_cfg.get("metrics") or {}}),
 ]
 
-comments = {
-  "00-log.json": [
-    "// Xray log fragment.",
-    "// Controls access/error logs and log level.",
-  ],
-  "01-api.json": [
-    "// Xray API fragment.",
-    "// HandlerService, LoggerService, and StatsService are exposed here.",
-  ],
-  "02-dns.json": [
-    "// Xray DNS fragment.",
-    "// FakeDNS is enabled and local DNS queries should be sent to dns-in at 127.0.0.1:1053 if you want to use it.",
-  ],
-  "10-inbounds.json": [
-    "// Xray inbound fragment.",
-    "// Public VLESS XHTTP/3 lives on UDP 443; internal transports stay on 127.0.0.1 high ports.",
-  ],
-  "20-outbounds.json": [
-    "// Xray outbound fragment.",
-    "// direct is default, blocked is sinkhole, warp is local socks upstream, dns-out is built-in DNS outbound.",
-  ],
-  "30-routing.json": [
-    "// Xray routing fragment.",
-    "// dns-in is forced to dns-out; user marker rules handle block/quota/limit state.",
-  ],
-  "40-policy.json": [
-    "// Xray policy fragment.",
-    "// Per-user and system traffic statistics are enabled here.",
-  ],
-  "50-stats.json": [
-    "// Xray stats fragment.",
-    "// Kept separate so stats can be toggled without touching other fragments.",
-  ],
-  "60-metrics.json": [
-    "// Xray metrics fragment.",
-    "// Local expvar and pprof endpoint for runtime inspection. Keep this bound to localhost only.",
-  ],
-}
-
 os.makedirs(outdir, exist_ok=True)
 
 for name, obj in parts:
   path = os.path.join(outdir, name)
   tmp = f"{path}.tmp"
   with open(tmp, "w", encoding="utf-8") as wf:
-    for line in comments.get(name, []):
+    for line in load_leading_comment_lines(os.path.join(srcdir, name)):
       wf.write(f"{line}\n")
     json.dump(obj, wf, ensure_ascii=False, indent=2)
     wf.write("\n")
