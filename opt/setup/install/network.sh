@@ -751,7 +751,7 @@ setup_warp_zero_trust_backend() {
       "config/warp-zerotrust.env" \
       "${WARP_ZEROTRUST_CONFIG_FILE}" \
       0600 \
-      "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
+      "WARP_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
   fi
 
   chmod 600 "${WARP_ZEROTRUST_CONFIG_FILE}" >/dev/null 2>&1 || true
@@ -777,7 +777,7 @@ setup_warp_zero_trust_backend() {
     0644 \
     "WARP_ZEROTRUST_BRIDGE_BIN=${WARP_ZEROTRUST_BRIDGE_BIN}" \
     "WARP_ZEROTRUST_BRIDGE_PORT=${WARP_ZEROTRUST_BRIDGE_PORT}" \
-    "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}" \
+    "WARP_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}" \
     "WARP_ZEROTRUST_SERVICE=${WARP_ZEROTRUST_SERVICE}"
   systemctl daemon-reload >/dev/null 2>&1 || true
   service_enable_restart_checked "${WARP_ZEROTRUST_BRIDGE_SERVICE}" \

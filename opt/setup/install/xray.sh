@@ -211,7 +211,7 @@ write_xray_modular_configs() {
     "xray-conf.d/20-outbounds.json" \
     "${rendered_dir}/20-outbounds.json" \
     0644 \
-    "WARP_ZEROTRUST_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
+    "WARP_PROXY_PORT=${WARP_ZEROTRUST_PROXY_PORT}"
   render_setup_template_or_die "xray-conf.d/30-routing.json" "${rendered_dir}/30-routing.json" 0644
   render_setup_template_or_die "xray-conf.d/40-policy.json" "${rendered_dir}/40-policy.json" 0644
   render_setup_template_or_die "xray-conf.d/50-stats.json" "${rendered_dir}/50-stats.json" 0644

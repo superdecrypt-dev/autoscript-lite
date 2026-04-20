@@ -25,7 +25,7 @@
         "servers": [
           {
             "address": "127.0.0.1",
-            "port": __WARP_ZEROTRUST_PROXY_PORT__
+            "port": __WARP_PROXY_PORT__
           }
         ]
       }
