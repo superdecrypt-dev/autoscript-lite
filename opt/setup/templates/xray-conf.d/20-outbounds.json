@@ -15,6 +15,32 @@
       }
     },
     {
+      "tag": "direct-google",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpCongestion": "bbr"
+        }
+      }
+    },
+    {
+      "tag": "direct-app",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpCongestion": "bbr"
+        }
+      }
+    },
+    {
       "protocol": "blackhole",
       "tag": "blocked"
     },

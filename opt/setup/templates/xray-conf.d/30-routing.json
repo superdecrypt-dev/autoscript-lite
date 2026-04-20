@@ -78,15 +78,21 @@
       {
         "type": "field",
         "domain": [
-          "geosite:apple",
-          "geosite:meta",
           "geosite:google",
+          "geosite:apple"
+        ],
+        "outboundTag": "direct-google"
+      },
+      {
+        "type": "field",
+        "domain": [
           "geosite:openai",
+          "geosite:meta",
           "geosite:spotify",
           "geosite:netflix",
           "geosite:reddit"
         ],
-        "outboundTag": "direct"
+        "outboundTag": "direct-app"
       },
       {
         "type": "field",
