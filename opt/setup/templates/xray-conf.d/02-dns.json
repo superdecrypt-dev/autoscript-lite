@@ -1,13 +1,55 @@
 // Xray DNS fragment template.
+// Advanced DNS control: object-based resolvers, per-domain priorities, system hosts, DoH + FakeDNS only.
 {
   "dns": {
-    "queryStrategy": "UseIPv4v6",
+    "queryStrategy": "UseIP",
+    "enableParallelQuery": true,
+    "useSystemHosts": true,
+    "disableFallback": false,
+    "disableFallbackIfMatch": false,
+    "hosts": {
+      "pzcbz.vyxara1.web.id": "52.74.68.102"
+    },
     "servers": [
       "fakedns",
-      "https+local://1.1.1.1/dns-query",
-      "https+local://dns.google/dns-query",
-      "1.1.1.1",
-      "8.8.8.8"
+      {
+        "address": "https+local://1.1.1.1/dns-query",
+        "domains": [
+          "full:pzcbz.vyxara1.web.id"
+        ],
+        "skipFallback": true,
+        "finalQuery": true,
+        "queryStrategy": "UseIPv4",
+        "tag": "portal-doh"
+      },
+      {
+        "address": "https+local://dns.google/dns-query",
+        "domains": [
+          "geosite:google"
+        ],
+        "skipFallback": true,
+        "queryStrategy": "UseIP",
+        "tag": "google-doh"
+      },
+      {
+        "address": "https+local://1.1.1.1/dns-query",
+        "domains": [
+          "geosite:openai",
+          "geosite:meta",
+          "geosite:spotify",
+          "geosite:netflix",
+          "geosite:reddit"
+        ],
+        "skipFallback": true,
+        "queryStrategy": "UseIP",
+        "tag": "app-doh"
+      },
+      {
+        "address": "https+local://1.1.1.1/dns-query",
+        "skipFallback": false,
+        "queryStrategy": "UseIP",
+        "tag": "cf-doh"
+      }
     ]
   },
   "fakedns": [
