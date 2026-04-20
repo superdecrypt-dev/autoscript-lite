@@ -101,6 +101,13 @@
       },
       {
         "type": "field",
+        "user": [
+          "cepot@vless"
+        ],
+        "outboundTag": "direct-user-cepot"
+      },
+      {
+        "type": "field",
         "domain": [
           "geosite:spotify",
           "geosite:netflix",
