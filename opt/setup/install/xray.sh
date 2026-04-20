@@ -102,8 +102,8 @@ write_xray_config() {
     "queryStrategy": "UseIPv4v6",
     "servers": [
       "fakedns",
-      "https://1.1.1.1/dns-query",
-      "https://dns.google/dns-query",
+      "https+local://1.1.1.1/dns-query",
+      "https+local://dns.google/dns-query",
       "1.1.1.1",
       "8.8.8.8"
     ]

@@ -848,6 +848,27 @@ hard_block_markers = {"dummy-block-user", "dummy-quota-user", "dummy-limit-user"
 def is_api_rule(rule):
   return isinstance(rule, dict) and rule.get("type") == "field" and rule.get("outboundTag") == "api"
 
+def is_dns_in_rule(rule):
+  if not isinstance(rule, dict) or rule.get("type") != "field":
+    return False
+  inbound_tags = rule.get("inboundTag")
+  return isinstance(inbound_tags, list) and "dns-in" in inbound_tags and rule.get("outboundTag") == "dns-out"
+
+def is_dns_protocol_rule(rule):
+  if not isinstance(rule, dict) or rule.get("type") != "field":
+    return False
+  protocols = rule.get("protocol")
+  return isinstance(protocols, list) and "dns" in protocols and rule.get("outboundTag") == "dns-out"
+
+def is_warp_redirect_rule(rule):
+  if not isinstance(rule, dict) or rule.get("type") != "field":
+    return False
+  inbound_tags = rule.get("inboundTag")
+  if not isinstance(inbound_tags, list):
+    return False
+  needed = {"xray-warp-redir-v4", "xray-warp-redir-v6"}
+  return needed.issubset(set(x for x in inbound_tags if isinstance(x, str))) and rule.get("outboundTag") == "warp"
+
 def is_static_block_rule(rule):
   if not isinstance(rule, dict) or rule.get("type") != "field":
     return False
@@ -870,7 +891,7 @@ prefix_rules = []
 hard_block_rules = []
 other_rules = []
 for rule in rules:
-  if is_api_rule(rule) or is_static_block_rule(rule):
+  if is_api_rule(rule) or is_dns_in_rule(rule) or is_dns_protocol_rule(rule) or is_warp_redirect_rule(rule) or is_static_block_rule(rule):
     prefix_rules.append(rule)
   elif is_hard_block_user_rule(rule):
     hard_block_rules.append(rule)
