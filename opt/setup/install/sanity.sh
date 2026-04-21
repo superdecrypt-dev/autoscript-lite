@@ -150,12 +150,12 @@ sanity_check() {
     fi
   fi
 
-  if command -v jq >/dev/null 2>&1 && [[ -f "${XRAY_CONFDIR}/10-inbounds.json" ]]; then
-    if jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >/dev/null 2>&1; then
+  if command -v xray >/dev/null 2>&1 && [[ -d "${XRAY_CONFDIR}" ]]; then
+    if xray run -test -confdir "${XRAY_CONFDIR}" >/dev/null 2>&1; then
       ok "check: xray config OK"
     else
       warn "check: xray config invalid"
-      jq -e . "${XRAY_CONFDIR}/10-inbounds.json" >&2 || true
+      xray run -test -confdir "${XRAY_CONFDIR}" >&2 || true
       failed=1
     fi
   fi

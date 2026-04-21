@@ -31,7 +31,7 @@ write_xray_config() {
   local P_VLESS_HUP P_VMESS_HUP P_TROJAN_HUP
   local P_VLESS_XHTTP P_VMESS_XHTTP P_TROJAN_XHTTP
   local P_VLESS_GRPC P_VMESS_GRPC P_TROJAN_GRPC
-  local P_API P_XRAY_WARP_REDIR P_XRAY_WARP_REDIR6
+  local P_API
 
   P_VLESS_TCP="$(pick_port)"
   P_VMESS_TCP="$(pick_port)"
@@ -49,9 +49,6 @@ write_xray_config() {
   P_VMESS_GRPC="$(pick_port)"
   P_TROJAN_GRPC="$(pick_port)"
   P_API="10080"
-  P_XRAY_WARP_REDIR="${XRAY_WARP_REDIR_PORT:-12345}"
-  P_XRAY_WARP_REDIR6="${XRAY_WARP_REDIR_PORT_V6:-12346}"
-
   if ! is_port_free "$P_API"; then
     warn "Port API Xray (${P_API}) sedang dipakai. Mencoba stop service xray sebelumnya..."
     if command -v systemctl >/dev/null 2>&1; then
@@ -139,6 +136,7 @@ write_xray_config() {
   declare -gx I_VMESS_HUP="$I_VMESS_HUP"
   declare -gx I_TROJAN_HUP="$I_TROJAN_HUP"
   declare -gx I_VLESS_XHTTP="$I_VLESS_XHTTP"
+  declare -gx I_VLESS_XHTTP3="$I_VLESS_XHTTP3"
   declare -gx I_VMESS_XHTTP="$I_VMESS_XHTTP"
   declare -gx I_TROJAN_XHTTP="$I_TROJAN_XHTTP"
   declare -gx I_VLESS_GRPC="$I_VLESS_GRPC"

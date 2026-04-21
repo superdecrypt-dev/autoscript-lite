@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -17,6 +18,8 @@ type xrayInbound struct {
 	Listen string `json:"listen"`
 	Port   int    `json:"port"`
 }
+
+var xrayJSONCommentRE = regexp.MustCompile(`(?m)//.*?$|(?s)/\*.*?\*/`)
 
 func RefreshDiscoveredRawBackends(cfg Config) (Config, bool, error) {
 	file := strings.TrimSpace(cfg.XrayInboundsFile)
@@ -63,6 +66,7 @@ func discoverRawBackendsFromXrayFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	content = []byte(xrayJSONCommentRE.ReplaceAllString(string(content), ""))
 
 	var payload xrayInboundFile
 	if err := json.Unmarshal(content, &payload); err != nil {

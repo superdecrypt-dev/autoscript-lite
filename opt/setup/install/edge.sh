@@ -418,6 +418,7 @@ activate_edge_provider_runtime() {
   done < <(edge_conflicting_provider_services)
 
   systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl reset-failed "${target_service}" >/dev/null 2>&1 || true
   for svc in "${restore_services[@]}"; do
     systemctl disable --now "${svc}" >/dev/null 2>&1 || true
     systemctl stop "${svc}" >/dev/null 2>&1 || true

@@ -1414,10 +1414,8 @@ dns_addons_server_object_editor_menu() {
   local candidate_var_name="${2:-}"
   local dns_candidate=""
   local pending_changes="false"
-  local candidate_ref=""
   [[ -n "${candidate_var_name}" ]] || return 1
   local -n _candidate_ref="${candidate_var_name}"
-  candidate_ref="${_candidate_ref}"
   if ! xray_dns_candidate_prepare _candidate_ref; then
     warn "Gagal menyiapkan staging DNS."
     return 1

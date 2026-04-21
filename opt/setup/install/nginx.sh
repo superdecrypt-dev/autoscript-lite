@@ -178,11 +178,13 @@ nginx_read_live_xray_inbound_value() {
   [[ -f "${xray_inbounds}" ]] || return 1
   python3 - "${xray_inbounds}" "${tag_name}" "${field_name}" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
 path, tag_name, field_name = sys.argv[1:]
-cfg = json.loads(Path(path).read_text())
+raw = Path(path).read_text(encoding="utf-8")
+cfg = json.loads(re.sub(r"//.*?$|/\*.*?\*/", "", raw, flags=re.M | re.S))
 for inbound in cfg.get("inbounds", []):
     if inbound.get("tag") != tag_name:
         continue

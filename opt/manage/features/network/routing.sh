@@ -999,6 +999,7 @@ network_show_summary() {
   pause
 }
 
+# shellcheck disable=SC2120
 xray_outbound_tags_list_get() {
   # args: [outbounds_conf]
   local src_file="${1:-${XRAY_OUTBOUNDS_CONF}}"
