@@ -1513,13 +1513,15 @@ EOF
   chmod +x /usr/local/bin/user-block
 
 
-  cat > /usr/local/bin/xray-quota <<'EOF'
+cat > /usr/local/bin/xray-quota <<'EOF'
 #!/usr/bin/env python3
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 XRAY_CONFIG_DEFAULT = "/usr/local/etc/xray/conf.d/30-routing.json"
@@ -1530,13 +1532,55 @@ PROTO_DIRS = ("vless", "vmess", "trojan")
 
 GB_DECIMAL = 1000 ** 3
 GB_BINARY = 1024 ** 3
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.M | re.S)
+XRAY_TEMPLATE_RELATIVE_DIR = ("opt", "setup", "templates", "xray-conf.d")
 
 def now_iso():
   return datetime.now().strftime("%Y-%m-%d %H:%M")
 
+def strip_json_comments(text):
+  return COMMENT_RE.sub("", text)
+
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
     return json.load(f)
+
+def load_json_with_comments(path):
+  with open(path, "r", encoding="utf-8") as f:
+    return json.loads(strip_json_comments(f.read()))
+
+def load_leading_comment_lines(path):
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      lines = f.read().splitlines()
+  except Exception:
+    return []
+  comments = []
+  for line in lines:
+    stripped = line.lstrip()
+    if not stripped:
+      if comments:
+        break
+      continue
+    if not stripped.startswith("//"):
+      break
+    comments.append(line)
+  return comments
+
+def template_comment_fallback(path):
+  name = Path(path).name
+  candidates = []
+  env_root = os.environ.get("AUTOSCRIPT_SETUP_LIB", "").strip()
+  if env_root:
+    candidates.append(Path(env_root).resolve().parent / "templates" / "xray-conf.d" / name)
+  candidates.append(Path("/usr/local/lib/autoscript-setup").joinpath(*XRAY_TEMPLATE_RELATIVE_DIR, name))
+  candidates.append(Path("/opt/setup").joinpath("templates", "xray-conf.d", name))
+  for candidate in candidates:
+    if candidate.is_file():
+      comments = load_leading_comment_lines(str(candidate))
+      if comments:
+        return comments
+  return []
 
 def save_json_atomic(path, data):
   # BUG-10 fix: use mkstemp (unique name) instead of fixed "{path}.tmp"
@@ -1576,6 +1620,47 @@ def save_json_atomic(path, data):
       pass
     raise
 
+def save_json_atomic_with_comments(path, data):
+  comments = load_leading_comment_lines(path)
+  if not comments:
+    comments = template_comment_fallback(path)
+  import tempfile
+  dirn = os.path.dirname(path) or "."
+  st_mode = None
+  st_uid = None
+  st_gid = None
+  try:
+    st = os.stat(path)
+    st_mode = st.st_mode & 0o777
+    st_uid = st.st_uid
+    st_gid = st.st_gid
+  except FileNotFoundError:
+    pass
+  fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+  try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+      for line in comments:
+        f.write(f"{line}\n")
+      json.dump(data, f, indent=2)
+      f.write("\n")
+      f.flush()
+      os.fsync(f.fileno())
+    if st_mode is not None:
+      os.chmod(tmp, st_mode)
+    if st_uid is not None and st_gid is not None:
+      try:
+        os.chown(tmp, st_uid, st_gid)
+      except PermissionError:
+        pass
+    os.replace(tmp, path)
+  except Exception:
+    try:
+      if os.path.exists(tmp):
+        os.remove(tmp)
+    except Exception:
+      pass
+    raise
+
 ROUTING_LOCK_PATH = "/run/autoscript/locks/xray-routing.lock"
 
 def save_routing_atomic_locked(config_path, cfg):
@@ -1590,7 +1675,7 @@ def save_routing_atomic_locked(config_path, cfg):
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
-      save_json_atomic(config_path, cfg)
+      save_json_atomic_with_comments(config_path, cfg)
     finally:
       fcntl.flock(lf, fcntl.LOCK_UN)
 
@@ -1607,10 +1692,10 @@ def load_and_modify_routing_locked(config_path, modify_fn):
   with open(ROUTING_LOCK_PATH, "w") as lf:
     try:
       fcntl.flock(lf, fcntl.LOCK_EX)
-      cfg = load_json(config_path)
+      cfg = load_json_with_comments(config_path)
       changed = modify_fn(cfg)
       if changed:
-        save_json_atomic(config_path, cfg)
+        save_json_atomic_with_comments(config_path, cfg)
       return changed, cfg
     finally:
       fcntl.flock(lf, fcntl.LOCK_UN)
@@ -1855,8 +1940,10 @@ def ensure_quota_status(meta, exhausted, q_limit, xray_used, q_unit, bpg):
 
 def run_once(config_path, marker, api_server, dry_run=False):
   try:
-    cfg = load_json(config_path)
-  except Exception:
+    cfg = load_json_with_comments(config_path)
+  except Exception as e:
+    import sys
+    print(f"[xray-quota] WARN: gagal membaca routing config {config_path}: {e}", file=sys.stderr)
     return 0
 
   rule = find_marker_rule(cfg, marker, "blocked")
@@ -1958,8 +2045,9 @@ def run_once(config_path, marker, api_server, dry_run=False):
         if meta_changed and not dry_run:
           try:
             save_json_atomic(path, meta)
-          except Exception:
-            pass
+          except Exception as e:
+            import sys
+            print(f"[xray-quota] WARN: gagal menyimpan quota file {path}: {e}", file=sys.stderr)
 
         if exhausted:
           exhausted_users.append(user_email)
