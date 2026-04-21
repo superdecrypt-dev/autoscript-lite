@@ -2297,7 +2297,116 @@ PY
   fi
 
   chmod 600 "${acc_file}" "${quota_file}" || true
+  if [[ -z "${account_output_override}" ]]; then
+    if ! account_info_portal_cache_refresh_for_user "${proto}" "${username}"; then
+      warn "Portal cache belum sinkron untuk ${username}@${proto}"
+      return 1
+    fi
+  fi
   return 0
+}
+
+account_info_portal_cache_refresh_for_user() {
+  # args: protocol username
+  local proto="$1"
+  local username="$2"
+  local acc_file portal_file
+
+  ensure_account_quota_dirs
+  need_python3
+
+  acc_file="$(xray_account_info_file_path "${proto}" "${username}")"
+  portal_file="${ACCOUNT_ROOT}/${proto}/${username}@${proto}.portal.json"
+  [[ -f "${acc_file}" ]] || return 0
+
+  python3 - <<'PY' "${acc_file}" "${portal_file}"
+import json
+import os
+import re
+import sys
+import tempfile
+
+acc_file, portal_file = sys.argv[1:3]
+
+with open(acc_file, "r", encoding="utf-8", errors="ignore") as handle:
+  lines = handle.read().splitlines()
+
+fields = {}
+for raw_line in lines:
+  line = str(raw_line or "").rstrip()
+  if not line or line.startswith("===") or ":" not in line:
+    continue
+  key, value = line.split(":", 1)
+  key_n = key.strip()
+  value_n = value.strip()
+  if key_n:
+    fields[key_n] = value_n
+
+items = []
+in_section = False
+pending_label = ""
+for raw_line in lines:
+  line = str(raw_line or "")
+  stripped = line.strip()
+  if not in_section:
+    if stripped == "=== LINKS IMPORT ===":
+      in_section = True
+    continue
+  if stripped.startswith("==="):
+    break
+  label_match = re.match(r"^\s{4}([^:]+?)\s*:\s*$", line)
+  if label_match:
+    pending_label = str(label_match.group(1) or "").strip()
+    continue
+  if stripped and "://" in stripped:
+    label = pending_label
+    if not label:
+      if "type=ws" in stripped:
+        label = "WebSocket"
+      elif "type=httpupgrade" in stripped:
+        label = "HTTPUpgrade"
+      elif "type=xhttp" in stripped and "alpn=h3" in stripped:
+        label = "XHTTP3"
+      elif "type=xhttp" in stripped:
+        label = "XHTTP"
+      elif "type=grpc" in stripped:
+        label = "gRPC"
+      elif "type=tcp" in stripped:
+        label = "TCP+TLS"
+      else:
+        label = "Import"
+    items.append({"label": label, "url": stripped})
+    pending_label = ""
+
+try:
+  source_mtime_ns = int(os.stat(acc_file).st_mtime_ns)
+except Exception:
+  source_mtime_ns = 0
+
+payload = {
+  "version": 1,
+  "source_mtime_ns": source_mtime_ns,
+  "fields": fields,
+  "import_links": items,
+}
+
+dirn = os.path.dirname(portal_file) or "."
+os.makedirs(dirn, exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".tmp.", suffix=".json", dir=dirn)
+try:
+  with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+  os.replace(tmp, portal_file)
+finally:
+  try:
+    if os.path.exists(tmp):
+      os.remove(tmp)
+  except Exception:
+    pass
+PY
 }
 
 account_info_refresh_for_user() {
@@ -2963,6 +3072,12 @@ PY
   fi
 
   chmod 600 "${output_file_override:-${acc_file}}" 2>/dev/null || true
+  if [[ -z "${output_file_override}" || "${output_file_override}" == "${acc_file}" ]]; then
+    if ! account_info_portal_cache_refresh_for_user "${proto}" "${username}"; then
+      warn "Portal cache belum sinkron untuk ${username}@${proto}"
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -3069,6 +3184,12 @@ account_refresh_xray_batch_apply() {
       rm -rf "${snap_dir}" >/dev/null 2>&1 || true
       return 1
     fi
+    if ! account_info_refresh_snapshot_file "${target_file%.txt}.portal.json" "${snap_dir}" "${manifest_file}"; then
+      warn "Gagal membuat snapshot batch portal cache: ${target_file%.txt}.portal.json"
+      account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+      rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+      return 1
+    fi
   done
 
   for (( i=start_idx; i<end_idx; i++ )); do
@@ -3085,11 +3206,27 @@ account_refresh_xray_batch_apply() {
       return 1
     fi
     if [[ -f "${target_file}" ]] && cmp -s -- "${target_file}" "${candidate_file}"; then
+      if ! account_info_portal_cache_refresh_for_user "${proto}" "${username}"; then
+        _failed_ref=$((_failed_ref + 1))
+        warn "Refresh portal cache gagal untuk ${username}@${proto}. Batch saat ini akan di-rollback."
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+        rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+        return 1
+      fi
       _skipped_ref=$((_skipped_ref + 1))
       rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
       continue
     fi
     if account_info_restore_file_locked "${candidate_file}" "${target_file}" >/dev/null 2>&1; then
+      if ! account_info_portal_cache_refresh_for_user "${proto}" "${username}"; then
+        _failed_ref=$((_failed_ref + 1))
+        warn "Refresh portal cache gagal untuk ${username}@${proto}. Batch saat ini akan di-rollback."
+        account_info_refresh_restore_snapshot "${manifest_file}" >/dev/null 2>&1 || warn "Rollback batch ACCOUNT INFO Xray juga gagal."
+        rm -f -- "${candidate_file}" >/dev/null 2>&1 || true
+        rm -rf "${snap_dir}" >/dev/null 2>&1 || true
+        return 1
+      fi
       _updated_ref=$((_updated_ref + 1))
     else
       _failed_ref=$((_failed_ref + 1))

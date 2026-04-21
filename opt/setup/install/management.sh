@@ -2349,6 +2349,21 @@ sync_setup_runtime_layout() {
 }
 
 refresh_account_info_runtime() {
-  ok "Refresh ACCOUNT INFO otomatis dilewati; jalankan manual via Domain Control bila diperlukan."
+  local domain ip manage_bin
+  domain="$(printf '%s' "${DOMAIN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  [[ -n "${domain}" ]] || domain="$(printf '%s' "$(detect_domain)" | tr '[:upper:]' '[:lower:]' | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  [[ -n "${domain}" ]] || die "Gagal refresh ACCOUNT INFO otomatis: domain aktif tidak terdeteksi."
+
+  ip="$(printf '%s' "${VPS_IPV4:-}" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+  [[ -n "${ip}" ]] || ip="$(printf '%s' "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)" | tr -d '\r\n' | awk '{print $1}' | tr -d ';')"
+
+  manage_bin="${MANAGE_BIN:-/usr/local/bin/manage}"
+  [[ -x "${manage_bin}" ]] || die "Gagal refresh ACCOUNT INFO otomatis: binary manage tidak ditemukan (${manage_bin})."
+
+  if ! "${manage_bin}" __refresh-account-info "${domain}" "${ip}"; then
+    die "Refresh ACCOUNT INFO otomatis gagal untuk domain ${domain}."
+  fi
+
+  ok "ACCOUNT INFO direfresh otomatis untuk domain: ${domain}"
   return 0
 }

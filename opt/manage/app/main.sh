@@ -11,9 +11,15 @@ main() {
 
   case "${action}" in
     __refresh-account-info)
-      warn "Hidden bulk refresh ACCOUNT INFO dinonaktifkan."
-      warn "Gunakan menu Domain Control > Refresh Account Info."
-      return 1
+      local refresh_domain="${2:-}"
+      local refresh_ip="${3:-}"
+      [[ -n "${refresh_domain}" ]] || refresh_domain="$(normalize_domain_token "$(detect_domain)")"
+      [[ -n "${refresh_ip}" ]] || refresh_ip="$(normalize_ip_token "$(detect_public_ip_ipapi 2>/dev/null || detect_public_ip 2>/dev/null || true)")"
+      [[ -n "${refresh_domain}" ]] || die "Domain aktif tidak terdeteksi untuk bulk refresh ACCOUNT INFO."
+      USER_DATA_MUTATION_LOCK_HELD=1 domain_control_refresh_account_info_batches_run "${refresh_domain}" "${refresh_ip}" "all" "10"
+      account_info_domain_sync_state_write "${refresh_domain}" >/dev/null 2>&1 || true
+      printf '[manage][OK] ACCOUNT INFO direfresh untuk domain: %s\n' "${refresh_domain}"
+      return 0
       ;;
     __sync-domain-file)
       warn "Hidden sync domain state dinonaktifkan."
