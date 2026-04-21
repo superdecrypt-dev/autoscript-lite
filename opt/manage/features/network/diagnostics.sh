@@ -70,6 +70,7 @@ network_menu() {
     "2|DNS"
     "3|DNS Editor"
     "4|Checks"
+    "5|Routing & Outbound"
     "0|Back"
   )
   while true; do
@@ -85,6 +86,7 @@ network_menu() {
       2) menu_run_isolated_report "DNS Settings" dns_settings_menu ;;
       3) menu_run_isolated_report "DNS Add-ons" dns_addons_menu ;;
       4) menu_run_isolated_report "Network Diagnostics" network_diagnostics_menu ;;
+      5) menu_run_isolated_report "Routing & Outbound" routing_outbound_summary_menu ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

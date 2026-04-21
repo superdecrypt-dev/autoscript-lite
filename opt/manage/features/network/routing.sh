@@ -959,6 +959,306 @@ network_show_summary() {
   pause
 }
 
+xray_outbound_tags_list_get() {
+  # args: [outbounds_conf]
+  local src_file="${1:-${XRAY_OUTBOUNDS_CONF}}"
+  need_python3
+  [[ -f "${src_file}" ]] || return 0
+  python3 - <<'PY' "$(routing_load_jsonc "${src_file}")" 2>/dev/null || true
+import json, sys
+
+try:
+  cfg = json.loads(sys.argv[1])
+except Exception:
+  raise SystemExit(0)
+
+outbounds = cfg.get('outbounds') or []
+seen = set()
+for ob in outbounds:
+  if not isinstance(ob, dict):
+    continue
+  tag = ob.get('tag')
+  if not isinstance(tag, str):
+    continue
+  tag = tag.strip()
+  if not tag or tag in seen:
+    continue
+  seen.add(tag)
+  print(tag)
+PY
+}
+
+routing_outbound_summary_render() {
+  local default_line mode tag
+  local -a outbounds=()
+  local -a direct_users=() warp_users=() direct_inbounds=() warp_inbounds=()
+  local direct_user_count warp_user_count direct_inbound_count warp_inbound_count
+
+  title
+  echo "Routing & Outbound Summary"
+  hr
+
+  if [[ -f "${XRAY_ROUTING_CONF}" ]]; then
+    if xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+      default_line="$(xray_routing_default_rule_get)"
+      mode="$(printf '%s\n' "${default_line}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true)"
+      tag="$(printf '%s\n' "${default_line}" | awk -F'=' '/^tag=/{print $2; exit}' 2>/dev/null || true)"
+      echo "Default route : mode=${mode:--} tag=${tag:--}"
+    else
+      warn "Routing conf tidak valid."
+    fi
+  else
+    warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
+  fi
+
+  echo "WARP mode     : $(warp_mode_state_get)"
+  echo "WARP global   : $(warp_global_mode_pretty_get)"
+  if svc_exists "$(warp_backend_service_name_get)"; then
+    svc_status_line "$(warp_backend_service_name_get)"
+  else
+    echo "$(warp_backend_display_name_get): (tidak terpasang)"
+  fi
+  hr
+
+  if [[ -f "${XRAY_OUTBOUNDS_CONF}" ]]; then
+    if xray_json_file_require_valid "${XRAY_OUTBOUNDS_CONF}" "Xray outbounds config"; then
+      mapfile -t outbounds < <(xray_outbound_tags_list_get)
+      echo "Outbound tags (${#outbounds[@]}):"
+      local tag_item
+      for tag_item in "${outbounds[@]}"; do
+        [[ -n "${tag_item}" ]] || continue
+        echo "  - ${tag_item}"
+      done
+    else
+      warn "Outbound conf tidak valid."
+    fi
+  else
+    warn "Outbound conf tidak ditemukan: ${XRAY_OUTBOUNDS_CONF}"
+  fi
+  hr
+
+  mapfile -t direct_users < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null || true)
+  mapfile -t warp_users < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null || true)
+  mapfile -t direct_inbounds < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null || true)
+  mapfile -t warp_inbounds < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null || true)
+  direct_user_count="${#direct_users[@]}"
+  warp_user_count="${#warp_users[@]}"
+  direct_inbound_count="${#direct_inbounds[@]}"
+  warp_inbound_count="${#warp_inbounds[@]}"
+
+  echo "Route buckets:"
+  echo "  direct-google : geosite:google, geosite:apple"
+  echo "  direct-app    : geosite:openai, geosite:meta"
+  echo "  warp-social   : geosite:spotify, geosite:netflix, geosite:reddit"
+  echo "  blocked       : geosite:private, geoip:private, bittorrent"
+  echo "  dns-out       : dns-in"
+  hr
+
+  echo "User / inbound overrides:"
+  echo "  direct users  : ${direct_user_count}"
+  if (( direct_user_count > 0 )); then
+    printf '    - %s\n' "${direct_users[@]}"
+  fi
+  echo "  warp users    : ${warp_user_count}"
+  if (( warp_user_count > 0 )); then
+    printf '    - %s\n' "${warp_users[@]}"
+  fi
+  echo "  direct inb    : ${direct_inbound_count}"
+  if (( direct_inbound_count > 0 )); then
+    printf '    - %s\n' "${direct_inbounds[@]}"
+  fi
+  echo "  warp inb      : ${warp_inbound_count}"
+  if (( warp_inbound_count > 0 )); then
+    printf '    - %s\n' "${warp_inbounds[@]}"
+  fi
+  hr
+  pause
+}
+
+xray_routing_outbound_default_route_render() {
+  local default_line mode tag
+  title
+  echo "Default Route"
+  hr
+  if [[ -f "${XRAY_ROUTING_CONF}" ]]; then
+    if xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+      default_line="$(xray_routing_default_rule_get)"
+      mode="$(printf '%s\n' "${default_line}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true)"
+      tag="$(printf '%s\n' "${default_line}" | awk -F'=' '/^tag=/{print $2; exit}' 2>/dev/null || true)"
+      echo "Current mode : ${mode:--}"
+      echo "Current tag  : ${tag:--}"
+    else
+      warn "Routing conf tidak valid."
+      pause
+      return 0
+    fi
+  else
+    warn "Routing conf tidak ditemukan: ${XRAY_ROUTING_CONF}"
+    pause
+    return 0
+  fi
+  hr
+  echo "Mode yang tersedia:"
+  echo "  1) direct"
+  echo "  2) warp"
+  echo "  0) Back"
+  hr
+  local c=""
+  read -r -p "Pilih: " c || { echo; return 0; }
+  case "${c}" in
+    1|direct)
+      if confirm_yn_or_back "Terapkan default route direct sekarang?"; then
+        xray_routing_default_rule_set direct
+        log "Default route disetel ke direct."
+      fi
+      ;;
+    2|warp)
+      if confirm_yn_or_back "Terapkan default route warp sekarang?"; then
+        xray_routing_default_rule_set warp
+        log "Default route disetel ke warp."
+      fi
+      ;;
+    0|kembali|k|back|b)
+      ;;
+    *)
+      invalid_choice
+      ;;
+  esac
+  pause
+}
+
+xray_routing_outbound_user_overrides_render() {
+  local -a direct_users=() warp_users=()
+  local direct_user_count warp_user_count
+  title
+  echo "User Overrides"
+  hr
+  mapfile -t direct_users < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null || true)
+  mapfile -t warp_users < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null || true)
+  direct_user_count="${#direct_users[@]}"
+  warp_user_count="${#warp_users[@]}"
+  echo "direct users : ${direct_user_count}"
+  if (( direct_user_count > 0 )); then
+    printf '  - %s\n' "${direct_users[@]}"
+  fi
+  echo "warp users   : ${warp_user_count}"
+  if (( warp_user_count > 0 )); then
+    printf '  - %s\n' "${warp_users[@]}"
+  fi
+  hr
+  pause
+}
+
+xray_routing_outbound_inbound_overrides_render() {
+  local -a direct_inbounds=() warp_inbounds=()
+  local direct_inbound_count warp_inbound_count
+  title
+  echo "Inbound Overrides"
+  hr
+  mapfile -t direct_inbounds < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null || true)
+  mapfile -t warp_inbounds < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null || true)
+  direct_inbound_count="${#direct_inbounds[@]}"
+  warp_inbound_count="${#warp_inbounds[@]}"
+  echo "direct inb : ${direct_inbound_count}"
+  if (( direct_inbound_count > 0 )); then
+    printf '  - %s\n' "${direct_inbounds[@]}"
+  fi
+  echo "warp inb   : ${warp_inbound_count}"
+  if (( warp_inbound_count > 0 )); then
+    printf '  - %s\n' "${warp_inbounds[@]}"
+  fi
+  hr
+  pause
+}
+
+xray_routing_outbound_domain_buckets_render() {
+  title
+  echo "Domain Buckets"
+  hr
+  echo "direct-google : geosite:google, geosite:apple"
+  echo "direct-app    : geosite:openai, geosite:meta"
+  echo "warp-social   : geosite:spotify, geosite:netflix, geosite:reddit"
+  echo "blocked       : geosite:private, geoip:private, bittorrent"
+  echo "dns-out       : dns-in"
+  hr
+  if [[ -f "${XRAY_ROUTING_CONF}" ]] && xray_json_file_require_valid "${XRAY_ROUTING_CONF}" "Xray routing config"; then
+    xray_routing_readonly_geosite_rule_print || true
+  fi
+  hr
+  pause
+}
+
+xray_routing_outbound_conflict_check_render() {
+  local -a direct_users=() warp_users=() direct_inbounds=() warp_inbounds=()
+  local user_conflicts=0 inbound_conflicts=0 entry
+  declare -A direct_user_set=()
+  declare -A warp_user_set=()
+  declare -A direct_inbound_set=()
+  declare -A warp_inbound_set=()
+
+  title
+  echo "Conflict Check"
+  hr
+  mapfile -t direct_users < <(xray_routing_rule_user_list_get "dummy-direct-user" "direct" 2>/dev/null || true)
+  mapfile -t warp_users < <(xray_routing_rule_user_list_get "dummy-warp-user" "warp" 2>/dev/null || true)
+  mapfile -t direct_inbounds < <(xray_routing_rule_inbound_list_get "dummy-direct-inbounds" "direct" 2>/dev/null || true)
+  mapfile -t warp_inbounds < <(xray_routing_rule_inbound_list_get "dummy-warp-inbounds" "warp" 2>/dev/null || true)
+
+  for entry in "${direct_users[@]}"; do
+    [[ -n "${entry}" ]] && direct_user_set["${entry}"]=1
+  done
+  for entry in "${warp_users[@]}"; do
+    [[ -n "${entry}" ]] && warp_user_set["${entry}"]=1
+  done
+  for entry in "${direct_inbounds[@]}"; do
+    [[ -n "${entry}" ]] && direct_inbound_set["${entry}"]=1
+  done
+  for entry in "${warp_inbounds[@]}"; do
+    [[ -n "${entry}" ]] && warp_inbound_set["${entry}"]=1
+  done
+
+  for entry in "${!direct_user_set[@]}"; do
+    [[ -n "${warp_user_set[${entry}]:-}" ]] && ((user_conflicts+=1))
+  done
+  for entry in "${!direct_inbound_set[@]}"; do
+    [[ -n "${warp_inbound_set[${entry}]:-}" ]] && ((inbound_conflicts+=1))
+  done
+
+  echo "user conflicts    : ${user_conflicts}"
+  echo "inbound conflicts : ${inbound_conflicts}"
+  hr
+  echo "Catatan: jika nilai > 0, ada entri yang terikat ke direct dan warp sekaligus."
+  hr
+  pause
+}
+
+routing_outbound_summary_menu() {
+  while true; do
+    title
+    xray_network_menu_title "Routing & Outbound"
+    hr
+    echo "  1) Summary"
+    echo "  2) Default Route"
+    echo "  3) User Overrides"
+    echo "  4) Inbound Overrides"
+    echo "  5) Domain Buckets"
+    echo "  6) Conflict Check"
+    echo "  0) Back"
+    hr
+    read -r -p "Pilih: " c
+    case "${c}" in
+      1) routing_outbound_summary_render ;;
+      2) xray_routing_outbound_default_route_render ;;
+      3) xray_routing_outbound_user_overrides_render ;;
+      4) xray_routing_outbound_inbound_overrides_render ;;
+      5) xray_routing_outbound_domain_buckets_render ;;
+      6) xray_routing_outbound_conflict_check_render ;;
+      0|kembali|k|back|b) break ;;
+      *) invalid_choice ;;
+    esac
+  done
+}
+
 warp_global_mode_get() {
   local src_file="${1:-${XRAY_ROUTING_CONF}}"
   xray_routing_default_rule_get "${src_file}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true
