@@ -1229,6 +1229,323 @@ xray_routing_outbound_domain_buckets_render() {
   pause
 }
 
+xray_routing_custom_list_entries_render() {
+  local mode="$1"
+  local src_file="${2:-${XRAY_ROUTING_CONF}}"
+  local marker outbound header
+  local -a entries=()
+
+  case "${mode}" in
+    direct)
+      marker="regexp:^$"
+      outbound="direct"
+      header="Custom DIRECT Entries"
+      ;;
+    warp)
+      marker="regexp:^\$WARP"
+      outbound="warp"
+      header="Custom WARP Entries"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  mapfile -t entries < <(xray_routing_custom_domain_list_get "${marker}" "${outbound}" "${src_file}" 2>/dev/null || true)
+  echo "${header}:"
+  if (( ${#entries[@]} == 0 )); then
+    echo "  (kosong)"
+    return 0
+  fi
+  local i ent
+  for (( i=0; i<${#entries[@]}; i++ )); do
+    ent="${entries[$i]}"
+    printf "  %2d. %s\n" "$((i + 1))" "${ent}"
+  done
+}
+
+xray_routing_custom_lists_summary_render() {
+  local src_file="${1:-${XRAY_ROUTING_CONF}}"
+  local default_line mode tag
+  local dd wd
+
+  title
+  echo "Custom Domain/Geosite Lists"
+  hr
+  if [[ -f "${src_file}" ]] && xray_json_file_require_valid "${src_file}" "Xray routing config"; then
+    default_line="$(xray_routing_default_rule_get "${src_file}")"
+    mode="$(printf '%s\n' "${default_line}" | awk -F'=' '/^mode=/{print $2; exit}' 2>/dev/null || true)"
+    tag="$(printf '%s\n' "${default_line}" | awk -F'=' '/^tag=/{print $2; exit}' 2>/dev/null || true)"
+    printf "%-14s : mode=%s tag=%s\n" "Default Route" "${mode:--}" "${tag:--}"
+  fi
+  dd="$(xray_routing_custom_domain_list_get "regexp:^$" "direct" "${src_file}" | wc -l | tr -d ' ')"
+  wd="$(xray_routing_custom_domain_list_get "regexp:^\$WARP" "warp" "${src_file}" | wc -l | tr -d ' ')"
+  [[ "${dd}" =~ ^[0-9]+$ ]] || dd=0
+  [[ "${wd}" =~ ^[0-9]+$ ]] || wd=0
+  printf "%-14s : %s\n" "DIRECT Count" "${dd}"
+  printf "%-14s : %s\n" "WARP Count" "${wd}"
+  hr
+  echo "Readonly Template Geosite:"
+  xray_routing_readonly_geosite_rule_print || true
+  hr
+  xray_routing_custom_list_entries_render direct "${src_file}"
+  hr
+  xray_routing_custom_list_entries_render warp "${src_file}"
+  hr
+  pause
+}
+
+xray_routing_custom_lists_menu() {
+  local routing_candidate=""
+  local pending_changes="false"
+  local source_file="" c="" ent="" mode=""
+
+  while true; do
+    source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
+    if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
+      title
+      echo "Routing & Outbound > Custom Lists"
+      hr
+      warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
+      hr
+      pause
+      return 0
+    fi
+
+    local dd wd
+    dd="$(xray_routing_custom_domain_list_get "regexp:^$" "direct" "${source_file}" | wc -l | tr -d ' ')"
+    wd="$(xray_routing_custom_domain_list_get "regexp:^\$WARP" "warp" "${source_file}" | wc -l | tr -d ' ')"
+    [[ "${dd}" =~ ^[0-9]+$ ]] || dd=0
+    [[ "${wd}" =~ ^[0-9]+$ ]] || wd=0
+
+    title
+    echo "Routing & Outbound > Custom Lists"
+    hr
+    printf "%-14s : %s\n" "DIRECT Count" "${dd}"
+    printf "%-14s : %s\n" "WARP Count" "${wd}"
+    if [[ "${pending_changes}" == "true" ]]; then
+      printf "%-14s : %s\n" "Staging" "pending apply"
+    fi
+    hr
+    echo "  1) Summary"
+    echo "  2) Show DIRECT entries"
+    echo "  3) Show WARP entries"
+    echo "  4) Add entry to DIRECT"
+    echo "  5) Add entry to WARP"
+    echo "  6) Move entry between lists"
+    echo "  7) Remove entry"
+    if [[ "${pending_changes}" == "true" ]]; then
+      echo "  8) Apply staged changes"
+      echo "  9) Discard staged changes"
+    fi
+    echo "  0) Back"
+    hr
+    read -r -p "Pilih: " c
+
+    if is_back_choice "${c}"; then
+      if [[ "${pending_changes}" == "true" ]]; then
+        local back_rc=0
+        if confirm_yn_or_back "Apply staged custom list changes sebelum keluar? Pilih no untuk membuang staging."; then
+          if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+            pause
+            continue
+          fi
+        else
+          back_rc=$?
+          if (( back_rc == 2 )); then
+            continue
+          fi
+        fi
+      fi
+      xray_stage_candidate_cleanup "${routing_candidate}"
+      return 0
+    fi
+
+    case "${c}" in
+      1)
+        xray_routing_custom_lists_summary_render "${source_file}"
+        ;;
+      2)
+        title
+        echo "Routing & Outbound > Custom DIRECT Entries"
+        hr
+        xray_routing_custom_list_entries_render direct "${source_file}"
+        hr
+        pause
+        ;;
+      3)
+        title
+        echo "Routing & Outbound > Custom WARP Entries"
+        hr
+        xray_routing_custom_list_entries_render warp "${source_file}"
+        hr
+        pause
+        ;;
+      4|5)
+        if [[ "${c}" == "4" ]]; then
+          mode="direct"
+        else
+          mode="warp"
+        fi
+        read -r -p "Entry (contoh: geosite:twitter / example.com) (atau kembali): " ent
+        if is_back_choice "${ent}"; then
+          continue
+        fi
+        ent="$(echo "${ent}" | tr -d '[:space:]')"
+        if [[ -z "${ent}" || "${ent}" == "regexp:^$" || "${ent}" == "regexp:^\$WARP" ]]; then
+          warn "Entry tidak valid / reserved"
+          pause
+          continue
+        fi
+        if ! routing_custom_domain_entry_valid "${ent}"; then
+          warn "Entry harus berupa geosite:nama atau domain yang valid."
+          pause
+          continue
+        fi
+        if is_readonly_geosite_domain "${ent}"; then
+          warn "Readonly geosite tidak boleh diubah dari menu ini: ${ent}"
+          pause
+          continue
+        fi
+        if ! confirm_yn_or_back "Stage entry ${ent} ke ${mode^^} sekarang?"; then
+          warn "Perubahan custom lists dibatalkan."
+          pause
+          continue
+        fi
+        if ! xray_routing_candidate_prepare routing_candidate; then
+          warn "Gagal menyiapkan staging routing."
+          pause
+          continue
+        fi
+        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" "${mode}" "${ent}"; then
+          warn "Gagal men-stage entry custom list."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "Entry di-stage ${mode^^}: ${ent}"
+        pause
+        ;;
+      6)
+        read -r -p "Entry yang dipindah (atau kembali): " ent
+        if is_back_choice "${ent}"; then
+          continue
+        fi
+        ent="$(echo "${ent}" | tr -d '[:space:]')"
+        if [[ -z "${ent}" ]]; then
+          warn "Entry kosong"
+          pause
+          continue
+        fi
+        if is_readonly_geosite_domain "${ent}"; then
+          warn "Readonly geosite tidak boleh dipindah dari menu ini: ${ent}"
+          pause
+          continue
+        fi
+        echo "Target:"
+        echo "  1) DIRECT"
+        echo "  2) WARP"
+        read -r -p "Pilih target: " mode
+        case "${mode}" in
+          1) mode="direct" ;;
+          2) mode="warp" ;;
+          *) warn "Pilihan target tidak valid" ; pause ; continue ;;
+        esac
+        if ! confirm_yn_or_back "Pindahkan entry ${ent} ke ${mode^^} sekarang?"; then
+          warn "Move custom list dibatalkan."
+          pause
+          continue
+        fi
+        if ! xray_routing_candidate_prepare routing_candidate; then
+          warn "Gagal menyiapkan staging routing."
+          pause
+          continue
+        fi
+        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" "${mode}" "${ent}"; then
+          warn "Gagal men-stage perpindahan entry."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "Entry dipindah ke ${mode^^}: ${ent}"
+        pause
+        ;;
+      7)
+        read -r -p "Entry yang dihapus (atau kembali): " ent
+        if is_back_choice "${ent}"; then
+          continue
+        fi
+        ent="$(echo "${ent}" | tr -d '[:space:]')"
+        if [[ -z "${ent}" || "${ent}" == "regexp:^$" || "${ent}" == "regexp:^\$WARP" ]]; then
+          warn "Entry tidak valid / reserved"
+          pause
+          continue
+        fi
+        if is_readonly_geosite_domain "${ent}"; then
+          warn "Readonly geosite tidak bisa dihapus dari menu ini: ${ent}"
+          pause
+          continue
+        fi
+        if ! confirm_yn_or_back "Hapus entry ${ent} dari custom lists sekarang?"; then
+          warn "Penghapusan custom list dibatalkan."
+          pause
+          continue
+        fi
+        if ! xray_routing_candidate_prepare routing_candidate; then
+          warn "Gagal menyiapkan staging routing."
+          pause
+          continue
+        fi
+        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" off "${ent}"; then
+          warn "Gagal men-stage penghapusan entry."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "Entry di-stage untuk dihapus: ${ent}"
+        pause
+        ;;
+      8)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Pilihan tidak valid"
+          sleep 1
+          continue
+        fi
+        if ! confirm_menu_apply_now "Apply staged custom list changes sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
+          pause
+          continue
+        fi
+        xray_stage_candidate_cleanup "${routing_candidate}"
+        routing_candidate=""
+        pending_changes="false"
+        log "Staged custom list changes diterapkan."
+        pause
+        ;;
+      9)
+        if [[ "${pending_changes}" != "true" ]]; then
+          warn "Pilihan tidak valid"
+          sleep 1
+          continue
+        fi
+        if confirm_menu_apply_now "Buang staged custom list changes?"; then
+          xray_stage_candidate_cleanup "${routing_candidate}"
+          routing_candidate=""
+          pending_changes="false"
+          log "Staged custom list changes dibuang."
+        fi
+        pause
+        ;;
+      *)
+        invalid_choice
+        ;;
+    esac
+  done
+}
+
 xray_routing_outbound_conflict_check_render() {
   local -a direct_users=() warp_users=() direct_inbounds=() warp_inbounds=()
   local user_conflicts=0 inbound_conflicts=0 entry
@@ -1282,7 +1599,8 @@ routing_outbound_summary_menu() {
     echo "  2) User Overrides"
     echo "  3) Inbound Overrides"
     echo "  4) Domain Buckets"
-    echo "  5) Conflict Check"
+    echo "  5) Custom Lists"
+    echo "  6) Conflict Check"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
@@ -1291,7 +1609,8 @@ routing_outbound_summary_menu() {
       2) xray_routing_outbound_user_overrides_render ;;
       3) xray_routing_outbound_inbound_overrides_render ;;
       4) xray_routing_outbound_domain_buckets_render ;;
-      5) xray_routing_outbound_conflict_check_render ;;
+      5) xray_routing_custom_lists_menu ;;
+      6) xray_routing_outbound_conflict_check_render ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac

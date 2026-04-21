@@ -2027,7 +2027,7 @@ warp_domain_geosite_menu() {
     source_file="${routing_candidate:-${XRAY_ROUTING_CONF}}"
     if ! xray_json_file_require_valid "${source_file}" "Xray routing config"; then
       title
-      echo "WARP Controls > WARP per-Geosite/Domain"
+      echo "WARP Controls > Custom Domain/Geosite Lists"
       hr
       warn "Menu diblok karena routing JSON invalid. Perbaiki dulu sebelum lanjut."
       hr
@@ -2035,15 +2035,15 @@ warp_domain_geosite_menu() {
       return 0
     fi
     title
-    echo "WARP Controls > WARP per-Geosite/Domain"
+    echo "WARP Controls > Custom Domain/Geosite Lists"
     hr
-    echo "Status: ${mode}"
+    echo "Active List : ${mode}"
     if [[ "${pending_changes}" == "true" ]]; then
-      echo "Staging: pending apply"
+      echo "Staging     : pending apply"
     fi
     hr
 
-    echo "Readonly (template) geosite:"
+    echo "Readonly Template Geosite:"
     xray_routing_readonly_geosite_rule_print || true
     hr
 
@@ -2052,10 +2052,10 @@ warp_domain_geosite_menu() {
     local -a lst=()
 
     if [[ "${mode}" == "warp" ]]; then
-      header="Custom WARP list:"
+      header="Custom WARP Entries:"
       mapfile -t lst_raw < <(xray_routing_custom_domain_list_get "regexp:^\$WARP" "warp" "${source_file}" 2>/dev/null || true)
     else
-      header="Custom DIRECT list:"
+      header="Custom DIRECT Entries:"
       mapfile -t lst_raw < <(xray_routing_custom_domain_list_get "regexp:^$" "direct" "${source_file}" 2>/dev/null || true)
     fi
 
@@ -2081,8 +2081,8 @@ warp_domain_geosite_menu() {
 
     echo "  1) direct"
     echo "  2) warp"
-    echo "  3) tambah domain"
-    echo "  4) hapus domain"
+    echo "  3) tambah entry"
+    echo "  4) hapus entry"
     if [[ "${pending_changes}" == "true" ]]; then
       echo "  5) apply staged changes"
       echo "  6) discard staged changes"
@@ -2094,7 +2094,7 @@ warp_domain_geosite_menu() {
     if is_back_choice "${c}"; then
       if [[ "${pending_changes}" == "true" ]]; then
         local back_rc=0
-        if confirm_yn_or_back "Apply staged WARP per-domain/geosite changes sebelum keluar? Pilih no untuk membuang staging."; then
+        if confirm_yn_or_back "Apply staged custom domain/geosite changes sebelum keluar? Pilih no untuk membuang staging."; then
           if ! xray_routing_apply_candidate_file "${routing_candidate}"; then
             pause
             continue
@@ -2135,7 +2135,7 @@ warp_domain_geosite_menu() {
 	          continue
 	        fi
 	        if ! confirm_yn_or_back "Stage entry ${ent} ke mode ${mode^^} sekarang?"; then
-	          warn "Perubahan WARP per-domain/geosite dibatalkan."
+          warn "Perubahan custom domain/geosite dibatalkan."
 	          pause
 	          continue
 	        fi
@@ -2145,7 +2145,7 @@ warp_domain_geosite_menu() {
 	          continue
 	        fi
 	        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" "${mode}" "${ent}"; then
-	          warn "Gagal men-stage entry WARP per-domain/geosite."
+	          warn "Gagal men-stage custom domain/geosite entry."
 	          pause
 	          continue
 	        fi
@@ -2185,7 +2185,7 @@ warp_domain_geosite_menu() {
 	          continue
 	        fi
 	        if ! confirm_yn_or_back "Stage penghapusan entry ${ent} dari mode ${mode^^} sekarang?"; then
-	          warn "Penghapusan entry WARP per-domain/geosite dibatalkan."
+	          warn "Penghapusan custom domain/geosite entry dibatalkan."
 	          pause
 	          continue
 	        fi
@@ -2196,7 +2196,7 @@ warp_domain_geosite_menu() {
 	          continue
 	        fi
 	        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" off "${ent}"; then
-	          warn "Gagal men-stage penghapusan entry WARP per-domain/geosite."
+	          warn "Gagal men-stage penghapusan custom domain/geosite entry."
 	          pause
 	          continue
 	        fi
@@ -2210,7 +2210,7 @@ warp_domain_geosite_menu() {
           sleep 1
           continue
         fi
-        if ! confirm_menu_apply_now "Apply staged WARP per-domain/geosite changes sekarang?"; then
+        if ! confirm_menu_apply_now "Apply staged custom domain/geosite changes sekarang?"; then
           pause
           continue
         fi
@@ -2221,7 +2221,7 @@ warp_domain_geosite_menu() {
         xray_stage_candidate_cleanup "${routing_candidate}"
         routing_candidate=""
         pending_changes="false"
-        log "Staged WARP per-domain/geosite changes diterapkan."
+        log "Staged custom domain/geosite changes diterapkan."
         pause
         ;;
       6)
@@ -2230,11 +2230,11 @@ warp_domain_geosite_menu() {
           sleep 1
           continue
         fi
-        if confirm_menu_apply_now "Buang staged WARP per-domain/geosite changes?"; then
+        if confirm_menu_apply_now "Buang staged custom domain/geosite changes?"; then
           xray_stage_candidate_cleanup "${routing_candidate}"
           routing_candidate=""
           pending_changes="false"
-          log "Staged WARP per-domain/geosite changes dibuang."
+          log "Staged custom domain/geosite changes dibuang."
         fi
         pause
         ;;
@@ -3959,7 +3959,6 @@ warp_controls_menu() {
     "3|WARP Global"
     "4|Per User"
     "5|Per Inbound"
-    "6|Per Domain"
     "0|Back"
   )
   while true; do
@@ -3998,7 +3997,6 @@ warp_controls_menu() {
       3) menu_run_isolated_report "WARP Global" warp_global_menu ;;
       4) menu_run_isolated_report "WARP Per User" warp_per_user_menu ;;
       5) menu_run_isolated_report "WARP Per Inbounds" warp_per_inbounds_menu ;;
-      6) menu_run_isolated_report "WARP Domain Geosite" warp_domain_geosite_menu ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
