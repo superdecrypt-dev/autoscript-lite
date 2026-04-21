@@ -1233,13 +1233,13 @@ dns_addons_servers_summary_render() {
     [[ -n "${line}" ]] || continue
     IFS=$'\t' read -r idx typ tag addr dcount skip final qstr dlist <<<"${line}"
     printf "  [%s] %s\n" "${idx}" "${addr:-${typ}}"
-    printf "       Tag            : %s\n" "${tag:--}"
-    printf "       Domains        : %s\n" "${dcount:-0}"
-    printf "       SkipFallback   : %s\n" "${skip:-off}"
-    printf "       FinalQuery     : %s\n" "${final:-off}"
-    printf "       QueryStrategy   : %s\n" "${qstr:--}"
+    printf "       %-14s : %s\n" "Tag" "${tag:--}"
+    printf "       %-14s : %s\n" "Domains" "${dcount:-0}"
+    printf "       %-14s : %s\n" "SkipFallback" "${skip:-off}"
+    printf "       %-14s : %s\n" "FinalQuery" "${final:-off}"
+    printf "       %-14s : %s\n" "QueryStrategy" "${qstr:--}"
     if [[ -n "${dlist}" && "${dlist}" != "-" ]]; then
-      printf "       Domain Filters  : %s\n" "${dlist}"
+      printf "       %-14s : %s\n" "Domain Filters" "${dlist}"
     fi
   done
 }
@@ -1396,15 +1396,15 @@ dns_addons_server_object_editor_menu() {
     title
     echo "$(xray_network_menu_title "DNS Resolver Object #${idx}")"
     hr
-    printf "Type           : %s\n" "${typ:-unknown}"
-    printf "Address        : %s\n" "${addr:--}"
-    printf "Tag            : %s\n" "${tag:--}"
-    printf "Domains        : %s\n" "${dcount:-0}"
-    printf "SkipFallback   : %s\n" "${skip:-off}"
-    printf "FinalQuery     : %s\n" "${final:-off}"
-    printf "QueryStrategy  : %s\n" "${qstr:--}"
+    printf "%-14s : %s\n" "Type" "${typ:-unknown}"
+    printf "%-14s : %s\n" "Address" "${addr:--}"
+    printf "%-14s : %s\n" "Tag" "${tag:--}"
+    printf "%-14s : %s\n" "Domains" "${dcount:-0}"
+    printf "%-14s : %s\n" "SkipFallback" "${skip:-off}"
+    printf "%-14s : %s\n" "FinalQuery" "${final:-off}"
+    printf "%-14s : %s\n" "QueryStrategy" "${qstr:--}"
     if [[ -n "${dlist}" && "${dlist}" != "-" ]]; then
-      printf "Domain Filters : %s\n" "${dlist}"
+      printf "%-14s : %s\n" "Domain Filters" "${dlist}"
     fi
     hr
     if [[ "${typ}" != "dict" ]]; then
@@ -2164,8 +2164,8 @@ dns_addons_menu() {
     echo "$(xray_network_menu_title "DNS Add-ons")"
     hr
     if [[ -f "${XRAY_DNS_CONF}" ]]; then
-      echo "DNS conf: ${XRAY_DNS_CONF}"
-      echo "Tip: resolver object editor untuk perubahan granular; nano untuk full replace."
+      printf "%-14s : %s\n" "DNS Conf" "${XRAY_DNS_CONF}"
+      printf "%-14s : %s\n" "Tip" "resolver object editor untuk perubahan granular; nano untuk full replace."
       hr
       dns_addons_servers_summary_render "${XRAY_DNS_CONF}" || true
       hr

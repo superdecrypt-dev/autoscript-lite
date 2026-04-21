@@ -645,6 +645,7 @@ speed_policy_artifacts_present_in_xray() {
     "${SPEED_OUTBOUND_TAG_PREFIX}" \
     "${SPEED_RULE_MARKER_PREFIX}"
 import json
+import re
 import sys
 
 out_src, rt_src, out_prefix, marker_prefix = sys.argv[1:5]
@@ -652,7 +653,37 @@ bal_prefix = f"{out_prefix}bal-"
 
 def load_json(path):
   with open(path, "r", encoding="utf-8") as f:
-    return json.load(f)
+    text = f.read()
+  text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+  lines = []
+  for line in text.splitlines():
+    out = []
+    i = 0
+    in_string = False
+    escape = False
+    while i < len(line):
+      ch = line[i]
+      if in_string:
+        out.append(ch)
+        if escape:
+          escape = False
+        elif ch == "\\":
+          escape = True
+        elif ch == '"':
+          in_string = False
+        i += 1
+        continue
+      if ch == '"':
+        in_string = True
+        out.append(ch)
+        i += 1
+        continue
+      if ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+        break
+      out.append(ch)
+      i += 1
+    lines.append("".join(out))
+  return json.loads("\n".join(lines))
 
 try:
   out_cfg = load_json(out_src)

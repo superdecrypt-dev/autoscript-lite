@@ -220,8 +220,48 @@ xray_routing_default_rule_set() {
     python3 - <<'PY' "${XRAY_ROUTING_CONF}" "${XRAY_OUTBOUNDS_CONF}" "${tmp}" "${mode}" "${SPEED_OUTBOUND_TAG_PREFIX}" || exit 1
 import json, sys
 src, ob_src, dst, mode, speed_out_prefix = sys.argv[1:6]
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
 with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
+  cfg=json.loads(strip_json_comments(f.read()))
 
 routing=(cfg.get('routing') or {})
 rules=routing.get('rules')
@@ -252,7 +292,7 @@ if idx is None:
 
 try:
   with open(ob_src,'r',encoding='utf-8') as f:
-    ob_cfg=json.load(f)
+    ob_cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   ob_cfg={}
 
@@ -1119,6 +1159,7 @@ xray_routing_outbound_default_route_render() {
       fi
       ;;
     0|kembali|k|back|b)
+      return 0
       ;;
     *)
       invalid_choice
@@ -1238,21 +1279,19 @@ routing_outbound_summary_menu() {
     xray_network_menu_title "Routing & Outbound"
     hr
     echo "  1) Summary"
-    echo "  2) Default Route"
-    echo "  3) User Overrides"
-    echo "  4) Inbound Overrides"
-    echo "  5) Domain Buckets"
-    echo "  6) Conflict Check"
+    echo "  2) User Overrides"
+    echo "  3) Inbound Overrides"
+    echo "  4) Domain Buckets"
+    echo "  5) Conflict Check"
     echo "  0) Back"
     hr
     read -r -p "Pilih: " c
     case "${c}" in
       1) routing_outbound_summary_render ;;
-      2) xray_routing_outbound_default_route_render ;;
-      3) xray_routing_outbound_user_overrides_render ;;
-      4) xray_routing_outbound_inbound_overrides_render ;;
-      5) xray_routing_outbound_domain_buckets_render ;;
-      6) xray_routing_outbound_conflict_check_render ;;
+      2) xray_routing_outbound_user_overrides_render ;;
+      3) xray_routing_outbound_inbound_overrides_render ;;
+      4) xray_routing_outbound_domain_buckets_render ;;
+      5) xray_routing_outbound_conflict_check_render ;;
       0|kembali|k|back|b) break ;;
       *) invalid_choice ;;
     esac
@@ -1285,9 +1324,49 @@ xray_routing_rule_user_list_get() {
   python3 - <<'PY' "${src_file}" "${marker}" "${outbound}" 2>/dev/null || true
 import json, sys
 src, marker, outbound = sys.argv[1:4]
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
 try:
   with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+    cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
@@ -1323,9 +1402,49 @@ xray_routing_rule_inbound_list_get() {
   python3 - <<'PY' "${src_file}" "${marker}" "${outbound}" 2>/dev/null || true
 import json, sys
 src, marker, outbound = sys.argv[1:4]
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
 try:
   with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+    cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
@@ -1361,9 +1480,49 @@ xray_routing_custom_domain_list_get() {
   python3 - <<'PY' "${src_file}" "${marker}" "${outbound}" 2>/dev/null || true
 import json, sys
 src, marker, outbound = sys.argv[1:4]
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
 try:
   with open(src,'r',encoding='utf-8') as f:
-    cfg=json.load(f)
+    cfg=json.loads(strip_json_comments(f.read()))
 except Exception:
   raise SystemExit(0)
 rules=((cfg.get('routing') or {}).get('rules') or [])
@@ -1421,8 +1580,48 @@ xray_routing_default_rule_set_in_file() {
   python3 - <<'PY' "${src_conf}" "${dst_conf}" "${mode}" || return 1
 import json, os, sys, tempfile
 src, dst, mode = sys.argv[1:4]
+def strip_json_comments(text):
+  out = []
+  i = 0
+  n = len(text)
+  in_str = False
+  quote = ""
+  escape = False
+  while i < n:
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < n else ""
+    if in_str:
+      out.append(ch)
+      if escape:
+        escape = False
+      elif ch == "\\":
+        escape = True
+      elif ch == quote:
+        in_str = False
+      i += 1
+      continue
+    if ch in ('"', "'"):
+      in_str = True
+      quote = ch
+      out.append(ch)
+      i += 1
+      continue
+    if ch == "/" and nxt == "/":
+      i += 2
+      while i < n and text[i] not in "\r\n":
+        i += 1
+      continue
+    if ch == "/" and nxt == "*":
+      i += 2
+      while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+        i += 1
+      i += 2
+      continue
+    out.append(ch)
+    i += 1
+  return "".join(out)
 with open(src,'r',encoding='utf-8') as f:
-  cfg=json.load(f)
+  cfg=json.loads(strip_json_comments(f.read()))
 routing=(cfg.get('routing') or {})
 rules=routing.get('rules') or []
 if not isinstance(rules, list):
@@ -2023,7 +2222,7 @@ warp_controls_summary() {
   done
 
   echo "WARP Mode   : ${mode}"
-  echo "WARP Global : ${global}"
+  echo "Default Route : ${global}"
   echo "${backend_name} : ${wire_state}"
   echo "Override    : user warp=${wu}, user direct=${du} | inbound warp=${wi}, inbound direct=${di}"
   echo "Conflict    : user=${user_conflicts}, inbound=${inbound_conflicts}"

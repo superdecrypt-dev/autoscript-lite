@@ -1526,7 +1526,7 @@ warp_per_user_menu() {
     title
     echo "WARP Controls > WARP per-user"
     hr
-    printf "WARP Global: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
+    printf "Default Route: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
     if [[ "${pending_changes}" == "true" ]]; then
       echo "Staging   : pending apply"
     fi
@@ -1838,7 +1838,7 @@ warp_per_inbounds_menu() {
     title
     echo "WARP Controls > WARP per-protocol inbounds"
     hr
-    printf "WARP Global: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
+    printf "Default Route: %s\n" "$(warp_global_mode_pretty_get "${source_file}")"
     if [[ "${pending_changes}" == "true" ]]; then
       echo "Staging   : pending apply"
     fi
