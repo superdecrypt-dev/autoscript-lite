@@ -1338,8 +1338,48 @@ mark_min = int(mark_min_raw)
 mark_max = int(mark_max_raw)
 
 def load_json(path):
+  def strip_json_comments(text):
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    quote = ""
+    escape = False
+    while i < n:
+      ch = text[i]
+      nxt = text[i + 1] if i + 1 < n else ""
+      if in_str:
+        out.append(ch)
+        if escape:
+          escape = False
+        elif ch == "\\":
+          escape = True
+        elif ch == quote:
+          in_str = False
+        i += 1
+        continue
+      if ch in ('"', "'"):
+        in_str = True
+        quote = ch
+        out.append(ch)
+        i += 1
+        continue
+      if ch == "/" and nxt == "/":
+        i += 2
+        while i < n and text[i] not in "\r\n":
+          i += 1
+        continue
+      if ch == "/" and nxt == "*":
+        i += 2
+        while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+          i += 1
+        i += 2
+        continue
+      out.append(ch)
+      i += 1
+    return "".join(out)
   with open(path, "r", encoding="utf-8") as f:
-    return json.load(f)
+    return json.loads(strip_json_comments(f.read()))
 
 def dump_json(path, obj):
   with open(path, "w", encoding="utf-8") as f:
@@ -2170,6 +2210,8 @@ lines.append("=== RUNNING ON PORT & PATH ===")
 lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
+if proto == "vless":
+  lines.append(section_line(f"{proto_disp} XHTTP/3 (UDP/QUIC)", "443 (UDP/QUIC)", running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
   lines.append(section_line(f"{proto_disp} TCP+TLS Port", tls_ports_disp, running_label_width))
@@ -2850,6 +2892,8 @@ lines.append("=== RUNNING ON PORT & PATH ===")
 lines.append(section_line(f"{proto_disp} WS", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} HUP", primary_ports_disp, running_label_width))
 lines.append(section_line(f"{proto_disp} XHTTP", primary_ports_disp, running_label_width))
+if proto == "vless":
+  lines.append(section_line(f"{proto_disp} XHTTP/3 (UDP/QUIC)", "443 (UDP/QUIC)", running_label_width))
 lines.append(section_line(f"{proto_disp} gRPC", primary_ports_disp, running_label_width))
 if proto in TCP_TLS_PROTOCOLS:
   lines.append(section_line(f"{proto_disp} TCP+TLS Port", tls_ports_disp, running_label_width))

@@ -606,6 +606,46 @@ elif action == "set_domains":
     entry["domains"] = domains
   else:
     entry.pop("domains", None)
+elif action == "append_domains":
+  current = entry.get("domains")
+  if not isinstance(current, list):
+    current = []
+  seen = set()
+  merged = []
+  for item in current:
+    if not isinstance(item, str):
+      continue
+    item = item.strip()
+    if not item or item in seen:
+      continue
+    seen.add(item)
+    merged.append(item)
+  for item in clean_list(value):
+    if item in seen:
+      continue
+    seen.add(item)
+    merged.append(item)
+  if merged:
+    entry["domains"] = merged
+  else:
+    entry.pop("domains", None)
+elif action == "remove_domains":
+  current = entry.get("domains")
+  if not isinstance(current, list):
+    current = []
+  remove = set(clean_list(value))
+  kept = []
+  for item in current:
+    if not isinstance(item, str):
+      continue
+    item = item.strip()
+    if not item or item in remove:
+      continue
+    kept.append(item)
+  if kept:
+    entry["domains"] = kept
+  else:
+    entry.pop("domains", None)
 elif action == "clear_domains":
   entry.pop("domains", None)
 else:
@@ -1423,11 +1463,13 @@ dns_addons_server_object_editor_menu() {
     echo "  3) Toggle Skip Fallback"
     echo "  4) Toggle Final Query"
     echo "  5) Set Query Strategy"
-    echo "  6) Set Domains (comma separated)"
-    echo "  7) Clear Domains"
+    echo "  6) Replace Domains (comma separated)"
+    echo "  7) Append Domains (comma separated)"
+    echo "  8) Remove Domains (comma separated)"
+    echo "  9) Clear Domains"
     if [[ "${pending_changes}" == "true" ]]; then
-      echo "  8) Apply staged changes"
-      echo "  9) Discard staged changes"
+      echo " 10) Apply staged changes"
+      echo " 11) Discard staged changes"
     fi
     echo "  0) Back"
     hr
@@ -1546,7 +1588,7 @@ dns_addons_server_object_editor_menu() {
           continue
         fi
         new_domains="$(echo "${new_domains}" | sed 's/[[:space:]]*,[[:space:]]*/,/g; s/^[[:space:]]*//; s/[[:space:]]*$//')"
-        if ! confirm_menu_apply_now "Stage domains resolver #${idx} sekarang?"; then
+        if ! confirm_menu_apply_now "Replace domains resolver #${idx} sekarang?"; then
           pause
           continue
         fi
@@ -1556,10 +1598,50 @@ dns_addons_server_object_editor_menu() {
           continue
         fi
         pending_changes="true"
-        log "Resolver #${idx} domains di-stage."
+        log "Resolver #${idx} domains di-stage (replace)."
         pause
         ;;
       7)
+        local add_domains
+        read -r -p "Domains CSV yang ditambahkan (contoh zoom.us,full:example.com) (atau kembali): " add_domains
+        if is_back_choice "${add_domains}"; then
+          continue
+        fi
+        add_domains="$(echo "${add_domains}" | sed 's/[[:space:]]*,[[:space:]]*/,/g; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+        if ! confirm_menu_apply_now "Append domains resolver #${idx} sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_dns_mutate_server_object_candidate_file "${dns_candidate}" "${idx}" append_domains "${add_domains}"; then
+          warn "Gagal append domains resolver."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "Resolver #${idx} domains di-stage (append)."
+        pause
+        ;;
+      8)
+        local remove_domains
+        read -r -p "Domains CSV yang dihapus (contoh zoom.us,full:example.com) (atau kembali): " remove_domains
+        if is_back_choice "${remove_domains}"; then
+          continue
+        fi
+        remove_domains="$(echo "${remove_domains}" | sed 's/[[:space:]]*,[[:space:]]*/,/g; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+        if ! confirm_menu_apply_now "Remove domains resolver #${idx} sekarang?"; then
+          pause
+          continue
+        fi
+        if ! xray_dns_mutate_server_object_candidate_file "${dns_candidate}" "${idx}" remove_domains "${remove_domains}"; then
+          warn "Gagal remove domains resolver."
+          pause
+          continue
+        fi
+        pending_changes="true"
+        log "Resolver #${idx} domains di-stage (remove)."
+        pause
+        ;;
+      9)
         if ! confirm_menu_apply_now "Clear domains resolver #${idx} sekarang?"; then
           pause
           continue
@@ -1573,7 +1655,7 @@ dns_addons_server_object_editor_menu() {
         log "Resolver #${idx} domains di-stage untuk dihapus."
         pause
         ;;
-      8)
+      10)
         if [[ "${pending_changes}" != "true" ]]; then
           warn "Pilihan tidak valid"
           sleep 1
@@ -1596,7 +1678,7 @@ dns_addons_server_object_editor_menu() {
         fi
         pause
         ;;
-      9)
+      11)
         if [[ "${pending_changes}" != "true" ]]; then
           warn "Pilihan tidak valid"
           sleep 1

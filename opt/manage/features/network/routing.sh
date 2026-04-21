@@ -1332,7 +1332,7 @@ xray_routing_custom_lists_menu() {
     echo "  3) Show WARP entries"
     echo "  4) Add entry to DIRECT"
     echo "  5) Add entry to WARP"
-    echo "  6) Move entry between lists"
+    echo "  6) Move entry DIRECT <-> WARP"
     echo "  7) Remove entry"
     if [[ "${pending_changes}" == "true" ]]; then
       echo "  8) Apply staged changes"
@@ -1427,6 +1427,42 @@ xray_routing_custom_lists_menu() {
         pause
         ;;
       6)
+        local -a direct_entries=() warp_entries=()
+        local source_mode="" target_mode=""
+        mapfile -t direct_entries < <(xray_routing_custom_domain_list_get "regexp:^$" "direct" "${source_file}" 2>/dev/null || true)
+        mapfile -t warp_entries < <(xray_routing_custom_domain_list_get "regexp:^\$WARP" "warp" "${source_file}" 2>/dev/null || true)
+        if (( ${#direct_entries[@]} == 0 && ${#warp_entries[@]} == 0 )); then
+          warn "Belum ada entry di custom DIRECT/WARP list."
+          pause
+          continue
+        fi
+        title
+        echo "Routing & Outbound > Move Entry DIRECT <-> WARP"
+        hr
+        echo "Custom DIRECT Entries:"
+        if (( ${#direct_entries[@]} == 0 )); then
+          echo "  (kosong)"
+        else
+          local i
+          for (( i=0; i<${#direct_entries[@]}; i++ )); do
+            printf "  D%-2d. %s\n" "$((i + 1))" "${direct_entries[$i]}"
+          done
+        fi
+        hr
+        echo "Custom WARP Entries:"
+        if (( ${#warp_entries[@]} == 0 )); then
+          echo "  (kosong)"
+        else
+          local j
+          for (( j=0; j<${#warp_entries[@]}; j++ )); do
+            printf "  W%-2d. %s\n" "$((j + 1))" "${warp_entries[$j]}"
+          done
+        fi
+        hr
+        echo "Input bisa berupa:"
+        echo "  - nomor dengan prefix list, contoh: D1 atau W2"
+        echo "  - atau nama entry persis"
+        hr
         read -r -p "Entry yang dipindah (atau kembali): " ent
         if is_back_choice "${ent}"; then
           continue
@@ -1437,21 +1473,64 @@ xray_routing_custom_lists_menu() {
           pause
           continue
         fi
+        if [[ "${ent}" =~ ^[Dd]([0-9]+)$ ]]; then
+          local didx="${BASH_REMATCH[1]}"
+          if (( didx < 1 || didx > ${#direct_entries[@]} )); then
+            warn "Nomor DIRECT tidak ditemukan"
+            pause
+            continue
+          fi
+          ent="${direct_entries[$((didx - 1))]}"
+        elif [[ "${ent}" =~ ^[Ww]([0-9]+)$ ]]; then
+          local widx="${BASH_REMATCH[1]}"
+          if (( widx < 1 || widx > ${#warp_entries[@]} )); then
+            warn "Nomor WARP tidak ditemukan"
+            pause
+            continue
+          fi
+          ent="${warp_entries[$((widx - 1))]}"
+        fi
         if is_readonly_geosite_domain "${ent}"; then
           warn "Readonly geosite tidak boleh dipindah dari menu ini: ${ent}"
           pause
           continue
         fi
-        echo "Target:"
-        echo "  1) DIRECT"
-        echo "  2) WARP"
-        read -r -p "Pilih target: " mode
-        case "${mode}" in
-          1) mode="direct" ;;
-          2) mode="warp" ;;
-          *) warn "Pilihan target tidak valid" ; pause ; continue ;;
-        esac
-        if ! confirm_yn_or_back "Pindahkan entry ${ent} ke ${mode^^} sekarang?"; then
+
+        local item
+        for item in "${direct_entries[@]}"; do
+          if [[ "${item}" == "${ent}" ]]; then
+            source_mode="direct"
+            break
+          fi
+        done
+        if [[ -z "${source_mode}" ]]; then
+          for item in "${warp_entries[@]}"; do
+            if [[ "${item}" == "${ent}" ]]; then
+              source_mode="warp"
+              break
+            fi
+          done
+        fi
+
+        if [[ -z "${source_mode}" ]]; then
+          warn "Entry tidak ditemukan di custom DIRECT/WARP list: ${ent}"
+          pause
+          continue
+        fi
+        if [[ "${source_mode}" == "direct" ]]; then
+          target_mode="warp"
+        else
+          target_mode="direct"
+        fi
+
+        title
+        echo "Routing & Outbound > Custom Lists"
+        hr
+        printf "%-14s : %s\n" "Entry" "${ent}"
+        printf "%-14s : %s\n" "Source List" "${source_mode^^}"
+        printf "%-14s : %s\n" "Target List" "${target_mode^^}"
+        hr
+        if ! confirm_yn_or_back "Pindahkan entry ${ent} dari ${source_mode^^} ke ${target_mode^^} sekarang?"; then
           warn "Move custom list dibatalkan."
           pause
           continue
@@ -1461,13 +1540,13 @@ xray_routing_custom_lists_menu() {
           pause
           continue
         fi
-        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" "${mode}" "${ent}"; then
+        if ! xray_routing_custom_domain_entry_set_mode_in_file "${routing_candidate}" "${routing_candidate}" "${target_mode}" "${ent}"; then
           warn "Gagal men-stage perpindahan entry."
           pause
           continue
         fi
         pending_changes="true"
-        log "Entry dipindah ke ${mode^^}: ${ent}"
+        log "Entry dipindah ${source_mode^^} -> ${target_mode^^}: ${ent}"
         pause
         ;;
       7)

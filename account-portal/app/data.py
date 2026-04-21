@@ -67,6 +67,7 @@ ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
         "Vless WS",
         "Vless HUP",
         "Vless XHTTP",
+        "Vless XHTTP/3 (UDP/QUIC)",
         "Vless gRPC",
         "Vless TCP+TLS Port",
         "Alt Port SSL/TLS",
