@@ -10,14 +10,14 @@
     "hosts": {
       "localhost": "127.0.0.1",
       "ip6-localhost": "::1",
-      "pzcbz.vyxara1.web.id": "52.74.68.102"
+      "__DOMAIN__": "__VPS_IPV4__"
     },
     "servers": [
       "fakedns",
       {
         "address": "https+local://1.1.1.1/dns-query",
         "domains": [
-          "full:pzcbz.vyxara1.web.id"
+          "full:__DOMAIN__"
         ],
         "skipFallback": true,
         "finalQuery": true,

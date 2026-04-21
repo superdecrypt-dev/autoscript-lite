@@ -148,16 +148,26 @@ write_xray_config() {
 
 write_xray_modular_configs() {
   ok "Buat config Xray modular..."
-  local template_dir rendered_dir
+  local template_dir rendered_dir dns_host_ipv4
   mkdir -p "${XRAY_CONFDIR}"
   need_python3
   template_dir="${SETUP_TEMPLATE_SRC_DIR:-${SCRIPT_DIR}/opt/setup/templates}/xray-conf.d"
   [[ -d "${template_dir}" ]] || die "Template modular Xray tidak ditemukan: ${template_dir}"
   rendered_dir="$(mktemp -d)"
+  dns_host_ipv4="${VPS_IPV4:-}"
+  if [[ -z "${dns_host_ipv4}" ]]; then
+    dns_host_ipv4="$(curl -4fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  fi
+  [[ -n "${dns_host_ipv4}" ]] || die "Gagal mendeteksi public IPv4 untuk template DNS Xray."
 
   render_setup_template_or_die "xray-conf.d/00-log.json" "${rendered_dir}/00-log.json" 0644
   render_setup_template_or_die "xray-conf.d/01-api.json" "${rendered_dir}/01-api.json" 0644
-  render_setup_template_or_die "xray-conf.d/02-dns.json" "${rendered_dir}/02-dns.json" 0644
+  render_setup_template_or_die \
+    "xray-conf.d/02-dns.json" \
+    "${rendered_dir}/02-dns.json" \
+    0644 \
+    "DOMAIN=${DOMAIN}" \
+    "VPS_IPV4=${dns_host_ipv4}"
   render_setup_template_or_die \
     "xray-conf.d/10-inbounds.json" \
     "${rendered_dir}/10-inbounds.json" \
