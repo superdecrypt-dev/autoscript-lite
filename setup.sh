@@ -195,18 +195,18 @@ setup_post_domain_main() {
     warn "Gagal menulis domain state file: ${XRAY_DOMAIN_FILE}"
   fi
   setup_run_step "Install management scripts" install_management_scripts
+  if [[ "${SETUP_SKIP_MANAGE_SYNC:-0}" != "1" ]]; then
+    setup_run_step "Sinkron modul manage" sync_manage_modules_layout
+  fi
+  setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install license guard" install_autoscript_license_runtime
   setup_run_step "Refresh ACCOUNT INFO" refresh_account_info_runtime
   setup_run_step "Install portal info akun (FastAPI + React)" install_account_portal
-  setup_run_step "Sinkron runtime setup" sync_setup_runtime_layout
   setup_run_step "Install Xray speed limiter" install_xray_speed_limiter_foundation
   setup_run_step "Install domain guard" install_domain_cert_guard
   setup_run_step "Konfigurasi logrotate" setup_logrotate
   setup_run_step "Konfigurasi jail fail2ban" configure_fail2ban_aggressive_jails
   setup_run_step "Sanity check" sanity_check
-  if [[ "${SETUP_SKIP_MANAGE_SYNC:-0}" != "1" ]]; then
-    setup_run_step "Sinkron modul manage" sync_manage_modules_layout
-  fi
 }
 
 setup_run_post_domain_with_spinner() {

@@ -635,6 +635,17 @@ configure_xray_service_confdir() {
   chown root:xray "${XRAY_CONFDIR}"/*.json >/dev/null 2>&1 || true
   chmod 640 "${XRAY_CONFDIR}"/*.json >/dev/null 2>&1 || true
 
+  # Cert dibuat sebelum user xray tersedia pada fresh install. Perbaiki ulang
+  # ownership di sini, tepat sebelum config test dan restart service xray.
+  if [[ -d "${CERT_DIR:-/opt/cert}" ]]; then
+    chown root:xray "${CERT_DIR:-/opt/cert}" >/dev/null 2>&1 || true
+    chmod 750 "${CERT_DIR:-/opt/cert}" >/dev/null 2>&1 || true
+  fi
+  if [[ -s "${CERT_FULLCHAIN:-/opt/cert/fullchain.pem}" && -s "${CERT_PRIVKEY:-/opt/cert/privkey.pem}" ]]; then
+    chown root:xray "${CERT_FULLCHAIN:-/opt/cert/fullchain.pem}" "${CERT_PRIVKEY:-/opt/cert/privkey.pem}" >/dev/null 2>&1 || true
+    chmod 640 "${CERT_FULLCHAIN:-/opt/cert/fullchain.pem}" "${CERT_PRIVKEY:-/opt/cert/privkey.pem}" >/dev/null 2>&1 || true
+  fi
+
   # Pastikan direktori & file log ada
   mkdir -p /var/log/xray
   touch /var/log/xray/access.log /var/log/xray/error.log

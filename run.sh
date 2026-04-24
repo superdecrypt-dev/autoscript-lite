@@ -595,7 +595,7 @@ run_setup() {
 
   log "Buka setup interaktif..."
   subtle "Prompt domain tetap dijalankan dari setup.sh."
-  SETUP_SKIP_MANAGE_SYNC=1 bash "${setup}"
+  bash "${setup}"
   ok "setup.sh selesai."
 }
 
