@@ -223,17 +223,16 @@ def handle_scoped(action: str, params: dict, settings, *, scope: str = "all") ->
             mode=str(mode_or_err),
             value=str(value_or_err),
         )
-        if ok_ext:
-            data: dict[str, object] = {}
-            ok_download, download_or_err = system_mutations.op_user_account_file_download(proto, username)
-            if ok_download and isinstance(download_or_err, dict):
-                data["download_file"] = download_or_err
-                if _proto_requires_sensitive_output(proto):
-                    data = _allow_sensitive_output(data)
+        if not ok_ext:
+            return error_response("user_extend_failed", title, msg_ext)
+
+        data: dict[str, object] = {}
+        ok_download, download_or_err = system_mutations.op_user_account_file_download(proto, username)
+        if ok_download and isinstance(download_or_err, dict):
+            data["download_file"] = download_or_err
         else:
             msg_ext = f"{msg_ext}\n- Warning: file account terbaru tidak bisa diunduh ({download_or_err})"
-            return ok_response(title, msg_ext, data=data)
-        return error_response("user_extend_failed", title, msg_ext)
+        return ok_response(title, msg_ext, data=data)
 
     if scope == "xray" and action == "reset_credential":
         title = _scope_title(scope, "Reset UUID/Password")

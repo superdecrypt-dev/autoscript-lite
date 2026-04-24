@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,16 @@ def _format_host_for_url(host: str) -> str:
     return host
 
 
+def _is_loopback_host(host: str) -> bool:
+    value = str(host or "").strip().strip("[]")
+    if value.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
 def _normalize_backend_base_url(raw: str) -> str:
     value = (raw or "").strip()
     if not value:
@@ -112,6 +123,8 @@ def _normalize_backend_base_url(raw: str) -> str:
         raise RuntimeError("BACKEND_BASE_URL harus memakai skema http/https.")
     if not parsed.netloc:
         raise RuntimeError("BACKEND_BASE_URL tidak memiliki host:port yang valid.")
+    if not _is_loopback_host(parsed.hostname or ""):
+        raise RuntimeError("BACKEND_BASE_URL harus mengarah ke loopback backend.")
     if parsed.username or parsed.password:
         raise RuntimeError("BACKEND_BASE_URL tidak boleh menyertakan kredensial.")
     if parsed.query or parsed.fragment:
@@ -142,6 +155,8 @@ def load_config() -> AppConfig:
     admin_chat_ids = _parse_id_set("TELEGRAM_ADMIN_CHAT_IDS", os.getenv("TELEGRAM_ADMIN_CHAT_IDS"))
     admin_user_ids = _parse_id_set("TELEGRAM_ADMIN_USER_IDS", os.getenv("TELEGRAM_ADMIN_USER_IDS"))
     allow_unrestricted_access = _parse_bool("TELEGRAM_ALLOW_UNRESTRICTED_ACCESS", False)
+    if allow_unrestricted_access:
+        raise RuntimeError("TELEGRAM_ALLOW_UNRESTRICTED_ACCESS=true tidak diizinkan untuk runtime produksi.")
     if not allow_unrestricted_access and not admin_chat_ids and not admin_user_ids:
         raise RuntimeError(
             "Akses bot ditolak by default: set TELEGRAM_ADMIN_USER_IDS/TELEGRAM_ADMIN_CHAT_IDS, "

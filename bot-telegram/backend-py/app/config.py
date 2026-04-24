@@ -1,4 +1,5 @@
 import os
+import ipaddress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,20 @@ def _get_port(name: str, default: int) -> int:
     return value
 
 
+def _get_loopback_host(name: str, default: str) -> str:
+    raw = (os.getenv(name) or default).strip()
+    host = raw.strip("[]")
+    if host.lower() == "localhost":
+        return raw
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} harus loopback (127.0.0.1/::1/localhost): {raw}") from exc
+    if not ip.is_loopback:
+        raise RuntimeError(f"{name} harus loopback (127.0.0.1/::1/localhost): {raw}")
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     internal_shared_secret: str
@@ -59,7 +74,7 @@ def get_settings() -> Settings:
     if _SETTINGS is None:
         _SETTINGS = Settings(
             internal_shared_secret=os.getenv("INTERNAL_SHARED_SECRET", "").strip(),
-            backend_host=os.getenv("BACKEND_HOST", "127.0.0.1").strip(),
+            backend_host=_get_loopback_host("BACKEND_HOST", "127.0.0.1"),
             backend_port=_get_port("BACKEND_PORT", 7081),
             commands_file=os.getenv("COMMANDS_FILE", _default_commands_file()).strip(),
         )

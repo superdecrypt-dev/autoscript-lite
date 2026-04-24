@@ -991,6 +991,32 @@ prepare_gateway_runtime_permissions() {
   mark_bot_owned_dir "${BOT_LOG_DIR}"
 }
 
+prepare_license_runtime_permissions() {
+  local gateway_group license_root license_config license_state_dir
+  gateway_group="$(gateway_service_group)"
+  [[ -n "${gateway_group}" ]] || gateway_group="${GATEWAY_RUN_USER}"
+  license_root="${AUTOSCRIPT_LICENSE_ROOT:-/etc/autoscript/license}"
+  license_config="${AUTOSCRIPT_LICENSE_CONFIG_FILE:-${license_root}/config.env}"
+  license_state_dir="${AUTOSCRIPT_LICENSE_STATE_DIR:-/var/lib/autoscript-license}"
+
+  if [[ -d "${license_root}" ]]; then
+    chown root:"${gateway_group}" "${license_root}" >/dev/null 2>&1 || true
+    chmod 750 "${license_root}" >/dev/null 2>&1 || true
+  fi
+  if [[ -f "${license_config}" ]]; then
+    chown root:"${gateway_group}" "${license_config}" >/dev/null 2>&1 || true
+    chmod 640 "${license_config}" >/dev/null 2>&1 || true
+  fi
+  if [[ -d "${license_state_dir}" ]]; then
+    chown root:"${gateway_group}" "${license_state_dir}" >/dev/null 2>&1 || true
+    chmod 770 "${license_state_dir}" >/dev/null 2>&1 || true
+    find "${license_state_dir}" -mindepth 1 -type d -exec chown root:"${gateway_group}" {} + >/dev/null 2>&1 || true
+    find "${license_state_dir}" -mindepth 1 -type d -exec chmod 770 {} + >/dev/null 2>&1 || true
+    find "${license_state_dir}" -type f -exec chown root:"${gateway_group}" {} + >/dev/null 2>&1 || true
+    find "${license_state_dir}" -type f -exec chmod 660 {} + >/dev/null 2>&1 || true
+  fi
+}
+
 extract_source_archive() {
   local archive="$1"
   local dst="$2"
@@ -1086,6 +1112,50 @@ with tarfile.open(archive_path, "r:*") as tf:
 PY
 }
 
+repair_relocated_venv() {
+  local active_dir="$1"
+  local old_dir="$2"
+
+  [[ -n "${active_dir}" && -n "${old_dir}" ]] || return 0
+  [[ -d "${active_dir}/.venv" ]] || return 0
+
+  python3 - "${active_dir}" "${old_dir}" <<'PY' || die "Gagal repair shebang venv setelah deploy."
+from pathlib import Path
+import sys
+
+active = Path(sys.argv[1]).resolve()
+old = Path(sys.argv[2]).resolve()
+venv = active / ".venv"
+old_b = str(old).encode()
+new_b = str(active).encode()
+
+if old_b == new_b:
+    raise SystemExit(0)
+
+candidates = []
+bin_dir = venv / "bin"
+if bin_dir.is_dir():
+    candidates.extend(bin_dir.iterdir())
+cfg = venv / "pyvenv.cfg"
+if cfg.exists():
+    candidates.append(cfg)
+
+for path in candidates:
+    if not path.is_file() or path.is_symlink():
+        continue
+    try:
+        data = path.read_bytes()
+    except OSError:
+        continue
+    if old_b not in data:
+        continue
+    allowed = data.startswith(b"#!") or path.name.startswith("activate") or path.name == "pyvenv.cfg"
+    if not allowed:
+        continue
+    path.write_bytes(data.replace(old_b, new_b))
+PY
+}
+
 deploy_or_update_files() {
   need_root
 
@@ -1174,6 +1244,7 @@ deploy_or_update_files() {
     fi
     die "Gagal mengaktifkan instalasi bot Telegram baru."
   fi
+  repair_relocated_venv "${BOT_HOME}" "${stage_dir}"
   stage_dir=""
   mark_bot_owned_dir "${BOT_HOME}"
 
@@ -1204,6 +1275,7 @@ install_or_update_systemd() {
 
   ensure_gateway_service_user
   prepare_gateway_runtime_permissions
+  prepare_license_runtime_permissions
 
   sed \
     -e "s#/opt/bot-telegram#${BOT_HOME}#g" \

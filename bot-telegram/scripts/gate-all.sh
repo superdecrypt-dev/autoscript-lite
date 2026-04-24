@@ -54,7 +54,7 @@ if [[ -x "${BOT_DIR}/.venv/bin/python" ]]; then
     export BACKEND_HOST='127.0.0.1'
     export BACKEND_PORT='18084'
     export COMMANDS_FILE="${BOT_DIR}/shared/commands.json"
-    "${BOT_DIR}/.venv/bin/uvicorn" app.main:app --host "${BACKEND_HOST}" --port "${BACKEND_PORT}" >"${LOG_FILE}" 2>&1 &
+    "${BOT_DIR}/.venv/bin/python" -m uvicorn app.main:app --host "${BACKEND_HOST}" --port "${BACKEND_PORT}" >"${LOG_FILE}" 2>&1 &
     uv_pid="$!"
     trap 'kill "${uv_pid}" >/dev/null 2>&1 || true' EXIT
 

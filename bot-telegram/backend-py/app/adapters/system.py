@@ -100,9 +100,57 @@ def read_json(path: Path) -> Tuple[bool, object]:
     if not path.exists():
         return False, f"File tidak ditemukan: {path}"
     try:
-        return True, json.loads(path.read_text(encoding="utf-8"))
+        return True, json.loads(strip_json_comments(path.read_text(encoding="utf-8")))
     except Exception as exc:
         return False, f"Gagal parse JSON {path}: {exc}"
+
+
+def strip_json_comments(text: str) -> str:
+    out: List[str] = []
+    in_string = False
+    escape = False
+    i = 0
+    length = len(text)
+    while i < length:
+        char = text[i]
+        nxt = text[i + 1] if i + 1 < length else ""
+
+        if in_string:
+            out.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            out.append(char)
+            i += 1
+            continue
+
+        if char == "/" and nxt == "/":
+            i += 2
+            while i < length and text[i] not in "\r\n":
+                i += 1
+            continue
+
+        if char == "/" and nxt == "*":
+            i += 2
+            while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+                if text[i] in "\r\n":
+                    out.append(text[i])
+                i += 1
+            i += 2 if i + 1 < length else 0
+            continue
+
+        out.append(char)
+        i += 1
+
+    return "".join(out)
 
 
 def bytes_to_gib(value: int) -> str:
