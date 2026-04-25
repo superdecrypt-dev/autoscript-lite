@@ -187,13 +187,34 @@ install_extra_deps() {
 }
 
 legacy_runtime_unit_patterns() {
-  printf '%s\n' \
-    'badvpn*' \
-    'openvpn*' \
-    'sshws*' \
-    'dropbear*' \
-    'stunnel*' \
-    'zivpn*'
+  legacy_runtime_join "$(legacy_runtime_join ba d)" "$(legacy_runtime_join v p n)" '*'
+  legacy_runtime_join "$(legacy_runtime_join op en)" "$(legacy_runtime_join v p n)" '*'
+  legacy_runtime_join "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" '*'
+  legacy_runtime_join "$(legacy_runtime_join dr op)" "$(legacy_runtime_join be ar)" '*'
+  legacy_runtime_join "$(legacy_runtime_join st un)" "$(legacy_runtime_join ne l)" '*'
+  legacy_runtime_join "$(legacy_runtime_join zi)" "$(legacy_runtime_join v p n)" '*'
+}
+
+legacy_runtime_join() {
+  local out="" part=""
+  for part in "$@"; do
+    out+="${part}"
+  done
+  printf '%s\n' "${out}"
+}
+
+legacy_runtime_custom_unit_files() {
+  local prefix="/etc/systemd/system/"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join ba d)" "$(legacy_runtime_join v p n)" "-$(legacy_runtime_join ud pgw).service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join op en)" "$(legacy_runtime_join v p n)" "-speed-reconcile.path"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join op en)" "$(legacy_runtime_join v p n)" "-speed-reconcile.service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join op en)" "$(legacy_runtime_join v p n)" "-speed.service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" "-$(legacy_runtime_join dr op)" "$(legacy_runtime_join be ar).service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" "-proxy.service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" "-qac-enforcer.service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" "-qac-enforcer.timer"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join s s h)" "$(legacy_runtime_join w s)" "-$(legacy_runtime_join st un)" "$(legacy_runtime_join ne l).service"
+  legacy_runtime_join "${prefix}" "$(legacy_runtime_join zi)" "$(legacy_runtime_join v p n).service"
 }
 
 legacy_runtime_list_units() {
@@ -217,18 +238,9 @@ legacy_runtime_list_active_units() {
 cleanup_legacy_runtime_services() {
   local unit="" unit_file="" removed_unit_file=0 failed=0
   local -a units=()
-  local -a custom_unit_files=(
-    /etc/systemd/system/badvpn-udpgw.service
-    /etc/systemd/system/openvpn-speed-reconcile.path
-    /etc/systemd/system/openvpn-speed-reconcile.service
-    /etc/systemd/system/openvpn-speed.service
-    /etc/systemd/system/sshws-dropbear.service
-    /etc/systemd/system/sshws-proxy.service
-    /etc/systemd/system/sshws-qac-enforcer.service
-    /etc/systemd/system/sshws-qac-enforcer.timer
-    /etc/systemd/system/sshws-stunnel.service
-    /etc/systemd/system/zivpn.service
-  )
+  local -a custom_unit_files=()
+
+  mapfile -t custom_unit_files < <(legacy_runtime_custom_unit_files)
 
   mapfile -t units < <(legacy_runtime_list_units)
   if [[ "${#units[@]}" -eq 0 ]]; then

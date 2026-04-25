@@ -322,32 +322,17 @@ func TestDecideHTTPRouteUnauthorizedForUnknownWebSocket(t *testing.T) {
 	}
 }
 
-func TestDecideHTTPRouteKnownWebSocketPathPassesThrough(t *testing.T) {
+func TestDecideHTTPRouteUnknownWebSocketPathRejected(t *testing.T) {
 	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
 	initial := []byte("GET /deadbeef00 HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 
 	decision := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
 
-	if decision.Route != "xray-ws-like" {
-		t.Fatalf("route = %q, want xray-ws-like", decision.Route)
+	if decision.Route != "websocket-other" {
+		t.Fatalf("route = %q, want websocket-other", decision.Route)
 	}
-	if decision.Status != 0 {
-		t.Fatalf("status = %d, want 0", decision.Status)
-	}
-}
-
-func TestDecideHTTPRouteDiagnosticProbeRequiresLoopback(t *testing.T) {
-	cfg := runtime.Config{HTTPBackend: "127.0.0.1:18080"}
-	initial := []byte("GET /diagnostic-probe HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-
-	blocked := decideHTTPRoute(cfg, "tls-inner", initial, "", "", false)
-	if blocked.Route != "websocket-other" || blocked.Status != 401 {
-		t.Fatalf("blocked diagnostic route = (%q,%d), want (websocket-other,401)", blocked.Route, blocked.Status)
-	}
-
-	allowed := decideHTTPRoute(cfg, "tls-inner", initial, "", "", true)
-	if allowed.Route != "xray-ws-like" || allowed.Status != 0 {
-		t.Fatalf("allowed diagnostic route = (%q,%d), want (xray-ws-like,0)", allowed.Route, allowed.Status)
+	if decision.Status != 401 {
+		t.Fatalf("status = %d, want 401", decision.Status)
 	}
 }
 

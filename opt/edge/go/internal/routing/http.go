@@ -31,10 +31,6 @@ var knownRouteNames = map[string]struct{}{
 	"trojan-grpc":  {},
 }
 
-const (
-	diagnosticProbeToken = "diagnostic-probe"
-)
-
 func ParseHTTPRequest(initial []byte) (HTTPRequest, bool) {
 	requestLineRaw, rest, ok := nextHeaderLine(initial)
 	if !ok {
@@ -188,25 +184,5 @@ func isWebSocketRequest(req HTTPRequest) bool {
 }
 
 func looksLikeXrayWSPath(path string) bool {
-	segments := pathSegments(path)
-	if len(segments) == 0 || len(segments) > 2 {
-		return false
-	}
-	last := segments[len(segments)-1]
-	if last == diagnosticProbeToken {
-		return true
-	}
-	if len(last) < 8 {
-		return false
-	}
-	for _, ch := range last {
-		switch {
-		case ch >= 'a' && ch <= 'f':
-		case ch >= 'A' && ch <= 'F':
-		case ch >= '0' && ch <= '9':
-		default:
-			return false
-		}
-	}
-	return true
+	return false
 }

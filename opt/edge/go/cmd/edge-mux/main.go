@@ -1387,11 +1387,6 @@ func decideHTTPRoute(cfg runtime.Config, surface string, initial []byte, alpn, s
 		decision.Route = routing.RouteLabel(req, alpn)
 		decision.Host = req.Host
 		decision.Path = req.Path
-		if req.Path == "/diagnostic-probe" && !allowDiagnostic {
-			decision.Route = "websocket-other"
-			decision.Status = 401
-			decision.Text = "Unauthorized"
-		}
 		if decision.Route == "websocket-other" {
 			decision.Status = 401
 			decision.Text = "Unauthorized"
