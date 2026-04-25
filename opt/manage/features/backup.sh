@@ -77,7 +77,7 @@ backup_cli_exec() {
     warn "Command backup keluar dengan status error (${rc})."
   fi
   pause
-  return 0
+  return "${rc}"
 }
 
 backup_cli_show_cloud_list() {
