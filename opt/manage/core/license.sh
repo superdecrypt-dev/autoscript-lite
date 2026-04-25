@@ -91,7 +91,12 @@ manage_license_guard_preflight() {
     printf '%s\n' "${license_output}" >&2
     if [[ "${stage}" == "manage" && -z "${action}" ]]; then
       MANAGE_LICENSE_BLOCKED=1
+      local detail_line
+      detail_line="$(printf '%s\n' "${license_output}" | grep "^Detail :" | head -n1)"
       MANAGE_LICENSE_BLOCK_REASON="${license_output##*$'\n'}"
+      if [[ -n "${detail_line}" ]]; then
+        MANAGE_LICENSE_BLOCK_REASON="${detail_line}\n${MANAGE_LICENSE_BLOCK_REASON}"
+      fi
       [[ -n "${MANAGE_LICENSE_BLOCK_REASON}" ]] || MANAGE_LICENSE_BLOCK_REASON="Akses manage ditolak oleh license guard."
       return 0
     fi

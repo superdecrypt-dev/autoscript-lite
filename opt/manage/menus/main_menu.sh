@@ -63,7 +63,9 @@ main_menu_render_license_block_notice() {
   main_menu_center_line "License Info"
   hr
   echo "Lisensi VPS tidak aktif untuk membuka menu utama."
-  echo "${reason}"
+  echo
+  echo -e "${reason}"
+  echo
   echo "Perpanjang lisensi di: https://autoscript.license.dpdns.org"
 }
 
