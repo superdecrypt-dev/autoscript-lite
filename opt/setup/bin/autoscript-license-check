@@ -617,7 +617,12 @@ def command_check(args):
         print(f"[license] {payload['status']}: {payload['reason']}")
         return 0
     next_action = next_action_for_state(payload)
-    message = f"[license] {payload['status']}: {payload['reason']}"
+    reason_str = payload['reason']
+    revoke_reason = payload.get('revoke_reason')
+    if revoke_reason:
+        reason_str = f"{reason_str} (Alasan: {revoke_reason})"
+        
+    message = f"[license] {payload['status']}: {reason_str}"
     if next_action not in {"none", "check license status", "run a license check"}:
         message = f"{message} (next: {next_action})"
     print(message, file=sys.stderr)
