@@ -123,8 +123,91 @@ def handle(action: str, params: dict, settings) -> dict:
             return ok_response(title, msg)
         return error_response("network_dns_cache_toggle_failed", title, msg)
 
+    if action == "toggle_dns_parallel_query":
+        ok_op, title, msg = system_mutations.op_network_toggle_dns_parallel_query()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_parallel_toggle_failed", title, msg)
+
+    if action == "toggle_dns_system_hosts":
+        ok_op, title, msg = system_mutations.op_network_toggle_dns_system_hosts()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_system_hosts_toggle_failed", title, msg)
+
+    if action == "toggle_dns_disable_fallback":
+        ok_op, title, msg = system_mutations.op_network_toggle_dns_disable_fallback()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_disable_fallback_toggle_failed", title, msg)
+
+    if action == "toggle_dns_disable_fallback_if_match":
+        ok_op, title, msg = system_mutations.op_network_toggle_dns_disable_fallback_if_match()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_disable_fallback_if_match_toggle_failed", title, msg)
+
+    if action == "pin_dns_host":
+        ok_d, domain_or_err = require_param(params, "domain", "Network Controls - DNS Advanced")
+        if not ok_d:
+            return domain_or_err
+        ok_v, value_or_err = require_param(params, "value", "Network Controls - DNS Advanced")
+        if not ok_v:
+            return value_or_err
+        ok_op, title, msg = system_mutations.op_network_pin_dns_host(str(domain_or_err), str(value_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_host_pin_failed", title, msg)
+
+    if action == "clear_dns_host_pin":
+        ok_d, domain_or_err = require_param(params, "domain", "Network Controls - DNS Advanced")
+        if not ok_d:
+            return domain_or_err
+        ok_op, title, msg = system_mutations.op_network_clear_dns_host_pin(str(domain_or_err))
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_dns_host_pin_clear_failed", title, msg)
+
     if action == "state_file":
         title, msg = system.op_network_state_raw()
+        return ok_response(title, msg)
+
+    if action == "network_summary":
+        title, msg = system.op_network_routing_summary()
+        return ok_response(title, msg)
+
+    if action == "routing_user_overrides":
+        title, msg = system.op_network_routing_user_overrides()
+        return ok_response(title, msg)
+
+    if action == "routing_inbound_overrides":
+        title, msg = system.op_network_routing_inbound_overrides()
+        return ok_response(title, msg)
+
+    if action == "routing_domain_buckets":
+        title, msg = system.op_network_routing_domain_buckets()
+        return ok_response(title, msg)
+
+    if action == "routing_custom_lists":
+        title, msg = system.op_network_routing_custom_lists()
+        return ok_response(title, msg)
+
+    if action == "routing_conflict_check":
+        title, msg = system.op_network_routing_conflict_check()
+        return ok_response(title, msg)
+
+    if action == "validate_confd_json":
+        title, msg = system.op_network_validate_confd_json()
+        return ok_response(title, msg)
+
+    if action == "xray_config_test":
+        ok_op, title, msg = system.op_xray_test()
+        if ok_op:
+            return ok_response(title, msg)
+        return error_response("network_xray_config_test_failed", title, msg)
+
+    if action == "core_service_status":
+        title, msg = system.op_network_core_service_status()
         return ok_response(title, msg)
 
     if action == "adblock_status":

@@ -1954,6 +1954,161 @@ def _service_alt_placeholder(service: str) -> str:
     return f"<bebas>/{raw}"
 
 
+def _xray_ech_config_from_server_keys(server_keys: Any) -> str:
+    raw = str(server_keys or "").strip()
+    if not raw:
+        return ""
+    ok, out = _run_cmd(["xray", "tls", "ech", "-i", raw], timeout=10)
+    if not ok:
+        return ""
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    for idx, line in enumerate(lines):
+        if line.lower().startswith("ech config list") and idx + 1 < len(lines):
+            return lines[idx + 1]
+    return ""
+
+
+def _find_vless_xhttp3_inbound(cfg: Any) -> dict[str, Any] | None:
+    if not isinstance(cfg, dict):
+        return None
+    for item in cfg.get("inbounds") or []:
+        if isinstance(item, dict) and str(item.get("tag") or "").strip() == "default@vless-xhttp3":
+            return item
+    return None
+
+
+def _build_vless_xhttp3_client_config(domain: str, cred: str, username: str, proto: str) -> dict[str, Any] | None:
+    ok, cfg = _read_json(XRAY_INBOUNDS_CONF)
+    if not ok:
+        return None
+    inbound = _find_vless_xhttp3_inbound(cfg)
+    if not isinstance(inbound, dict):
+        return None
+
+    stream = inbound.get("streamSettings") or {}
+    tls = stream.get("tlsSettings") or {}
+    xhttp = stream.get("xhttpSettings") or {}
+    finalmask = stream.get("finalmask") or {}
+    udp_masks = finalmask.get("udp") if isinstance(finalmask, dict) else []
+    quic_params = finalmask.get("quicParams") if isinstance(finalmask, dict) else {}
+
+    out_stream: dict[str, Any] = {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+            "serverName": str(tls.get("serverName") or domain),
+            "alpn": list(tls.get("alpn") or ["h3"]),
+        },
+        "xhttpSettings": {
+            "path": str(xhttp.get("path") or "/vless-xhttp3"),
+        },
+    }
+    user_agent = str((xhttp.get("headers") or {}).get("User-Agent") or "").strip()
+    if user_agent:
+        out_stream["xhttpSettings"]["headers"] = {"User-Agent": user_agent}
+
+    ech_config = _xray_ech_config_from_server_keys(tls.get("echServerKeys"))
+    if ech_config:
+        out_stream["tlsSettings"]["echConfigList"] = ech_config
+
+    udp_out: list[dict[str, Any]] = []
+    if isinstance(udp_masks, list):
+        for mask in udp_masks:
+            if not isinstance(mask, dict):
+                continue
+            if str(mask.get("type") or "").strip() != "salamander":
+                continue
+            password = str(((mask.get("settings") or {}).get("password")) or "").strip()
+            if password:
+                udp_out.append({"type": "salamander", "settings": {"password": password}})
+    if udp_out or (isinstance(quic_params, dict) and quic_params):
+        out_stream["finalmask"] = {}
+        if udp_out:
+            out_stream["finalmask"]["udp"] = udp_out
+        if isinstance(quic_params, dict) and quic_params:
+            out_stream["finalmask"]["quicParams"] = quic_params
+
+    email = f"{username}@{proto}"
+    remark = f"VLESS XHTTP/3 Full - {email}"
+    return {
+        "remark": remark,
+        "remarks": remark,
+        "version": {"min": "26.3.27"},
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "port": 10808,
+                "protocol": "socks",
+                "settings": {"udp": True},
+            }
+        ],
+        "outbounds": [
+            {
+                "tag": "vless-xhttp3-out",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [
+                        {
+                            "address": domain,
+                            "port": 443,
+                            "users": [{"id": cred, "encryption": "none"}],
+                        }
+                    ]
+                },
+                "streamSettings": out_stream,
+            }
+        ],
+        "routing": {
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["socks-in"],
+                    "outboundTag": "vless-xhttp3-out",
+                }
+            ]
+        },
+    }
+
+
+def _build_vless_xhttp3_link(domain: str, cred: str, username: str, proto: str) -> str:
+    ok, cfg = _read_json(XRAY_INBOUNDS_CONF)
+    if not ok:
+        return ""
+    inbound = _find_vless_xhttp3_inbound(cfg)
+    if not isinstance(inbound, dict):
+        return ""
+
+    stream = inbound.get("streamSettings") or {}
+    tls = stream.get("tlsSettings") or {}
+    xhttp = stream.get("xhttpSettings") or {}
+    finalmask = stream.get("finalmask") or {}
+    headers = xhttp.get("headers") or {}
+    user_agent = str(headers.get("User-Agent") or "").strip()
+    ech_config = _xray_ech_config_from_server_keys(tls.get("echServerKeys"))
+
+    query: dict[str, str] = {
+        "alpn": "h3",
+        "fp": user_agent or "firefox",
+        "type": "xhttp",
+        "sni": str(tls.get("serverName") or domain),
+        "mode": str(xhttp.get("mode") or "auto"),
+        "path": str(xhttp.get("path") or "/vless-xhttp3"),
+        "security": "tls",
+        "encryption": "none",
+        "insecure": "0",
+        "allowInsecure": "0",
+    }
+    if ech_config:
+        query["ech"] = ech_config
+    if isinstance(finalmask, dict) and finalmask:
+        query["fm"] = json.dumps(finalmask, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(headers, dict) and headers:
+        query["extra"] = json.dumps({"headers": headers}, ensure_ascii=False, separators=(",", ":"))
+    return f"vless://{cred}@{domain}:443?{urllib.parse.urlencode(query)}#{urllib.parse.quote(username + '@' + proto)}"
+
+
 def _proto_display_label(proto: str) -> str:
     mapping = {
         "vless": "Vless",
@@ -2993,18 +3148,69 @@ def _dns_toggle_cache(cfg: dict[str, Any]) -> tuple[bool, str]:
     return True, "DNS cache sekarang: OFF."
 
 
+def _dns_toggle_bool_key(cfg: dict[str, Any], key: str, label: str) -> tuple[bool, str]:
+    dns_obj = cfg.get("dns")
+    assert isinstance(dns_obj, dict)
+    current = bool(dns_obj.get(key))
+    if current:
+        dns_obj.pop(key, None)
+        return True, f"{label} sekarang: OFF."
+    dns_obj[key] = True
+    return True, f"{label} sekarang: ON."
+
+
+def _dns_hosts_dict(cfg: dict[str, Any]) -> dict[str, Any]:
+    dns_obj = cfg.get("dns")
+    assert isinstance(dns_obj, dict)
+    hosts = dns_obj.get("hosts")
+    if not isinstance(hosts, dict):
+        hosts = {}
+    dns_obj["hosts"] = hosts
+    return hosts
+
+
+def _dns_pin_host(cfg: dict[str, Any], domain: str, value: str) -> tuple[bool, str]:
+    dom = str(domain or "").strip().lower().strip(".")
+    val = str(value or "").strip()
+    if not DOMAIN_RE.match(dom):
+        return False, "Domain host pin tidak valid."
+    if not val:
+        return False, "Value host pin tidak boleh kosong."
+    hosts = _dns_hosts_dict(cfg)
+    hosts[dom] = val
+    return True, f"Host pin diset: {dom} -> {val}"
+
+
+def _dns_clear_host_pin(cfg: dict[str, Any], domain: str) -> tuple[bool, str]:
+    dom = str(domain or "").strip().lower().strip(".")
+    if not DOMAIN_RE.match(dom):
+        return False, "Domain host pin tidak valid."
+    hosts = _dns_hosts_dict(cfg)
+    if dom in hosts:
+        hosts.pop(dom, None)
+        return True, f"Host pin dihapus: {dom}"
+    return True, f"Host pin tidak ditemukan: {dom}"
+
+
 def _build_links(proto: str, username: str, cred: str, domain: str, tcp_tls_host: str) -> dict[str, str]:
     public_paths = {
-        "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
+        "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "xhttp3": "/vless-xhttp3", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
     }
-    tcp_tls_protocols = {"vless", "trojan"}
+    tcp_tls_protocols = {"vless", "vmess", "trojan"}
 
     def vless_link(net: str, val: str) -> str:
+        if net == "xhttp3":
+            full = _build_vless_xhttp3_link(domain, cred, username, proto)
+            if full:
+                return full
         q = {"encryption": "none", "security": "tls", "type": net, "sni": domain}
-        if net in {"ws", "httpupgrade", "xhttp"}:
+        if net in {"ws", "httpupgrade", "xhttp", "xhttp3"}:
             q["path"] = val or "/"
+        if net == "xhttp3":
+            q["type"] = "xhttp"
+            q["alpn"] = "h3"
         elif net == "grpc" and val:
             q["serviceName"] = val
         host = tcp_tls_host if net == "tcp" else domain
@@ -3023,17 +3229,17 @@ def _build_links(proto: str, username: str, cred: str, domain: str, tcp_tls_host
         obj = {
             "v": "2",
             "ps": username + "@" + proto,
-            "add": domain,
+            "add": tcp_tls_host if net == "tcp" else domain,
             "port": "443",
             "id": cred,
             "aid": "0",
             "net": net,
             "type": "none",
-            "host": domain,
+            "host": "" if net == "tcp" else domain,
             "tls": "tls",
             "sni": domain,
         }
-        if net in {"ws", "httpupgrade"}:
+        if net in {"ws", "httpupgrade", "xhttp"}:
             obj["path"] = val or "/"
         elif net == "grpc":
             obj["path"] = val or ""
@@ -3047,6 +3253,8 @@ def _build_links(proto: str, username: str, cred: str, domain: str, tcp_tls_host
     if proto in tcp_tls_protocols:
         nets = ["tcp"] + nets
     nets = [net for net in nets if net != "grpc"] + ["xhttp", "grpc"]
+    if proto == "vless":
+        nets = [net for net in nets if net != "grpc"] + ["xhttp3", "grpc"]
     for net in nets:
         v = p.get(net, "")
         if proto == "vless":
@@ -3084,7 +3292,7 @@ def _build_account_text(
     proto_disp = _proto_display_label(proto)
     portal_url = _account_portal_url(portal_token)
     public_paths = {
-        "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "grpc": "vless-grpc"},
+        "vless": {"ws": "/vless-ws", "httpupgrade": "/vless-hup", "xhttp": "/vless-xhttp", "xhttp3": "/vless-xhttp3", "grpc": "vless-grpc"},
         "vmess": {"ws": "/vmess-ws", "httpupgrade": "/vmess-hup", "xhttp": "/vmess-xhttp", "grpc": "vmess-grpc"},
         "trojan": {"ws": "/trojan-ws", "httpupgrade": "/trojan-hup", "xhttp": "/trojan-xhttp", "grpc": "trojan-grpc"},
     }
@@ -3095,6 +3303,7 @@ def _build_account_text(
     hup_path_alt = _path_alt_placeholder(hup_path)
     xhttp_path = public_proto.get("xhttp", "") or "/"
     xhttp_path_alt = _path_alt_placeholder(xhttp_path)
+    xhttp3_path = public_proto.get("xhttp3", "") or "-"
     grpc_service = public_proto.get("grpc", "") or "-"
     grpc_service_alt = _service_alt_placeholder(grpc_service)
     created_disp = _normalize_created_display(created_at, date_only=True)
@@ -3102,6 +3311,7 @@ def _build_account_text(
         f"{proto_disp} WS",
         f"{proto_disp} HUP",
         f"{proto_disp} XHTTP",
+        f"{proto_disp} XHTTP/3 (UDP/QUIC)",
         f"{proto_disp} gRPC",
         f"{proto_disp} Path WS",
         f"{proto_disp} Path WS Alt",
@@ -3109,6 +3319,7 @@ def _build_account_text(
         f"{proto_disp} Path HUP Alt",
         f"{proto_disp} Path XHTTP",
         f"{proto_disp} Path XHTTP Alt",
+        f"{proto_disp} Path XHTTP/3",
         f"{proto_disp} Path Service",
         f"{proto_disp} Path Service Alt",
     ]
@@ -3162,6 +3373,8 @@ def _build_account_text(
         ]
     )
     lines.append(section_line(f"{proto_disp} XHTTP", _edge_runtime_ws_ports_label()))
+    if proto == "vless":
+        lines.append(section_line(f"{proto_disp} XHTTP/3 (UDP/QUIC)", "443 (UDP/QUIC)"))
     lines.extend(
         [
             section_line(f"{proto_disp} gRPC", _edge_runtime_ws_ports_label()),
@@ -3179,6 +3392,12 @@ def _build_account_text(
             section_line(f"{proto_disp} Path HUP Alt", hup_path_alt),
             section_line(f"{proto_disp} Path XHTTP", xhttp_path),
             section_line(f"{proto_disp} Path XHTTP Alt", xhttp_path_alt),
+        ]
+    )
+    if proto == "vless":
+        lines.append(section_line(f"{proto_disp} Path XHTTP/3", xhttp3_path))
+    lines.extend(
+        [
             section_line(f"{proto_disp} Path Service", grpc_service),
             section_line(f"{proto_disp} Path Service Alt", grpc_service_alt),
             "",
@@ -3194,6 +3413,9 @@ def _build_account_text(
     lines.append("")
     if "xhttp" in links:
         append_link_block(lines, "XHTTP", links.get("xhttp", "-"))
+        lines.append("")
+    if "xhttp3" in links:
+        append_link_block(lines, "VLESS XHTTP/3 (UDP/QUIC)", links.get("xhttp3", "-"))
         lines.append("")
     append_link_block(lines, "gRPC", links.get("grpc", "-"))
     lines.append("")
@@ -3371,8 +3593,13 @@ def _write_account_artifacts(
     }
 
     _write_text_atomic(account_file, account_text)
+    if proto == "vless":
+        xray_client_cfg = _build_vless_xhttp3_client_config(domain, credential, username, proto)
+        if xray_client_cfg:
+            _write_json_atomic(account_file.with_suffix(".xray.json"), xray_client_cfg)
     _write_json_atomic(quota_file, quota_payload)
     _chmod_600(account_file)
+    _chmod_600(account_file.with_suffix(".xray.json"))
     _chmod_600(quota_file)
     return account_file, quota_file
 
@@ -3461,7 +3688,12 @@ def _refresh_account_info_for_user(proto: str, username: str, domain: str | None
     )
 
     _write_text_atomic(account_target, content)
+    if proto == "vless":
+        xray_client_cfg = _build_vless_xhttp3_client_config(domain_eff, credential, username, proto)
+        if xray_client_cfg:
+            _write_json_atomic(account_target.with_suffix(".xray.json"), xray_client_cfg)
     _chmod_600(account_target)
+    _chmod_600(account_target.with_suffix(".xray.json"))
     if quota_target is not None:
         _save_quota(quota_target, quota_data)
     return True, "ok"
@@ -6697,6 +6929,56 @@ def op_network_set_dns_query_strategy(strategy: str) -> tuple[bool, str, str]:
 def op_network_toggle_dns_cache() -> tuple[bool, str, str]:
     title = "Network Controls - Toggle DNS Cache"
     ok_apply, msg_apply = _apply_dns_transaction(_dns_toggle_cache)
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_toggle_dns_parallel_query() -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(lambda cfg: _dns_toggle_bool_key(cfg, "enableParallelQuery", "Parallel Query"))
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_toggle_dns_system_hosts() -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(lambda cfg: _dns_toggle_bool_key(cfg, "useSystemHosts", "Use System Hosts"))
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_toggle_dns_disable_fallback() -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(lambda cfg: _dns_toggle_bool_key(cfg, "disableFallback", "Disable Fallback"))
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_toggle_dns_disable_fallback_if_match() -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(
+        lambda cfg: _dns_toggle_bool_key(cfg, "disableFallbackIfMatch", "Disable Fallback If Match")
+    )
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_pin_dns_host(domain: str, value: str) -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(lambda cfg: _dns_pin_host(cfg, domain, value))
+    if not ok_apply:
+        return False, title, msg_apply
+    return True, title, msg_apply
+
+
+def op_network_clear_dns_host_pin(domain: str) -> tuple[bool, str, str]:
+    title = "Network Controls - DNS Advanced"
+    ok_apply, msg_apply = _apply_dns_transaction(lambda cfg: _dns_clear_host_pin(cfg, domain))
     if not ok_apply:
         return False, title, msg_apply
     return True, title, msg_apply

@@ -78,6 +78,7 @@ ACCESS_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {
         "Vless Path HUP Alt",
         "Vless Path XHTTP",
         "Vless Path XHTTP Alt",
+        "Vless Path XHTTP/3",
         "Vless Path Service",
         "Vless Path Service Alt",
     ),
@@ -923,7 +924,16 @@ def _access_detail_items(proto: str, username: str, fields: dict[str, str] | Non
 
 
 def _portal_credentials(proto: str, username: str, fields: dict[str, str] | None = None) -> dict[str, str]:
-    return {"username": "", "password": "", "available": ""}
+    if fields is None:
+        fields = _account_info_bundle(proto, username).get("fields") or {}
+    credential = _field_lookup(fields, "UUID") if proto in {"vless", "vmess"} else _field_lookup(fields, "Password")
+    if not credential:
+        return {"username": "", "password": "", "available": ""}
+    return {
+        "username": _display_username(proto, username),
+        "password": credential,
+        "available": "1",
+    }
 
 
 def build_public_account_summary(token: str) -> dict[str, Any] | None:

@@ -1453,6 +1453,268 @@ def op_network_state_raw() -> tuple[str, str]:
     return "Network Controls - State File", json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def op_network_validate_confd_json() -> tuple[str, str]:
+    title = "Network Checks - Validate conf.d JSON"
+    if not XRAY_CONFDIR.exists():
+        return title, f"Directory tidak ditemukan: {XRAY_CONFDIR}"
+
+    lines: list[str] = []
+    ok_all = True
+    for path in sorted(XRAY_CONFDIR.glob("*.json")):
+        ok, payload = read_json(path)
+        if ok and isinstance(payload, dict):
+            lines.append(f"OK   {path.name}")
+            continue
+        ok_all = False
+        lines.append(f"FAIL {path.name}: {payload}")
+
+    if not lines:
+        return title, f"Tidak ada file JSON di {XRAY_CONFDIR}"
+    status = "PASS" if ok_all else "FAIL"
+    return title, "\n".join([f"Status: {status}", "", *lines])
+
+
+def op_network_core_service_status() -> tuple[str, str]:
+    title = "Network Checks - Core Service Status"
+    services = ["xray", "nginx", "wireproxy", "warp-svc", "edge-mux"]
+    lines = [f"- {name}: {service_state(name)}" for name in services if service_exists(name)]
+    if not lines:
+        lines = ["Tidak ada core service yang terdeteksi."]
+    return title, "\n".join(lines)
+
+
+def _routing_rule_user_count(rules: list, marker: str, outbound: str) -> int:
+    count = 0
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        users = item.get("user")
+        if not isinstance(users, list) or marker not in users:
+            continue
+        count += sum(1 for user in users if isinstance(user, str) and user and user != marker)
+    return count
+
+
+def _routing_rule_inbound_count(rules: list, marker: str, outbound: str) -> int:
+    count = 0
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        tags = item.get("inboundTag")
+        if not isinstance(tags, list) or marker not in tags:
+            continue
+        count += sum(1 for tag in tags if isinstance(tag, str) and tag and tag != marker)
+    return count
+
+
+def _routing_custom_domain_count(rules: list, marker: str, outbound: str) -> int:
+    count = 0
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        domains = item.get("domain")
+        if not isinstance(domains, list) or marker not in domains:
+            continue
+        count += sum(1 for domain in domains if isinstance(domain, str) and domain and domain != marker)
+    return count
+
+
+def _routing_list_users(rules: list, marker: str, outbound: str) -> list[str]:
+    out: list[str] = []
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        users = item.get("user")
+        if not isinstance(users, list) or marker not in users:
+            continue
+        for user in users:
+            if isinstance(user, str) and user and user != marker:
+                out.append(user)
+    return sorted(dict.fromkeys(out))
+
+
+def _routing_list_inbounds(rules: list, marker: str, outbound: str) -> list[str]:
+    out: list[str] = []
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        tags = item.get("inboundTag")
+        if not isinstance(tags, list) or marker not in tags:
+            continue
+        for tag in tags:
+            if isinstance(tag, str) and tag and tag != marker:
+                out.append(tag)
+    return sorted(dict.fromkeys(out))
+
+
+def _routing_list_domains(rules: list, marker: str, outbound: str) -> list[str]:
+    out: list[str] = []
+    for item in rules:
+        if not isinstance(item, dict) or item.get("outboundTag") != outbound:
+            continue
+        domains = item.get("domain")
+        if not isinstance(domains, list) or marker not in domains:
+            continue
+        for domain in domains:
+            if not isinstance(domain, str):
+                continue
+            ent = domain.strip()
+            if ent and ent != marker:
+                out.append(ent)
+    return sorted(dict.fromkeys(out))
+
+
+def _routing_rules_get() -> tuple[bool, list | str]:
+    routing_file = XRAY_CONFDIR / "30-routing.json"
+    ok, payload = read_json(routing_file)
+    if not ok or not isinstance(payload, dict):
+        return False, str(payload)
+    routing = payload.get("routing")
+    rules = routing.get("rules") if isinstance(routing, dict) else None
+    if not isinstance(rules, list):
+        return False, f"routing.rules tidak valid di {routing_file}"
+    return True, rules
+
+
+def op_network_routing_user_overrides() -> tuple[str, str]:
+    title = "Routing & Outbound - User Overrides"
+    ok, rules_or_err = _routing_rules_get()
+    if not ok:
+        return title, str(rules_or_err)
+    rules = rules_or_err if isinstance(rules_or_err, list) else []
+    direct = _routing_list_users(rules, "dummy-direct-user", "direct")
+    warp = _routing_list_users(rules, "dummy-warp-user", "warp")
+    lines = [
+        f"DIRECT users: {len(direct)}",
+        *[f"- {item}" for item in direct[:80]],
+        "",
+        f"WARP users: {len(warp)}",
+        *[f"- {item}" for item in warp[:80]],
+    ]
+    return title, "\n".join(lines).strip()
+
+
+def op_network_routing_inbound_overrides() -> tuple[str, str]:
+    title = "Routing & Outbound - Inbound Overrides"
+    ok, rules_or_err = _routing_rules_get()
+    if not ok:
+        return title, str(rules_or_err)
+    rules = rules_or_err if isinstance(rules_or_err, list) else []
+    direct = _routing_list_inbounds(rules, "dummy-direct-inbounds", "direct")
+    warp = _routing_list_inbounds(rules, "dummy-warp-inbounds", "warp")
+    lines = [
+        f"DIRECT inbounds: {len(direct)}",
+        *[f"- {item}" for item in direct[:80]],
+        "",
+        f"WARP inbounds: {len(warp)}",
+        *[f"- {item}" for item in warp[:80]],
+    ]
+    return title, "\n".join(lines).strip()
+
+
+def op_network_routing_domain_buckets() -> tuple[str, str]:
+    title = "Routing & Outbound - Domain Buckets"
+    ok, rules_or_err = _routing_rules_get()
+    if not ok:
+        return title, str(rules_or_err)
+    rules = rules_or_err if isinstance(rules_or_err, list) else []
+    direct = _routing_list_domains(rules, "regexp:^$", "direct")
+    warp = _routing_list_domains(rules, "regexp:^$WARP", "warp")
+    lines = [
+        f"DIRECT entries: {len(direct)}",
+        *[f"- {item}" for item in direct[:80]],
+        "",
+        f"WARP entries: {len(warp)}",
+        *[f"- {item}" for item in warp[:80]],
+    ]
+    return title, "\n".join(lines).strip()
+
+
+def op_network_routing_custom_lists() -> tuple[str, str]:
+    title = "Routing & Outbound - Custom Lists"
+    _t, msg = op_network_routing_domain_buckets()
+    return title, msg
+
+
+def op_network_routing_conflict_check() -> tuple[str, str]:
+    title = "Routing & Outbound - Conflict Check"
+    ok, rules_or_err = _routing_rules_get()
+    if not ok:
+        return title, str(rules_or_err)
+    rules = rules_or_err if isinstance(rules_or_err, list) else []
+    user_direct = set(_routing_list_users(rules, "dummy-direct-user", "direct"))
+    user_warp = set(_routing_list_users(rules, "dummy-warp-user", "warp"))
+    inb_direct = set(_routing_list_inbounds(rules, "dummy-direct-inbounds", "direct"))
+    inb_warp = set(_routing_list_inbounds(rules, "dummy-warp-inbounds", "warp"))
+    dom_direct = set(_routing_list_domains(rules, "regexp:^$", "direct"))
+    dom_warp = set(_routing_list_domains(rules, "regexp:^$WARP", "warp"))
+    conflicts = [
+        ("User", sorted(user_direct & user_warp)),
+        ("Inbound", sorted(inb_direct & inb_warp)),
+        ("Domain", sorted(dom_direct & dom_warp)),
+    ]
+    lines: list[str] = []
+    total = 0
+    for label, items in conflicts:
+        total += len(items)
+        lines.append(f"{label} conflicts: {len(items)}")
+        lines.extend(f"- {item}" for item in items[:50])
+        lines.append("")
+    if total == 0:
+        return title, "Tidak ada conflict direct+warp yang terdeteksi."
+    return title, "\n".join(lines).strip()
+
+
+def op_network_routing_summary() -> tuple[str, str]:
+    title = "Routing & Outbound - Summary"
+    routing_file = XRAY_CONFDIR / "30-routing.json"
+    ok, payload = read_json(routing_file)
+    if not ok or not isinstance(payload, dict):
+        return title, str(payload)
+
+    routing = payload.get("routing")
+    rules = routing.get("rules") if isinstance(routing, dict) else None
+    if not isinstance(rules, list):
+        return title, f"routing.rules tidak valid di {routing_file}"
+
+    default_tag = "-"
+    for item in rules:
+        if not isinstance(item, dict) or item.get("type") != "field":
+            continue
+        port = str(item.get("port") or "").strip()
+        if port in {"1-65535", "0-65535"} and not any(item.get(key) for key in ("user", "domain", "ip", "protocol")):
+            default_tag = str(item.get("outboundTag") or "-").strip() or "-"
+
+    outbounds_file = XRAY_CONFDIR / "20-outbounds.json"
+    ok_out, out_payload = read_json(outbounds_file)
+    out_tags: list[str] = []
+    if ok_out and isinstance(out_payload, dict) and isinstance(out_payload.get("outbounds"), list):
+        for item in out_payload.get("outbounds", []):
+            if isinstance(item, dict):
+                tag = str(item.get("tag") or "").strip()
+                if tag:
+                    out_tags.append(tag)
+
+    lines = [
+        f"Default Route : {default_tag}",
+        f"WARP Mode     : {_warp_mode_display_get()}",
+        f"Outbound Tags : {len(out_tags)}",
+        "",
+        "Overrides:",
+        f"- direct users : {_routing_rule_user_count(rules, 'dummy-direct-user', 'direct')}",
+        f"- warp users   : {_routing_rule_user_count(rules, 'dummy-warp-user', 'warp')}",
+        f"- direct inb   : {_routing_rule_inbound_count(rules, 'dummy-direct-inbounds', 'direct')}",
+        f"- warp inb     : {_routing_rule_inbound_count(rules, 'dummy-warp-inbounds', 'warp')}",
+        "",
+        "Custom Lists:",
+        f"- DIRECT entries: {_routing_custom_domain_count(rules, 'regexp:^$', 'direct')}",
+        f"- WARP entries  : {_routing_custom_domain_count(rules, 'regexp:^$WARP', 'warp')}",
+    ]
+    if out_tags:
+        lines.extend(["", "Outbound tags:", *[f"- {tag}" for tag in out_tags[:25]]])
+    return title, "\n".join(lines)
+
+
 def _adblock_env_value(key: str, default: str = "") -> str:
     try:
         if not ADBLOCK_ENV_FILE.exists():

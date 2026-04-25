@@ -60,6 +60,7 @@
       "id": "9",
       "label": "Speedtest",
       "description": "Jalankan dan cek tool speedtest seperti menu CLI.",
+      "hidden": true,
       "actions": [
         {
           "id": "open_speedtest",
@@ -74,6 +75,7 @@
       "id": "10",
       "label": "Security",
       "description": "Ringkasan TLS, Fail2ban, dan hardening host.",
+      "hidden": true,
       "actions": [
         {
           "id": "open_security",
@@ -88,6 +90,7 @@
       "id": "11",
       "label": "Maintenance",
       "description": "Status dan aksi maintenance utama yang mengikuti CLI.",
+      "hidden": true,
       "actions": [
         {
           "id": "open_maintenance",
@@ -102,6 +105,7 @@
       "id": "12",
       "label": "Traffic",
       "description": "Traffic overview, top users, search, dan export JSON.",
+      "hidden": true,
       "actions": [
         {
           "id": "open_traffic",
@@ -116,6 +120,7 @@
       "id": "13",
       "label": "WARP Tier",
       "description": "Kontrol tier WARP Free/Plus/Zero Trust yang dipisah dari Tools.",
+      "hidden": true,
       "actions": [
         {
           "id": "open_warp_tier",
@@ -1132,9 +1137,53 @@
     {
       "id": "33",
       "label": "Xray Network",
-      "description": "WARP, DNS, dan routing runtime Xray yang mengikuti domain menu CLI.",
+      "description": "Root menu Xray Network yang mengikuti struktur CLI.",
       "hidden": true,
       "parent_menu": "5",
+      "actions": [
+        {
+          "id": "open_xray_network_warp",
+          "label": "WARP",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "54"
+        },
+        {
+          "id": "open_xray_network_dns",
+          "label": "DNS",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "55"
+        },
+        {
+          "id": "open_xray_network_dns_editor",
+          "label": "DNS Editor",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "56"
+        },
+        {
+          "id": "open_xray_network_checks",
+          "label": "Checks",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "57"
+        },
+        {
+          "id": "open_xray_network_routing",
+          "label": "Routing & Outbound",
+          "mode": "menu",
+          "style": "primary",
+          "target_menu": "58"
+        }
+      ]
+    },
+    {
+      "id": "54",
+      "label": "Xray Network - WARP",
+      "description": "WARP status, restart, global route, per-user, dan per-inbound seperti CLI.",
+      "hidden": true,
+      "parent_menu": "33",
       "actions": [
         {
           "id": "warp_status",
@@ -1227,33 +1276,16 @@
             ]
           },
           "dangerous": true
-        },
-        {
-          "id": "set_warp_domain_mode",
-          "label": "Set WARP Domain",
-          "mode": "modal",
-          "style": "secondary",
-          "modal": {
-            "title": "Set WARP Per Domain",
-            "fields": [
-              {
-                "id": "mode",
-                "label": "Mode",
-                "style": "short",
-                "required": true,
-                "placeholder": "direct / warp / off"
-              },
-              {
-                "id": "entry",
-                "label": "Domain/Geosite",
-                "style": "short",
-                "required": true,
-                "placeholder": "contoh: domain:openai.com"
-              }
-            ]
-          },
-          "dangerous": true
-        },
+        }
+      ]
+    },
+    {
+      "id": "55",
+      "label": "Xray Network - DNS",
+      "description": "DNS settings dasar seperti menu CLI.",
+      "hidden": true,
+      "parent_menu": "33",
+      "actions": [
         {
           "id": "dns_summary",
           "label": "View DNS Summary",
@@ -1326,10 +1358,382 @@
           "dangerous": true
         },
         {
+          "id": "open_xray_network_dns_advanced",
+          "label": "Advanced Controls",
+          "mode": "menu",
+          "style": "secondary",
+          "target_menu": "60"
+        },
+        {
+          "id": "dns_summary",
+          "label": "Show DNS Status",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "60",
+      "label": "Xray Network - DNS Advanced",
+      "description": "DNS advanced controls seperti menu CLI.",
+      "hidden": true,
+      "parent_menu": "55",
+      "actions": [
+        {
+          "id": "toggle_dns_parallel_query",
+          "label": "Toggle Parallel Query",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "toggle_dns_system_hosts",
+          "label": "Toggle Use System Hosts",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "toggle_dns_disable_fallback",
+          "label": "Toggle Disable Fallback",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "toggle_dns_disable_fallback_if_match",
+          "label": "Toggle Disable Fallback If Match",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "pin_dns_host",
+          "label": "Pin Host Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Pin Host Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: example.com"
+              },
+              {
+                "id": "value",
+                "label": "Value",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: 1.2.3.4"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "clear_dns_host_pin",
+          "label": "Clear Host Pin",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Clear Host Pin",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        }
+      ]
+    },
+    {
+      "id": "56",
+      "label": "Xray Network - DNS Editor",
+      "description": "Tampilan DNS dan validasi sebelum fitur editor advanced Telegram lengkap.",
+      "hidden": true,
+      "parent_menu": "33",
+      "actions": [
+        {
+          "id": "dns_summary",
+          "label": "View DNS Summary",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "validate_confd_json",
+          "label": "Validate conf.d JSON",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "57",
+      "label": "Xray Network - Checks",
+      "description": "Diagnostics dan health checks seperti menu CLI.",
+      "hidden": true,
+      "parent_menu": "33",
+      "actions": [
+        {
+          "id": "network_summary",
+          "label": "Show Summary",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "validate_confd_json",
+          "label": "Validate conf.d JSON",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "xray_config_test",
+          "label": "Xray Config Test",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "core_service_status",
+          "label": "Core Service Status",
+          "mode": "direct",
+          "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "58",
+      "label": "Xray Network - Routing & Outbound",
+      "description": "Routing dan outbound seperti menu CLI.",
+      "hidden": true,
+      "parent_menu": "33",
+      "actions": [
+        {
+          "id": "network_summary",
+          "label": "Routing Summary",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "routing_user_overrides",
+          "label": "User Overrides",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "routing_inbound_overrides",
+          "label": "Inbound Overrides",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "routing_domain_buckets",
+          "label": "Domain Buckets",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "routing_custom_lists",
+          "label": "Custom Lists",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "routing_conflict_check",
+          "label": "Conflict Check",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "set_warp_domain_mode",
+          "label": "Custom List: Set DIRECT/WARP",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Custom List: Set DIRECT/WARP",
+            "fields": [
+              {
+                "id": "mode",
+                "label": "Mode",
+                "style": "short",
+                "required": true,
+                "placeholder": "direct / warp / off"
+              },
+              {
+                "id": "entry",
+                "label": "Domain/Geosite",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: domain:openai.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
           "id": "state_file",
           "label": "View State File",
           "mode": "direct",
           "style": "secondary"
+        }
+      ]
+    },
+    {
+      "id": "59",
+      "label": "Xray Network - Adblock",
+      "description": "Kontrol adblock Xray/DNS yang backend-nya tersedia di bot.",
+      "hidden": true,
+      "parent_menu": "33",
+      "actions": [
+        {
+          "id": "adblock_status",
+          "label": "Adblock Status",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "adblock_enable",
+          "label": "Enable Adblock",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_disable",
+          "label": "Disable Adblock",
+          "mode": "direct",
+          "style": "danger",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_domain",
+          "label": "Add Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: ads.example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_domain",
+          "label": "Delete Domain",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Delete Adblock Domain",
+            "fields": [
+              {
+                "id": "domain",
+                "label": "Domain",
+                "style": "short",
+                "required": true,
+                "placeholder": "contoh: ads.example.com"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "add_adblock_url_source",
+          "label": "Add URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Add Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL",
+                "style": "short",
+                "required": true,
+                "placeholder": "https://example.com/blocklist.txt"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "delete_adblock_url_source",
+          "label": "Delete URL Source",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Delete Adblock URL Source",
+            "fields": [
+              {
+                "id": "url",
+                "label": "URL",
+                "style": "short",
+                "required": true,
+                "placeholder": "https://example.com/blocklist.txt"
+              }
+            ]
+          },
+          "dangerous": true
+        },
+        {
+          "id": "adblock_update",
+          "label": "Update Adblock",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_show_bound_users",
+          "label": "Show Bound Users",
+          "mode": "direct",
+          "style": "secondary"
+        },
+        {
+          "id": "adblock_toggle_auto_update",
+          "label": "Toggle Auto Update",
+          "mode": "direct",
+          "style": "secondary",
+          "confirm": true,
+          "dangerous": true
+        },
+        {
+          "id": "adblock_set_auto_update_days",
+          "label": "Set Auto Update Interval",
+          "mode": "modal",
+          "style": "secondary",
+          "modal": {
+            "title": "Set Adblock Auto Update Interval",
+            "fields": [
+              {
+                "id": "days",
+                "label": "Days",
+                "style": "short",
+                "required": true,
+                "placeholder": "1"
+              }
+            ]
+          },
+          "dangerous": true
         }
       ]
     },
