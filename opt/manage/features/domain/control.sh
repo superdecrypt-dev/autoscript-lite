@@ -130,19 +130,8 @@ domain_menu_v2() {
   fi
 
   echo
-  local proxy_rc=0
-  if confirm_yn_or_back "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    CF_PROXIED="true"
-    log "Cloudflare proxy: ON (proxied=true)"
-  else
-    proxy_rc=$?
-    if (( proxy_rc == 2 )); then
-      warn "Input domain dibatalkan, kembali ke menu Domain Control."
-      return 2
-    fi
-    CF_PROXIED="false"
-    log "Cloudflare proxy: OFF (proxied=false)"
-  fi
+  CF_PROXIED="false"
+  log "Cloudflare proxy: fixed OFF (proxied=false)"
 
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
   log "Domain final: $DOMAIN"

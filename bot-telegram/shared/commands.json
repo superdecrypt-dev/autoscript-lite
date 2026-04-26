@@ -735,29 +735,22 @@
           "confirm": true,
           "modal": {
             "title": "Set Domain Auto",
-            "fields": [
-              {
-                "id": "root_domain",
-                "label": "Root Domain",
-                "style": "short",
-                "required": true,
-                "placeholder": "Pilih via tombol"
-              },
-              {
-                "id": "proxied",
-                "label": "Cloudflare Proxy",
-                "style": "short",
-                "required": false,
-                "placeholder": "on / off (default: off)"
-              },
-              {
-                "id": "allow_existing_same_ip",
-                "label": "Lanjut jika ada A record dengan IP sama?",
-                "style": "short",
-                "required": false,
-                "placeholder": "on / off (default: off)"
-              }
-            ]
+              "fields": [
+                {
+                  "id": "root_domain",
+                  "label": "Root Domain",
+                  "style": "short",
+                  "required": true,
+                  "placeholder": "Pilih via tombol"
+                },
+                {
+                  "id": "allow_existing_same_ip",
+                  "label": "Lanjut jika ada A record dengan IP sama?",
+                  "style": "short",
+                  "required": false,
+                  "placeholder": "on / off (default: off)"
+                }
+              ]
           },
           "dangerous": true
         },

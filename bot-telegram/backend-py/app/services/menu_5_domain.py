@@ -32,14 +32,6 @@ def handle(action: str, params: dict, settings) -> dict:
         ok_r, root_or_err = require_param(params, "root_domain", title)
         if not ok_r:
             return root_or_err
-        proxied = False
-        proxied_raw = str(params.get("proxied", "") or "").strip()
-        if proxied_raw:
-            proxied_parsed = parse_bool_value(proxied_raw, default=None)
-            if proxied_parsed is None:
-                warnings.append("Input 'proxied' tidak valid, default dipakai: OFF.")
-            else:
-                proxied = bool(proxied_parsed)
 
         allow_existing = False
         allow_existing_raw = str(params.get("allow_existing_same_ip", "") or "").strip()
@@ -54,7 +46,7 @@ def handle(action: str, params: dict, settings) -> dict:
             root_domain_input=str(root_or_err),
             subdomain_mode="auto",
             subdomain="",
-            proxied=bool(proxied),
+            proxied=False,
             allow_existing_same_ip=bool(allow_existing),
         )
         warning_data = {"warnings": warnings} if warnings else None
