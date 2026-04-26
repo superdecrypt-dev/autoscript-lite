@@ -7,6 +7,7 @@
 # - SSH session only
 # - root only
 # - can be bypassed with AUTOSCRIPT_MANAGE_AUTO_OPEN=0
+# - returns to the SSH shell after manage exits
 
 case $- in
   *i*) ;;
@@ -26,4 +27,4 @@ fi
 manage_bin="/usr/local/bin/manage"
 [[ -x "${manage_bin}" ]] || return 0
 
-exec "${manage_bin}"
+"${manage_bin}"
