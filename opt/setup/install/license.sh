@@ -9,7 +9,7 @@ install_autoscript_license_runtime() {
   render_setup_template_or_die \
     "config/autoscript-license.env" \
     "${AUTOSCRIPT_LICENSE_CONFIG_FILE}" \
-    0600 \
+    0644 \
     "AUTOSCRIPT_LICENSE_DEFAULT_API_URL=${AUTOSCRIPT_LICENSE_DEFAULT_API_URL}" \
     "AUTOSCRIPT_LICENSE_API_URL=${AUTOSCRIPT_LICENSE_DEFAULT_API_URL}" \
     "AUTOSCRIPT_LICENSE_CACHE_TTL_SEC=${AUTOSCRIPT_LICENSE_CACHE_TTL_SEC}" \
