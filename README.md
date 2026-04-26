@@ -276,3 +276,10 @@ Catatan:
   - `backup-YYYY-MM-DD-HH:MM.tar.gz`
 - `safety backup` internal tetap dibuat otomatis sebelum restore penuh dan disimpan terpisah.
 - Panduan setup provider cloud ada di [`docs/BACKUP_RESTORE_CLOUD.md`](/root/project/autoscript-lite/docs/BACKUP_RESTORE_CLOUD.md).
+
+## Lisensi
+
+Repo ini menggunakan lisensi `GPL-3.0-or-later`.
+
+- detail lengkap tersedia di file [`LICENSE`](/root/project/autoscript-lite/LICENSE)
+- website lisensi VPS dan flow aktivasi produk tidak mengubah lisensi source code repo ini
