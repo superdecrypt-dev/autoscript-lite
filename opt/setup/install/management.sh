@@ -2160,6 +2160,11 @@ EOF
     "/etc/systemd/system/xray-session.service" \
     0644
 
+  render_setup_template_or_die \
+    "profile.d/99-autoscript-manage.sh" \
+    "${MANAGE_AUTO_OPEN_PROFILED_FILE:-/etc/profile.d/99-autoscript-manage.sh}" \
+    0644
+
   systemctl daemon-reload
   if ! service_enable_restart_checked xray-expired; then
     journalctl -u xray-expired -n 120 --no-pager >&2 || true
@@ -2185,6 +2190,7 @@ EOF
   ok "  - /usr/local/bin/xray-quota    (service: xray-quota)"
   ok "  - /usr/local/bin/xray-session  (service: xray-session)"
   ok "  - /usr/local/bin/backup-manage (CLI local/cloud backup)"
+  ok "  - SSH login auto-open manage   (${MANAGE_AUTO_OPEN_PROFILED_FILE:-/etc/profile.d/99-autoscript-manage.sh})"
 }
 
 sync_manage_modules_layout() {

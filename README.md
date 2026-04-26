@@ -1,20 +1,36 @@
 # Autoscript Lite
 
-> Installer, runtime, dan panel operasional harian untuk stack `Xray-core`, `edge-mux`, `WARP`, dan bot `Telegram` di VPS Linux.
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Linux-0f172a?style=for-the-badge&logo=linux&logoColor=white" alt="Linux">
+  <img src="https://img.shields.io/badge/Core-Xray-111827?style=for-the-badge&logo=radar&logoColor=white" alt="Xray">
+  <img src="https://img.shields.io/badge/Edge-Go%20edge--mux-0b5fff?style=for-the-badge&logo=go&logoColor=white" alt="Go edge-mux">
+  <img src="https://img.shields.io/badge/Remote-Telegram-229ED9?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram">
+  <img src="https://img.shields.io/badge/WARP-Cloudflare-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare WARP">
+</p>
 
-`autoscript-lite` adalah varian yang hanya menyajikan layanan `Xray-core`. Repo ini tidak memuat surface installer, CLI, bot, atau dokumentasi operasional untuk protokol non-Xray yang tidak lagi menjadi surface aktif dan menu turunannya.
+<p align="center">
+  <img src="https://img.shields.io/badge/Manage-CLI-1f2937?style=flat-square&logo=gnubash&logoColor=white" alt="Manage CLI">
+  <img src="https://img.shields.io/badge/Portal-Account-2563eb?style=flat-square&logo=vercel&logoColor=white" alt="Account Portal">
+  <img src="https://img.shields.io/badge/Zero%20Trust-Cloudflare%20WARP-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare WARP">
+</p>
 
-Beberapa helper kompatibilitas internal masih tersisa untuk membaca state/runtime lama saat upgrade host lama ke snapshot terbaru. Itu bukan surface produk aktif dan tidak didokumentasikan sebagai fitur `lite`.
+## Fokus
+
+- `autoscript-lite` = repo ringan untuk stack `Xray`
+- `run.sh` = bootstrap host
+- `manage` = panel operasi harian
+- `Xray`, `edge-mux`, `WARP`, `Account Portal`
+- `Domain Control`, `Speedtest`, `Traffic`, `Security`, `Backup/Restore`
 
 ## Status Biaya
 
-`autoscript-lite` dan source repo ini gratis untuk digunakan.
+Source code `autoscript-lite` tersedia gratis untuk digunakan.
 
-Aktivasi lisensi IP VPS tetap menjadi bagian dari flow produk, tetapi dokumentasi ini menegaskan bahwa software/repo `autoscript-lite` sendiri tidak dijual berbayar.
+Aktivasi lisensi IP VPS tetap menjadi bagian dari flow produk, tetapi repo ini sendiri bukan software berbayar.
 
 ## Sebelum Install
 
-Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:
+Sebelum menjalankan installer, aktifkan lisensi IP VPS terlebih dahulu:
 
 - Website lisensi: `https://autoscript.license.dpdns.org`
 - Langkah singkat:
@@ -24,7 +40,7 @@ Sebelum menjalankan installer, aktifkan dulu lisensi IP VPS di website:
   4. pastikan IP sudah aktif
   5. baru jalankan `run.sh`
 
-Kalau lisensi belum aktif, installer akan berhenti di preflight license guard.
+Kalau lisensi belum aktif, installer akan berhenti pada preflight `License Guard`.
 
 ## Quick Install
 
@@ -32,7 +48,7 @@ Kalau lisensi belum aktif, installer akan berhenti di preflight license guard.
 bash <(curl -fsSL https://raw.githubusercontent.com/superdecrypt-dev/autoscript-lite/main/run.sh)
 ```
 
-## Arsitektur Singkat
+## Arsitektur
 
 ```text
 Internet / Cloudflare
@@ -42,8 +58,8 @@ Internet / Cloudflare
   :80, :8080, :8880, :2052, :2082, :2086, :2095
   :443, :2053, :2083, :2087, :2096, :8443
         |
-        +--> nginx       127.0.0.1:18080
-        +--> Xray-core   via inbound runtime
+        +--> nginx         127.0.0.1:18080
+        +--> Xray-core     via inbound runtime
 ```
 
 ## Layanan Utama
@@ -55,14 +71,32 @@ Internet / Cloudflare
 | `nginx` | HTTP backend internal dan TLS/web support | internal |
 | `wireproxy` / `warp-svc` | runtime `WARP Free/Plus` atau `Zero Trust` | sesuai mode aktif |
 | `xray-domain-guard` | guardrail domain, TLS, dan health check | maintenance |
+| `account-portal` | portal akun read-only | opsional |
 | `bot-telegram-backend` | API internal bot Telegram | opsional |
 | `bot-telegram-gateway` | gateway Telegram menu-first | opsional |
 
-## Layanan dan Protokol
+## Kapabilitas
+
+### Protokol dan transport
 
 - `VLESS`, `VMess`, `Trojan`
 - transport `XHTTP`, `WS`, `HTTPUpgrade`, `gRPC`, `TCP+TLS`
 - `WARP Free/Plus`, `WARP Zero Trust`
+
+### Transport highlight
+
+- `VMess TCP+TLS`
+- `VLESS XHTTP3`
+
+### Surface operasional
+
+- `manage` CLI modular
+- `Account Portal`
+- `Bot Telegram`
+- `Backup/Restore`
+- `License Guard`
+- `Domain Control`
+- `Traffic`, `QAC`, `Speed`, dan `Adblocker`
 
 ## Port Publik
 
@@ -95,67 +129,113 @@ Internet / Cloudflare
 | `Trojan gRPC` | `443, 80` + alt port Cloudflare |
 | `Trojan TCP+TLS` | `443, 80` + alt port Cloudflare |
 
-## Path Runtime
+## Path Publik
 
-Gunakan hanya path publik di bawah ini untuk client. Jangan gunakan path internal acak backend `Xray` karena nilainya bisa berubah setiap install atau re-render config.
+Gunakan hanya path publik di bawah ini untuk client. Hindari memakai path internal backend karena nilainya bisa berubah saat install ulang atau re-render config.
 
-### Path Publik Stabil
-
-| Transport | Path utama | Varian alt yang didukung | Catatan |
+| Transport | Path utama | Varian alt | Catatan |
 | --- | --- | --- | --- |
 | `VLESS WS` | `/vless-ws` | `/<bebas>/vless-ws` atau `/<bebas>/vless-ws/<bebas>` | path publik stabil |
 | `VLESS HUP` | `/vless-hup` | `/<bebas>/vless-hup` atau `/<bebas>/vless-hup/<bebas>` | path publik stabil |
 | `VLESS XHTTP` | `/vless-xhttp` | `/<bebas>/vless-xhttp` atau `/<bebas>/vless-xhttp/<bebas>` | path publik stabil |
-| `VLESS gRPC` | `/vless-grpc` | `/<bebas>/vless-grpc` atau `/<bebas>/vless-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+| `VLESS gRPC` | `/vless-grpc` | `/<bebas>/vless-grpc` atau `/<bebas>/vless-grpc/<bebas>` | service name internal dirahasiakan |
 | `VMess WS` | `/vmess-ws` | `/<bebas>/vmess-ws` atau `/<bebas>/vmess-ws/<bebas>` | path publik stabil |
 | `VMess HUP` | `/vmess-hup` | `/<bebas>/vmess-hup` atau `/<bebas>/vmess-hup/<bebas>` | path publik stabil |
 | `VMess XHTTP` | `/vmess-xhttp` | `/<bebas>/vmess-xhttp` atau `/<bebas>/vmess-xhttp/<bebas>` | path publik stabil |
-| `VMess gRPC` | `/vmess-grpc` | `/<bebas>/vmess-grpc` atau `/<bebas>/vmess-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+| `VMess gRPC` | `/vmess-grpc` | `/<bebas>/vmess-grpc` atau `/<bebas>/vmess-grpc/<bebas>` | service name internal dirahasiakan |
 | `Trojan WS` | `/trojan-ws` | `/<bebas>/trojan-ws` atau `/<bebas>/trojan-ws/<bebas>` | path publik stabil |
 | `Trojan HUP` | `/trojan-hup` | `/<bebas>/trojan-hup` atau `/<bebas>/trojan-hup/<bebas>` | path publik stabil |
 | `Trojan XHTTP` | `/trojan-xhttp` | `/<bebas>/trojan-xhttp` atau `/<bebas>/trojan-xhttp/<bebas>` | path publik stabil |
-| `Trojan gRPC` | `/trojan-grpc` | `/<bebas>/trojan-grpc` atau `/<bebas>/trojan-grpc/<bebas>` | request publik tetap path, service name internal dirahasiakan |
+| `Trojan gRPC` | `/trojan-grpc` | `/<bebas>/trojan-grpc` atau `/<bebas>/trojan-grpc/<bebas>` | service name internal dirahasiakan |
 
-### Path Internal
+Catatan:
 
-Contoh path internal yang tidak perlu dipakai operator:
-- `Xray WS/HUP` memakai path acak seperti `/h5faaachbphar0`
-- `Xray gRPC` memakai service name acak seperti `24j1m934rp8m`
-
-Path internal itu hanya dipakai untuk wiring `nginx -> Xray` di host.
-
-## Portal Info Akun
-
-- Setiap akun `Xray` bisa punya link portal read-only sendiri.
-- Portal ini berdiri sebagai service mandiri di host, tidak menumpang backend bot Telegram.
-- Format URL:
-  - `https://<domain-vps>/account/<token>`
-- Portal menampilkan:
-  - status akun
-  - sisa masa aktif
-  - quota limit / quota terpakai / quota tersisa
-  - IP login aktif yang masih terdeteksi runtime
-- API JSON pendukung:
-  - `GET /api/account/<token>/summary`
+- `TCP+TLS` tidak menggunakan path publik
+- `VLESS XHTTP3` menggunakan profile `xray.json` yang dirender per akun
 
 ## Port Internal
 
 | Komponen | Bind | Keterangan |
 | --- | --- | --- |
 | `nginx` | `127.0.0.1:18080` | backend web internal |
-| `account-portal` | `127.0.0.1:7082` | website read-only info akun |
-| `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot Telegram |
-| `edge-mux metrics` | `127.0.0.1:9910` | metrics dan status edge |
-| `WARP local proxy` | `127.0.0.1:40000` | runtime `Zero Trust` / proxy lokal |
+| `account-portal` | `127.0.0.1:7082` | website info akun |
+| `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot |
+| `edge-mux metrics` | `127.0.0.1:9910` | metrics edge |
+| `WARP local proxy` | `127.0.0.1:40000` | runtime Zero Trust |
+| `BadVPN UDPGW` | `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` | UDPGW lokal |
 
-## Service Highlights
+## Account Portal
 
-- `manage.sh` adalah panel CLI modular untuk operasi harian.
-- `run.sh` dan `setup.sh` menangani bootstrap host, install runtime, dan sinkronisasi service.
-- `account-portal/` menyediakan website mandiri untuk status akun per token.
-- `bot-telegram/` menyediakan backend + gateway menu-first untuk operasi dari Telegram.
-- `opt/edge/go/` memuat source `edge-mux` untuk ingress publik dan observability.
-- `manage_bundle.zip` dan `bot_telegram.zip` dipakai sebagai release artifact untuk installer.
+Setiap akun `Xray` dapat memiliki link portal read-only sendiri.
+
+- format URL:
+  - `https://<domain-vps>/account/<token>`
+- portal menampilkan:
+  - status akun
+  - masa aktif
+  - quota limit, used, dan remaining
+  - sesi aktif yang masih terdeteksi runtime
+- endpoint JSON:
+  - `GET /api/account/<token>/summary`
+
+## Cloudflare Zero Trust Setup
+
+Bagian ini dipakai saat Anda ingin menyiapkan `WARP Zero Trust` dengan service token.
+
+### 1) Device enrollment permissions
+
+Masuk ke:
+
+`Team & Resources -> Devices -> Management -> Device enrollment permissions -> Manage -> Policies`
+
+Lalu:
+
+1. add rule `Policies`
+2. nama bebas
+3. `Rule action`: `service auth`
+4. `Include selector`: `Any Access Service Token`
+5. save
+
+### 2) Device Profile
+
+Masuk ke:
+
+`Team & Resources -> Devices -> Device Profile`
+
+Lalu:
+
+1. `Create new profile`
+2. nama bebas
+3. selector -> `user email`
+4. operator -> `is`
+5. value: `non_identity@<team-name>.cloudflareaccess.com`
+6. `+ AND condition`
+7. selector -> `operating system`
+8. operator -> `is`
+9. value: `Linux`
+10. `Device tunnel protocol`: `MASQUE`
+11. `Service mode`: `local proxy mode port 40000`
+12. save
+
+### 3) Service Token
+
+Masuk ke:
+
+`Access controls -> Service Credentials -> Service Token`
+
+Lalu:
+
+1. create service token
+2. nama bebas
+3. token durasi bebas
+4. generate token
+5. copy `Client ID` token dan `Client Secret` token
+
+Catatan:
+
+- Untuk enrollment headless Linux, `Device enrollment permissions` dengan `Service Auth` adalah bagian penting.
+- `Device Profile` di atas dipakai sebagai pelengkap konfigurasi client, bukan pengganti service token.
+- Pada host, kredensial biasanya dipakai oleh file `mdm.xml` di `/var/lib/cloudflare-warp/mdm.xml` dan config Zero Trust di `/etc/autoscript/warp-zerotrust/config.env`.
 
 ## Menu Utama
 
