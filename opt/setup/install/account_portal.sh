@@ -1,10 +1,39 @@
 #!/usr/bin/env bash
 # Standalone account portal module for setup runtime.
 
+ensure_account_portal_python_venv_support() {
+  command -v python3 >/dev/null 2>&1 || die "python3 dibutuhkan untuk portal info akun."
+
+  if python3 -m ensurepip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  command -v apt-get >/dev/null 2>&1 || die "ensurepip tidak tersedia dan apt-get tidak ditemukan untuk memasang python venv support."
+  declare -F apt_get_with_lock_retry >/dev/null 2>&1 || die "Helper apt_get_with_lock_retry tidak tersedia."
+
+  local py_major_minor="" py_venv_pkg=""
+  py_major_minor="$(python3 - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+  [[ -n "${py_major_minor}" ]] || die "Gagal mendeteksi versi python3 aktif."
+  py_venv_pkg="python${py_major_minor}-venv"
+
+  warn "ensurepip belum tersedia untuk python3 aktif. Mencoba memasang ${py_venv_pkg} ..."
+  apt_get_with_lock_retry update -y
+  if ! apt_get_with_lock_retry install -y "${py_venv_pkg}"; then
+    warn "Gagal memasang ${py_venv_pkg}. Mencoba fallback ke python3-venv ..."
+    apt_get_with_lock_retry install -y python3-venv || die "Gagal memasang dukungan python venv (${py_venv_pkg} / python3-venv)."
+  fi
+
+  python3 -m ensurepip --version >/dev/null 2>&1 || die "Dukungan ensurepip tetap belum tersedia setelah memasang paket venv Python."
+}
+
 install_account_portal() {
   ok "Pasang portal info akun..."
 
-  command -v python3 >/dev/null 2>&1 || die "python3 dibutuhkan untuk portal info akun."
+  ensure_account_portal_python_venv_support
   [[ -d "${ACCOUNT_PORTAL_SRC_DIR}" ]] || die "Source portal info akun tidak ditemukan: ${ACCOUNT_PORTAL_SRC_DIR}"
   [[ -f "${ACCOUNT_PORTAL_SRC_DIR}/requirements.lock.txt" ]] || die "requirements.lock.txt portal tidak ditemukan."
 
