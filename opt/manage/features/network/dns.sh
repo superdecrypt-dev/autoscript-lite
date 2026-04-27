@@ -1933,7 +1933,7 @@ dns_settings_menu() {
         pause
         ;;
       5)
-        menu_run_isolated_report "DNS Advanced Controls" dns_advanced_controls_menu
+        dns_advanced_controls_menu dns_candidate pending_changes
         ;;
       6)
         if [[ "${pending_changes}" == "true" ]]; then
@@ -2011,11 +2011,20 @@ dns_settings_menu() {
 }
 
 dns_advanced_controls_menu() {
-  local dns_candidate=""
-  local pending_changes="false"
+  local dns_candidate_local=""
+  local pending_changes_local="false"
+  local dns_candidate_var="${1:-dns_candidate_local}"
+  local pending_changes_var="${2:-pending_changes_local}"
+  local shared_stage="false"
+  if [[ -n "${1:-}" && -n "${2:-}" ]]; then
+    shared_stage="true"
+  fi
   while true; do
     local status_source status_blob parse_state parallel systemhosts disablefallback disablefallbackifmatch hosts_count
-    status_source="${dns_candidate:-${XRAY_DNS_CONF}}"
+    local dns_candidate_current pending_changes_current
+    dns_candidate_current="${!dns_candidate_var-}"
+    pending_changes_current="${!pending_changes_var-}"
+    status_source="${dns_candidate_current:-${XRAY_DNS_CONF}}"
     status_blob="$(xray_dns_status_get "${status_source}")"
     parse_state="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^parse_state=/{print $2; exit}' 2>/dev/null || true)"
     parallel="$(printf '%s\n' "${status_blob}" | awk -F'=' '/^parallel=/{print $2; exit}' 2>/dev/null || true)"
@@ -2055,17 +2064,18 @@ dns_advanced_controls_menu() {
           continue
         fi
         if confirm_menu_apply_now "Toggle enableParallelQuery sekarang?"; then
-          if ! xray_dns_candidate_prepare dns_candidate; then
+          if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
             warn "Gagal menyiapkan staging DNS."
             pause
             continue
           fi
-          if ! xray_dns_mutate_candidate_file "${dns_candidate}" toggle_enable_parallel_query; then
+          dns_candidate_current="${!dns_candidate_var-}"
+          if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" toggle_enable_parallel_query; then
             warn "Gagal toggle enableParallelQuery."
             pause
             continue
           fi
-          pending_changes="true"
+          printf -v "${pending_changes_var}" '%s' "true"
           log "enableParallelQuery di-stage."
         fi
         pause
@@ -2077,17 +2087,18 @@ dns_advanced_controls_menu() {
           continue
         fi
         if confirm_menu_apply_now "Toggle useSystemHosts sekarang?"; then
-          if ! xray_dns_candidate_prepare dns_candidate; then
+          if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
             warn "Gagal menyiapkan staging DNS."
             pause
             continue
           fi
-          if ! xray_dns_mutate_candidate_file "${dns_candidate}" toggle_use_system_hosts; then
+          dns_candidate_current="${!dns_candidate_var-}"
+          if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" toggle_use_system_hosts; then
             warn "Gagal toggle useSystemHosts."
             pause
             continue
           fi
-          pending_changes="true"
+          printf -v "${pending_changes_var}" '%s' "true"
           log "useSystemHosts di-stage."
         fi
         pause
@@ -2099,17 +2110,18 @@ dns_advanced_controls_menu() {
           continue
         fi
         if confirm_menu_apply_now "Toggle disableFallback sekarang?"; then
-          if ! xray_dns_candidate_prepare dns_candidate; then
+          if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
             warn "Gagal menyiapkan staging DNS."
             pause
             continue
           fi
-          if ! xray_dns_mutate_candidate_file "${dns_candidate}" toggle_disable_fallback; then
+          dns_candidate_current="${!dns_candidate_var-}"
+          if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" toggle_disable_fallback; then
             warn "Gagal toggle disableFallback."
             pause
             continue
           fi
-          pending_changes="true"
+          printf -v "${pending_changes_var}" '%s' "true"
           log "disableFallback di-stage."
         fi
         pause
@@ -2121,17 +2133,18 @@ dns_advanced_controls_menu() {
           continue
         fi
         if confirm_menu_apply_now "Toggle disableFallbackIfMatch sekarang?"; then
-          if ! xray_dns_candidate_prepare dns_candidate; then
+          if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
             warn "Gagal menyiapkan staging DNS."
             pause
             continue
           fi
-          if ! xray_dns_mutate_candidate_file "${dns_candidate}" toggle_disable_fallback_if_match; then
+          dns_candidate_current="${!dns_candidate_var-}"
+          if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" toggle_disable_fallback_if_match; then
             warn "Gagal toggle disableFallbackIfMatch."
             pause
             continue
           fi
-          pending_changes="true"
+          printf -v "${pending_changes_var}" '%s' "true"
           log "disableFallbackIfMatch di-stage."
         fi
         pause
@@ -2168,17 +2181,18 @@ dns_advanced_controls_menu() {
           pause
           continue
         fi
-        if ! xray_dns_candidate_prepare dns_candidate; then
+        if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
           warn "Gagal menyiapkan staging DNS."
           pause
           continue
         fi
-        if ! xray_dns_mutate_candidate_file "${dns_candidate}" set_host_pin "${host_value}"; then
+        dns_candidate_current="${!dns_candidate_var-}"
+        if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" set_host_pin "${host_value}"; then
           warn "Gagal pin host DNS."
           pause
           continue
         fi
-        pending_changes="true"
+        printf -v "${pending_changes_var}" '%s' "true"
         log "Host DNS di-stage: ${host} -> ${ip}"
         pause
         ;;
@@ -2203,34 +2217,40 @@ dns_advanced_controls_menu() {
           pause
           continue
         fi
-        if ! xray_dns_candidate_prepare dns_candidate; then
+        if ! xray_dns_candidate_prepare "${dns_candidate_var}"; then
           warn "Gagal menyiapkan staging DNS."
           pause
           continue
         fi
-        if ! xray_dns_mutate_candidate_file "${dns_candidate}" clear_host_pin "${host}"; then
+        dns_candidate_current="${!dns_candidate_var-}"
+        if ! xray_dns_mutate_candidate_file "${dns_candidate_current}" clear_host_pin "${host}"; then
           warn "Gagal hapus host DNS."
           pause
           continue
         fi
-        pending_changes="true"
+        printf -v "${pending_changes_var}" '%s' "true"
         log "Host DNS di-stage untuk dihapus: ${host}"
         pause
         ;;
       0|kembali|k|back|b)
-        if [[ "${pending_changes}" == "true" ]]; then
+        if [[ "${shared_stage}" == "true" ]]; then
+          break
+        fi
+        if [[ "${pending_changes_current}" == "true" ]]; then
+          dns_candidate_current="${!dns_candidate_var-}"
           if confirm_menu_apply_now "Apply staged DNS advanced changes sekarang?"; then
-            if ! dns_settings_run_mutation "Staged DNS advanced settings applied" xray_dns_apply_candidate_file "${dns_candidate}"; then
+            if ! dns_settings_run_mutation "Staged DNS advanced settings applied" xray_dns_apply_candidate_file "${dns_candidate_current}"; then
               pause
               continue
             fi
           else
-            xray_stage_candidate_cleanup "${dns_candidate}"
-            dns_candidate=""
-            pending_changes="false"
+            xray_stage_candidate_cleanup "${dns_candidate_current}"
+            printf -v "${dns_candidate_var}" '%s' ""
+            printf -v "${pending_changes_var}" '%s' "false"
           fi
         fi
-        xray_stage_candidate_cleanup "${dns_candidate}"
+        dns_candidate_current="${!dns_candidate_var-}"
+        xray_stage_candidate_cleanup "${dns_candidate_current}"
         break
         ;;
       *) invalid_choice ;;
