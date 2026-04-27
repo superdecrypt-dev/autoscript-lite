@@ -65,11 +65,19 @@ PY
 }
 
 adblock_custom_dat_status_get() {
-  if [[ -s "${CUSTOM_GEOSITE_DAT}" ]]; then
+  if [[ -s "$(adblock_custom_dat_path_get)" ]]; then
     echo "ready"
   else
     echo "missing"
   fi
+}
+
+adblock_custom_dat_path_get() {
+  if [[ -n "${CUSTOM_GEOSITE_DEST:-}" ]]; then
+    printf '%s\n' "${CUSTOM_GEOSITE_DEST}"
+    return 0
+  fi
+  printf '%s\n' "${CUSTOM_GEOSITE_DAT}"
 }
 
 xray_routing_adblock_rule_set() {
@@ -1542,7 +1550,7 @@ xray_adblock_menu() {
     title
     echo "$(adblock_menu_title "Custom Geosite")"
     hr
-    printf "Geosite File : %s\n" "${CUSTOM_GEOSITE_DAT}"
+    printf "Geosite File : %s\n" "$(adblock_custom_dat_path_get)"
     printf "Asset Status : %s\n" "${asset_status}"
     printf "Rule Entry   : %s\n" "${ADBLOCK_GEOSITE_ENTRY}"
     if [[ "${enabled}" == "1" ]]; then
@@ -1562,7 +1570,7 @@ xray_adblock_menu() {
     read -r -p "Pilih: " c
     case "${c}" in
       1)
-        if [[ ! -s "${CUSTOM_GEOSITE_DAT}" ]]; then
+        if [[ ! -s "$(adblock_custom_dat_path_get)" ]]; then
           warn "custom.dat belum tersedia. Jalankan setup.sh dulu untuk download custom geosite."
           pause
           continue
