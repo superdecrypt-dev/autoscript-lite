@@ -587,8 +587,7 @@ autoscript_full_hard_uninstall_menu() {
 autoscript_uninstall_menu() {
   # shellcheck disable=SC2034
   local -a items=(
-    "1|Full Hard Uninstall"
-    "2|Full Hard Uninstall + Purge Package"
+    "1|Uninstall"
     "0|Back"
   )
   while true; do
@@ -600,8 +599,7 @@ autoscript_uninstall_menu() {
       break
     fi
     case "${c}" in
-      1|full|hard) autoscript_full_hard_uninstall_menu false ;;
-      2|purge|full-purge|hard-purge) autoscript_full_hard_uninstall_menu true ;;
+      1|uninstall|full|hard|purge|full-purge|hard-purge) autoscript_full_hard_uninstall_menu true ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
