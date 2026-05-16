@@ -280,8 +280,84 @@ autoscript_uninstall_remove_managed_users() {
   autoscript_uninstall_delete_service_user "bot-telegram-gateway"
 }
 
+autoscript_uninstall_stop_orphan_processes() {
+  local self="$$" bash_pid="${BASHPID:-$$}" parent="${PPID:-0}"
+  local pid="" proc_cmd="" killed=0
+
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    proc_cmd="${line#* }"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    case "${pid}" in
+      "${self}"|"${bash_pid}"|"${parent}") continue ;;
+    esac
+    case "${proc_cmd}" in
+      *"/autoscript-lite/run.sh"*|*" autoscript-lite/run.sh"*|*"/autoscript-lite/setup.sh"*|*" autoscript-lite/setup.sh"*|*"/usr/local/bin/install-telegram-bot"*|*"/opt/bot-telegram/"*)
+        kill -TERM "${pid}" >/dev/null 2>&1 || true
+        killed=$((killed + 1))
+        ;;
+    esac
+  done < <(ps -eo pid=,args= 2>/dev/null | awk '{$1=$1; print}')
+
+  if (( killed > 0 )); then
+    sleep 1
+    while IFS= read -r line; do
+      pid="${line%% *}"
+      proc_cmd="${line#* }"
+      [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+      case "${pid}" in
+        "${self}"|"${bash_pid}"|"${parent}") continue ;;
+      esac
+      case "${proc_cmd}" in
+        *"/autoscript-lite/run.sh"*|*" autoscript-lite/run.sh"*|*"/autoscript-lite/setup.sh"*|*" autoscript-lite/setup.sh"*|*"/usr/local/bin/install-telegram-bot"*|*"/opt/bot-telegram/"*)
+          kill -KILL "${pid}" >/dev/null 2>&1 || true
+          ;;
+      esac
+    done < <(ps -eo pid=,args= 2>/dev/null | awk '{$1=$1; print}')
+  fi
+}
+
+autoscript_uninstall_purge_packages() {
+  local -a purge_pkgs=(
+    nginx
+    nginx-common
+    nginx-core
+    nginx-full
+    dropbear
+    dropbear-bin
+    stunnel4
+    stunnel
+    cloudflare-warp
+    dnsmasq-base
+    wireguard-tools
+    easy-rsa
+    rclone
+    fail2ban
+    chrony
+    snapd
+  )
+  local -a installed=()
+  local pkg=""
+
+  export DEBIAN_FRONTEND=noninteractive
+  for pkg in "${purge_pkgs[@]}"; do
+    if dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q "install ok installed"; then
+      installed+=("${pkg}")
+    fi
+  done
+
+  if have_cmd snap; then
+    snap remove speedtest >/dev/null 2>&1 || true
+  fi
+
+  if (( ${#installed[@]} > 0 )); then
+    apt-get purge -y "${installed[@]}" >/dev/null 2>&1 || warn "Sebagian package autoscript-lite gagal dipurge."
+    apt-get autoremove -y >/dev/null 2>&1 || true
+  fi
+}
+
 autoscript_uninstall_warning_screen() {
-  local domain="${1:-}"
+  local domain="${1:-}" purge_packages="${2:-false}"
   ui_menu_screen_begin "10) Tools > Uninstall > Full Hard Uninstall"
   warn "Mode ini akan menghapus stack autoscript-lite secara keras dari host ini."
   echo
@@ -292,8 +368,16 @@ autoscript_uninstall_warning_screen() {
   echo "  - binary helper /usr/local/bin dan unit /etc/systemd/system milik autoscript-lite"
   echo
   echo "Yang TIDAK dihapus:"
-  echo "  - package sistem / apt / snap yang sudah terpasang"
-  echo "  - tool umum host seperti curl, git, nano, nginx package, cloudflare-warp package"
+  if [[ "${purge_packages}" == "true" ]]; then
+    echo "  - package umum host seperti curl, git, nano, python3, jq, cron, iproute2"
+  else
+    echo "  - package sistem / apt / snap yang sudah terpasang"
+    echo "  - tool umum host seperti curl, git, nano, nginx package, cloudflare-warp package"
+  fi
+  if [[ "${purge_packages}" == "true" ]]; then
+    echo
+    warn "Mode purge aktif: package add-on autoscript-lite seperti nginx/dropbear/stunnel/cloudflare-warp akan dipurge."
+  fi
   if [[ -n "${domain}" ]]; then
     echo
     echo "Domain aktif terdeteksi: ${domain}"
@@ -303,11 +387,13 @@ autoscript_uninstall_warning_screen() {
 
 autoscript_full_hard_uninstall_apply() {
   local domain="${1:-}"
+  local purge_packages="${2:-false}"
   local unit="" path="" failures=0
   local -a remove_paths=()
   local -a remove_files=()
 
   need_root
+  autoscript_uninstall_stop_orphan_processes
   autoscript_uninstall_cleanup_runtime_network
 
   while IFS= read -r unit; do
@@ -325,6 +411,8 @@ autoscript_full_hard_uninstall_apply() {
     "/etc/cron.d/xray-update-geodata"
     "/etc/apt/sources.list.d/cloudflare-client.list"
     "/etc/apt/sources.list.d/nginx.list"
+    "/etc/apt/sources.list.d/nodesource.list"
+    "/etc/apt/keyrings/nodesource.gpg"
     "/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg"
     "/usr/share/keyrings/nginx-archive-keyring.gpg"
     "/usr/local/bin/manage"
@@ -342,11 +430,18 @@ autoscript_full_hard_uninstall_apply() {
     "/usr/local/bin/xray-session"
     "/usr/local/bin/xray-speed"
     "/usr/local/bin/xray-update-geodata"
+    "/usr/local/bin/xray"
     "/usr/local/bin/warp-zt-socks-bridge"
     "/usr/local/bin/xray-warp-sync"
     "/usr/local/bin/xray-xhttp3-udphop-rules"
     "/usr/local/bin/wgcf"
     "/usr/local/bin/wireproxy"
+    "/usr/local/bin/zivpn"
+    "/etc/logrotate.d/xray-nginx"
+    "/var/lib/systemd/timers/stamp-autoscript-license-enforcer.timer"
+    "/var/lib/systemd/timers/stamp-bot-telegram-monitor.timer"
+    "/var/lib/systemd/timers/stamp-sshws-qac-enforcer.timer"
+    "/var/lib/systemd/timers/stamp-xray-domain-guard.timer"
     "${MANAGE_AUTO_OPEN_PROFILED_FILE:-/etc/profile.d/99-autoscript-manage.sh}"
     "/etc/wireguard/${XRAY_WARP_INTERFACE:-warp-xray0}.conf"
     "/run/lock/xray-backup-restore.lock"
@@ -390,6 +485,7 @@ autoscript_full_hard_uninstall_apply() {
     "/var/lib/cloudflare-warp"
     "/root/.acme.sh"
     "/var/lib/autoscript-backup"
+    "/var/lib/autoscript-run"
     "/root/.config/rclone"
     "/root/.cache/rclone"
     "/var/lib/xray"
@@ -410,6 +506,17 @@ autoscript_full_hard_uninstall_apply() {
     autoscript_uninstall_rm_f "${path}" || failures=$((failures + 1))
   done
 
+  for path in "${ACCOUNT_ROOT:-/opt/account}" "${QUOTA_ROOT:-/opt/quota}"; do
+    [[ -n "${path}" ]] || continue
+    if [[ -e "${path}" ]]; then
+      autoscript_uninstall_rm_rf "${path}" "${path}" || failures=$((failures + 1))
+    fi
+  done
+
+  if [[ "${purge_packages}" == "true" ]]; then
+    autoscript_uninstall_purge_packages
+  fi
+
   if [[ -n "${domain}" ]]; then
     autoscript_uninstall_rm_rf "/root/.acme.sh/${domain}" "acme domain ${domain}" || failures=$((failures + 1))
     autoscript_uninstall_rm_rf "/root/.acme.sh/${domain}_ecc" "acme domain ${domain}_ecc" || failures=$((failures + 1))
@@ -425,7 +532,11 @@ autoscript_full_hard_uninstall_apply() {
   else
     echo "Full hard uninstall selesai"
     echo "Stack autoscript-lite, akun, cert/domain lokal, secret, dan runtime state sudah dibersihkan."
-    echo "Package sistem tetap dibiarkan terpasang."
+    if [[ "${purge_packages}" == "true" ]]; then
+      echo "Package add-on autoscript-lite juga sudah dicoba purge secara konservatif."
+    else
+      echo "Package sistem tetap dibiarkan terpasang."
+    fi
   fi
   hr
   pause
@@ -433,33 +544,51 @@ autoscript_full_hard_uninstall_apply() {
 }
 
 autoscript_full_hard_uninstall_menu() {
-  local domain="" ack=""
+  local domain="" ack="" purge_packages="${1:-false}"
   need_root
   domain="$(autoscript_uninstall_collect_domain 2>/dev/null || true)"
-  autoscript_uninstall_warning_screen "${domain}"
+  autoscript_uninstall_warning_screen "${domain}" "${purge_packages}"
 
   if ! confirm_menu_apply_now "Lanjutkan ke tahap konfirmasi full hard uninstall sekarang?"; then
     pause
     return 0
   fi
+  if [[ "${purge_packages}" == "true" ]]; then
+    if ! confirm_menu_apply_now "Konfirmasi purge package add-on autoscript-lite juga?"; then
+      pause
+      return 0
+    fi
+  fi
   if ! confirm_menu_apply_now "Konfirmasi final: uninstall akan menghapus akun, cert/domain lokal, secret, dan runtime state autoscript-lite. Lanjutkan?"; then
     pause
     return 0
   fi
-  read -r -p "Ketik persis 'UNINSTALL AUTOSCRIPT' untuk lanjut full hard uninstall (atau kembali): " ack || true
-  if [[ "${ack}" != "UNINSTALL AUTOSCRIPT" ]]; then
-    warn "Batal uninstall."
-    pause
-    return 0
+  if [[ "${purge_packages}" == "true" ]]; then
+    read -r -p "Ketik persis 'UNINSTALL AUTOSCRIPT PURGE' untuk lanjut full hard uninstall + purge (atau kembali): " ack || true
+    if [[ "${ack}" != "UNINSTALL AUTOSCRIPT PURGE" ]]; then
+      warn "Batal uninstall."
+      pause
+      return 0
+    fi
+  else
+    read -r -p "Ketik persis 'UNINSTALL AUTOSCRIPT' untuk lanjut full hard uninstall (atau kembali): " ack || true
+    if [[ "${ack}" != "UNINSTALL AUTOSCRIPT" ]]; then
+      warn "Batal uninstall."
+      pause
+      return 0
+    fi
   fi
 
-  autoscript_full_hard_uninstall_apply "${domain}"
+  autoscript_full_hard_uninstall_apply "${domain}" "${purge_packages}"
+  # shellcheck disable=SC2317
   return 0
 }
 
 autoscript_uninstall_menu() {
+  # shellcheck disable=SC2034
   local -a items=(
     "1|Full Hard Uninstall"
+    "2|Full Hard Uninstall + Purge Package"
     "0|Back"
   )
   while true; do
@@ -471,7 +600,8 @@ autoscript_uninstall_menu() {
       break
     fi
     case "${c}" in
-      1|full|hard) autoscript_full_hard_uninstall_menu ;;
+      1|full|hard) autoscript_full_hard_uninstall_menu false ;;
+      2|purge|full-purge|hard-purge) autoscript_full_hard_uninstall_menu true ;;
       0|kembali|k|back|b) break ;;
       *) warn "Pilihan tidak valid" ; sleep 1 ;;
     esac
