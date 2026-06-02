@@ -162,7 +162,6 @@ Catatan:
 | `bot-telegram-backend` | `127.0.0.1:7081` | API internal bot |
 | `edge-mux metrics` | `127.0.0.1:9910` | metrics edge |
 | `WARP local proxy` | `127.0.0.1:40000` | runtime Zero Trust |
-| `BadVPN UDPGW` | `127.0.0.1:7300, 7400, 7500, 7600, 7700, 7800, 7900` | UDPGW lokal |
 
 ## Account Portal
 
