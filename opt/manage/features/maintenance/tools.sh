@@ -155,6 +155,7 @@ autoscript_uninstall_rm_rf() {
 autoscript_uninstall_rm_f() {
   local target="${1:-}"
   [[ -e "${target}" || -L "${target}" ]] || return 0
+  autoscript_uninstall_assert_safe_delete_target "${target}" "${target}"
   rm -f "${target}" >/dev/null 2>&1 || true
   if [[ -e "${target}" || -L "${target}" ]]; then
     warn "Gagal menghapus file: ${target}"
@@ -366,6 +367,7 @@ autoscript_uninstall_warning_screen() {
   echo "  - akun Xray, quota, account info, runtime state, log, backup config"
   echo "  - cert/domain lokal, ACME state lokal, token/env bot, WARP/WireGuard config"
   echo "  - binary helper /usr/local/bin dan unit /etc/systemd/system milik autoscript-lite"
+  echo "  - state root-level yang dipakai autoscript-lite: /root/.acme.sh, /root/.config/rclone, /etc/wireguard"
   echo
   echo "Yang TIDAK dihapus:"
   if [[ "${purge_packages}" == "true" ]]; then
@@ -564,15 +566,15 @@ autoscript_full_hard_uninstall_menu() {
     return 0
   fi
   if [[ "${purge_packages}" == "true" ]]; then
-    read -r -p "Ketik persis 'UNINSTALL AUTOSCRIPT PURGE' untuk lanjut full hard uninstall + purge (atau kembali): " ack || true
-    if [[ "${ack}" != "UNINSTALL AUTOSCRIPT PURGE" ]]; then
+    read -r -p "Ketik 'UNINSTALL' untuk lanjut full hard uninstall + purge (atau kembali): " ack || true
+    if [[ "${ack,,}" != "uninstall" ]]; then
       warn "Batal uninstall."
       pause
       return 0
     fi
   else
-    read -r -p "Ketik persis 'UNINSTALL AUTOSCRIPT' untuk lanjut full hard uninstall (atau kembali): " ack || true
-    if [[ "${ack}" != "UNINSTALL AUTOSCRIPT" ]]; then
+    read -r -p "Ketik 'UNINSTALL' untuk lanjut full hard uninstall (atau kembali): " ack || true
+    if [[ "${ack,,}" != "uninstall" ]]; then
       warn "Batal uninstall."
       pause
       return 0
@@ -587,7 +589,7 @@ autoscript_full_hard_uninstall_menu() {
 autoscript_uninstall_menu() {
   # shellcheck disable=SC2034
   local -a items=(
-    "1|Uninstall"
+    "1|Full Hard Uninstall + Purge"
     "0|Back"
   )
   while true; do
