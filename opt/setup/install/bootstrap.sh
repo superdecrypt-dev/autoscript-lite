@@ -140,31 +140,84 @@ node_version_satisfies_portal_build() {
   return 1
 }
 
+nodejs_org_arch_suffix() {
+  local arch
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  case "${arch}" in
+    x86_64|amd64) printf '%s\n' "x64" ;;
+    aarch64|arm64) printf '%s\n' "arm64" ;;
+    *) die "Arsitektur tidak didukung untuk Node.js official binary: ${arch}" ;;
+  esac
+}
+
+nodejs_org_latest_version_for_major() {
+  local major="${1:-24}"
+  local arch="$2"
+  local shasums_url="https://nodejs.org/dist/latest-v${major}.x/SHASUMS256.txt"
+  local version
+
+  version="$(
+    curl -fsSL --connect-timeout 15 --max-time 120 "${shasums_url}" \
+      | awk -v arch="${arch}" '
+          $2 ~ "^node-v[0-9]+\\.[0-9]+\\.[0-9]+-linux-" arch "\\.tar\\.xz$" {
+            name = $2
+            sub(/^node-/, "", name)
+            sub("-linux-" arch "\\.tar\\.xz$", "", name)
+            print name
+            exit
+          }
+        '
+  )" || return 1
+
+  [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s\n' "${version}"
+}
+
+install_nodejs_from_nodejs_org() {
+  local major="${NODEJS_PORTAL_MAJOR:-26}"
+  local arch version archive_url tmp archive extract_root node_root
+
+  arch="$(nodejs_org_arch_suffix)"
+  version="$(nodejs_org_latest_version_for_major "${major}" "${arch}")" \
+    || die "Gagal membaca versi Node.js latest-v${major}.x dari nodejs.org."
+
+  archive_url="https://nodejs.org/dist/${version}/node-${version}-linux-${arch}.tar.xz"
+  tmp="$(mktemp -d)" || die "Gagal membuat direktori sementara Node.js."
+  archive="${tmp}/node.tar.xz"
+  extract_root="${tmp}/extract"
+  node_root="/usr/local/lib/nodejs/node-${version}-linux-${arch}"
+
+  mkdir -p "${extract_root}" /usr/local/lib/nodejs /usr/local/bin
+  download_file_or_die "${archive_url}" "${archive}" "Node.js ${version}" "Node.js ${version} official binary"
+  tar -xJf "${archive}" -C "${extract_root}" \
+    || die "Gagal mengekstrak Node.js ${version}."
+
+  rm -rf "${node_root}" >/dev/null 2>&1 || true
+  mv "${extract_root}/node-${version}-linux-${arch}" "${node_root}" \
+    || die "Gagal memasang Node.js ke ${node_root}."
+  chown -R root:root "${node_root}" 2>/dev/null || true
+
+  ln -sfn "${node_root}/bin/node" /usr/local/bin/node
+  ln -sfn "${node_root}/bin/npm" /usr/local/bin/npm
+  ln -sfn "${node_root}/bin/npx" /usr/local/bin/npx
+  if [[ -x "${node_root}/bin/corepack" ]]; then
+    ln -sfn "${node_root}/bin/corepack" /usr/local/bin/corepack
+  fi
+
+  rm -rf "${tmp}" >/dev/null 2>&1 || true
+}
+
 ensure_nodejs_runtime_for_account_portal() {
   if node_version_satisfies_portal_build; then
     ok "Node.js siap untuk build portal React: $(node -v) / npm $(npm -v)"
     return 0
   fi
 
-  ok "Menyiapkan Node.js untuk build portal React..."
+  ok "Menyiapkan Node.js untuk build portal React dari nodejs.org..."
   export DEBIAN_FRONTEND=noninteractive
   ensure_dpkg_consistent
-  apt_get_with_lock_retry install -y ca-certificates curl gpg
-
-  install -d -m 0755 /etc/apt/keyrings
-  if [[ ! -s /etc/apt/keyrings/nodesource.gpg ]]; then
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-      | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-      || die "Gagal memasang keyring NodeSource."
-    chmod 0644 /etc/apt/keyrings/nodesource.gpg || true
-  fi
-
-  cat > /etc/apt/sources.list.d/nodesource.list <<'EOF'
-deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main
-EOF
-
-  apt_get_with_lock_retry update -y
-  apt_get_with_lock_retry install -y nodejs
+  apt_get_with_lock_retry install -y ca-certificates curl tar xz-utils
+  install_nodejs_from_nodejs_org
   hash -r || true
 
   node_version_satisfies_portal_build \
