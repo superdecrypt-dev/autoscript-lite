@@ -9,6 +9,16 @@ ExecStart=/usr/local/bin/wireproxy -c /etc/wireproxy/config.conf
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

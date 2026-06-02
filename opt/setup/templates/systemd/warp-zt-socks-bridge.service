@@ -13,6 +13,16 @@ ExecStart=__WARP_ZEROTRUST_BRIDGE_BIN__
 Restart=always
 RestartSec=2
 LimitNOFILE=1048576
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

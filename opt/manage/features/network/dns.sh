@@ -2011,7 +2011,9 @@ dns_settings_menu() {
 }
 
 dns_advanced_controls_menu() {
+  # shellcheck disable=SC2034
   local dns_candidate_local=""
+  # shellcheck disable=SC2034
   local pending_changes_local="false"
   local dns_candidate_var="${1:-dns_candidate_local}"
   local pending_changes_var="${2:-pending_changes_local}"

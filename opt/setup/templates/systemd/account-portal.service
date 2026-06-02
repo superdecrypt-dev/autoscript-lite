@@ -11,6 +11,17 @@ ExecStartPre=+/usr/local/bin/autoscript-license-check check --stage runtime --al
 ExecStart=__ACCOUNT_PORTAL_ROOT__/.venv/bin/python -m uvicorn app.main:app --host __ACCOUNT_PORTAL_HOST__ --port __ACCOUNT_PORTAL_PORT__
 Restart=always
 RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/autoscript-license
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
