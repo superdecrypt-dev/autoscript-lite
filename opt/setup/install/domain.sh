@@ -753,14 +753,11 @@ domain_menu_v2() {
     done
   fi
 
-  echo
-  if confirm_yn "Aktifkan Cloudflare proxy (orange cloud) untuk DNS A record?"; then
-    CF_PROXIED="true"
-    ok "Cloudflare proxy: ON"
-  else
+  CF_PROXIED="${CF_PROXIED:-false}"
+  if [[ "${CF_PROXIED}" != "true" && "${CF_PROXIED}" != "false" ]]; then
     CF_PROXIED="false"
-    ok "Cloudflare proxy: OFF"
   fi
+  ok "Cloudflare proxy: ${CF_PROXIED}"
   DOMAIN="${sub}.${ACME_ROOT_DOMAIN}"
   ok "Domain: ${DOMAIN}"
 
